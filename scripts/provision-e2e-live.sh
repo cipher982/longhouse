@@ -203,10 +203,10 @@ else
     if [[ "$auth_code" == "200" ]]; then
       ok "Authenticated browser access via SSO cookie -> 200"
     else
-      echo "  Warning: Authenticated /api/timeline/sessions -> ${auth_code} (unexpected browser auth result). Non-fatal."
+      fail "Authenticated /api/timeline/sessions -> ${auth_code} (expected 200 after SSO login)"
     fi
   else
-    echo "  Warning: SSO accept-token failed (may need config). Non-fatal."
+    fail "SSO accept-token failed — instance is not accepting control-plane-issued tokens"
   fi
 fi
 rm -f "$COOKIE_JAR"
@@ -222,10 +222,10 @@ if ! lh_hosted_get_instance "$INSTANCE_ID"; then
 fi
 inst_status="$LH_INSTANCE_STATUS"
 
-if [[ "$inst_status" == "active" || "$inst_status" == "running" || "$inst_status" == "provisioned" || "$inst_status" == "provisioning" ]]; then
+if [[ "$inst_status" == "active" ]]; then
   ok "Instance status: ${inst_status}"
 else
-  fail "Instance status unexpected: '${inst_status}' (expected active/running/provisioned)"
+  fail "Instance status unexpected: '${inst_status}' (expected active — provisioning means health check never passed)"
 fi
 
 # ---------------------------------------------------------------------------
