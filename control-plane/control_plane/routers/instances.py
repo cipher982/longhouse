@@ -231,6 +231,12 @@ def _recreate_instance(
     inst.data_path = result.data_path
     inst.status = "provisioning"
     inst.last_health_at = None
+    inst.provisioned_at = datetime.now(timezone.utc)
+    # Clear stale health state from the previous run so the reconciler
+    # doesn't carry over old failure counts or an outdated error message.
+    inst.consecutive_failures = 0
+    inst.unhealthy_since = None
+    inst.last_health_error = None
     if result.password_hash:
         inst.password_hash = result.password_hash
     if result.image:
@@ -361,6 +367,7 @@ def create_instance(payload: InstanceCreate, db: Session = Depends(get_db)):
         data_path=result.data_path,
         password_hash=result.password_hash,
         status="provisioning",
+        provisioned_at=datetime.now(timezone.utc),
     )
     db.add(instance)
     db.commit()
@@ -511,6 +518,9 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
                 )
                 inst.container_name = rb.container_name
                 inst.current_image = prior_image
+                db.commit()
+                # Verify the rollback image is actually healthy before promoting.
+                provisioner.wait_for_health(inst.subdomain, timeout=60)
                 inst.status = "active"
                 inst.last_health_at = datetime.now(timezone.utc)
                 db.commit()

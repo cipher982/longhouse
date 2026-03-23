@@ -33,11 +33,17 @@ from control_plane.services.instance_health_reconciler import run_instance_healt
 logger = logging.getLogger(__name__)
 
 
+_reconciler_task: asyncio.Task | None = None
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    global _reconciler_task
     _startup()
-    asyncio.create_task(run_instance_health_reconciler(settings.root_domain))
+    _reconciler_task = asyncio.create_task(run_instance_health_reconciler(settings.root_domain))
     yield
+    if _reconciler_task is not None:
+        _reconciler_task.cancel()
 
 
 app = FastAPI(title="Longhouse Control Plane", version="0.1.0", lifespan=_lifespan)
@@ -76,6 +82,7 @@ def _startup():
 
     # Migrate: add per-instance health tracking columns if missing
     for col_ddl in (
+        "ALTER TABLE cp_instances ADD COLUMN provisioned_at DATETIME",
         "ALTER TABLE cp_instances ADD COLUMN consecutive_failures INTEGER DEFAULT 0",
         "ALTER TABLE cp_instances ADD COLUMN unhealthy_since DATETIME",
         "ALTER TABLE cp_instances ADD COLUMN last_health_error TEXT",

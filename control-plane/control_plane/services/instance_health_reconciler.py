@@ -89,17 +89,19 @@ def _reconcile(db, root_domain: str) -> dict:
                     inst.last_health_error = None
                     result["promoted"] += 1
                 else:
-                    # Detect stuck provisioning
-                    created = inst.created_at
-                    if created.tzinfo is None:
-                        created = created.replace(tzinfo=timezone.utc)
-                    age = now - created
-                    if age > timedelta(minutes=PROVISIONING_TIMEOUT_MINUTES):
-                        inst.status = "failed"
-                        inst.last_health_error = (
-                            f"Provisioning timeout after {PROVISIONING_TIMEOUT_MINUTES}m: {error}"
-                        )
-                        result["provisioning_timed_out"] += 1
+                    # Use provisioned_at (set on each reprovision/create) so we don't
+                    # instantly time out a months-old instance that just got reprovisioned.
+                    # Fall back to created_at only for rows that predate this column.
+                    start = inst.provisioned_at or inst.created_at
+                    if start is not None:
+                        if start.tzinfo is None:
+                            start = start.replace(tzinfo=timezone.utc)
+                        if now - start > timedelta(minutes=PROVISIONING_TIMEOUT_MINUTES):
+                            inst.status = "failed"
+                            inst.last_health_error = (
+                                f"Provisioning timeout after {PROVISIONING_TIMEOUT_MINUTES}m: {error}"
+                            )
+                            result["provisioning_timed_out"] += 1
 
             else:  # active or unhealthy
                 if healthy:
@@ -135,7 +137,13 @@ def _reconcile(db, root_domain: str) -> dict:
 
 
 async def run_instance_health_reconciler(root_domain: str) -> None:
-    """Async loop: probe all hosted instances every RECONCILE_INTERVAL_SECONDS."""
+    """Async loop: probe all hosted instances every RECONCILE_INTERVAL_SECONDS.
+
+    Runs an immediate first pass on startup so stuck provisioning instances are
+    caught right away rather than waiting up to 5 minutes. Blocking DB + HTTP
+    I/O is offloaded to a thread executor so the event loop is not stalled.
+    """
+    loop = asyncio.get_event_loop()
     logger.info(
         "Instance health reconciler started (interval=%ds, timeout=%dm, unhealthy_threshold=%d)",
         RECONCILE_INTERVAL_SECONDS,
@@ -143,9 +151,8 @@ async def run_instance_health_reconciler(root_domain: str) -> None:
         UNHEALTHY_THRESHOLD,
     )
     while True:
-        await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
         try:
-            result = reconcile_once(root_domain)
+            result = await loop.run_in_executor(None, reconcile_once, root_domain)
             actionable = {k: v for k, v in result.items() if k != "checked" and v > 0}
             if actionable or result.get("errors", 0) > 0:
                 logger.info("Instance health reconcile: checked=%d %s", result["checked"], actionable)
@@ -153,3 +160,4 @@ async def run_instance_health_reconciler(root_domain: str) -> None:
                 logger.debug("Instance health reconcile: checked=%d all ok", result["checked"])
         except Exception:
             logger.exception("Instance health reconciler loop error")
+        await asyncio.sleep(RECONCILE_INTERVAL_SECONDS)
