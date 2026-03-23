@@ -24,7 +24,7 @@ Uses a temporary HOME so onboarding/install checks do not touch the real machine
 Options:
   --installer <local|remote>  Installer source (default: local)
   --installer-url <url>       Remote installer URL (default: https://get.longhouse.ai/install.sh)
-  --pkg-source <path>         Package source for installer (default: apps/zerg/backend for local mode)
+  --pkg-source <path>         Package source for installer (default: server for local mode)
   --shell <path>              Shell to simulate for PATH/profile checks (default: $SHELL)
   --port <port>               Fixed port for onboarding/demo server
   --demo-port <port>          Fixed port for demo server (default: random free port)
@@ -257,7 +257,7 @@ if [[ -z "$DEMO_PORT" ]]; then
 fi
 
 if [[ -z "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" ]]; then
-  PACKAGE_SOURCE="$ROOT_DIR/apps/zerg/backend"
+  PACKAGE_SOURCE="$ROOT_DIR/server"
 fi
 
 if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" ]]; then
@@ -266,7 +266,7 @@ if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" ]]; then
   (
     cd "$ROOT_DIR"
     bun install --frozen-lockfile --silent
-    cd apps/zerg/frontend-web
+    cd web
     bun run build
   )
 fi

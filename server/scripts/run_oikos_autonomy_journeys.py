@@ -2,8 +2,8 @@
 """Run Oikos autonomy journey fixtures and persist reviewable artifacts.
 
 Usage:
-  uv run python apps/zerg/backend/scripts/run_oikos_autonomy_journeys.py
-  uv run python apps/zerg/backend/scripts/run_oikos_autonomy_journeys.py --artifact-root /tmp/oikos-autonomy
+  uv run python server/scripts/run_oikos_autonomy_journeys.py
+  uv run python server/scripts/run_oikos_autonomy_journeys.py --artifact-root /tmp/oikos-autonomy
 """
 
 from __future__ import annotations

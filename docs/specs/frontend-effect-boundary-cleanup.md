@@ -138,7 +138,7 @@ Add the primitives that later slices will migrate onto:
 
 Files immediately touched in this slice:
 
-- `apps/zerg/frontend-web/src/lib/auth.tsx`
+- `web/src/lib/auth.tsx`
 - public info pages currently open-coding page metadata
 - readiness-flag pages currently open-coding body attribute mutations
 
@@ -152,8 +152,8 @@ Rewrite auth/config consumers so query state owns auth truth:
 
 Primary files:
 
-- `apps/zerg/frontend-web/src/lib/auth.tsx`
-- `apps/zerg/frontend-web/src/components/Layout.tsx`
+- `web/src/lib/auth.tsx`
+- `web/src/components/Layout.tsx`
 
 ### Slice 3: Route-Owned State Rewrites
 

@@ -14,7 +14,7 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent / "apps/zerg/frontend-web/src"
+ROOT = Path(__file__).resolve().parent.parent / "web/src"
 
 # Directories to process
 CSS_DIRS = [

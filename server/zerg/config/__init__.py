@@ -31,14 +31,14 @@ from dotenv import load_dotenv  # noqa: E402
 # ``_REPO_ROOT`` points to the top-level repository directory.
 # Detect environment:
 # - Docker: /app/zerg/config/__init__.py → parents[1] = /app
-# - Local monorepo: apps/zerg/backend/zerg/config/__init__.py → parents[5] = repo root
+# - Local monorepo: server/zerg/config/__init__.py → parents[5] = repo root
 
 _current_path = Path(__file__).resolve()
 if "/app/" in str(_current_path):
     # Docker environment: mounted at /app
     _REPO_ROOT = _current_path.parents[1]  # /app/zerg/config → /app
 else:
-    # Local monorepo: apps/zerg/backend/zerg/config → repo root
+    # Local monorepo: server/zerg/config → repo root
     _REPO_ROOT = _current_path.parents[5]
 
 

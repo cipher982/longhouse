@@ -5,7 +5,7 @@ Tiny FastAPI service that handles signup, billing, and provisioning of per-user 
 ## Dev (local)
 
 ```bash
-cd apps/control-plane
+cd control-plane
 uv sync
 uv run uvicorn control_plane.main:app --reload --port 48080
 ```

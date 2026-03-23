@@ -19,7 +19,7 @@ import time
 # Add backend to path — works both in container (/app/) and locally (relative to script)
 _script_dir = os.path.dirname(os.path.abspath(__file__))
 _backend_rel = os.path.join(_script_dir, "..", "apps", "zerg", "backend")
-_backend_container = "/app/apps/zerg/backend"
+_backend_container = "/app/server"
 if os.path.isdir(_backend_container):
     sys.path.insert(0, _backend_container)
 elif os.path.isdir(_backend_rel):

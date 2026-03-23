@@ -21,7 +21,7 @@ from pathlib import Path
 import yaml
 
 MANIFEST_PATH = Path(__file__).parent / "screenshots.yaml"
-FRONTEND_DIR = Path(__file__).parent.parent / "apps" / "zerg" / "frontend-web"
+FRONTEND_DIR = Path(__file__).parent.parent / "web"
 READY_TIMEOUT = 15000  # 15 seconds
 TIMELINE_SESSIONS_PATH = "/api/timeline/sessions"
 

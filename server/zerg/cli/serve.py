@@ -414,7 +414,7 @@ def serve(
             fg=typer.colors.YELLOW,
         )
         typer.echo("  If you installed from PyPI, this may be a packaging issue.")
-        typer.echo("  From source: cd apps/zerg/frontend-web && bun run build")
+        typer.echo("  From source: cd web && bun run build")
         typer.echo("")
 
     typer.echo("Starting Longhouse server...")

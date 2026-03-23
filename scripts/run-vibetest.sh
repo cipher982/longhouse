@@ -125,7 +125,7 @@ else
 
   echo "Starting isolated Longhouse at ${BASE_URL}..."
   (
-    cd "${ROOT_DIR}/apps/zerg/backend"
+    cd "${ROOT_DIR}/server"
     HOME="$QA_HOME" AUTH_DISABLED=1 ENVIRONMENT="test:vibetest" DATABASE_URL="sqlite:///${DEMO_DB}" \
       uv run longhouse serve --demo-fresh --host 127.0.0.1 --port "$PORT"
   ) >"$SERVER_LOG" 2>&1 &

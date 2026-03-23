@@ -8,7 +8,7 @@ Each test case:
 4. Reports pass/fail
 5. Saves results to per-commis temp files
 
-Run with: pytest apps/zerg/backend/evals/
+Run with: pytest server/evals/
 Or via Make: make eval
 """
 

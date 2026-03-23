@@ -17,7 +17,7 @@ WORKDIR /app
 # Copy root lockfile + workspace package.json for dependency caching
 # bun.lock lives at monorepo root; no per-workspace lockfile exists
 COPY bun.lock ./
-COPY apps/zerg/frontend-web/package.json ./
+COPY web/package.json ./
 
 # Install dependencies (no --frozen-lockfile: root lockfile covers all workspaces
 # but Docker only has this one package.json, causing a mismatch. Lockfile still
@@ -25,7 +25,7 @@ COPY apps/zerg/frontend-web/package.json ./
 RUN bun install
 
 # Copy frontend source
-COPY apps/zerg/frontend-web/ ./
+COPY web/ ./
 
 # Build for production (same-origin mode - no cross-origin API URLs needed)
 # The backend will serve both static files and API from the same origin
@@ -42,10 +42,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends git \
 
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-WORKDIR /repo/apps/zerg/backend
+WORKDIR /repo/server
 
 # Copy pyproject files for dependency caching
-COPY apps/zerg/backend/uv.lock apps/zerg/backend/pyproject.toml ./
+COPY server/uv.lock server/pyproject.toml ./
 
 RUN uv sync --frozen --no-install-project --no-dev
 
@@ -60,20 +60,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
-WORKDIR /repo/apps/zerg/backend
+WORKDIR /repo/server
 
 # Copy virtual environment from dependencies stage
-COPY --from=dependencies /repo/apps/zerg/backend/.venv ./.venv
+COPY --from=dependencies /repo/server/.venv ./.venv
 
 # Copy backend source
-COPY apps/zerg/backend/ ./
-COPY apps/control-plane/longhouse_shared /app/longhouse_shared
+COPY server/ ./
+COPY control-plane/longhouse_shared /app/longhouse_shared
 
 # Copy shared config
 COPY config/models.json /config/models.json
 
 # Copy REAL frontend dist from frontend-builder (not placeholder)
-COPY --from=frontend-builder /app/dist /repo/apps/zerg/frontend-web/dist
+COPY --from=frontend-builder /app/dist /repo/web/dist
 
 # Install the project
 RUN uv sync --frozen --no-dev
@@ -106,11 +106,11 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 longhouse
 WORKDIR /app
 
 # Copy backend with virtual environment
-COPY --from=backend-builder --chown=longhouse:longhouse /repo/apps/zerg/backend /app
+COPY --from=backend-builder --chown=longhouse:longhouse /repo/server /app
 COPY --from=backend-builder --chown=longhouse:longhouse /app/longhouse_shared /app/longhouse_shared
 
 # Copy frontend dist to where backend expects it
-COPY --from=frontend-builder --chown=longhouse:longhouse /app/dist /app/frontend-web/dist
+COPY --from=frontend-builder --chown=longhouse:longhouse /app/dist /app/web/dist
 
 # Copy config
 COPY --from=backend-builder --chown=longhouse:longhouse /config /config

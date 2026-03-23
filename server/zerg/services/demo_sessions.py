@@ -51,14 +51,14 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Bash",
             tool_call_id="call_s1_01",
-            tool_input_json={"command": "rg -n 'embedding\\|semantic\\|vector' apps/zerg/backend/zerg/ --include='*.py' -l"},
+            tool_input_json={"command": "rg -n 'embedding\\|semantic\\|vector' server/zerg/ --include='*.py' -l"},
             timestamp=t1 + timedelta(minutes=1),
         ),
         EventIngest(
             role="assistant",
             tool_name="Grep",
             tool_call_id="call_s1_02",
-            tool_input_json={"pattern": "def.*search", "path": "apps/zerg/backend/zerg/services/"},
+            tool_input_json={"pattern": "def.*search", "path": "server/zerg/services/"},
             timestamp=t1 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -75,7 +75,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
                 "0.312",
                 0,
                 89,
-                "apps/zerg/backend/zerg/services/agents_store.py\napps/zerg/backend/zerg/services/embedding_cache.py\napps/zerg/backend/zerg/models/agents.py",
+                "server/zerg/services/agents_store.py\nserver/zerg/services/embedding_cache.py\nserver/zerg/models/agents.py",
             ),
             timestamp=t1 + timedelta(minutes=1, seconds=2),
         ),
@@ -99,7 +99,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Read",
-            tool_input_json={"file_path": "apps/zerg/backend/zerg/services/embedding_cache.py"},
+            tool_input_json={"file_path": "server/zerg/services/embedding_cache.py"},
             timestamp=t1 + timedelta(minutes=3),
         ),
         EventIngest(
@@ -115,7 +115,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Read",
-            tool_input_json={"file_path": "apps/zerg/backend/zerg/services/agents_store.py", "offset": 210, "limit": 60},
+            tool_input_json={"file_path": "server/zerg/services/agents_store.py", "offset": 210, "limit": 60},
             timestamp=t1 + timedelta(minutes=5),
         ),
         EventIngest(
@@ -127,7 +127,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Edit",
             tool_input_json={
-                "file_path": "apps/zerg/backend/zerg/services/agents_store.py",
+                "file_path": "server/zerg/services/agents_store.py",
                 "old_string": "    fts_results = await _fts_search(query, days_back, limit, project)\n    return SessionSearchResult(sessions=fts_results, mode='fts')",
                 "new_string": "    if use_semantic and (emb := await get_embedding(query)):\n        semantic = await _cosine_search(emb, days_back, limit, project)\n        return SessionSearchResult(sessions=semantic, mode='semantic')\n    fts_results = await _fts_search(query, days_back, limit, project)\n    return SessionSearchResult(sessions=fts_results, mode='fts')",
             },
@@ -138,7 +138,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Write",
             tool_input_json={
-                "file_path": "apps/zerg/backend/zerg/services/agents_store.py",
+                "file_path": "server/zerg/services/agents_store.py",
                 "content": "async def _cosine_search(embedding: list[float], days_back: int, limit: int, project: str | None) -> list[Session]:\n    # Fetch candidate sessions with stored embeddings, compute cosine similarity\n    ...",
             },
             timestamp=t1 + timedelta(minutes=9),
@@ -149,14 +149,14 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Bash",
             tool_call_id="call_s1_10",
-            tool_input_json={"command": "cd apps/zerg/backend && uv run pytest tests_lite/test_agents_store.py -x -q"},
+            tool_input_json={"command": "cd server && uv run pytest tests_lite/test_agents_store.py -x -q"},
             timestamp=t1 + timedelta(minutes=12),
         ),
         EventIngest(
             role="assistant",
             tool_name="Bash",
             tool_call_id="call_s1_11",
-            tool_input_json={"command": "cd apps/zerg/backend && uv run ruff check zerg/services/agents_store.py"},
+            tool_input_json={"command": "cd server && uv run ruff check zerg/services/agents_store.py"},
             timestamp=t1 + timedelta(minutes=12),
         ),
         EventIngest(
@@ -180,7 +180,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Edit",
             tool_input_json={
-                "file_path": "apps/zerg/backend/zerg/routers/agents.py",
+                "file_path": "server/zerg/routers/agents.py",
                 "old_string": "async def list_sessions(query: str | None = None,",
                 "new_string": "async def list_sessions(query: str | None = None, semantic: bool = False,",
             },
@@ -190,7 +190,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "cd apps/zerg/backend && uv run pytest tests_lite/ -q --tb=short"},
+            tool_input_json={"command": "cd server && uv run pytest tests_lite/ -q --tb=short"},
             timestamp=t1 + timedelta(minutes=17),
         ),
         EventIngest(
@@ -226,7 +226,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="exec_command",
             tool_call_id="call_s2_01",
-            tool_input_json={"cmd": "grep -n 'INSERT\\|upsert\\|on_conflict' apps/zerg/backend/zerg/services/agents_store.py | head -30"},
+            tool_input_json={"cmd": "grep -n 'INSERT\\|upsert\\|on_conflict' server/zerg/services/agents_store.py | head -30"},
             timestamp=t2 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -234,7 +234,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             tool_name="exec_command",
             tool_call_id="call_s2_02",
             tool_input_json={
-                "cmd": "grep -n 'ingest_session\\|provider_session_id' apps/zerg/backend/zerg/services/agents_store.py | head -20"
+                "cmd": "grep -n 'ingest_session\\|provider_session_id' server/zerg/services/agents_store.py | head -20"
             },
             timestamp=t2 + timedelta(minutes=1),
         ),
@@ -242,7 +242,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="exec_command",
             tool_call_id="call_s2_03",
-            tool_input_json={"cmd": "grep -rn 'ingest_session' apps/zerg/backend/ --include='*.py' | grep -v test | grep -v __pycache__"},
+            tool_input_json={"cmd": "grep -rn 'ingest_session' server/ --include='*.py' | grep -v test | grep -v __pycache__"},
             timestamp=t2 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -287,14 +287,14 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="exec_command",
             tool_call_id="call_s2_04",
-            tool_input_json={"cmd": "sed -n '85,110p' apps/zerg/backend/zerg/services/agents_store.py"},
+            tool_input_json={"cmd": "sed -n '85,110p' server/zerg/services/agents_store.py"},
             timestamp=t2 + timedelta(minutes=3),
         ),
         EventIngest(
             role="assistant",
             tool_name="exec_command",
             tool_call_id="call_s2_05",
-            tool_input_json={"cmd": "grep -n 'provider_session_id' apps/zerg/backend/zerg/models/agents.py"},
+            tool_input_json={"cmd": "grep -n 'provider_session_id' server/zerg/models/agents.py"},
             timestamp=t2 + timedelta(minutes=3),
         ),
         EventIngest(
@@ -322,7 +322,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="exec_command",
-            tool_input_json={"cmd": "cd apps/zerg/backend && grep -n 'provider_session_id' zerg/models/agents.py"},
+            tool_input_json={"cmd": "cd server && grep -n 'provider_session_id' zerg/models/agents.py"},
             timestamp=t2 + timedelta(minutes=5),
         ),
         EventIngest(
@@ -333,7 +333,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="exec_command",
-            tool_input_json={"cmd": "cd apps/zerg/backend && uv run pytest tests_lite/test_agents_store.py -x -q -k 'ingest'"},
+            tool_input_json={"cmd": "cd server && uv run pytest tests_lite/test_agents_store.py -x -q -k 'ingest'"},
             timestamp=t2 + timedelta(minutes=12),
         ),
         EventIngest(
@@ -634,7 +634,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="exec_command",
             tool_call_id="call_s5_01",
-            tool_input_json={"cmd": "find apps/zerg/frontend-web/src -name '*.tsx' | xargs grep -l 'search\\|query' | head -10"},
+            tool_input_json={"cmd": "find web/src -name '*.tsx' | xargs grep -l 'search\\|query' | head -10"},
             timestamp=t5 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -642,7 +642,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             tool_name="exec_command",
             tool_call_id="call_s5_02",
             tool_input_json={
-                "cmd": "grep -rn 'useSearch\\|searchQuery\\|query=' apps/zerg/frontend-web/src/pages/SessionsPage.tsx | head -20"
+                "cmd": "grep -rn 'useSearch\\|searchQuery\\|query=' web/src/pages/SessionsPage.tsx | head -20"
             },
             timestamp=t5 + timedelta(minutes=1),
         ),
@@ -653,7 +653,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
                 "0.312",
                 0,
                 144,
-                "apps/zerg/frontend-web/src/pages/SessionsPage.tsx\napps/zerg/frontend-web/src/hooks/useAgentSessions.ts\napps/zerg/frontend-web/src/services/api/agents.ts",
+                "web/src/pages/SessionsPage.tsx\nweb/src/hooks/useAgentSessions.ts\nweb/src/services/api/agents.ts",
             ),
             timestamp=t5 + timedelta(minutes=1, seconds=2),
         ),
@@ -672,14 +672,14 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="exec_command",
             tool_call_id="call_s5_03",
-            tool_input_json={"cmd": "sed -n '40,80p' apps/zerg/frontend-web/src/pages/SessionsPage.tsx"},
+            tool_input_json={"cmd": "sed -n '40,80p' web/src/pages/SessionsPage.tsx"},
             timestamp=t5 + timedelta(minutes=2),
         ),
         EventIngest(
             role="assistant",
             tool_name="exec_command",
             tool_call_id="call_s5_04",
-            tool_input_json={"cmd": "grep -n 'semantic\\|mode' apps/zerg/frontend-web/src/services/api/agents.ts | head -10"},
+            tool_input_json={"cmd": "grep -n 'semantic\\|mode' web/src/services/api/agents.ts | head -10"},
             timestamp=t5 + timedelta(minutes=2),
         ),
         EventIngest(
@@ -707,14 +707,14 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="exec_command",
-            tool_input_json={"cmd": "cd apps/zerg/frontend-web && bun run typecheck 2>&1 | tail -5"},
+            tool_input_json={"cmd": "cd web && bun run typecheck 2>&1 | tail -5"},
             timestamp=t5 + timedelta(minutes=10),
         ),
         EventIngest(role="tool", tool_output_text=_lh("8.441", 0, 44, "Found 0 errors."), timestamp=t5 + timedelta(minutes=10, seconds=10)),
         EventIngest(
             role="assistant",
             tool_name="exec_command",
-            tool_input_json={"cmd": "cd apps/zerg/frontend-web && bun run lint 2>&1 | tail -5"},
+            tool_input_json={"cmd": "cd web && bun run lint 2>&1 | tail -5"},
             timestamp=t5 + timedelta(minutes=11),
         ),
         EventIngest(
@@ -851,7 +851,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Bash",
             tool_call_id="call_s7_01",
-            tool_input_json={"command": "grep -rn 'recall\\|RecallPanel' apps/zerg/frontend-web/src/ --include='*.tsx' | head -10"},
+            tool_input_json={"command": "grep -rn 'recall\\|RecallPanel' web/src/ --include='*.tsx' | head -10"},
             timestamp=t7 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -866,7 +866,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="tool",
             tool_call_id="call_s7_01",
-            tool_output_text=_lh("0.188", 0, 88, "apps/zerg/frontend-web/src/components/RecallPanel.tsx"),
+            tool_output_text=_lh("0.188", 0, 88, "web/src/components/RecallPanel.tsx"),
             timestamp=t7 + timedelta(minutes=1, seconds=2),
         ),
         EventIngest(
@@ -888,7 +888,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Read",
-            tool_input_json={"file_path": "apps/zerg/frontend-web/src/components/RecallPanel.tsx"},
+            tool_input_json={"file_path": "web/src/components/RecallPanel.tsx"},
             timestamp=t7 + timedelta(minutes=3),
         ),
         EventIngest(
@@ -900,7 +900,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Edit",
             tool_input_json={
-                "file_path": "apps/zerg/frontend-web/src/pages/SessionsPage.tsx",
+                "file_path": "web/src/pages/SessionsPage.tsx",
                 "old_string": "  const [selectedSession, setSelectedSession] = useState(null);",
                 "new_string": "  const [selectedSession, setSelectedSession] = useState(null);\n  const recallQuery = selectedSession?.first_user_message ?? '';",
             },
@@ -910,7 +910,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="assistant",
             tool_name="Bash",
-            tool_input_json={"command": "cd apps/zerg/frontend-web && bun run typecheck 2>&1 | tail -3"},
+            tool_input_json={"command": "cd web && bun run typecheck 2>&1 | tail -3"},
             timestamp=t7 + timedelta(minutes=9),
         ),
         EventIngest(role="tool", tool_output_text=_lh("7.881", 0, 33, "Found 0 errors."), timestamp=t7 + timedelta(minutes=9, seconds=9)),
@@ -1026,7 +1026,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
                 "2.881",
                 0,
                 312,
-                "error[E0432]: unresolved import `ring::rand`\n --> apps/engine/src/crypto.rs:3:5\nerror: aborting due to previous error\nnote: the `ring` crate requires OpenSSL headers; install `libssl-dev` on the runner",
+                "error[E0432]: unresolved import `ring::rand`\n --> engine/src/crypto.rs:3:5\nerror: aborting due to previous error\nnote: the `ring` crate requires OpenSSL headers; install `libssl-dev` on the runner",
             ),
             timestamp=t9 + timedelta(minutes=2, seconds=3),
         ),
@@ -1069,7 +1069,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="Bash",
             tool_call_id="call_s10_01",
-            tool_input_json={"command": "ls -lh apps/zerg/frontend-web/public/images/landing/"},
+            tool_input_json={"command": "ls -lh web/public/images/landing/"},
             timestamp=t10 + timedelta(minutes=1),
         ),
         EventIngest(

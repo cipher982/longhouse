@@ -56,7 +56,7 @@ make qa-visual-compare       # Visual comparison with Gemini LLM triage
 make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 ```
 
-**Visual compare** (`scripts/visual-compare.ts`): Hybrid pixelmatch + Gemini Flash triage. Catches semantic regressions (color catastrophes, broken layouts) that pixel-perfect baselines miss. Two modes: (1) `--baseline-dir`/`--current-dir` for CI, (2) single-pair manual debugging. Shared page definitions in `apps/zerg/e2e/tests/helpers/page-list.ts`. Requires `GOOGLE_API_KEY` for LLM triage; falls back to hard threshold without it.
+**Visual compare** (`scripts/visual-compare.ts`): Hybrid pixelmatch + Gemini Flash triage. Catches semantic regressions (color catastrophes, broken layouts) that pixel-perfect baselines miss. Two modes: (1) `--baseline-dir`/`--current-dir` for CI, (2) single-pair manual debugging. Shared page definitions in `e2e/tests/helpers/page-list.ts`. Requires `GOOGLE_API_KEY` for LLM triage; falls back to hard threshold without it.
 
 **`tests_lite/` convention:** No shared conftest. Each test file creates its own DB via `_make_db(tmp_path)` using `make_engine("sqlite:///...")` + `AgentsBase.metadata.create_all()`. HTTP-level tests use `TestClient` with `dependency_overrides` on `api_app` (not `app`). See `test_job_preflight.py` for a clean example of both ORM-only and HTTP-level patterns.
 
@@ -89,11 +89,11 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 
 ## Conventions
 
-- **Backend**: FastAPI + Pydantic, `apps/zerg/backend/zerg/`
-- **Frontend**: React + React Query, `apps/zerg/frontend-web/`
+- **Backend**: FastAPI + Pydantic, `server/zerg/`
+- **Frontend**: React + React Query, `web/`
 - **Frontend effects**: `useEffect` is for external synchronization only, never for syncing React state to React state or routine fetch bookkeeping.
 - **Package managers**: Bun (JS), uv (Python) — never npm/pip
-- **Generated code** (don't edit): `backend/zerg/generated/`, `backend/zerg/tools/generated/`, `frontend-web/src/generated/`
+- **Generated code** (don't edit): `server/zerg/generated/`, `server/zerg/tools/generated/`, `web/src/generated/`
 - **Tests**: Always use `make test*` targets, never direct pytest/playwright. New backend tests go in `tests_lite/`.
 - **Tool contracts**: Edit `schemas/tools.yml`, then run `scripts/generate_tool_types.py` — never edit generated files directly
 - **Oikos tools**: Registration is centralized in `oikos_tools.py`; `OIKOS_TOOL_NAMES` + `OIKOS_UTILITY_TOOLS` define the tool subset; `get_oikos_allowed_tools()` is the single source of truth
@@ -125,10 +125,10 @@ Import from `../components/ui`. **Check here before building custom UI.**
 4. **Auth disabled in dev** — `AUTH_DISABLED=1` set by dev.sh.
 5. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
 6. **Master task list:** `TODO.md` is current work only; use `docs/tasks/open/` for multi-step tasks and keep historical notes out of the main list.
-7. **Backend README required** — pyproject.toml needs it; don't delete `apps/zerg/backend/README.md`.
+7. **Backend README required** — pyproject.toml needs it; don't delete `server/README.md`.
 8. **Stripe key rotation** — Use `~/git/me/mytech/scripts/update-stripe-key.sh sk_live_...`. It validates against Stripe before touching anything, then updates Coolify and redeploys.
 9. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
-10. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `apps/zerg/backend/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
+10. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `server/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
 11. **Deploy requires GHCR build** — Push triggers `runtime-image.yml` (path-filtered). Must wait for build before pulling on zerg. Use `gh run watch <id>` to wait. Marketing + control plane pull the same image via Coolify.
 12. **Do not commit valid secret-shaped dummy values** — GitGuardian will flag Fernet-format placeholders even when they are fake. For dev/test/bootstrap paths, generate ephemeral secrets at runtime instead of checking in realistic-looking literals.
 13. **Stage only your changes** — Dirty trees are normal (other agents' WIP). When committing, `git add` specific files — never `git add -A`. If new code depends on unstaged changes from other files, include those files or the deploy will break.
@@ -200,7 +200,7 @@ curl -s https://david010.longhouse.ai/api/health       # User instance health
 ```
 
 ### Automation Note
-Pushes to `main` that touch the runtime image paths (`apps/zerg/backend/**`, `apps/zerg/frontend-web/**`, `config/**`, `docker/runtime.dockerfile`) now trigger the GitHub Actions runtime-image build and the follow-on deploy workflow. Treat that as the primary path for normal app deploys, and keep the manual Coolify + reprovision steps above as the operator fallback and recovery path.
+Pushes to `main` that touch the runtime image paths (`server/**`, `web/**`, `config/**`, `docker/runtime.dockerfile`) now trigger the GitHub Actions runtime-image build and the follow-on deploy workflow. Treat that as the primary path for normal app deploys, and keep the manual Coolify + reprovision steps above as the operator fallback and recovery path.
 
 ### If Something Breaks
 ```bash
@@ -232,26 +232,26 @@ Sauron is separate again. Longhouse core only runs builtin product jobs; David's
 - `host.docker.internal` still matters for the standalone scheduler because jobs ProxyJump through the host into other servers
 - There must only ever be ONE active standalone Sauron scheduler for the private jobs pack; duplicate runtimes = duplicate scheduled jobs
 
-## apps/runner - Native Runner Daemon
+## runner - Native Runner Daemon
 
 Bun-compiled binary for command execution on user infrastructure. Connects via WebSocket, validates commands client-side (defense-in-depth), streams output. Install via `ENROLL_TOKEN=xxx curl .../install.sh | bash` → launchd (macOS) or systemd (Linux).
 
-**Entrypoints:** `apps/runner/src/index.ts` (daemon), `apps/runner/src/executor.ts` (command exec), `zerg/services/runner_job_dispatcher.py` (backend dispatch). Release workflow: `.github/workflows/runner-release.yml`.
+**Entrypoints:** `runner/src/index.ts` (daemon), `runner/src/executor.ts` (command exec), `zerg/services/runner_job_dispatcher.py` (backend dispatch). Release workflow: `.github/workflows/runner-release.yml`.
 
 ## Product Surface (Canonical)
 
 Source of truth for product surface and priorities: `VISION.md` section **"Product Surface (2026-02 Decision)"**.
 
 Do not maintain a second feature catalog in this file. Keep AGENTS focused on execution rules and link to canonical docs:
-- Oikos tool contract lives in code under `apps/zerg/backend/zerg/tools/builtin/oikos_tools.py` and `apps/zerg/backend/zerg/services/`
-- Harness/runtime contracts live in code under `apps/zerg/backend/zerg/services/` and `apps/zerg/backend/zerg/tools/`
-- Runner daemon docs: `apps/runner/README.md`
-- Control plane docs: `apps/control-plane/README.md`
-- Shipper internals: `apps/zerg/backend/zerg/services/shipper/` (Python — hooks, install, auth)
-- Rust engine (high-perf shipper daemon): `apps/engine/` — `longhouse-engine connect` replaces Python watcher daemon; 27 MB RSS idle vs 835 MB Python
-- Session processing: `apps/zerg/backend/zerg/services/session_processing/` (summarize, embeddings, content, tokens)
-- Embedding cache: `apps/zerg/backend/zerg/services/embedding_cache.py`
-- Video production: `apps/video/` (Remotion studio — canonical video pipeline)
+- Oikos tool contract lives in code under `server/zerg/tools/builtin/oikos_tools.py` and `server/zerg/services/`
+- Harness/runtime contracts live in code under `server/zerg/services/` and `server/zerg/tools/`
+- Runner daemon docs: `runner/README.md`
+- Control plane docs: `control-plane/README.md`
+- Shipper internals: `server/zerg/services/shipper/` (Python — hooks, install, auth)
+- Rust engine (high-perf shipper daemon): `engine/` — `longhouse-engine connect` replaces Python watcher daemon; 27 MB RSS idle vs 835 MB Python
+- Session processing: `server/zerg/services/session_processing/` (summarize, embeddings, content, tokens)
+- Embedding cache: `server/zerg/services/embedding_cache.py`
+- Video production: `video/` (Remotion studio — canonical video pipeline)
 - Marketing screenshots: `scripts/capture_marketing.py`, `scripts/screenshots.yaml`
 
 ## Jobs: Builtin vs External
@@ -278,7 +278,7 @@ Two separate things exist — don't conflate or rebuild:
 ## Learnings (High-Signal Only)
 
 <!-- Agents: keep this tight (<=10). Keep durable invariants only. If a learning is code-fixable confusion, add TODO work and remove it after the fix lands. -->
-- (2026-02-05) [db] Alembic migrations are deprecated for core app work; `apps/zerg/backend/alembic/versions` is intentionally empty. New models use `AgentsBase.metadata.create_all()` auto-creation. **New columns on existing models must also be added to `_migrate_agents_columns()` in `database.py`** — SQLite ignores new columns on existing tables and will 500 without the ALTER.
+- (2026-02-05) [db] Alembic migrations are deprecated for core app work; `server/alembic/versions` is intentionally empty. New models use `AgentsBase.metadata.create_all()` auto-creation. **New columns on existing models must also be added to `_migrate_agents_columns()` in `database.py`** — SQLite ignores new columns on existing tables and will 500 without the ALTER.
 - (2026-02-05) [security] Never store admin/device tokens in AI session notes; rotate immediately if exposed.
 - (2026-02-12) [arch] Agent infra models use `AgentsBase` (not `Base`), live in `models/agents.py` and `models/work.py`. Schema `agents.` gets translate-mapped to `None` for SQLite.
 - (2026-02-12) [frontend] Frontend API errors: `ApiError` class has `status`, `url`, `body` (already-parsed object, not string). FastAPI wraps HTTPException detail in `{detail: ...}`, so structured error data is at `body.detail.field`.

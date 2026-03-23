@@ -71,7 +71,7 @@ async function seedSessionDetailFixture(
     ...toolCall(
       2,
       "toolu_mobile_workspace_ls",
-      "ls -la apps/zerg/frontend-web/src/components/session-workspace",
+      "ls -la web/src/components/session-workspace",
       "total 48\ndrwxr-xr-x  6 agent  staff   192 Mar 18 10:00 .\ndrwxr-xr-x 12 agent  staff   384 Mar 18 10:00 ..\n-rw-r--r--  1 agent  staff  4512 Mar 18 10:00 EventInspectorPane.tsx\n-rw-r--r--  1 agent  staff  9238 Mar 18 10:00 SessionContextPane.tsx\n-rw-r--r--  1 agent  staff  8384 Mar 18 10:00 TimelinePane.tsx\n",
     ),
     message(
@@ -82,7 +82,7 @@ async function seedSessionDetailFixture(
     ...toolCall(
       5,
       "toolu_mobile_css_rg",
-      "rg -n \"workspace-shell|@media|timeline-pane\" apps/zerg/frontend-web/src/styles/session-workspace.css",
+      "rg -n \"workspace-shell|@media|timeline-pane\" web/src/styles/session-workspace.css",
       "15:.workspace-shell {\n33:.workspace-shell__body {\n522:.timeline-pane__header {\n694:.timeline-pane__list {\n1010:@media (max-width: 1180px) {\n1034:@media (max-width: 900px) {\n",
     ),
     message(
@@ -98,7 +98,7 @@ async function seedSessionDetailFixture(
     ...toolCall(
       9,
       "toolu_mobile_css_sed",
-      "sed -n '1000,1085p' apps/zerg/frontend-web/src/styles/session-workspace.css",
+      "sed -n '1000,1085p' web/src/styles/session-workspace.css",
       "@media (max-width: 900px) {\n  .workspace-shell__body {\n    grid-template-columns: 1fr;\n    grid-template-rows: auto minmax(360px, 1fr) minmax(280px, auto);\n    grid-template-areas:\n      \"sidebar\"\n      \"main\"\n      \"inspector\";\n  }\n}\n",
     ),
     message(
@@ -123,7 +123,7 @@ async function seedSessionDetailFixture(
       environment: "development",
       project: "mobile-session-detail-e2e",
       device_id: "e2e-mobile-device",
-      cwd: "/Users/davidrose/git/zerg/apps/zerg/frontend-web/src/components/session-workspace",
+      cwd: "/Users/davidrose/git/zerg/web/src/components/session-workspace",
       git_repo: "git@github.com:cipher982/longhouse.git",
       git_branch: "fix/mobile-session-layout-readability",
       provider_session_id: `claude-session-${sessionId}`,

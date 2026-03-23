@@ -1,9 +1,9 @@
 FROM oven/bun:1
 
-# Build from apps/runner directory:
-#   docker build -t longhouse/runner:latest apps/runner
+# Build from runner directory:
+#   docker build -t longhouse/runner:latest runner
 # Or from repo root:
-#   docker build -f apps/runner/Dockerfile -t longhouse/runner:latest apps/runner
+#   docker build -f runner/Dockerfile -t longhouse/runner:latest runner
 WORKDIR /app
 
 # Copy package files and install deps

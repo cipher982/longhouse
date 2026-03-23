@@ -12,14 +12,14 @@ RUN echo "Cache bust: $CACHE_BUST"
 WORKDIR /app
 
 # Copy package files first for better caching
-COPY apps/zerg/frontend-web/package.json ./
-COPY apps/zerg/frontend-web/bun.lock* ./
+COPY web/package.json ./
+COPY web/bun.lock* ./
 
 # Install dependencies
 RUN bun install --frozen-lockfile || bun install
 
 # Copy source
-COPY apps/zerg/frontend-web/ ./
+COPY web/ ./
 
 # Build args for Vite env vars (baked into JS bundle at build time)
 ARG VITE_API_BASE_URL
@@ -40,8 +40,8 @@ RUN bun run build
 # Production target - nginx serving static files
 FROM nginx:alpine AS production
 
-COPY apps/zerg/frontend-web/nginx.conf.template /etc/nginx/nginx.conf.template
-COPY apps/zerg/frontend-web/docker-entrypoint.sh /docker-entrypoint.sh
+COPY web/nginx.conf.template /etc/nginx/nginx.conf.template
+COPY web/docker-entrypoint.sh /docker-entrypoint.sh
 COPY --from=builder /app/dist/ /usr/share/nginx/html/
 
 RUN test -f /usr/share/nginx/html/index.html && \
@@ -56,14 +56,14 @@ FROM oven/bun:alpine AS development
 WORKDIR /app
 
 # Copy package files
-COPY apps/zerg/frontend-web/package.json ./
-COPY apps/zerg/frontend-web/bun.lock* ./
+COPY web/package.json ./
+COPY web/bun.lock* ./
 
 # Install dependencies
 RUN bun install --frozen-lockfile || bun install
 
 # Copy source (will be overwritten by volume mount in dev)
-COPY apps/zerg/frontend-web/ ./
+COPY web/ ./
 
 EXPOSE 5173
 CMD ["bun", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]

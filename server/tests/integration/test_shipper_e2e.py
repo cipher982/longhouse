@@ -42,7 +42,7 @@ import requests
 # ---------------------------------------------------------------------------
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
-BACKEND_DIR = Path(__file__).parent.parent.parent  # apps/zerg/backend
+BACKEND_DIR = Path(__file__).parent.parent.parent  # server
 REPO_ROOT = BACKEND_DIR.parent.parent.parent       # repo root
 
 # Always use the repo-local binary so tests are coupled to the current source.
@@ -182,7 +182,7 @@ def server(tmp_path_factory):
     if not ENGINE_BIN.exists():
         pytest.skip(
             f"Repo-local engine binary not found at {ENGINE_BIN}.\n"
-            "Run: cd apps/engine && cargo build --release"
+            "Run: cd engine && cargo build --release"
         )
 
     db_path = tmp_path_factory.mktemp("shipper_e2e") / "test.db"

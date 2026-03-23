@@ -6,7 +6,7 @@ This script tests the LLM decider in isolation to validate:
 2. Response times are acceptable (< 1.5s)
 3. The decider handles various scenarios correctly
 
-Run: cd apps/zerg/backend && uv run python scripts/test_llm_decider.py
+Run: cd server && uv run python scripts/test_llm_decider.py
 """
 
 import asyncio

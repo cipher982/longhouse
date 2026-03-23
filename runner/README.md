@@ -15,7 +15,7 @@ bun run --filter @longhouse/runner start
 ## Docker
 
 ```bash
-docker build -t longhouse/runner:latest apps/runner
+docker build -t longhouse/runner:latest runner
 
 docker run -d --name longhouse-runner \
   -e LONGHOUSE_URL=http://localhost:8080 \
@@ -37,7 +37,7 @@ Optional: `RUNNER_CAPABILITIES`, `HEARTBEAT_INTERVAL_MS`.
 {
   "name": "runner-install-typecheck",
   "mode": "smoke",
-  "workdir": "apps/runner",
+  "workdir": "runner",
   "timeout": 120,
   "steps": [
     "bun install --frozen-lockfile",

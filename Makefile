@@ -92,7 +92,7 @@ dev-demo: ## Start demo environment (seeded SQLite DB)
 	@env -u DATABASE_URL ./scripts/dev-demo.sh
 
 demo-db: ## Build demo SQLite database
-	@uv run python apps/zerg/backend/scripts/build_demo_db.py
+	@uv run python server/scripts/build_demo_db.py
 
 stop: ## Stop development services
 	@echo "Stopping development services..."
@@ -200,40 +200,40 @@ test-readmes: ## Run README contract tests (MODE=smoke[default] or full)
 
 test-lite: ## Fast SQLite-lite backend tests (no Docker)
 	@echo "🧪 Running lite backend tests (SQLite)..."; \
-	(cd apps/zerg/backend && ./run_backend_tests_lite.sh)
+	(cd server && ./run_backend_tests_lite.sh)
 	@$(MAKE) test-control-plane
 	@$(MAKE) test-engine-fast
 
 test-autonomy-journeys: ## Run deterministic Oikos autonomy journey harness tests
 	@echo "🧪 Running Oikos autonomy journey harness tests..."
-	cd apps/zerg/backend && ./run_backend_tests_lite.sh tests_lite/test_oikos_autonomy_journeys.py tests_lite/test_session_loop_mode.py tests_lite/test_oikos_operator_loop_canary.py
+	cd server && ./run_backend_tests_lite.sh tests_lite/test_oikos_autonomy_journeys.py tests_lite/test_session_loop_mode.py tests_lite/test_oikos_operator_loop_canary.py
 
 run-autonomy-journeys: ## Run Oikos autonomy journey fixtures and save artifacts to .tmp/
 	@echo "🧪 Running Oikos autonomy journeys with durable artifacts..."
-	cd apps/zerg/backend && uv run python scripts/run_oikos_autonomy_journeys.py
+	cd server && uv run python scripts/run_oikos_autonomy_journeys.py
 
 test-control-plane: ## Fast control-plane unit tests (no Docker)
 	@echo "🧪 Running control-plane tests..."; \
-	cd apps/control-plane && \
+	cd control-plane && \
 	uv sync --extra dev --frozen >/dev/null && \
 	uv run --extra dev pytest tests -q
 
 test-e2e-cp: ## Control plane E2E (Playwright, local server, no Docker)
 	@echo "🎭 Running control-plane E2E tests..."; \
-	cd apps/control-plane && \
+	cd control-plane && \
 	uv sync --extra dev --frozen >/dev/null && \
 	uv run --extra dev playwright install chromium --with-deps >/dev/null 2>&1 || true && \
 	uv run --extra dev pytest e2e/ -v
 
 install-engine: ## Build + sign the Rust engine binary (run after any engine source change)
-	cd apps/engine && cargo build --release
-	codesign -s - apps/engine/target/release/longhouse-engine
+	cd engine && cargo build --release
+	codesign -s - engine/target/release/longhouse-engine
 	@echo "longhouse-engine installed (symlink at ~/.local/bin/longhouse-engine)"
 
 test-engine-fast: ## Rust engine unit + golden + adversarial tests (uses repo-local binary, included in make test)
 	@echo "🦀 Running engine unit + golden + adversarial tests..."
-	cd apps/engine && cargo build --release
-	cd apps/engine && cargo test --bin longhouse-engine --test golden_parser_contract --test adversarial_parser
+	cd engine && cargo build --release
+	cd engine && cargo test --bin longhouse-engine --test golden_parser_contract --test adversarial_parser
 
 test-zerg-ops-backup: ## Backup/restore retention contract test for scripts/zerg-ops.sh
 	@bash scripts/test-zerg-ops.sh
@@ -241,8 +241,8 @@ test-zerg-ops-backup: ## Backup/restore retention contract test for scripts/zerg
 test-shipper-e2e: ## Full pipeline E2E: fixture → longhouse-engine ship → API → DB (uses repo-local binary)
 	@echo "🚀 Running shipper E2E tests (Claude/Gemini/Codex + schema-drift)..."
 	@echo "🦀 Building release engine binary (avoids stale-binary false confidence)..."
-	cd apps/engine && cargo build --release
-	cd apps/zerg/backend && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
+	cd engine && cargo build --release
+	cd server && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
 test-shipper-premerge: ## Full shipper QA: engine fast tests + pipeline E2E (run before merging engine changes)
 	$(MAKE) test-engine-fast
@@ -262,7 +262,7 @@ test-e2e: ## Run E2E tests (core + a11y)
 test-e2e-core: ## @internal Run core E2E tests only (no retries, must pass 100%)
 	@$(MAKE) ensure-js-deps
 	@echo "🔴 Running CORE E2E tests (no retries, must pass 100%)..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=core --retries=0 --workers=1
 
 test-full: ## Full local suite (unit + full E2E + visual baselines + visual compare)
@@ -277,36 +277,36 @@ test-full: ## Full local suite (unit + full E2E + visual baselines + visual comp
 test-chat-e2e: ## Run Oikos chat E2E tests (inside unified SPA)
 	@$(MAKE) ensure-js-deps
 	@echo "🧪 Running chat E2E tests (unified SPA)..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/unified-frontend.spec.ts
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/unified-frontend.spec.ts
 
 test-e2e-single: ## @internal Run a single E2E test (usage: make test-e2e-single TEST=tests/unified-frontend.spec.ts)
 	@$(MAKE) ensure-js-deps
 	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=<spec-or-args>" && exit 1)
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
 
 test-e2e-continuation-provider: ## Run the real provider-backed continuation smoke (requires ANTHROPIC_API_KEY + claude CLI; optional PROVIDER_SMOKE_ARTIFACT_DIR)
 	@$(MAKE) ensure-js-deps
-	cd apps/zerg/frontend-web && bun run build
-	cd apps/zerg/e2e && E2E_BACKEND_PORT=$(E2E_BACKEND_PORT) node scripts/provider-continuation-smoke.mjs
+	cd web && bun run build
+	cd e2e && E2E_BACKEND_PORT=$(E2E_BACKEND_PORT) node scripts/provider-continuation-smoke.mjs
 
 test-e2e-ui: ## @internal Run Playwright E2E tests with interactive UI
 	@$(MAKE) ensure-js-deps
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --ui
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --ui
 
 test-e2e-verbose: ## @internal Run E2E tests with full verbose output (for debugging)
 	@$(MAKE) ensure-js-deps
-	cd apps/zerg/e2e && VERBOSE=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
+	cd e2e && VERBOSE=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
 
 test-e2e-errors: ## @internal Show detailed errors from last E2E run
-	@if [ -f apps/zerg/e2e/test-results/errors.txt ]; then \
-		cat apps/zerg/e2e/test-results/errors.txt; \
+	@if [ -f e2e/test-results/errors.txt ]; then \
+		cat e2e/test-results/errors.txt; \
 	else \
 		echo "No errors.txt found. Run 'make test-e2e' first."; \
 	fi
 
 test-e2e-query: ## @internal Query last E2E results (usage: make test-e2e-query Q='.failed[]')
-	@if [ -f apps/zerg/e2e/test-results/summary.json ]; then \
-		jq '$(Q)' apps/zerg/e2e/test-results/summary.json; \
+	@if [ -f e2e/test-results/summary.json ]; then \
+		jq '$(Q)' e2e/test-results/summary.json; \
 	else \
 		echo "No summary.json found. Run 'make test-e2e' first."; \
 	fi
@@ -314,12 +314,12 @@ test-e2e-query: ## @internal Query last E2E results (usage: make test-e2e-query 
 test-e2e-grep: ## @internal Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
 	@$(MAKE) ensure-js-deps
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --grep "$(GREP)"
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --grep "$(GREP)"
 
 test-e2e-a11y: ## @internal Run accessibility UI/UX checks (axe + heuristics)
 	@$(MAKE) ensure-js-deps
 	@echo "🧪 Running accessibility UI/UX checks..."
-	cd apps/zerg/e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
 
 qa-ui: ## Quick UI QA (accessibility checks)
 	$(MAKE) test-e2e-a11y
@@ -364,16 +364,16 @@ qa-ui-full: ## Full UI regression sweep (a11y + desktop + mobile baselines + vis
 test-perf: ## Run performance evaluation tests (chat latency profiling)
 	@$(MAKE) ensure-js-deps
 	@echo "🧪 Running performance evaluation tests..."
-	cd apps/zerg/e2e && RUN_PERF=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
-	@echo "✅ Performance tests complete. Metrics exported to apps/zerg/e2e/metrics/"
+	cd e2e && RUN_PERF=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
+	@echo "✅ Performance tests complete. Metrics exported to e2e/metrics/"
 
 test-frontend-unit: ## @internal Run frontend unit tests only
 	@if [ "$(MINIMAL)" = "1" ]; then \
 		echo "🧪 Running frontend unit tests (minimal)..."; \
-		cd apps/zerg/frontend-web && bun run test -- --reporter=dot --silent; \
+		cd web && bun run test -- --reporter=dot --silent; \
 	else \
 		echo "🧪 Running frontend unit tests..."; \
-		cd apps/zerg/frontend-web && bun run test; \
+		cd web && bun run test; \
 	fi
 
 test-hatch-agent: ## @internal Run hatch-agent package tests from sibling repo
@@ -392,7 +392,7 @@ test-hatch-agent: ## @internal Run hatch-agent package tests from sibling repo
 
 test-runner-unit: ## @internal Run runner unit tests
 	@echo "🧪 Running runner unit tests..."
-	cd apps/runner && bun test
+	cd runner && bun test
 
 test-install-runner: ## @internal Run install-runner script tests
 	@echo "🧪 Running install-runner script tests..."
@@ -427,7 +427,7 @@ test-provision-e2e: ## Provision an instance via control plane and run smoke che
 test-integration: ## @internal Run integration tests (REAL API calls, requires API keys)
 	@echo "🧪 Running integration tests (real API calls)..."
 	@echo "   Note: Requires OPENAI_API_KEY and/or GROQ_API_KEY"
-	cd apps/zerg/backend && EVAL_MODE=live uv run --extra dev pytest tests/integration/ -v -m integration
+	cd server && EVAL_MODE=live uv run --extra dev pytest tests/integration/ -v -m integration
 
 shipper-e2e-prereqs: ## Shipper E2E prerequisites (migrations + table check)
 	@./scripts/shipper-e2e-prereqs.sh
@@ -449,7 +449,7 @@ test-prompts: ## @internal Run live prompt quality tests (requires backend runni
 	fi
 	@echo "   Using http://localhost:30080 (dev nginx entry)"
 	@echo "   Setting LLM_REQUEST_LOG=1 for debugging..."
-	cd apps/zerg/backend && \
+	cd server && \
 		LLM_REQUEST_LOG=1 \
 		LONGHOUSE_DATA_PATH=$${LONGHOUSE_DATA_PATH:-/tmp/longhouse} \
 		uv run --extra dev pytest tests/live/test_prompt_quality.py \
@@ -469,17 +469,17 @@ eval: ## 🔴 Run AI evals (REAL LLM - costs $$$)
 	@echo "🔴 Running AI evals (REAL OpenAI API calls)..."
 	@echo "   This costs money. Press Ctrl+C to cancel."
 	@sleep 2
-	cd apps/zerg/backend && env EVAL_MODE=live uv run --extra dev pytest evals/ -v --variant=$(EVAL_VARIANT) --timeout=120
+	cd server && env EVAL_MODE=live uv run --extra dev pytest evals/ -v --variant=$(EVAL_VARIANT) --timeout=120
 
 eval-compare: ## @internal Compare two eval result files (usage: make eval-compare BASELINE=file1 VARIANT=file2)
 	@test -n "$(BASELINE)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
 	@test -n "$(VARIANT)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
 	@echo "📊 Comparing eval results..."
-	cd apps/zerg/backend && uv run python -m evals.compare evals/results/$(BASELINE) evals/results/$(VARIANT)
+	cd server && uv run python -m evals.compare evals/results/$(BASELINE) evals/results/$(VARIANT)
 
 eval-tool-selection: ## @internal Run tool selection evals (tests tool picking quality)
 	@echo "🎯 Running tool selection evals (REAL LLM)..."
-	cd apps/zerg/backend && env EVAL_MODE=live uv run --extra dev pytest evals/ -v -k tool_selection --timeout=120
+	cd server && env EVAL_MODE=live uv run --extra dev pytest evals/ -v -k tool_selection --timeout=120
 
 # ---------------------------------------------------------------------------
 # SDK & Integration
@@ -487,8 +487,8 @@ eval-tool-selection: ## @internal Run tool selection evals (tests tool picking q
 generate-sdk: ## Generate OpenAPI types from backend schema
 	@echo "🔄 Generating SDK..."
 	@$(MAKE) ensure-js-deps
-	@cd apps/zerg/backend && uv run python scripts/export_openapi.py >/dev/null
-	@cd apps/zerg/frontend-web && bun run openapi-typescript ../openapi.json --output src/generated/openapi-types.ts
+	@cd server && uv run python scripts/export_openapi.py >/dev/null
+	@cd web && bun run openapi-typescript ../openapi.json --output src/generated/openapi-types.ts
 	@echo "✅ SDK generation complete"
 
 seed-agents: ## Seed baseline Zerg agents for Oikos
@@ -534,22 +534,22 @@ video-audio: ## Generate voiceover audio. Override: SCENARIO=timeline-demo
 	@echo "✅ Audio generated. Check videos/$(SCENARIO)/audio/"
 
 video-studio: ## Open Remotion Studio for video editing
-	@cd apps/video && bunx remotion studio
+	@cd video && bunx remotion studio
 
 video-remotion: ## Render timeline demo via Remotion
 	@echo "🎬 Rendering TimelineDemo via Remotion..."
-	@cd apps/video && bunx remotion render TimelineDemo out/timeline-demo.mp4 --codec h264 --crf 18
-	@echo "✅ Rendered: apps/video/out/timeline-demo.mp4"
+	@cd video && bunx remotion render TimelineDemo out/timeline-demo.mp4 --codec h264 --crf 18
+	@echo "✅ Rendered: video/out/timeline-demo.mp4"
 
 video-remotion-web: ## Render + compress for web (CRF 23)
 	@echo "🎬 Rendering TimelineDemo for web..."
-	@cd apps/video && bunx remotion render TimelineDemo out/timeline-demo.mp4 --codec h264 --crf 23
-	@cp apps/video/out/timeline-demo.mp4 apps/zerg/frontend-web/public/videos/timeline-demo.mp4
+	@cd video && bunx remotion render TimelineDemo out/timeline-demo.mp4 --codec h264 --crf 23
+	@cp video/out/timeline-demo.mp4 web/public/videos/timeline-demo.mp4
 	@echo "✅ Copied to frontend public/videos/"
 
 video-remotion-preview: ## Render single frame for quick preview
-	@cd apps/video && bunx remotion still TimelineDemo out/preview.jpg --frame 150
-	@echo "✅ Preview: apps/video/out/preview.jpg"
+	@cd video && bunx remotion still TimelineDemo out/preview.jpg --frame 150
+	@echo "✅ Preview: video/out/preview.jpg"
 
 # ---------------------------------------------------------------------------
 # UI Capture (Debug Bundles for Agents)
@@ -573,21 +573,21 @@ validate: ## Run all validation checks
 	@printf '\n✅ All validations passed\n'
 
 validate-ws: ## Check WebSocket code is in sync (for CI)
-	@cd apps/zerg/backend && \
+	@cd server && \
 		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
 		uv run --no-project --with pyyaml python ../../../scripts/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml >/dev/null 2>&1
 	@# Only check for drift in generated files to avoid false positives from unrelated changes
 	@if ! git diff --quiet \
-		apps/zerg/backend/zerg/generated/ws_messages.py \
-		apps/zerg/frontend-web/src/generated/ws-messages.ts \
+		server/zerg/generated/ws_messages.py \
+		web/src/generated/ws-messages.ts \
 		schemas/ws-protocol.schema.json \
 		schemas/ws-protocol-v1.json; then \
 		echo "❌ WebSocket code out of sync"; \
 		echo "   Run 'make regen-ws' and commit changes"; \
 		git diff \
-			apps/zerg/backend/zerg/generated/ws_messages.py \
-			apps/zerg/frontend-web/src/generated/ws-messages.ts \
+			server/zerg/generated/ws_messages.py \
+			web/src/generated/ws-messages.ts \
 			schemas/ws-protocol.schema.json \
 			schemas/ws-protocol-v1.json; \
 		exit 1; \
@@ -596,27 +596,27 @@ validate-ws: ## Check WebSocket code is in sync (for CI)
 
 regen-ws: ## Regenerate WebSocket contract code
 	@echo "🔄 Regenerating WebSocket code..."
-	@cd apps/zerg/backend && \
+	@cd server && \
 		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
 		uv run --no-project --with pyyaml python ../../../scripts/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml
 	@echo "✅ WebSocket code regenerated"
 
 validate-sse: ## Check SSE code is in sync (for CI)
-	@cd apps/zerg/backend && \
+	@cd server && \
 		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
 		uv run --no-project --with pyyaml python ../../../scripts/generate-sse-types.py schemas/sse-events.asyncapi.yml >/dev/null 2>&1
 	@# Only check for drift in generated files to avoid false positives from unrelated changes
 	@if ! git diff --quiet \
-		apps/zerg/backend/zerg/generated/sse_events.py \
-		apps/zerg/frontend-web/src/generated/sse-events.ts \
+		server/zerg/generated/sse_events.py \
+		web/src/generated/sse-events.ts \
 		schemas/sse-events.asyncapi.yml; then \
 		echo "❌ SSE code out of sync"; \
 		echo "   Run 'make regen-sse' and commit changes"; \
 		git diff \
-			apps/zerg/backend/zerg/generated/sse_events.py \
-			apps/zerg/frontend-web/src/generated/sse-events.ts \
+			server/zerg/generated/sse_events.py \
+			web/src/generated/sse-events.ts \
 			schemas/sse-events.asyncapi.yml; \
 		exit 1; \
 	fi
@@ -624,7 +624,7 @@ validate-sse: ## Check SSE code is in sync (for CI)
 
 regen-sse: ## Regenerate SSE event contract code
 	@echo "🔄 Regenerating SSE code..."
-	@cd apps/zerg/backend && \
+	@cd server && \
 		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
 		uv run --no-project --with pyyaml python ../../../scripts/generate-sse-types.py schemas/sse-events.asyncapi.yml
@@ -689,19 +689,19 @@ test-ci: ## @internal CI-ready tests (unit + build + contracts)
 	@echo "🤖 CI Test Suite Starting..."
 	@echo "═══════════════════════════════════════════════════════════════════════════════"
 	@echo "🧪 Running React Unit Tests..."
-	@cd apps/zerg/frontend-web && bun run test -- --run --reporter=basic
+	@cd web && bun run test -- --run --reporter=basic
 	@echo "  ✅ React unit tests passed"
 	@echo ""
 	@echo "🏗️  Testing React Build..."
-	@cd apps/zerg/frontend-web && bun run build >/dev/null 2>&1
+	@cd web && bun run build >/dev/null 2>&1
 	@echo "  ✅ React build successful"
 	@echo ""
 	@echo "🧪 Running Backend Lite Tests..."
-	@cd apps/zerg/backend && ./run_backend_tests_lite.sh >/dev/null
+	@cd server && ./run_backend_tests_lite.sh >/dev/null
 	@echo "  ✅ Backend lite tests passed"
 	@echo ""
 	@echo "🔍 Running Contract Validation..."
-	@cd apps/zerg/frontend-web && bun run validate:contracts >/dev/null
+	@cd web && bun run validate:contracts >/dev/null
 	@echo "  ✅ API contracts valid"
 	@echo ""
 	@echo "═══════════════════════════════════════════════════════════════════════════════"
@@ -721,13 +721,13 @@ perf-landing: ## Profile landing page rendering events (Chrome trace analysis)
 	@echo "🔬 Profiling landing page rendering..."
 	@echo "   Ensure 'make dev' is running first!"
 	@echo ""
-	cd apps/zerg/e2e && bun run scripts/profile-landing.ts \
+	cd e2e && bun run scripts/profile-landing.ts \
 		--url=http://localhost:30080 \
 		--duration=10 \
 		--output=./perf-results \
 		$(ARGS)
 	@echo ""
-	@echo "📊 Results in apps/zerg/e2e/perf-results/"
+	@echo "📊 Results in e2e/perf-results/"
 	@echo "   - report.md: Human-readable summary"
 	@echo "   - trace-*.json: Open in Chrome DevTools or https://ui.perfetto.dev"
 
@@ -736,13 +736,13 @@ perf-gpu: ## Measure actual GPU utilization % for landing page effects (macOS)
 	@echo "   Ensure 'make dev' is running first!"
 	@echo "   This measures actual GPU % from macOS (same as Activity Monitor)"
 	@echo ""
-	cd apps/zerg/e2e && bun run scripts/gpu-profiler.ts \
+	cd e2e && bun run scripts/gpu-profiler.ts \
 		--url=http://localhost:30080 \
 		--duration=10 \
 		--output=./perf-results \
 		$(ARGS)
 	@echo ""
-	@echo "📊 Results in apps/zerg/e2e/perf-results/"
+	@echo "📊 Results in e2e/perf-results/"
 	@echo "   - gpu-report.md: Human-readable summary"
 	@echo "   - gpu-summary.json: Stats per variant"
 	@echo "   - gpu-samples.json: Raw sample data"
@@ -752,13 +752,13 @@ perf-gpu-dashboard: ## Measure actual GPU utilization % for dashboard ui-effects
 	@echo "   Ensure 'make dev' is running first!"
 	@echo "   This measures actual GPU % from macOS (same as Activity Monitor)"
 	@echo ""
-	cd apps/zerg/e2e && bun run scripts/gpu-profiler-dashboard.ts \
+	cd e2e && bun run scripts/gpu-profiler-dashboard.ts \
 		--url=http://localhost:30080 \
 		--duration=10 \
 		--output=./perf-results \
 		$(ARGS)
 	@echo ""
-	@echo "📊 Results in apps/zerg/e2e/perf-results/"
+	@echo "📊 Results in e2e/perf-results/"
 	@echo "   - gpu-dashboard-report.md: Human-readable summary"
 	@echo "   - gpu-dashboard-summary.json: Stats per variant"
 	@echo "   - gpu-dashboard-samples.json: Raw sample data"
@@ -768,24 +768,24 @@ perf-gpu-dashboard: ## Measure actual GPU utilization % for dashboard ui-effects
 # ---------------------------------------------------------------------------
 debug-thread: ## @internal Inspect DB ThreadMessages (usage: make debug-thread THREAD_ID=1)
 	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-thread THREAD_ID=<id>" && exit 1)
-	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py thread $(THREAD_ID)
+	@cd server && uv run python scripts/debug_langgraph.py thread $(THREAD_ID)
 
 debug-validate: ## @internal Validate message integrity (usage: make debug-validate THREAD_ID=1)
 	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-validate THREAD_ID=<id>" && exit 1)
-	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py validate $(THREAD_ID)
+	@cd server && uv run python scripts/debug_langgraph.py validate $(THREAD_ID)
 
 debug-inspect: ## @internal Inspect LangGraph checkpoint state (usage: make debug-inspect THREAD_ID=1)
 	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-inspect THREAD_ID=<id>" && exit 1)
-	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py inspect $(THREAD_ID)
+	@cd server && uv run python scripts/debug_langgraph.py inspect $(THREAD_ID)
 
 debug-batch: ## @internal Run batch queries from stdin JSON (usage: echo '{"queries":[...]}' | make debug-batch)
-	@cd apps/zerg/backend && uv run python scripts/debug_langgraph.py batch --stdin
+	@cd server && uv run python scripts/debug_langgraph.py batch --stdin
 
 debug-trace: ## @internal Debug a trace end-to-end (usage: make debug-trace TRACE=abc-123 or make debug-trace RECENT=1)
 	@if [ -n "$(RECENT)" ]; then \
-		cd apps/zerg/backend && uv run python scripts/debug_trace.py --recent; \
+		cd server && uv run python scripts/debug_trace.py --recent; \
 	elif [ -n "$(TRACE)" ]; then \
-		cd apps/zerg/backend && uv run python scripts/debug_trace.py $(TRACE) $(if $(LEVEL),--level $(LEVEL),); \
+		cd server && uv run python scripts/debug_trace.py $(TRACE) $(if $(LEVEL),--level $(LEVEL),); \
 	else \
 		echo "❌ Usage: make debug-trace TRACE=<uuid> [LEVEL=summary|full|errors]"; \
 		echo "         make debug-trace RECENT=1"; \
@@ -793,7 +793,7 @@ debug-trace: ## @internal Debug a trace end-to-end (usage: make debug-trace TRAC
 	fi
 
 trace-coverage: ## @internal Trace coverage report (usage: make trace-coverage [SINCE_HOURS=24] [MIN=95] [MIN_EVENTS=90] [JSON=1])
-	@cd apps/zerg/backend && uv run python scripts/trace_coverage.py \
+	@cd server && uv run python scripts/trace_coverage.py \
 		$(if $(SINCE_HOURS),--since-hours $(SINCE_HOURS),) \
 		$(if $(MIN),--min-percent $(MIN),) \
 		$(if $(MIN_EVENTS),--min-event-percent $(MIN_EVENTS),) \
@@ -815,7 +815,7 @@ onboarding-smoke: ## Quick onboarding smoke (uses current workspace, Docker)
 
 onboarding-sqlite: ## SQLite-only onboarding smoke test (no Docker)
 	@echo "Testing SQLite-only onboarding..."
-	@cd apps/zerg/backend && \
+	@cd server && \
 	uv run --extra dev pytest tests_lite/test_onboarding_sqlite.py -v --tb=short -p no:warnings
 	@echo "SQLite onboarding smoke test passed"
 

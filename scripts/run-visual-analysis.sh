@@ -91,14 +91,14 @@ echo "🚀 Starting services..."
 
 # Start backend in testing mode
 echo "  📡 Starting backend on port $BACKEND_PORT..."
-cd apps/zerg/backend && TESTING=1 ENVIRONMENT=test:e2e NODE_ENV=test uv run python -m uvicorn zerg.main:app \
+cd server && TESTING=1 ENVIRONMENT=test:e2e NODE_ENV=test uv run python -m uvicorn zerg.main:app \
     --host=127.0.0.1 --port=$BACKEND_PORT --log-level=warning > ../../../visual-backend.log 2>&1 &
 BACKEND_PID=$!
 cd ../../..
 
 # Start React frontend
 echo "  ⚛️  Starting React frontend on port $FRONTEND_PORT..."
-cd apps/zerg/frontend-web && bun run dev -- --host 127.0.0.1 --port $FRONTEND_PORT > ../../../visual-frontend.log 2>&1 &
+cd web && bun run dev -- --host 127.0.0.1 --port $FRONTEND_PORT > ../../../visual-frontend.log 2>&1 &
 FRONTEND_PID=$!
 cd ../../..
 
@@ -126,7 +126,7 @@ echo "  ✅ Services ready"
 echo ""
 
 # Navigate to E2E directory
-cd apps/zerg/e2e
+cd e2e
 
 # Prepare Playwright command
 PLAYWRIGHT_CMD="bunx playwright test comprehensive-visual-test.ts"
@@ -160,12 +160,12 @@ if eval $PLAYWRIGHT_CMD; then
     echo "✅ Visual analysis completed successfully!"
     echo ""
     echo "📊 Results:"
-    echo "  📄 Test reports: apps/zerg/e2e/test-results/"
-    echo "  📄 Visual reports: apps/zerg/e2e/visual-reports/"
+    echo "  📄 Test reports: e2e/test-results/"
+    echo "  📄 Visual reports: e2e/visual-reports/"
     echo "  📸 Screenshots: attached to test results"
     echo ""
     echo "🔍 To view detailed HTML report:"
-    echo "  cd apps/zerg/e2e && bunx playwright show-report"
+    echo "  cd e2e && bunx playwright show-report"
     echo ""
 else
     echo ""
@@ -175,7 +175,7 @@ else
     echo "  1. Check service logs: visual-backend.log, visual-frontend.log"
     echo "  2. Verify OpenAI API key is set: echo \$OPENAI_API_KEY"
     echo "  3. Run with --verbose for detailed output"
-    echo "  4. View test report: cd apps/zerg/e2e && bunx playwright show-report"
+    echo "  4. View test report: cd e2e && bunx playwright show-report"
     echo ""
     exit 1
 fi

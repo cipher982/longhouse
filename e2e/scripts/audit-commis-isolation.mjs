@@ -8,14 +8,14 @@
  * - Flags hardcoded backend URLs like http://localhost:8001 which often bypass the shared helpers.
  *
  * Usage:
- *   node apps/zerg/e2e/scripts/audit-commis-isolation.mjs
+ *   node e2e/scripts/audit-commis-isolation.mjs
  */
 
 import fs from "fs";
 import path from "path";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), "../../../..");
-const testsRoot = path.join(repoRoot, "apps/zerg/e2e/tests");
+const testsRoot = path.join(repoRoot, "e2e/tests");
 
 function walk(dir) {
   const entries = fs.readdirSync(dir, { withFileTypes: true });

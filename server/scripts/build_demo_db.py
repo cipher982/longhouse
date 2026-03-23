@@ -2,9 +2,9 @@
 """Build a demo SQLite database with seeded data.
 
 Usage:
-  uv run python apps/zerg/backend/scripts/build_demo_db.py
-  uv run python apps/zerg/backend/scripts/build_demo_db.py --output /path/to/demo.db
-  uv run python apps/zerg/backend/scripts/build_demo_db.py --scenario swarm-mvp
+  uv run python server/scripts/build_demo_db.py
+  uv run python server/scripts/build_demo_db.py --output /path/to/demo.db
+  uv run python server/scripts/build_demo_db.py --scenario swarm-mvp
 """
 
 from __future__ import annotations

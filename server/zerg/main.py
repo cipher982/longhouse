@@ -294,8 +294,8 @@ def _get_frontend_dist_path() -> tuple[Path | None, str]:
 
     Resolution order:
         1. Bundled in package: zerg/_frontend_dist (for pip install deployment)
-        2. Dev repo: ../frontend-web/dist (relative to backend)
-        3. Docker: /app/frontend-web/dist
+        2. Dev repo: ../web/dist (relative to server)
+        3. Docker: /app/web/dist
     """
     # 1. Check for bundled assets in installed package
     try:
@@ -311,15 +311,15 @@ def _get_frontend_dist_path() -> tuple[Path | None, str]:
     except (ImportError, TypeError, AttributeError, FileNotFoundError, OSError):
         pass
 
-    # 2. Development mode: relative to backend directory
-    # main.py is at backend/zerg/main.py, frontend is at apps/zerg/frontend-web/dist
-    # parent=zerg, parent.parent=backend, parent.parent.parent=apps/zerg
-    dev_dist = Path(__file__).resolve().parent.parent.parent / "frontend-web" / "dist"
+    # 2. Development mode: relative to server directory
+    # main.py is at server/zerg/main.py, frontend is at web/dist
+    # parent=zerg, parent.parent=server, parent.parent.parent=repo root
+    dev_dist = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
     if dev_dist.is_dir() and (dev_dist / "index.html").exists():
         return dev_dist, "local"
 
     # 3. Docker environment
-    docker_dist = Path("/app/frontend-web/dist")
+    docker_dist = Path("/app/web/dist")
     if docker_dist.is_dir() and (docker_dist / "index.html").exists():
         return docker_dist, "docker"
 

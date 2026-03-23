@@ -67,6 +67,6 @@ export API_URL="$API_URL"
 export RUN_LIVE_E2E="1"
 export SMOKE_LOGIN_TOKEN
 
-cd "$ROOT_DIR/apps/zerg/e2e"
+cd "$ROOT_DIR/e2e"
 
 bunx playwright test --config playwright.prod.config.js "$@"

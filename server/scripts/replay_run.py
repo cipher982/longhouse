@@ -10,7 +10,7 @@ Key properties:
 - **Safe by default**: blocks side-effectful tools unless explicitly allowed.
 
 Usage (run from backend directory):
-    cd apps/zerg/backend
+    cd server
     uv run python scripts/replay_run.py <run_id>
     uv run python scripts/replay_run.py <run_id> --dry-run
 

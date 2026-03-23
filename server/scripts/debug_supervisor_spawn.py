@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Debug script to trace oikos behavior for infrastructure requests.
 
-Run with: cd apps/zerg/backend && uv run python scripts/debug_oikos_spawn.py
+Run with: cd server && uv run python scripts/debug_oikos_spawn.py
 """
 
 import sys

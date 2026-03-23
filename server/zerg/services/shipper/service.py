@@ -141,9 +141,9 @@ def get_engine_executable() -> str:
         return str(claude_bin)
 
     # 4. Repo dev builds
-    # service.py lives at apps/zerg/backend/zerg/services/shipper/service.py
-    # pyproject.toml is at apps/zerg/backend/ → project_root
-    # engine is at apps/engine/ → project_root.parent.parent / "engine"
+    # service.py lives at server/zerg/services/shipper/service.py
+    # pyproject.toml is at server/ → project_root
+    # engine is at engine/ → project_root.parent.parent / "engine"
     project_root = _find_project_root()
     if project_root:
         engine_dir = project_root.parent.parent / "engine"
@@ -153,7 +153,7 @@ def get_engine_executable() -> str:
                 return str(candidate)
 
     raise RuntimeError(
-        "longhouse-engine not found. " "Install it from https://longhouse.ai/install or build apps/engine (cargo build --release)."
+        "longhouse-engine not found. " "Install it from https://longhouse.ai/install or build engine (cargo build --release)."
     )
 
 

@@ -37,7 +37,7 @@ function sha256Hex(buffer: Buffer): string {
 }
 
 function usage(): void {
-  console.log(`Usage: bun apps/runner/scripts/build-update-manifest.ts \\
+  console.log(`Usage: bun runner/scripts/build-update-manifest.ts \\
   --binaries-dir <dir> \\
   --output-dir <dir> \\
   --tag <runner-vX.Y.Z> \\

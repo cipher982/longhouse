@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument(
         "--stdout",
         action="store_true",
-        help="Print schema JSON to stdout after writing apps/zerg/openapi.json",
+        help="Print schema JSON to stdout after writing openapi.json",
     )
     args = parser.parse_args()
 

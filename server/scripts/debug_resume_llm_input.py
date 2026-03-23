@@ -8,7 +8,7 @@ It shows the raw messages that would be sent to OpenAI so we can diagnose:
 - Is there something confusing the LLM?
 
 Usage:
-    cd apps/zerg/backend
+    cd server
 
     # Option 1: Analyze a real run from the database
     uv run python scripts/debug_resume_llm_input.py --run-id 82

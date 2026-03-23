@@ -2,7 +2,7 @@
 """Seed deterministic scenarios for demos and tests.
 
 Usage (run from backend directory):
-    cd apps/zerg/backend
+    cd server
     uv run python scripts/seed_scenario.py --list
     uv run python scripts/seed_scenario.py swarm-mvp
     uv run python scripts/seed_scenario.py swarm-mvp --owner-email dev@local

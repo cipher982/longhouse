@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-BACKEND_DIR="$(cd "$(dirname "$0")/../apps/zerg/backend" && pwd)"
+BACKEND_DIR="$(cd "$(dirname "$0")/../server" && pwd)"
 
 cd "$BACKEND_DIR"
 

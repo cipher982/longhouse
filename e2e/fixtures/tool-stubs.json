@@ -1,5 +1,5 @@
 {
-  "$comment": "Tool stubs for deterministic E2E tests. See apps/zerg/backend/zerg/testing/tool_stubs.py",
+  "$comment": "Tool stubs for deterministic E2E tests. See server/zerg/testing/tool_stubs.py",
 
   "ssh_exec": [
     {

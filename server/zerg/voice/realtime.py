@@ -26,7 +26,7 @@ def _get_models_config() -> dict[str, Any]:
         # Docker environment
         config_path = Path("/app/config/models.json")
     else:
-        # Local monorepo: services/ is deep in apps/zerg/backend/zerg/
+        # Local monorepo: services/ is deep in server/zerg/
         repo_root = current_path.parents[5]
         config_path = repo_root / "config" / "models.json"
 

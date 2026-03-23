@@ -8,8 +8,8 @@ on:
     paths:
       - ".dockerignore"
       - "bun.lock"
-      - "apps/zerg/backend/**"
-      - "apps/zerg/frontend-web/**"
+      - "server/**"
+      - "web/**"
       - "config/**"
       - "docker/entrypoint.sh"
       - "docker/runtime.dockerfile"

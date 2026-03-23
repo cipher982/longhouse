@@ -169,8 +169,8 @@ e2e/enhanced-analysis.js
 
 # Generated files
 openapi.json
-apps/zerg/frontend-web/src/styles/generated/
-apps/zerg/frontend-web/src/styles/tokens/
+web/src/styles/generated/
+web/src/styles/tokens/
 
 # Logs (local dev only)
 logs/
@@ -186,7 +186,7 @@ docs-archive/
 
 # Yarn
 .yarn/install-state.gz
-apps/oikos/.yarn
+
 
 # Test credentials (never commit!)
 .env.test
@@ -200,21 +200,21 @@ CLAUDE.md
 comet_latest.dmg
 .clinerules/
 .playwright-mcp/
-apps/zerg/backend/scripts/user_context.local.json
-apps/zerg/backend/scripts/personal_credentials.local.json
-apps/zerg/backend/scripts/runners.local.json
+server/scripts/user_context.local.json
+server/scripts/personal_credentials.local.json
+server/scripts/runners.local.json
 
 # Environment backups
 .env-backups-*/
 data/llm_requests/
 
 # Eval results
-apps/zerg/backend/evals/results/*.json
-apps/zerg/backend/evals/results/.tmp/
-apps/zerg/backend/data/
+server/evals/results/*.json
+server/evals/results/.tmp/
+server/data/
 
 # Work-in-progress docs
-apps/zerg/backend/docs/work/
+server/docs/work/
 
 # Agent handoff docs (ephemeral, session-specific)
 docs/handoffs/
@@ -230,7 +230,7 @@ artifacts/ui-capture/
 **/archive/
 **/legacy/
 **/*_legacy*
-apps/zerg/backend/.qa-home/
+server/.qa-home/
 
 # Vibetest results
 vibetest-results/
@@ -242,7 +242,7 @@ visual-compare-results/
 .tmp/
 
 # Remotion video app — binary media (captured clips, audio, renders)
-apps/video/out/
-apps/video/public/clips/
-apps/video/public/audio-clips/
-apps/video/public/audio/
+video/out/
+video/public/clips/
+video/public/audio-clips/
+video/public/audio/

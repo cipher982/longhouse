@@ -5,7 +5,7 @@ This script simulates the complete event flow from commis tool execution
 to SSE output, helping verify Phase 2 implementation is working correctly.
 
 Usage:
-    cd apps/zerg/backend
+    cd server
     uv run python scripts/debug_tool_events.py
 """
 

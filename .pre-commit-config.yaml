@@ -32,13 +32,13 @@ repos:
     rev: v0.8.4
     hooks:
       - id: ruff
-        args: [--fix, --exit-non-zero-on-fix, --config=apps/zerg/backend/pyproject.toml]
-        files: ^apps/zerg/backend/zerg/
-        exclude: ^apps/zerg/backend/zerg/generated/
+        args: [--fix, --exit-non-zero-on-fix, --config=server/pyproject.toml]
+        files: ^server/zerg/
+        exclude: ^server/zerg/generated/
       - id: ruff-format
-        args: [--config=apps/zerg/backend/pyproject.toml]
-        files: ^apps/zerg/backend/zerg/
-        exclude: ^apps/zerg/backend/zerg/generated/
+        args: [--config=server/pyproject.toml]
+        files: ^server/zerg/
+        exclude: ^server/zerg/generated/
 
   # =========================================================================
   # Local hooks for project-specific checks
@@ -50,9 +50,9 @@ repos:
       # -----------------------------------------------------------------------
       - id: typescript-typecheck
         name: TypeScript type check
-        entry: bash -c 'cd apps/zerg/frontend-web && bun run validate:types'
+        entry: bash -c 'cd web && bun run validate:types'
         language: system
-        files: ^apps/zerg/frontend-web/src/.*\.(ts|tsx)$
+        files: ^web/src/.*\.(ts|tsx)$
         pass_filenames: false
 
       # -----------------------------------------------------------------------
@@ -60,9 +60,9 @@ repos:
       # -----------------------------------------------------------------------
       - id: frontend-lint
         name: Frontend lint
-        entry: bash -c 'cd apps/zerg/frontend-web && bun run lint --max-warnings 100'
+        entry: bash -c 'cd web && bun run lint --max-warnings 100'
         language: system
-        files: ^apps/zerg/frontend-web/src/.*\.(ts|tsx|js|jsx)$
+        files: ^web/src/.*\.(ts|tsx|js|jsx)$
         pass_filenames: false
 
       # -----------------------------------------------------------------------
@@ -72,7 +72,7 @@ repos:
         name: WebSocket contract drift check
         entry: make validate-ws
         language: system
-        files: ^(schemas/ws-protocol.*|apps/zerg/backend/zerg/generated/ws_messages\.py|apps/zerg/frontend-web/src/generated/ws-messages\.ts)$
+        files: ^(schemas/ws-protocol.*|server/zerg/generated/ws_messages\.py|web/src/generated/ws-messages\.ts)$
         pass_filenames: false
 
       # -----------------------------------------------------------------------
@@ -82,7 +82,7 @@ repos:
         name: SSE contract drift check
         entry: make validate-sse
         language: system
-        files: ^(schemas/sse-events\.asyncapi\.yml|apps/zerg/backend/zerg/generated/sse_events\.py|apps/zerg/frontend-web/src/generated/sse-events\.ts)$
+        files: ^(schemas/sse-events\.asyncapi\.yml|server/zerg/generated/sse_events\.py|web/src/generated/sse-events\.ts)$
         pass_filenames: false
 
       # -----------------------------------------------------------------------
@@ -111,8 +111,8 @@ repos:
       # -----------------------------------------------------------------------
       - id: python-vulture
         name: Vulture - detect dead code
-        entry: bash -c 'cd apps/zerg/backend && uv run --extra dev vulture zerg/ vulture-whitelist.py --min-confidence 80 --exclude "**/tests/**,**/test_*.py"'
+        entry: bash -c 'cd server && uv run --extra dev vulture zerg/ vulture-whitelist.py --min-confidence 80 --exclude "**/tests/**,**/test_*.py"'
         language: system
-        files: ^apps/zerg/backend/zerg/
-        exclude: ^apps/zerg/backend/zerg/generated/
+        files: ^server/zerg/
+        exclude: ^server/zerg/generated/
         pass_filenames: false
