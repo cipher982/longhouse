@@ -9,6 +9,7 @@ use anyhow::Result;
 use serde::Serialize;
 
 use crate::error_tracker::ConsecutiveErrorTracker;
+use crate::error_tracker::RecentIssueTracker;
 use crate::shipping::client::ShipperClient;
 use crate::state::spool::DeadLetterEntry;
 use crate::state::spool::Spool;
@@ -34,6 +35,7 @@ pub struct HeartbeatPayload {
 pub struct HeartbeatStats<'a> {
     pub spool: &'a Spool<'a>,
     pub tracker: &'a ConsecutiveErrorTracker,
+    pub parse_tracker: &'a RecentIssueTracker,
     pub is_offline: bool,
     pub last_ship_at: Option<String>,
 }
@@ -56,6 +58,7 @@ impl HeartbeatPayload {
     pub fn build(stats: &HeartbeatStats<'_>) -> Self {
         let spool_pending_count = stats.spool.pending_count().unwrap_or(0);
         let spool_dead_count = stats.spool.dead_count().unwrap_or(0);
+        let parse_error_count_1h = stats.parse_tracker.count_last_hour();
         let consecutive_ship_failures = stats.tracker.consecutive_count();
         let disk_free_bytes = get_disk_free();
 
@@ -65,7 +68,7 @@ impl HeartbeatPayload {
             last_ship_at: stats.last_ship_at.clone(),
             spool_pending_count,
             spool_dead_count,
-            parse_error_count_1h: 0, // placeholder — not tracked per-hour yet
+            parse_error_count_1h,
             consecutive_ship_failures,
             disk_free_bytes,
             is_offline: stats.is_offline,
@@ -219,6 +222,7 @@ mod tests {
         let conn = open_db(Some(db.path())).unwrap();
         let spool = Spool::new(&conn);
         let tracker = ConsecutiveErrorTracker::new();
+        let parse_tracker = RecentIssueTracker::new();
         let payload = HeartbeatPayload {
             version: "0.1.0".to_string(),
             daemon_pid: 42,
@@ -244,6 +248,7 @@ mod tests {
         let stats = HeartbeatStats {
             spool: &spool,
             tracker: &tracker,
+            parse_tracker: &parse_tracker,
             is_offline: false,
             last_ship_at: payload.last_ship_at.clone(),
         };

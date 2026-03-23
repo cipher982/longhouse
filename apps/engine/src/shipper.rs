@@ -11,7 +11,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 use crate::discovery::{self, ProviderConfig};
-use crate::error_tracker::ConsecutiveErrorTracker;
+use crate::error_tracker::{ConsecutiveErrorTracker, RecentIssueTracker};
 use crate::pipeline::batcher::{self, PlannedRangeAction, ShipRange};
 use crate::pipeline::compressor::{self, CompressionAlgo};
 use crate::pipeline::parser::{self, ParseResult};
@@ -413,6 +413,24 @@ fn log_suspicious_empty_parse(path_str: &str, file_size: u64, candidate_records:
     }
 }
 
+fn record_parse_issue(parse_tracker: Option<&RecentIssueTracker>) {
+    if let Some(tracker) = parse_tracker {
+        tracker.record();
+    }
+}
+
+fn log_suspicious_empty_parse_with_tracker(
+    path_str: &str,
+    file_size: u64,
+    candidate_records: usize,
+    parse_tracker: Option<&RecentIssueTracker>,
+) {
+    if candidate_records > 0 && file_size >= 128 {
+        record_parse_issue(parse_tracker);
+        log_suspicious_empty_parse(path_str, file_size, candidate_records);
+    }
+}
+
 fn should_ack_empty_gemini_document(
     provider: &str,
     parse_result: &ParseResult,
@@ -685,6 +703,28 @@ pub fn prepare_path_range(
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
 ) -> Result<Option<PreparedFile>> {
+    prepare_path_range_with_parse_tracker(
+        path,
+        provider,
+        offset,
+        end_offset_cap,
+        algo,
+        max_batch_bytes,
+        session_id_override,
+        None,
+    )
+}
+
+pub(crate) fn prepare_path_range_with_parse_tracker(
+    path: &Path,
+    provider: &str,
+    offset: u64,
+    end_offset_cap: Option<u64>,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    session_id_override: Option<&str>,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_size = match std::fs::metadata(path) {
         Ok(m) => m.len(),
@@ -697,6 +737,7 @@ pub fn prepare_path_range(
     let parse_result = match parser::parse_session_file(path, offset) {
         Ok(result) => result,
         Err(e) => {
+            record_parse_issue(parse_tracker);
             tracing::warn!("Skip {}: {}", path_str, e);
             return Ok(None);
         }
@@ -722,7 +763,12 @@ pub fn prepare_path_range(
     }
 
     if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
-        log_suspicious_empty_parse(&path_str, file_size, parse_result.candidate_records);
+        log_suspicious_empty_parse_with_tracker(
+            &path_str,
+            file_size,
+            parse_result.candidate_records,
+            parse_tracker,
+        );
         return Ok(None);
     }
 
@@ -771,6 +817,26 @@ pub fn prepare_file_batches(
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
 ) -> Result<Option<PreparedFile>> {
+    prepare_file_batches_with_parse_tracker(
+        path,
+        provider,
+        algo,
+        conn,
+        max_batch_bytes,
+        session_id_override,
+        None,
+    )
+}
+
+pub(crate) fn prepare_file_batches_with_parse_tracker(
+    path: &Path,
+    provider: &str,
+    algo: CompressionAlgo,
+    conn: &Connection,
+    max_batch_bytes: u64,
+    session_id_override: Option<&str>,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_state = FileState::new(conn);
 
@@ -807,7 +873,7 @@ pub fn prepare_file_batches(
         current_offset
     };
 
-    prepare_path_range(
+    prepare_path_range_with_parse_tracker(
         path,
         provider,
         offset,
@@ -815,6 +881,7 @@ pub fn prepare_file_batches(
         algo,
         max_batch_bytes,
         session_id_override,
+        parse_tracker,
     )
 }
 
@@ -1076,6 +1143,25 @@ pub async fn replay_spool_batch_with_batch_bytes(
     limit: usize,
     max_batch_bytes: u64,
 ) -> Result<(usize, usize)> {
+    replay_spool_batch_with_batch_bytes_and_parse_tracker(
+        conn,
+        client,
+        algo,
+        limit,
+        max_batch_bytes,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn replay_spool_batch_with_batch_bytes_and_parse_tracker(
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    limit: usize,
+    max_batch_bytes: u64,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<(usize, usize)> {
     let spool = Spool::new(conn);
     let file_state = FileState::new(conn);
     let pending = spool.dequeue_batch(limit)?;
@@ -1092,7 +1178,7 @@ pub async fn replay_spool_batch_with_batch_bytes(
             continue;
         }
 
-        let prepared = match prepare_path_range(
+        let prepared = match prepare_path_range_with_parse_tracker(
             &path,
             &entry.provider,
             entry.start_offset,
@@ -1100,6 +1186,7 @@ pub async fn replay_spool_batch_with_batch_bytes(
             algo,
             max_batch_bytes,
             None,
+            parse_tracker,
         ) {
             Ok(Some(prepared)) => prepared,
             Ok(None) => {
@@ -1249,6 +1336,7 @@ pub async fn full_scan(
     full_scan_with_batch_bytes(providers, conn, client, algo, u64::MAX, tracker).await
 }
 
+#[allow(dead_code)]
 pub async fn full_scan_with_batch_bytes(
     providers: &[ProviderConfig],
     conn: &Connection,
@@ -1257,13 +1345,42 @@ pub async fn full_scan_with_batch_bytes(
     max_batch_bytes: u64,
     tracker: Option<&ConsecutiveErrorTracker>,
 ) -> Result<(usize, usize)> {
+    full_scan_with_batch_bytes_and_parse_tracker(
+        providers,
+        conn,
+        client,
+        algo,
+        max_batch_bytes,
+        tracker,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn full_scan_with_batch_bytes_and_parse_tracker(
+    providers: &[ProviderConfig],
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    max_batch_bytes: u64,
+    tracker: Option<&ConsecutiveErrorTracker>,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<(usize, usize)> {
     let all_files = discovery::discover_all_files(providers);
     let mut files_shipped = 0usize;
     let mut events_shipped = 0usize;
 
     for (path, provider_name) in &all_files {
         let file_start = std::time::Instant::now();
-        match prepare_file_batches(path, provider_name, algo, conn, max_batch_bytes, None) {
+        match prepare_file_batches_with_parse_tracker(
+            path,
+            provider_name,
+            algo,
+            conn,
+            max_batch_bytes,
+            None,
+            parse_tracker,
+        ) {
             Ok(Some(prepared)) => {
                 let event_count = prepared.total_event_count();
                 let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
