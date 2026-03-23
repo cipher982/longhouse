@@ -195,6 +195,22 @@ def test_build_entry_command_codex_injects_longhouse_session_id():
     assert 'curl -fsS "$READYZ_URL"' in inner
 
 
+def test_build_entry_command_codex_preserves_heredoc_structure():
+    cmd = _build_entry_command(
+        provider="codex",
+        provider_session_id="abc-123",
+        display_name=None,
+        managed_session_name="lh-zerg-codex",
+    )
+    inner = _inner_command(cmd)
+    assert 'cat > "$APP_SERVER_META" <<EOF\n' in inner
+    assert 'LONGHOUSE_CODEX_APP_SERVER_PID="$APP_SERVER_PID"\n' in inner
+    assert 'LONGHOUSE_CODEX_APP_SERVER_URL="$REMOTE_URL"\n' in inner
+    assert 'LONGHOUSE_CODEX_APP_SERVER_HEALTHZ="$HEALTHZ_URL"\nEOF\n' in inner
+    assert "<<EOF;" not in inner
+    assert "; EOF" not in inner
+
+
 def test_build_preflight_command_claude_checks_claude_code():
     cmd = _build_preflight_command(provider="claude", cwd="/tmp/test")
     inner = _inner_command(cmd)
@@ -356,7 +372,7 @@ def test_launch_managed_local_session_rejects_shell_wrapper_startup_error(monkey
                     "cwd": "/Users/davidrose/git/zeta/hiring",
                 },
             )
-            assert response.status_code == 502, response.text
+            assert response.status_code == 424, response.text
             assert "failed to start Claude" in response.json()["detail"]
         finally:
             api_app_ref.dependency_overrides = {}
@@ -387,7 +403,7 @@ def test_launch_managed_local_session_rolls_back_when_tmux_verify_fails(monkeypa
                     "cwd": "/Users/davidrose/git/zeta/hiring",
                 },
             )
-            assert response.status_code == 502, response.text
+            assert response.status_code == 424, response.text
             assert "failed to find session" in response.json()["detail"]
             assert db.query(AgentSession).count() == 0
             assert len(dispatcher.calls) == 4
@@ -566,8 +582,45 @@ def test_launch_managed_local_codex_shell_error_reports_codex(monkeypatch, tmp_p
                     "provider": "codex",
                 },
             )
-            assert response.status_code == 502, response.text
+            assert response.status_code == 424, response.text
             assert "failed to start Codex" in response.json()["detail"]
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_codex_rejects_script_name_false_positive(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        client, api_app_ref = _make_client(db, user)
+        dispatcher = _FakeDispatcher(
+            pane_command="longhouse-managed-lh-Codex-CLI-smoke-3649a5df.zsh",
+            capture_stdout="",
+        )
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": runner.name,
+                    "cwd": "/Users/davidrose/git/zerg",
+                    "project": "zerg",
+                    "provider": "codex",
+                },
+            )
+            assert response.status_code == 424, response.text
+            assert "unexpected pane command" in response.json()["detail"]
+            assert "longhouse-managed-lh-codex-cli-smoke-3649a5df.zsh" in response.json()["detail"]
         finally:
             api_app_ref.dependency_overrides = {}
 
