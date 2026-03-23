@@ -18,6 +18,7 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
@@ -303,6 +304,12 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert runtime_state.last_runtime_signal_at is not None
             assert runtime_state.freshness_expires_at is not None
 
+            presence = db.query(SessionPresence).filter(SessionPresence.session_id == str(session.id)).one()
+            assert presence.state == "idle"
+            assert presence.provider == "claude"
+            assert presence.cwd == session.cwd
+            assert presence.project == session.project
+
             preflight_inner = _inner_command(dispatcher.calls[0]["command"])
             hooks_inner = _inner_command(dispatcher.calls[1]["command"])
             launch_inner = _inner_command(dispatcher.calls[2]["command"])
@@ -525,6 +532,12 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.provider == "codex"
             assert session.execution_home == "managed_local"
+
+            presence = db.query(SessionPresence).filter(SessionPresence.session_id == str(session.id)).one()
+            assert presence.state == "idle"
+            assert presence.provider == "codex"
+            assert presence.cwd == session.cwd
+            assert presence.project == session.project
 
             preflight_inner = _inner_command(dispatcher.calls[0]["command"])
             assert "command -v codex" in preflight_inner
