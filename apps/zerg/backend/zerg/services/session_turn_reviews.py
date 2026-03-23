@@ -22,6 +22,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTurnReview
 from zerg.models.user import User
+from zerg.services.managed_local_codex_exec import run_codex_exec_resume_for_managed_local_session
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_runtime import mark_managed_local_turn_idle
 from zerg.services.managed_local_runtime import mark_managed_local_turn_needs_user
@@ -1108,7 +1109,7 @@ async def _continue_managed_local_session(
         )
         return False
 
-    send_result = await send_text_to_managed_local_session(
+    send_result = await _send_follow_up_to_managed_local_session(
         db=db,
         owner_id=int(review.owner_id),
         session=session,
@@ -1134,6 +1135,34 @@ async def _continue_managed_local_session(
         actual_outcome="failed",
     )
     return False
+
+
+async def _send_follow_up_to_managed_local_session(
+    *,
+    db: Session,
+    owner_id: int,
+    session: AgentSession,
+    text: str,
+    commis_id: str | None = None,
+    timeout_secs: int = 15,
+):
+    if str(getattr(session, "provider", "") or "").strip().lower() == "codex":
+        return await run_codex_exec_resume_for_managed_local_session(
+            db=db,
+            owner_id=owner_id,
+            session=session,
+            text=text,
+            commis_id=commis_id,
+            timeout_secs=max(timeout_secs, 300),
+        )
+    return await send_text_to_managed_local_session(
+        db=db,
+        owner_id=owner_id,
+        session=session,
+        text=text,
+        commis_id=commis_id,
+        timeout_secs=timeout_secs,
+    )
 
 
 async def approve_pending_turn_review(
@@ -1234,7 +1263,7 @@ async def reply_to_pending_turn_review(
     if not clean_reply:
         raise ValueError("reply text must not be empty")
 
-    send_result = await send_text_to_managed_local_session(
+    send_result = await _send_follow_up_to_managed_local_session(
         db=db,
         owner_id=int(review.owner_id or 0),
         session=session,
