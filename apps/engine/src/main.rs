@@ -6,6 +6,7 @@ mod error_tracker;
 mod heartbeat;
 mod outbox;
 mod pipeline;
+mod scheduler;
 mod shipper;
 mod shipping;
 mod state;
