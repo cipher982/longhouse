@@ -30,7 +30,7 @@ from typing import Dict
 
 # The project root is two levels above this file: scripts/mcp_debug_trace/ → scripts → *ROOT*
 PROJECT_ROOT: pathlib.Path = pathlib.Path(__file__).resolve().parents[2]
-BACKEND_ROOT: pathlib.Path = PROJECT_ROOT / "apps" / "zerg" / "backend"
+BACKEND_ROOT: pathlib.Path = PROJECT_ROOT / "server"
 
 
 def debug_trace(params: Dict[str, Any]) -> Dict[str, Any]:

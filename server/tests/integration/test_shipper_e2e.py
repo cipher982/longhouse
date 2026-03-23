@@ -43,10 +43,10 @@ import requests
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 BACKEND_DIR = Path(__file__).parent.parent.parent  # server
-REPO_ROOT = BACKEND_DIR.parent.parent.parent       # repo root
+REPO_ROOT = BACKEND_DIR.parent                     # repo root
 
 # Always use the repo-local binary so tests are coupled to the current source.
-ENGINE_BIN = REPO_ROOT / "apps" / "engine" / "target" / "release" / "longhouse-engine"
+ENGINE_BIN = REPO_ROOT / "engine" / "target" / "release" / "longhouse-engine"
 
 # Fixture filenames.
 CLAUDE_FIXTURE = "1dd6c481-7d7b-498a-b492-c33c917889b9.jsonl"

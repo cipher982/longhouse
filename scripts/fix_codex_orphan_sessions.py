@@ -51,7 +51,7 @@ import sqlalchemy as sa
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).parent.parent
-BACKEND_DIR = REPO_ROOT / "apps" / "zerg" / "backend"
+BACKEND_DIR = REPO_ROOT / "server"
 PROD_CONTAINER = "longhouse-david010"
 
 

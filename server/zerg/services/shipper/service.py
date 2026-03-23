@@ -143,10 +143,10 @@ def get_engine_executable() -> str:
     # 4. Repo dev builds
     # service.py lives at server/zerg/services/shipper/service.py
     # pyproject.toml is at server/ → project_root
-    # engine is at engine/ → project_root.parent.parent / "engine"
+    # engine is at engine/ → project_root.parent / "engine"
     project_root = _find_project_root()
     if project_root:
-        engine_dir = project_root.parent.parent / "engine"
+        engine_dir = project_root.parent / "engine"
         for profile in ("release", "debug"):
             candidate = engine_dir / "target" / profile / "longhouse-engine"
             if candidate.exists():
