@@ -14,6 +14,7 @@ use anyhow::Result;
 use crate::config::ShipperConfig;
 use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::ConsecutiveErrorTracker;
+use crate::error_tracker::RecentIssueTracker;
 use crate::heartbeat;
 use crate::outbox;
 use crate::pipeline::compressor::CompressionAlgo;
@@ -109,16 +110,18 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     // 5. Create error tracker (shared across all ship operations)
     let tracker = ConsecutiveErrorTracker::new();
+    let parse_tracker = RecentIssueTracker::new();
 
     // 6. Initial full scan (catch up on anything missed while stopped)
     tracing::info!("Running initial full scan...");
-    let (files, events) = shipper::full_scan_with_batch_bytes(
+    let (files, events) = shipper::full_scan_with_batch_bytes_and_parse_tracker(
         &providers,
         &conn,
         &client,
         config.algo,
         config.shipper_config.max_batch_bytes,
         Some(&tracker),
+        Some(&parse_tracker),
     )
     .await?;
     tracing::info!(
@@ -129,12 +132,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     );
 
     // 7. Replay any pending spool entries
-    let (spool_ok, spool_fail) = shipper::replay_spool_batch_with_batch_bytes(
+    let (spool_ok, spool_fail) = shipper::replay_spool_batch_with_batch_bytes_and_parse_tracker(
         &conn,
         &client,
         config.algo,
         100,
         config.shipper_config.max_batch_bytes,
+        Some(&parse_tracker),
     )
     .await?;
     if spool_ok > 0 || spool_fail > 0 {
@@ -225,6 +229,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                             config.algo,
                             config.shipper_config.max_batch_bytes,
                             &tracker,
+                            &parse_tracker,
                         ).await;
                         if had_connect_error {
                             offline.mark_offline();
@@ -246,13 +251,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Periodic full scan (catch missed events) — skip when offline
             _ = fallback_timer.tick(), if !offline.is_offline => {
                 tracing::debug!("Running fallback full scan...");
-                match shipper::full_scan_with_batch_bytes(
+                match shipper::full_scan_with_batch_bytes_and_parse_tracker(
                     &providers,
                     &conn,
                     &client,
                     config.algo,
                     config.shipper_config.max_batch_bytes,
                     Some(&tracker),
+                    Some(&parse_tracker),
                 ).await {
                     Ok((f, e)) => {
                         if f > 0 {
@@ -274,12 +280,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Spool replay (retry failed shipments) — skip when offline
             _ = spool_timer.tick(), if !offline.is_offline => {
-                match shipper::replay_spool_batch_with_batch_bytes(
+                match shipper::replay_spool_batch_with_batch_bytes_and_parse_tracker(
                     &conn,
                     &client,
                     config.algo,
                     50,
                     config.shipper_config.max_batch_bytes,
+                    Some(&parse_tracker),
                 ).await {
                     Ok((ok, fail)) => {
                         if ok > 0 || fail > 0 {
@@ -314,6 +321,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 let stats = heartbeat::HeartbeatStats {
                     spool: &spool,
                     tracker: &tracker,
+                    parse_tracker: &parse_tracker,
                     is_offline: offline.is_offline,
                     last_ship_at: last_ship_at.clone(),
                 };
@@ -342,6 +350,7 @@ async fn ship_batch(
     algo: CompressionAlgo,
     max_batch_bytes: u64,
     tracker: &ConsecutiveErrorTracker,
+    parse_tracker: &RecentIssueTracker,
 ) -> (bool, usize) {
     let batch_start = Instant::now();
     let mut shipped = 0usize;
@@ -358,7 +367,15 @@ async fn ship_batch(
             }
         };
 
-        match shipper::prepare_file_batches(path, provider, algo, conn, max_batch_bytes, None) {
+        match shipper::prepare_file_batches_with_parse_tracker(
+            path,
+            provider,
+            algo,
+            conn,
+            max_batch_bytes,
+            None,
+            Some(parse_tracker),
+        ) {
             Ok(Some(prepared)) => {
                 let event_count = prepared.total_event_count();
                 let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
