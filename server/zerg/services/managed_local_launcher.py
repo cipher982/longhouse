@@ -94,13 +94,13 @@ _PROVIDER_PANE_COMMANDS = {
 }
 _PROVIDER_HOOK_FILES = {
     "claude": {
-        "script": "$HOME/.claude/hooks/longhouse-hook.sh",
-        "config": "$HOME/.claude/settings.json",
+        "script": "${HOME}/.claude/hooks/longhouse-hook.sh",
+        "config": "${HOME}/.claude/settings.json",
         "marker": "longhouse-hook.sh",
     },
     "codex": {
-        "script": "$HOME/.codex/hooks/longhouse-codex-hook.sh",
-        "config": "$HOME/.codex/hooks.json",
+        "script": "${HOME}/.codex/hooks/longhouse-codex-hook.sh",
+        "config": "${HOME}/.codex/hooks.json",
         "marker": "longhouse-codex-hook.sh",
     },
 }
@@ -201,16 +201,16 @@ def _build_preflight_command(*, provider: str, cwd: str) -> str:
 
 def _build_hooks_ensure_command(*, provider: str) -> str:
     hook_files = _PROVIDER_HOOK_FILES.get(provider, _PROVIDER_HOOK_FILES["claude"])
-    quoted_script = shlex.quote(hook_files["script"])
-    quoted_config = shlex.quote(hook_files["config"])
+    shell_script_path = hook_files["script"]
+    shell_config_path = hook_files["config"]
     quoted_marker = shlex.quote(hook_files["marker"])
     checks = [
         build_managed_local_shell_prelude(require_tmux=False),
         "command -v longhouse >/dev/null 2>&1 || { echo 'longhouse is not available' >&2; exit 14; }",
         "longhouse connect --hooks-only >/dev/null 2>&1 || { echo 'failed to install Longhouse hooks' >&2; exit 15; }",
-        f"test -x {quoted_script} || {{ echo 'Longhouse hook script missing after install' >&2; exit 16; }}",
-        f"test -f {quoted_config} || {{ echo 'Longhouse hook config missing after install' >&2; exit 17; }}",
-        f"grep -q {quoted_marker} {quoted_config} || {{ echo 'Longhouse hook config is missing the expected hook entry' >&2; exit 18; }}",
+        f"test -x \"{shell_script_path}\" || {{ echo 'Longhouse hook script missing after install' >&2; exit 16; }}",
+        f"test -f \"{shell_config_path}\" || {{ echo 'Longhouse hook config missing after install' >&2; exit 17; }}",
+        f"grep -q {quoted_marker} \"{shell_config_path}\" || {{ echo 'Longhouse hook config is missing the expected hook entry' >&2; exit 18; }}",
     ]
     return f"zsh -lc {shlex.quote('; '.join(checks))}"
 

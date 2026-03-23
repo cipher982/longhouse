@@ -241,8 +241,8 @@ def test_build_hooks_ensure_command_installs_longhouse_hooks_for_codex():
     inner = _inner_command(cmd)
     assert "command -v longhouse" in inner
     assert "longhouse connect --hooks-only" in inner
-    assert "$HOME/.codex/hooks/longhouse-codex-hook.sh" in inner
-    assert "$HOME/.codex/hooks.json" in inner
+    assert "${HOME}/.codex/hooks/longhouse-codex-hook.sh" in inner
+    assert "${HOME}/.codex/hooks.json" in inner
     assert "longhouse-codex-hook.sh" in inner
 
 
@@ -315,8 +315,8 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert "command -v claude-code" in preflight_inner
             assert "printf '__LONGHOUSE_TMUX_TMPDIR__=%s\\n' \"${TMUX_TMPDIR:-}\"" in preflight_inner
             assert "longhouse connect --hooks-only" in hooks_inner
-            assert "$HOME/.claude/hooks/longhouse-hook.sh" in hooks_inner
-            assert "$HOME/.claude/settings.json" in hooks_inner
+            assert "${HOME}/.claude/hooks/longhouse-hook.sh" in hooks_inner
+            assert "${HOME}/.claude/settings.json" in hooks_inner
             assert "cat > /tmp/longhouse-managed-" in launch_inner
             assert "__LONGHOUSE_MANAGED_LOCAL__" in launch_inner
             assert (
@@ -532,8 +532,8 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
 
             hooks_inner = _inner_command(dispatcher.calls[1]["command"])
             assert "longhouse connect --hooks-only" in hooks_inner
-            assert "$HOME/.codex/hooks/longhouse-codex-hook.sh" in hooks_inner
-            assert "$HOME/.codex/hooks.json" in hooks_inner
+            assert "${HOME}/.codex/hooks/longhouse-codex-hook.sh" in hooks_inner
+            assert "${HOME}/.codex/hooks.json" in hooks_inner
 
             launch_inner = _inner_command(dispatcher.calls[2]["command"])
             assert "exec codex --enable codex_hooks" in launch_inner
