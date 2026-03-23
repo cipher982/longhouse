@@ -294,7 +294,8 @@ fn main() -> anyhow::Result<()> {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            rt.block_on(daemon::run(connect_config))?;
+            let local = tokio::task::LocalSet::new();
+            rt.block_on(local.run_until(daemon::run(connect_config)))?;
         }
         Commands::Parse {
             path,
