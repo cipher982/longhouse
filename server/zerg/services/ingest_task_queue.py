@@ -179,9 +179,10 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
         return False
     except RetryTaskLater as e:
         logger.info("Ingest task %s (%s/%s) re-queued: %s", task_id, task_type, session_id, e)
-        # Pass "failed" as final_status so exhausted tasks actually die rather
-        # than looping as "pending" forever.
-        _mark_status(task_id, "failed", error=str(e), retry=True)
+        # RetryTaskLater means "not yet" (session still active), not a real failure.
+        # Reset to pending WITHOUT consuming the retry budget so we never drop a
+        # turn review just because the session was actively running for >6 seconds.
+        _reset_for_retry_later(task_id, str(e))
         return True
     except asyncio.TimeoutError:
         timeout_label = f"{timeout_seconds:g}s" if timeout_seconds is not None else "unknown"
@@ -230,6 +231,32 @@ async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
             db.close()
         return
     logger.warning("Unknown task_type %r for session %s", task_type, session_id)
+
+
+def _reset_for_retry_later(task_id: str, error: str) -> None:
+    """Reset a task to pending without consuming its retry budget.
+
+    Used by RetryTaskLater — the signal means "not yet" (e.g. session is still
+    actively running), not a real failure. We undo the attempt increment that
+    _claim_pending applied so the retry budget is preserved for genuine errors.
+    """
+    factory = get_session_factory()
+    db = factory()
+    try:
+        task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
+        if not task:
+            return
+        # Undo the attempt increment from _claim_pending
+        task.attempts = max(0, (task.attempts or 1) - 1)
+        task.status = "pending"
+        task.error = error[:1000] if error else None
+        task.updated_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception:
+        logger.exception("Failed to reset task %s for retry later", task_id)
+        db.rollback()
+    finally:
+        db.close()
 
 
 def _mark_status(task_id: str, final_status: str, error: str | None, retry: bool) -> None:
