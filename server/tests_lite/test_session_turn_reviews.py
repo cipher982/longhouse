@@ -178,9 +178,8 @@ async def test_turn_review_autopilot_enqueues_same_session_continue_job(monkeypa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["claude", "codex"])
-async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud_job(
-    monkeypatch, tmp_path, provider
+async def test_turn_review_autopilot_routes_claude_managed_local_continue_without_cloud_job(
+    monkeypatch, tmp_path
 ):
     SessionLocal = _make_db(tmp_path, "turn_review_autopilot_managed_local.db")
     calls: list[dict[str, object]] = []
@@ -230,7 +229,7 @@ async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud
             loop_mode="autopilot",
             user_text="finish the session detail page",
             assistant_text="Only targeted verification remains. Run the pending targeted tests.",
-            provider=provider,
+            provider="claude",
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
@@ -261,9 +260,9 @@ async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["claude", "codex"])
-async def test_turn_review_autopilot_managed_local_marks_failure_when_send_fails(monkeypatch, tmp_path, provider):
-    SessionLocal = _make_db(tmp_path, f"turn_review_autopilot_managed_local_send_failure_{provider}.db")
+async def test_turn_review_autopilot_managed_local_codex_stays_notify_only(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_managed_local_codex_notify.db")
+    invoke_calls: list[dict[str, object]] = []
 
     async def _fake_evaluate(**_kwargs):
         return LoopControllerDecision(
@@ -278,15 +277,23 @@ async def test_turn_review_autopilot_managed_local_marks_failure_when_send_fails
             loop_thread_id=52,
         )
 
-    async def _fake_send_text(**_kwargs):
-        return SimpleNamespace(
-            ok=False,
-            exit_code=17,
-            error="runner send failed",
+    async def _fail_send_text(**_kwargs):
+        raise AssertionError("managed-local Codex autopilot should not send tmux input")
+
+    async def _fake_invoke(owner_id, message, message_id, **kwargs):
+        invoke_calls.append(
+            {
+                "owner_id": owner_id,
+                "message": message,
+                "message_id": message_id,
+                **kwargs,
+            }
         )
+        return 654
 
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fail_send_text)
+    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
     monkeypatch.setattr(
         "zerg.services.session_turn_reviews._load_policy",
         lambda _db, _owner_id: OikosOperatorPolicy(
@@ -304,7 +311,7 @@ async def test_turn_review_autopilot_managed_local_marks_failure_when_send_fails
             loop_mode="autopilot",
             user_text="finish the session detail page",
             assistant_text="Only targeted verification remains. Run the pending targeted tests.",
-            provider=provider,
+            provider="codex",
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
@@ -317,19 +324,25 @@ async def test_turn_review_autopilot_managed_local_marks_failure_when_send_fails
 
         review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
         assert review is not None
-        assert review.execution_state == "would_auto_continue"
-        assert review.status == "failed"
-        assert review.reason == "managed_local_send_failed"
-        assert review.actual_outcome == "failed"
+        assert review.execution_state == "awaiting_user_approval"
+        assert review.status == "enqueued"
+        assert review.reason == "notify_user"
+        assert review.actual_outcome is None
+        assert review.run_id == 654
 
         jobs = db.query(CommisJob).all()
         assert jobs == []
 
+        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
+        assert runtime_state.phase == "needs_user"
+
+        assert len(invoke_calls) == 1
+        assert invoke_calls[0]["owner_id"] == user.id
+
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider", ["claude", "codex"])
-async def test_reply_to_pending_turn_review_routes_managed_local_reply_without_cloud_job(
-    monkeypatch, tmp_path, provider
+async def test_reply_to_pending_turn_review_routes_claude_managed_local_reply_without_cloud_job(
+    monkeypatch, tmp_path
 ):
     SessionLocal = _make_db(tmp_path, "turn_review_reply_managed_local.db")
     calls: list[dict[str, object]] = []
@@ -357,7 +370,7 @@ async def test_reply_to_pending_turn_review_routes_managed_local_reply_without_c
             loop_mode="assist",
             user_text="keep the hiring task moving",
             assistant_text="I finished the last turn and need your direction on what to do next.",
-            provider=provider,
+            provider="claude",
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
@@ -413,6 +426,64 @@ async def test_reply_to_pending_turn_review_routes_managed_local_reply_without_c
         assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
         assert calls[0]["transport"] == "tmux"
         assert calls[0]["timeout_secs"] == 15
+
+
+@pytest.mark.asyncio
+async def test_reply_to_pending_turn_review_rejects_managed_local_codex(tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_reply_managed_local_codex_reject.db")
+
+    with SessionLocal() as db:
+        user = _create_user(db, allow_continue=False)
+        runner = _create_runner(db, owner_id=user.id, name="cinder")
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="keep the hiring task moving",
+            assistant_text="I finished the last turn and need your direction on what to do next.",
+            provider="codex",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+        session.managed_transport = "tmux"
+        session.source_runner_id = runner.id
+        session.source_runner_name = runner.name
+        session.managed_session_name = "lh-managed-local-reply-codex"
+        db.commit()
+        db.refresh(session)
+
+        review = SessionTurnReview(
+            session_id=session_id,
+            owner_id=user.id,
+            assistant_event_id=2,
+            turn_index=1,
+            trigger_type="turn.completed",
+            loop_mode="assist",
+            decision="wait",
+            summary="Awaiting your direction on the next hiring step.",
+            rationale="The finished turn needs a human reply rather than autonomous continuation.",
+            turn_excerpt="I finished the last turn and need your direction on what to do next.",
+            mode_capability="notify_only",
+            mode_summary="Suggest or escalate from completed turns, but wait for user approval before continuing.",
+            execution_state="needs_human",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=[],
+            status="enqueued",
+            reason="notify_user",
+        )
+        db.add(review)
+        db.commit()
+        db.refresh(review)
+
+        with pytest.raises(
+            ValueError,
+            match="Managed-local Codex follow-ups are terminal-driven right now; open the full session instead.",
+        ):
+            await reply_to_pending_turn_review(
+                db=db,
+                review=review,
+                reply_text="keep going with the hiring shortlist",
+            )
 
 
 @pytest.mark.asyncio

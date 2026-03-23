@@ -190,7 +190,7 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
-      "Web continuation unavailable for Codex",
+      "Managed-local Codex stays terminal-driven",
     );
     expect(screen.queryByTestId("session-chat")).not.toBeInTheDocument();
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();
