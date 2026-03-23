@@ -155,6 +155,9 @@ function SessionDetailWorkspaceRoute({
   const continuationSourceSession = currentThreadSession || session;
   const providerLabel = formatProviderLabel(continuationSourceSession.provider);
   const canContinueInCloud = supportsCloudContinuation(continuationSourceSession.provider);
+  const isManagedLocalCodex =
+    continuationSourceSession.provider === "codex" &&
+    continuationSourceSession.execution_home === "managed_local";
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
   const sourceOriginLabel = continuationSourceSession
     ? getSessionOriginLabel(continuationSourceSession)
@@ -182,15 +185,19 @@ function SessionDetailWorkspaceRoute({
         ? "Cloud continuation starts here"
         : continuationMode === "branch"
           ? "New cloud branch starts here"
-          : `This ${providerLabel} transcript is synced, but not resumable from the web yet`;
+          : isManagedLocalCodex
+            ? "Drive this session from the attached Codex terminal"
+            : `This ${providerLabel} transcript is synced, but not resumable from the web yet`;
 
   const continuationDescription =
     continuationMode === "head"
       ? `Earlier turns were synced from ${sourceOriginLabel}. New messages below keep extending this cloud session.`
       : continuationMode === "promote"
-        ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts the cloud continuation.`
-        : continuationMode === "branch"
-          ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts a new cloud branch from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
+      ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts the cloud continuation.`
+      : continuationMode === "branch"
+        ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts a new cloud branch from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
+        : isManagedLocalCodex
+          ? "This managed-local Codex session is terminal-driven in the current MVP. Use the attached Codex terminal for prompts while Longhouse stays in sync here."
           : `Direct cloud continuation is currently wired for Claude sessions only. This ${providerLabel} transcript is still searchable and auditable here while we close that provider gap.`;
 
   const continuationHint = undefined;
@@ -222,8 +229,12 @@ function SessionDetailWorkspaceRoute({
 
   const continuationNotice = !canContinueInCloud
     ? {
-        title: `Web continuation unavailable for ${providerLabel}`,
-        body: `This ${providerLabel} transcript is still fully searchable here, but direct cloud continuation is currently wired for Claude sessions only.`,
+        title: isManagedLocalCodex
+          ? "Managed-local Codex stays terminal-driven"
+          : `Web continuation unavailable for ${providerLabel}`,
+        body: isManagedLocalCodex
+          ? "Attach locally and use the Codex TUI for prompts. Longhouse stays live here for transcript review, search, and runtime status."
+          : `This ${providerLabel} transcript is still fully searchable here, but direct cloud continuation is currently wired for Claude sessions only.`,
       }
     : null;
 

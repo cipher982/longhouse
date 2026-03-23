@@ -53,21 +53,14 @@ export default function LaunchSessionModal({
   const handleLaunch = useCallback(() => {
     if (!cwd.trim()) return;
 
-    launchMutation.mutate(
-      {
-        runner_target: `runner:${runner.id}`,
-        cwd: cwd.trim(),
-        provider,
-        project: project.trim() || null,
-        display_name: displayName.trim() || null,
-      },
-      {
-        onSuccess: (result) => {
-          navigate(`/timeline/${result.session_id}`);
-        },
-      },
-    );
-  }, [cwd, provider, project, displayName, runner.id, launchMutation, navigate]);
+    launchMutation.mutate({
+      runner_target: `runner:${runner.id}`,
+      cwd: cwd.trim(),
+      provider,
+      project: project.trim() || null,
+      display_name: displayName.trim() || null,
+    });
+  }, [cwd, provider, project, displayName, runner.id, launchMutation]);
 
   const handleClose = useCallback(() => {
     if (launchMutation.isPending) return;
@@ -114,11 +107,24 @@ export default function LaunchSessionModal({
                 Session launched on {runner.name}
               </p>
               <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--font-size-sm)" }}>
-                Attach locally:
+                Attach locally first, then open the session in Longhouse.
               </p>
               <pre className="code-block" style={{ marginTop: "var(--space-2)" }}>
                 <code>{launchMutation.data.attach_command}</code>
               </pre>
+              {launchMutation.data.provider === "codex" ? (
+                <p
+                  style={{
+                    color: "var(--color-text-secondary)",
+                    fontSize: "var(--font-size-sm)",
+                    marginTop: "var(--space-3)",
+                    marginBottom: 0,
+                  }}
+                >
+                  Codex MVP is terminal-first. Drive the session in the attached Codex terminal while Longhouse
+                  mirrors the transcript and runtime state.
+                </p>
+              ) : null}
               <div className="modal-actions" style={{ marginTop: "var(--space-4)" }}>
                 <Button variant="secondary" onClick={handleClose}>
                   Close
@@ -143,6 +149,18 @@ export default function LaunchSessionModal({
                 Start a managed AI session on <strong>{runner.name}</strong>.
                 Longhouse will launch the CLI inside tmux and manage the session lifecycle.
               </p>
+              {provider === "codex" ? (
+                <p
+                  style={{
+                    color: "var(--color-text-secondary)",
+                    fontSize: "var(--font-size-sm)",
+                    marginBottom: "var(--space-4)",
+                  }}
+                >
+                  Codex is terminal-first in this MVP. Launch here, attach locally, then use Longhouse as the live
+                  transcript and runtime view.
+                </p>
+              ) : null}
 
               {/* Provider selector */}
               <div style={{ marginBottom: "var(--space-4)" }}>

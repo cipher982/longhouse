@@ -6,7 +6,6 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -107,14 +106,13 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
     return session
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex"])
-def test_chat_with_session_routes_managed_local_without_cloud_continuation(monkeypatch, tmp_path, provider):
+def test_chat_with_session_routes_claude_managed_local_without_cloud_continuation(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider=provider)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
         client, api_app_ref = _make_client(db, user)
 
         async def fake_wait_for_events(**_kwargs):
@@ -180,13 +178,12 @@ def test_chat_with_session_routes_managed_local_without_cloud_continuation(monke
             api_app_ref.dependency_overrides = {}
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex"])
-def test_chat_with_session_reports_managed_local_send_failure(monkeypatch, tmp_path, provider):
+def test_chat_with_session_reports_claude_managed_local_send_failure(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider=provider)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
         client, api_app_ref = _make_client(db, user)
 
         async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
@@ -204,5 +201,26 @@ def test_chat_with_session_reports_managed_local_send_failure(monkeypatch, tmp_p
             assert "Runner send failed" in body
             assert '"persisted_events": 0' in body
             assert '"created_continuation": false' in body
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_chat_with_session_rejects_managed_local_codex_web_input(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
+        client, api_app_ref = _make_client(db, user)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 409, response.text
+            assert response.json()["detail"] == (
+                "Managed-local Codex is terminal-driven right now; attach locally instead of sending web input."
+            )
         finally:
             api_app_ref.dependency_overrides = {}

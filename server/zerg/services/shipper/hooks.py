@@ -196,17 +196,6 @@ else
   SID="$CODEX_SESSION_ID"
 fi
 
-# Managed-local Codex sessions need a local Longhouse UUID -> native Codex UUID
-# mapping so later managed-local control can target the original native Codex
-# thread without creating duplicates.
-MANAGED_SESSIONS_DIR="$HOME/.claude/longhouse-managed-sessions"
-if [[ "$EVENT" == "SessionStart" ]] && [[ -n "$LONGHOUSE_SESSION_ID" ]] && [[ -n "$CODEX_SESSION_ID" ]]; then
-  [ -d "$MANAGED_SESSIONS_DIR" ] || mkdir -p "$MANAGED_SESSIONS_DIR"
-  MAP_TMP=$(mktemp "$MANAGED_SESSIONS_DIR/.tmp.XXXXXX")
-  printf '%s\n' "$CODEX_SESSION_ID" > "$MAP_TMP"
-  mv "$MAP_TMP" "$MANAGED_SESSIONS_DIR/$LONGHOUSE_SESSION_ID.codex-session-id"
-fi
-
 # Map event -> presence state
 case "$EVENT" in
   SessionStart)         STATE="idle" ;;

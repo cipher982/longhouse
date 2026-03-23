@@ -34,7 +34,7 @@ async def send_text_to_managed_local_session(
     commis_id: str | None = None,
     timeout_secs: int = 15,
 ) -> ManagedLocalSendResult:
-    """Send text into a tmux-backed managed-local Claude session.
+    """Send text into a tmux-backed managed-local session.
 
     Returns a normalized result so callers do not need to know the runner
     dispatch envelope details.
@@ -42,6 +42,11 @@ async def send_text_to_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
+    if str(getattr(session, "provider", "") or "").strip().lower() == "codex":
+        return ManagedLocalSendResult(
+            ok=False,
+            error="Managed-local Codex is terminal-driven right now; attach locally instead of sending web input.",
+        )
     if str(getattr(session, "managed_transport", "") or "").strip() != ManagedSessionTransport.TMUX.value:
         return ManagedLocalSendResult(ok=False, error="Managed local session does not use tmux transport")
     if not getattr(session, "source_runner_id", None):

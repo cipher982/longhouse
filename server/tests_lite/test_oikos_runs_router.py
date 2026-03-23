@@ -719,9 +719,8 @@ def test_loop_inbox_approve_action_queues_same_session_continue_and_clears_item(
             api_app_ref.dependency_overrides = {}
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex"])
-def test_loop_inbox_approve_action_routes_managed_local_continue_without_cloud_job(
-    monkeypatch, tmp_path, provider
+def test_loop_inbox_approve_action_routes_claude_managed_local_continue_without_cloud_job(
+    monkeypatch, tmp_path
 ):
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
@@ -766,7 +765,7 @@ def test_loop_inbox_approve_action_routes_managed_local_continue_without_cloud_j
             summary_title="Mac Continue",
             project="zerg",
             device_id=runner.name,
-            provider=provider,
+            provider="claude",
             execution_home="managed_local",
             managed_transport="tmux",
             source_runner_id=runner.id,
@@ -987,8 +986,7 @@ def test_loop_inbox_end_to_end_phone_approve_flow(monkeypatch, tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
-@pytest.mark.parametrize("provider", ["claude", "codex"])
-def test_loop_inbox_reply_action_routes_managed_local_reply_without_cloud_job(monkeypatch, tmp_path, provider):
+def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud_job(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
 
@@ -1032,7 +1030,7 @@ def test_loop_inbox_reply_action_routes_managed_local_reply_without_cloud_job(mo
             summary_title="Mac Reply",
             project="zerg",
             device_id=runner.name,
-            provider=provider,
+            provider="claude",
             execution_home="managed_local",
             managed_transport="tmux",
             source_runner_id=runner.id,
@@ -1099,6 +1097,83 @@ def test_loop_inbox_reply_action_routes_managed_local_reply_without_cloud_job(mo
             assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
             assert calls[0]["transport"] == "tmux"
             assert calls[0]["timeout_secs"] == 15
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_loop_inbox_codex_managed_local_hides_remote_control_actions(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        owner = User(
+            email="owner@local",
+            role=UserRole.USER.value,
+            context={
+                "preferences": {
+                    "operator_mode": {
+                        "enabled": True,
+                        "allow_continue": True,
+                        "allow_notify": True,
+                    }
+                }
+            },
+        )
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+        runner = _create_runner(db, owner_id=owner.id, name="cinder")
+
+        session = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Codex Terminal First",
+            project="zerg",
+            device_id=runner.name,
+            provider="codex",
+            execution_home="managed_local",
+            managed_transport="tmux",
+            source_runner_id=runner.id,
+            source_runner_name=runner.name,
+            managed_session_name="lh-codex-managed-local",
+        )
+        _, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="finish targeted verification",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+        review = _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=datetime(2026, 3, 21, 12, 15, tzinfo=timezone.utc),
+            execution_state="awaiting_user_approval",
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            card_response = client.get(f"/api/oikos/loop-inbox/cards/{review.id}")
+            assert card_response.status_code == 200, card_response.text
+            card_payload = card_response.json()
+            assert card_payload["available_actions"] == [
+                "not_now",
+                "open_full_session",
+            ]
+
+            approve_response = client.post(
+                f"/api/oikos/loop-inbox/cards/{review.id}/actions",
+                json={"action": "approve_recommended_action"},
+            )
+            assert approve_response.status_code == 409, approve_response.text
+            assert "terminal-driven right now" in approve_response.json()["detail"]
+
+            reply_response = client.post(
+                f"/api/oikos/loop-inbox/cards/{review.id}/actions",
+                json={"action": "reply_to_session", "reply_text": "keep going"},
+            )
+            assert reply_response.status_code == 409, reply_response.text
+            assert "terminal-driven right now" in reply_response.json()["detail"]
         finally:
             api_app_ref.dependency_overrides = {}
 

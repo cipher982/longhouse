@@ -1056,6 +1056,11 @@ async def chat_with_session(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Unsupported managed local transport: {source_session.managed_transport}",
                 )
+            if (source_session.provider or "").strip().lower() == "codex":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Managed-local Codex is terminal-driven right now; attach locally instead of sending web input.",
+                )
 
             async def generate_managed_local():
                 try:

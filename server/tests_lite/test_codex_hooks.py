@@ -30,8 +30,6 @@ def test_codex_hook_script_has_managed_session_id_support():
     """Hook script must have explicit managed vs unmanaged session ID paths."""
     assert "LONGHOUSE_SESSION_ID" in CODEX_HOOK_SCRIPT, "must check for managed-local env var"
     assert "CODEX_SESSION_ID" in CODEX_HOOK_SCRIPT, "must read Codex's native session ID"
-    assert "longhouse-managed-sessions" in CODEX_HOOK_SCRIPT, "must persist managed-local Codex session mapping"
-    assert ".codex-session-id" in CODEX_HOOK_SCRIPT, "must write a deterministic mapping file per managed session"
     # Managed path: uses LONGHOUSE_SESSION_ID for outbox AND transcript ship
     assert "--session-id" in CODEX_HOOK_SCRIPT, "must pass --session-id override to engine for managed sessions"
     # No fallback pattern — two explicit paths

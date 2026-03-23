@@ -358,9 +358,15 @@ def _home_label(session: AgentSession | None) -> str | None:
 def _available_loop_actions(review: SessionTurnReview, session: AgentSession | None) -> List[str]:
     actions = ["not_now", "open_full_session"]
     execution_home = str(getattr(session, "execution_home", "") or "").strip()
-    if execution_home == "managed_local":
+    provider = str(getattr(session, "provider", "") or "").strip().lower()
+    is_managed_local_codex = execution_home == "managed_local" and provider == "codex"
+    if execution_home == "managed_local" and not is_managed_local_codex:
         actions.insert(0, "reply_to_session")
-    if review.execution_state == "awaiting_user_approval" and review.recommended_action == "continue_session":
+    if (
+        review.execution_state == "awaiting_user_approval"
+        and review.recommended_action == "continue_session"
+        and not is_managed_local_codex
+    ):
         return ["approve_recommended_action", *actions]
     return actions
 
