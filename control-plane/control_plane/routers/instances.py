@@ -77,7 +77,7 @@ def _instance_url(subdomain: str) -> str:
 
 
 def _instance_health_url(inst: Instance) -> str:
-    return f"{_instance_url(inst.subdomain)}/api/health"
+    return f"{_instance_url(inst.subdomain)}/api/readyz"
 
 
 def _probe_instance_health(inst: Instance, timeout_seconds: float = 5.0) -> tuple[bool, str | None]:

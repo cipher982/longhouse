@@ -417,10 +417,10 @@ class Provisioner:
 
     def wait_for_health(self, subdomain: str, timeout: int = 120) -> bool:
         if settings.publish_ports:
-            url = f"http://127.0.0.1:{settings.instance_port}/api/health"
+            url = f"http://127.0.0.1:{settings.instance_port}/api/readyz"
         else:
             host = _host_for(subdomain)
-            url = f"https://{host}/api/health"
+            url = f"https://{host}/api/readyz"
         deadline = time.time() + timeout
         last_error = None
 
