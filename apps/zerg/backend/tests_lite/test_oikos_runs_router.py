@@ -1022,23 +1022,13 @@ def test_loop_inbox_reply_action_routes_managed_local_reply_without_cloud_job(mo
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-    async def _fake_codex_exec(*, db, owner_id, session, text, commis_id=None, timeout_secs=300):
-        calls.append(
-            {
-                "owner_id": owner_id,
-                "session_id": str(session.id),
-                "text": text,
-                "commis_id": commis_id,
-                "timeout_secs": timeout_secs,
-                "transport": "codex_exec",
-            }
-        )
-        return SimpleNamespace(ok=True, exit_code=0, error=None)
+    async def _fail_codex_exec(**_kwargs):
+        raise AssertionError("reply path must stay on tmux")
 
     monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
     monkeypatch.setattr(
         "zerg.services.session_turn_reviews.run_codex_exec_resume_for_managed_local_session",
-        _fake_codex_exec,
+        _fail_codex_exec,
     )
 
     with session_local() as db:
@@ -1131,8 +1121,8 @@ def test_loop_inbox_reply_action_routes_managed_local_reply_without_cloud_job(mo
             assert calls[0]["session_id"] == str(session.id)
             assert calls[0]["text"] == "keep going with the shortlist"
             assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
-            assert calls[0]["transport"] == ("codex_exec" if provider == "codex" else "tmux")
-            assert calls[0]["timeout_secs"] == (300 if provider == "codex" else 15)
+            assert calls[0]["transport"] == "tmux"
+            assert calls[0]["timeout_secs"] == 15
         finally:
             api_app_ref.dependency_overrides = {}
 
