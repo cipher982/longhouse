@@ -349,6 +349,7 @@ async fn ship_batch(
     let mut had_connect_error = false;
 
     for path in paths {
+        let file_start = Instant::now();
         let provider = match discovery::provider_for_path(path, providers) {
             Some(p) => p,
             None => {
@@ -359,8 +360,19 @@ async fn ship_batch(
 
         match shipper::prepare_file_batches(path, provider, algo, conn, max_batch_bytes, None) {
             Ok(Some(prepared)) => {
+                let event_count = prepared.total_event_count();
+                let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
                 match shipper::ship_prepared_file(prepared, client, conn, Some(tracker)).await {
                     Ok(outcome) => {
+                        shipper::log_slow_file_processing(
+                            "watch",
+                            path,
+                            provider,
+                            event_count,
+                            byte_count,
+                            outcome.dead_lettered,
+                            file_start.elapsed(),
+                        );
                         if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
                             shipped += 1;
                             events += outcome.events_shipped;
