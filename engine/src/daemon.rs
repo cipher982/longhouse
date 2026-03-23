@@ -5,7 +5,7 @@
 //! incrementally. Designed for 24/7 operation with minimal resources:
 //! - <10 MB RSS when idle
 //! - 0% CPU when idle (blocked on kernel filesystem events)
-//! - Single-threaded tokio runtime (current_thread)
+//! - Current-thread tokio runtime, with blocking file work offloaded
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -41,6 +41,7 @@ const DAEMON_MAX_IN_FLIGHT_CAP: usize = 4;
 const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
+const LOCAL_RETRY_DELAY_SECS: u64 = 5;
 
 /// Offline / connectivity state.
 struct OfflineState {
@@ -95,6 +96,18 @@ struct PathTaskResult {
     failed_spool: usize,
     had_connect_error: bool,
     rerun_priority: Option<WorkPriority>,
+    local_retry_after: Option<Duration>,
+}
+
+struct DeferredRetry {
+    due_at: Instant,
+    job: PathJob,
+}
+
+struct DiscoveryTaskResult {
+    files: Vec<(PathBuf, &'static str)>,
+    priority: WorkPriority,
+    reason: &'static str,
 }
 
 /// Run the connect daemon. This function blocks until shutdown signal.
@@ -154,14 +167,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let max_in_flight = daemon_max_in_flight(&config.shipper_config);
     let mut scheduler = PathScheduler::new(max_in_flight);
     let mut in_flight = JoinSet::new();
+    let mut discovery_tasks = JoinSet::new();
+    let mut deferred_retries = Vec::new();
 
-    let initial_scan_paths =
-        queue_all_discovered_files(&mut scheduler, &providers, WorkPriority::Scan);
+    start_discovery_task(
+        &mut discovery_tasks,
+        &providers,
+        WorkPriority::Scan,
+        "startup catch-up",
+    );
     let initial_retry_paths =
         queue_pending_spool_paths(&mut scheduler, &conn, INITIAL_SPOOL_PATH_LIMIT)?;
     tracing::info!(
-        "Queued startup catch-up: {} scan paths, {} retry paths (max {} concurrent)",
-        initial_scan_paths,
+        "Queued startup catch-up: {} retry paths; background scan started (max {} concurrent)",
         initial_retry_paths,
         max_in_flight
     );
@@ -190,6 +208,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let mut outbox_timer = tokio::time::interval(Duration::from_secs(1));
     outbox_timer.tick().await; // consume first immediate tick
+    let mut local_retry_timer = tokio::time::interval(Duration::from_secs(1));
+    local_retry_timer.tick().await; // consume first immediate tick
 
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
@@ -205,6 +225,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let outbox_dir = claude_dir.join("outbox");
 
     loop {
+        drain_due_local_retries(&mut scheduler, &mut deferred_retries);
         if !offline.is_offline {
             start_ready_jobs(&mut scheduler, &mut in_flight, &task_context);
         }
@@ -221,7 +242,14 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             task_result = in_flight.join_next(), if scheduler.has_in_flight() => {
                 match task_result {
                     Some(Ok(result)) => {
-                        scheduler.complete(&result.job.path, result.rerun_priority);
+                        let completed_job = result.job.clone();
+                        scheduler.complete(&completed_job.path, result.rerun_priority);
+                        if let Some(delay) = result.local_retry_after {
+                            deferred_retries.push(DeferredRetry {
+                                due_at: Instant::now() + delay,
+                                job: completed_job,
+                            });
+                        }
                         if result.resolved_spool > 0 || result.failed_spool > 0 {
                             tracing::info!(
                                 "Path retry {}: {} resolved, {} failed",
@@ -242,6 +270,23 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     }
                     Some(Err(e)) => {
                         return Err(anyhow::anyhow!("path task failed: {}", e));
+                    }
+                    None => {}
+                }
+            }
+
+            discovery_result = discovery_tasks.join_next(), if !discovery_tasks.is_empty() => {
+                match discovery_result {
+                    Some(Ok(result)) => {
+                        let queued = enqueue_discovered_files(
+                            &mut scheduler,
+                            result.files,
+                            result.priority,
+                        );
+                        tracing::debug!("Queued {} paths for {}", queued, result.reason);
+                    }
+                    Some(Err(e)) => {
+                        tracing::warn!("Background discovery task failed: {}", e);
                     }
                     None => {}
                 }
@@ -292,10 +337,16 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Periodic full scan (catch missed events) — skip when offline
             _ = fallback_timer.tick(), if !offline.is_offline => {
-                tracing::debug!("Running fallback full scan...");
-                let queued = queue_all_discovered_files(&mut scheduler, &providers, WorkPriority::Scan);
-                if queued > 0 {
-                    tracing::debug!("Queued {} paths for fallback scan", queued);
+                if discovery_tasks.is_empty() {
+                    tracing::debug!("Starting fallback full scan in background...");
+                    start_discovery_task(
+                        &mut discovery_tasks,
+                        &providers,
+                        WorkPriority::Scan,
+                        "fallback scan",
+                    );
+                } else {
+                    tracing::debug!("Skipping fallback full scan tick because discovery is still running");
                 }
             }
 
@@ -318,6 +369,9 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     tracing::debug!("Outbox drain: {} sent, {} pending", sent, kept);
                 }
             }
+
+            // Wake the loop when a delayed local retry may now be ready.
+            _ = local_retry_timer.tick(), if !deferred_retries.is_empty() => {}
 
             // Daily: prune stale file_state entries
             _ = prune_timer.tick() => {
@@ -358,17 +412,30 @@ fn daemon_max_in_flight(config: &ShipperConfig) -> usize {
     config.workers.max(1).min(DAEMON_MAX_IN_FLIGHT_CAP)
 }
 
-fn queue_all_discovered_files(
+fn enqueue_discovered_files(
     scheduler: &mut PathScheduler,
-    providers: &[ProviderConfig],
+    all_files: Vec<(PathBuf, &'static str)>,
     priority: WorkPriority,
 ) -> usize {
-    let all_files = discovery::discover_all_files(providers);
     let count = all_files.len();
     for (path, provider) in all_files {
         scheduler.enqueue(path, provider, priority);
     }
     count
+}
+
+fn start_discovery_task(
+    discovery_tasks: &mut JoinSet<DiscoveryTaskResult>,
+    providers: &[ProviderConfig],
+    priority: WorkPriority,
+    reason: &'static str,
+) {
+    let providers = providers.to_vec();
+    discovery_tasks.spawn_blocking(move || DiscoveryTaskResult {
+        files: discovery::discover_all_files(&providers),
+        priority,
+        reason,
+    });
 }
 
 fn queue_pending_spool_paths(
@@ -430,6 +497,48 @@ fn start_ready_jobs(
     }
 }
 
+fn drain_due_local_retries(
+    scheduler: &mut PathScheduler,
+    deferred_retries: &mut Vec<DeferredRetry>,
+) {
+    let now = Instant::now();
+    let mut idx = 0usize;
+    while idx < deferred_retries.len() {
+        if deferred_retries[idx].due_at <= now {
+            let retry = deferred_retries.remove(idx);
+            scheduler.enqueue(retry.job.path, retry.job.provider, WorkPriority::Retry);
+        } else {
+            idx += 1;
+        }
+    }
+}
+
+async fn prepare_file_for_job(
+    job: &PathJob,
+    task_context: &PathTaskContext,
+) -> Result<Option<shipper::PreparedFile>> {
+    let path = job.path.clone();
+    let provider = job.provider;
+    let algo = task_context.algo;
+    let db_path = task_context.shipper_config.db_path.clone();
+    let max_batch_bytes = task_context.shipper_config.max_batch_bytes;
+    let parse_tracker = task_context.parse_tracker.clone();
+
+    tokio::task::spawn_blocking(move || {
+        let conn = open_db(db_path.as_deref())?;
+        shipper::prepare_file_batches_with_parse_tracker(
+            &path,
+            provider,
+            algo,
+            &conn,
+            max_batch_bytes,
+            None,
+            Some(&parse_tracker),
+        )
+    })
+    .await?
+}
+
 async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskResult {
     let mut result = PathTaskResult {
         job,
@@ -438,6 +547,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
         failed_spool: 0,
         had_connect_error: false,
         rerun_priority: None,
+        local_retry_after: None,
     };
 
     let conn = match open_db(task_context.shipper_config.db_path.as_deref()) {
@@ -450,6 +560,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     e
                 );
             }
+            result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
             return result;
         }
     };
@@ -478,6 +589,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     e
                 );
             }
+            result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
             return result;
         }
     }
@@ -495,15 +607,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
     }
 
     let file_start = Instant::now();
-    match shipper::prepare_file_batches_with_parse_tracker(
-        &result.job.path,
-        result.job.provider,
-        task_context.algo,
-        &conn,
-        task_context.shipper_config.max_batch_bytes,
-        None,
-        Some(&task_context.parse_tracker),
-    ) {
+    match prepare_file_for_job(&result.job, &task_context).await {
         Ok(Some(prepared)) => {
             let event_count = prepared.total_event_count();
             let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
@@ -534,6 +638,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
                     if task_context.tracker.record_error() {
                         tracing::warn!("Error shipping {}: {}", result.job.path.display(), e);
                     }
+                    result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
                 }
             }
         }
@@ -542,6 +647,7 @@ async fn run_path_job(job: PathJob, task_context: PathTaskContext) -> PathTaskRe
             if task_context.tracker.record_error() {
                 tracing::warn!("Error preparing {}: {}", result.job.path.display(), e);
             }
+            result.local_retry_after = Some(Duration::from_secs(LOCAL_RETRY_DELAY_SECS));
         }
     }
 
@@ -558,5 +664,45 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {},
         _ = sigterm.recv() => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_drain_due_local_retries_enqueues_only_ready_paths() {
+        let mut scheduler = PathScheduler::new(4);
+        let now = Instant::now();
+        let mut deferred_retries = vec![
+            DeferredRetry {
+                due_at: now - Duration::from_secs(1),
+                job: PathJob {
+                    path: PathBuf::from("/tmp/retry-now.jsonl"),
+                    provider: "claude",
+                    priority: WorkPriority::Watch,
+                },
+            },
+            DeferredRetry {
+                due_at: now + Duration::from_secs(60),
+                job: PathJob {
+                    path: PathBuf::from("/tmp/retry-later.jsonl"),
+                    provider: "claude",
+                    priority: WorkPriority::Watch,
+                },
+            },
+        ];
+
+        drain_due_local_retries(&mut scheduler, &mut deferred_retries);
+
+        let launched = scheduler.pop_launchable().unwrap();
+        assert_eq!(launched.path, PathBuf::from("/tmp/retry-now.jsonl"));
+        assert_eq!(launched.priority, WorkPriority::Retry);
+        assert_eq!(deferred_retries.len(), 1);
+        assert_eq!(
+            deferred_retries[0].job.path,
+            PathBuf::from("/tmp/retry-later.jsonl")
+        );
     }
 }
