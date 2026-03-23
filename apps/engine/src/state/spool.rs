@@ -30,6 +30,18 @@ pub struct SpoolEntry {
     pub end_offset: u64,
 }
 
+/// A retained dead-lettered range for local inspection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeadLetterEntry {
+    pub provider: String,
+    pub file_path: String,
+    pub start_offset: u64,
+    pub end_offset: u64,
+    pub session_id: Option<String>,
+    pub last_error: Option<String>,
+    pub created_at: String,
+}
+
 /// Spool operations on a shared SQLite connection.
 pub struct Spool<'a> {
     conn: &'a Connection,
@@ -231,6 +243,33 @@ impl<'a> Spool<'a> {
         Ok(count as usize)
     }
 
+    /// Return recent dead-lettered ranges, newest first.
+    pub fn recent_dead(&self, limit: usize) -> Result<Vec<DeadLetterEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT provider, file_path, start_offset, end_offset, session_id, last_error, created_at
+             FROM spool_queue
+             WHERE status = 'dead'
+             ORDER BY created_at DESC, id DESC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
+            Ok(DeadLetterEntry {
+                provider: row.get(0)?,
+                file_path: row.get(1)?,
+                start_offset: row.get::<_, i64>(2)? as u64,
+                end_offset: row.get::<_, i64>(3)? as u64,
+                session_id: row.get(4)?,
+                last_error: row.get(5)?,
+                created_at: row.get(6)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
     /// Total entries (for backpressure check).
     pub fn total_size(&self) -> Result<usize> {
         let count: i64 = self
@@ -266,8 +305,8 @@ impl<'a> Spool<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::DateTime;
     use crate::state::db::open_db;
+    use chrono::DateTime;
 
     fn setup() -> (tempfile::NamedTempFile, Connection) {
         let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -385,6 +424,42 @@ mod tests {
         assert_eq!(row.4, "dead");
         assert!(row.5.contains("oversize"));
         assert_eq!(spool.dead_count().unwrap(), 1);
+    }
+
+    #[test]
+    fn test_recent_dead_returns_newest_first() {
+        let (_tmp, conn) = setup();
+        let spool = Spool::new(&conn);
+
+        spool
+            .record_dead(
+                "claude",
+                "/older.jsonl",
+                0,
+                10,
+                Some("older"),
+                "older error",
+            )
+            .unwrap();
+        spool
+            .record_dead(
+                "codex",
+                "/newer.jsonl",
+                10,
+                30,
+                Some("newer"),
+                "newer error",
+            )
+            .unwrap();
+
+        let entries = spool.recent_dead(10).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].file_path, "/newer.jsonl");
+        assert_eq!(entries[0].provider, "codex");
+        assert_eq!(entries[0].start_offset, 10);
+        assert_eq!(entries[0].end_offset, 30);
+        assert_eq!(entries[0].last_error.as_deref(), Some("newer error"));
+        assert_eq!(entries[1].file_path, "/older.jsonl");
     }
 
     #[test]

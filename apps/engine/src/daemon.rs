@@ -318,7 +318,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     last_ship_at: last_ship_at.clone(),
                 };
                 let payload = heartbeat::HeartbeatPayload::build(&stats);
-                heartbeat::write_status_file(&payload, &claude_dir);
+                heartbeat::write_status_file(&payload, &stats, &claude_dir);
                 if !offline.is_offline {
                     if let Err(e) = heartbeat::send_heartbeat(&client, &payload).await {
                         tracing::debug!("Heartbeat send failed: {}", e);

@@ -451,17 +451,28 @@ async fn cmd_ship(
     }
 
     if files_to_ship.is_empty() {
+        let spool = Spool::new(&conn);
+        let spool_pending = spool.pending_count()?;
+        let spool_dead = spool.dead_count()?;
+        let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
         if json_output {
             let summary = serde_json::json!({
                 "status": "ok",
                 "files_scanned": all_files.len(),
                 "files_shipped": 0,
                 "events_shipped": 0,
+                "spool_pending": spool_pending,
+                "spool_dead": spool_dead,
+                "recent_dead_letters": recent_dead_letters,
                 "total_seconds": start.elapsed().as_secs_f64(),
             });
             println!("{}", serde_json::to_string_pretty(&summary)?);
         } else {
             eprintln!("Nothing to ship — all files up to date.");
+            if spool_dead > 0 {
+                eprintln!("Dead-lettered ranges retained: {}", spool_dead);
+                print_recent_dead_letters(&spool, 3, |line| eprintln!("{}", line))?;
+            }
         }
         return Ok(());
     }
@@ -624,6 +635,7 @@ async fn cmd_ship(
     let spool = Spool::new(&conn);
     let spool_pending = spool.pending_count()?;
     let spool_dead = spool.dead_count()?;
+    let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
 
     if json_output {
         let summary = serde_json::json!({
@@ -637,6 +649,7 @@ async fn cmd_ship(
             "spool_replayed": spool_replayed,
             "spool_pending": spool_pending,
             "spool_dead": spool_dead,
+            "recent_dead_letters": recent_dead_letters,
             "total_seconds": total_elapsed.as_secs_f64(),
             "throughput_mb_s": bytes_shipped as f64 / 1_048_576.0 / total_elapsed.as_secs_f64(),
             "dry_run": dry_run,
@@ -658,6 +671,7 @@ async fn cmd_ship(
         }
         if spool_dead > 0 {
             eprintln!("Dead-lettered ranges retained: {}", spool_dead);
+            print_recent_dead_letters(&spool, 3, |line| eprintln!("{}", line))?;
         }
         eprintln!("Total: {:.3}s", total_elapsed.as_secs_f64());
         if bytes_shipped > 0 {
@@ -697,6 +711,49 @@ fn detect_provider_for_file(
             path.display()
         ),
     }
+}
+
+fn recent_dead_letter_json(
+    spool: &Spool<'_>,
+    limit: usize,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    Ok(spool
+        .recent_dead(limit)?
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "provider": entry.provider,
+                "file_path": entry.file_path,
+                "start_offset": entry.start_offset,
+                "end_offset": entry.end_offset,
+                "range_bytes": entry.end_offset.saturating_sub(entry.start_offset),
+                "session_id": entry.session_id,
+                "last_error": entry.last_error,
+                "created_at": entry.created_at,
+            })
+        })
+        .collect())
+}
+
+fn print_recent_dead_letters(
+    spool: &Spool<'_>,
+    limit: usize,
+    printer: impl Fn(&str),
+) -> anyhow::Result<()> {
+    for entry in spool.recent_dead(limit)? {
+        let reason = entry.last_error.as_deref().unwrap_or("no error recorded");
+        let line = format!(
+            "  - [{}] {} {}..{} ({} bytes): {}",
+            entry.provider,
+            entry.file_path,
+            entry.start_offset,
+            entry.end_offset,
+            entry.end_offset.saturating_sub(entry.start_offset),
+            reason
+        );
+        printer(&line);
+    }
+    Ok(())
 }
 
 async fn cmd_ship_file(
@@ -742,7 +799,26 @@ async fn cmd_ship_file(
     let prepared = match prepared {
         Some(prepared) => prepared,
         None => {
-            println!("No new events");
+            let spool = Spool::new(&conn);
+            let spool_dead = spool.dead_count()?;
+            let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
+            if json_output {
+                let summary = serde_json::json!({
+                    "status": "ok",
+                    "file": path.display().to_string(),
+                    "events_shipped": 0,
+                    "spool_dead": spool_dead,
+                    "recent_dead_letters": recent_dead_letters,
+                    "dry_run": dry_run,
+                });
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("No new events");
+                if spool_dead > 0 {
+                    println!("Dead-lettered ranges retained: {}", spool_dead);
+                    print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
+                }
+            }
             return Ok(());
         }
     };
@@ -765,7 +841,9 @@ async fn cmd_ship_file(
     let client = ShipperClient::with_compression(&config, algo)?;
     let outcome = shipper::ship_prepared_file(prepared, &client, &conn, None).await?;
     let events_shipped = outcome.events_shipped;
-    let spool_dead = Spool::new(&conn).dead_count()?;
+    let spool = Spool::new(&conn);
+    let spool_dead = spool.dead_count()?;
+    let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
 
     if json_output {
         let summary = serde_json::json!({
@@ -773,6 +851,7 @@ async fn cmd_ship_file(
             "file": path.display().to_string(),
             "events_shipped": events_shipped,
             "spool_dead": spool_dead,
+            "recent_dead_letters": recent_dead_letters,
             "dry_run": false,
         });
         println!("{}", serde_json::to_string_pretty(&summary)?);
@@ -780,6 +859,7 @@ async fn cmd_ship_file(
         println!("Shipped {} events", events_shipped);
         if spool_dead > 0 {
             println!("Dead-lettered ranges retained: {}", spool_dead);
+            print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
         }
     }
 
