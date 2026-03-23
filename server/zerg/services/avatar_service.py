@@ -32,7 +32,7 @@ ALLOWED_MIME: Final[set[str]] = {"image/png", "image/jpeg", "image/webp"}
 
 # Directory where avatars are persisted.  Computed relative to repo root so
 # the function also works in tests where CWD can vary.
-AVATARS_DIR = Path(__file__).resolve().parent.parent.parent / "static" / "avatars"
+AVATARS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "static" / "avatars"
 AVATARS_DIR.mkdir(parents=True, exist_ok=True)
 
 

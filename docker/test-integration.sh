@@ -50,7 +50,7 @@ if docker buildx build \
     -f docker/backend.dockerfile \
     --target production \
     -t zerg-backend:test \
-    backend/; then
+    .; then
 
     end_time=$(date +%s)
     duration=$((end_time - start_time))

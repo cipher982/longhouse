@@ -119,7 +119,7 @@ case "$SERVICE" in
             --progress=plain \
             -f docker/backend.dockerfile \
             -t zerg-backend:latest \
-            backend/
+            .
 
         backend_end=$(date +%s)
         backend_duration=$((backend_end - backend_start))

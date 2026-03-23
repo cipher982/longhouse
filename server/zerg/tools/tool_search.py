@@ -275,7 +275,7 @@ def _is_tool_allowed(name: str) -> bool:
 
 EMBEDDING_DIMENSIONS = 1536
 
-EMBEDDING_CACHE_DIR = Path(__file__).parent.parent.parent / "data"
+EMBEDDING_CACHE_DIR = Path(__file__).parent.parent.parent.parent / "data"
 EMBEDDING_CACHE_FILE = EMBEDDING_CACHE_DIR / "tool_embeddings.npz"
 
 _search_index: ToolSearchIndex | None = None

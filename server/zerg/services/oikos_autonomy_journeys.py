@@ -40,7 +40,7 @@ def _safe_parent(path: Path, index: int, fallback: Path) -> Path:
 
 
 _BACKEND_ROOT = _safe_parent(_MODULE_PATH, 2, _MODULE_PATH.parent)
-_REPO_ROOT = _safe_parent(_MODULE_PATH, 5, _BACKEND_ROOT)
+_REPO_ROOT = _safe_parent(_MODULE_PATH, 3, _BACKEND_ROOT)
 DecisionCallable = Callable[["AutonomyContextPacket"], "AutonomyDecision | Awaitable[AutonomyDecision]"]
 DEFAULT_AUTONOMY_JOURNEY_FIXTURE_PATH = _BACKEND_ROOT / "tests_lite" / "fixtures" / "oikos_autonomy_journeys.yml"
 DEFAULT_AUTONOMY_ARTIFACT_ROOT = _REPO_ROOT / ".tmp" / "oikos-autonomy-journeys"

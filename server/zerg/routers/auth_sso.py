@@ -35,7 +35,7 @@ from zerg.services import sso_keys as sso_keys_service
 
 def _configure_shared_imports() -> None:
     for parent in Path(__file__).resolve().parents:
-        for candidate in (parent, parent / "apps" / "control-plane"):
+        for candidate in (parent, parent / "control-plane"):
             if (candidate / "longhouse_shared" / "redirects.py").exists():
                 candidate_str = str(candidate)
                 if candidate_str not in sys.path:
