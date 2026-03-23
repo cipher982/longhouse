@@ -5,6 +5,7 @@
 //! startup recovery, spool replay.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::Result;
 use rusqlite::Connection;
@@ -60,6 +61,8 @@ pub struct PreparedFile {
     pub actions: Vec<PreparedAction>,
 }
 
+pub const SLOW_FILE_PROCESSING_MS: u128 = 5_000;
+
 impl PreparedAction {
     fn event_count(&self) -> usize {
         match self {
@@ -92,6 +95,31 @@ impl PreparedFile {
     pub fn total_event_count(&self) -> usize {
         self.actions.iter().map(PreparedAction::event_count).sum()
     }
+}
+
+pub fn log_slow_file_processing(
+    context: &str,
+    path: &Path,
+    provider: &str,
+    event_count: usize,
+    byte_count: u64,
+    dead_lettered: usize,
+    elapsed: Duration,
+) {
+    if elapsed.as_millis() < SLOW_FILE_PROCESSING_MS {
+        return;
+    }
+
+    tracing::warn!(
+        context,
+        path = %path.display(),
+        provider,
+        event_count,
+        byte_count,
+        dead_lettered,
+        elapsed_ms = elapsed.as_millis() as u64,
+        "Slow file processing"
+    );
 }
 
 pub struct ShipPreparedOutcome {
@@ -1234,9 +1262,21 @@ pub async fn full_scan_with_batch_bytes(
     let mut events_shipped = 0usize;
 
     for (path, provider_name) in &all_files {
+        let file_start = std::time::Instant::now();
         match prepare_file_batches(path, provider_name, algo, conn, max_batch_bytes, None) {
             Ok(Some(prepared)) => {
+                let event_count = prepared.total_event_count();
+                let byte_count = prepared.new_offset.saturating_sub(prepared.offset);
                 let outcome = ship_prepared_file(prepared, client, conn, tracker).await?;
+                log_slow_file_processing(
+                    "fallback_scan",
+                    path,
+                    provider_name,
+                    event_count,
+                    byte_count,
+                    outcome.dead_lettered,
+                    file_start.elapsed(),
+                );
                 if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
                     files_shipped += 1;
                     events_shipped += outcome.events_shipped;
