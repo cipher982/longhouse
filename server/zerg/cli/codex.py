@@ -85,6 +85,7 @@ def codex(
     resolved_config_dir = Path(config_dir) if config_dir else None
     resolved_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=resolved_config_dir)
     machine_name = get_machine_name_label()
+    typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
         token=resolved_token,

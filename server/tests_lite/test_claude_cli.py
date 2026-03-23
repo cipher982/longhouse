@@ -139,6 +139,7 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
     )
 
     assert result.exit_code == 0, result.output
+    assert "Longhouse: https://longhouse.test" in result.output
     assert "Managed local Claude session launched on this device." in result.output
     assert "Session ID: session-123" in result.output
     assert "Provider session ID: provider-123" in result.output
