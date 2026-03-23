@@ -6,6 +6,7 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -72,11 +73,11 @@ def _seed_user_and_runner(db):
     return user, runner
 
 
-def _seed_managed_local_session(db, *, runner: Runner) -> AgentSession:
+def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude") -> AgentSession:
     session_id = uuid4()
     session = AgentSession(
         id=session_id,
-        provider="claude",
+        provider=provider,
         environment="development",
         project="hiring",
         device_id=runner.name,
@@ -106,13 +107,14 @@ def _seed_managed_local_session(db, *, runner: Runner) -> AgentSession:
     return session
 
 
-def test_chat_with_session_routes_managed_local_without_cloud_continuation(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_chat_with_session_routes_managed_local_without_cloud_continuation(monkeypatch, tmp_path, provider):
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner)
+        source_session = _seed_managed_local_session(db, runner=runner, provider=provider)
         client, api_app_ref = _make_client(db, user)
 
         async def fake_wait_for_events(**_kwargs):
@@ -178,12 +180,13 @@ def test_chat_with_session_routes_managed_local_without_cloud_continuation(monke
             api_app_ref.dependency_overrides = {}
 
 
-def test_chat_with_session_reports_managed_local_send_failure(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_chat_with_session_reports_managed_local_send_failure(monkeypatch, tmp_path, provider):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner)
+        source_session = _seed_managed_local_session(db, runner=runner, provider=provider)
         client, api_app_ref = _make_client(db, user)
 
         async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):

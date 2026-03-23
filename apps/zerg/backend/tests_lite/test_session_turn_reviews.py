@@ -177,7 +177,10 @@ async def test_turn_review_autopilot_enqueues_same_session_continue_job(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud_job(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud_job(
+    monkeypatch, tmp_path, provider
+):
     SessionLocal = _make_db(tmp_path, "turn_review_autopilot_managed_local.db")
     calls: list[dict[str, object]] = []
 
@@ -217,6 +220,7 @@ async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud
             loop_mode="autopilot",
             user_text="finish the session detail page",
             assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+            provider=provider,
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
@@ -245,7 +249,10 @@ async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud
 
 
 @pytest.mark.asyncio
-async def test_reply_to_pending_turn_review_routes_managed_local_reply_without_cloud_job(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+async def test_reply_to_pending_turn_review_routes_managed_local_reply_without_cloud_job(
+    monkeypatch, tmp_path, provider
+):
     SessionLocal = _make_db(tmp_path, "turn_review_reply_managed_local.db")
     calls: list[dict[str, object]] = []
 
@@ -271,6 +278,7 @@ async def test_reply_to_pending_turn_review_routes_managed_local_reply_without_c
             loop_mode="assist",
             user_text="keep the hiring task moving",
             assistant_text="I finished the last turn and need your direction on what to do next.",
+            provider=provider,
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
@@ -405,7 +413,8 @@ async def test_turn_review_assist_enqueues_operator_wakeup(monkeypatch, tmp_path
 
 
 @pytest.mark.asyncio
-async def test_turn_review_marks_managed_local_attention_phase(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+async def test_turn_review_marks_managed_local_attention_phase(monkeypatch, tmp_path, provider):
     SessionLocal = _make_db(tmp_path, "turn_review_managed_local_attention.db")
 
     async def _fake_evaluate(**_kwargs):
@@ -435,6 +444,7 @@ async def test_turn_review_marks_managed_local_attention_phase(monkeypatch, tmp_
             loop_mode="assist",
             user_text="what should we do next?",
             assistant_text="I finished the last turn and now need your direction on the next hiring step.",
+            provider=provider,
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
@@ -911,8 +921,11 @@ async def test_turn_review_skips_stale_completed_turn_by_default(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["claude", "codex"])
 @pytest.mark.parametrize("presence_state", ["needs_user", "blocked"])
-async def test_turn_review_still_records_when_latest_presence_is_pause_state(monkeypatch, tmp_path, presence_state):
+async def test_turn_review_still_records_when_latest_presence_is_pause_state(
+    monkeypatch, tmp_path, presence_state, provider
+):
     SessionLocal = _make_db(tmp_path, f"turn_review_pause_{presence_state}.db")
 
     async def _fake_evaluate(**_kwargs):
@@ -936,12 +949,13 @@ async def test_turn_review_still_records_when_latest_presence_is_pause_state(mon
             loop_mode="assist",
             user_text="finish the verification",
             assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+            provider=provider,
         )
         db.add(
             SessionPresence(
                 session_id=str(session_id),
                 state=presence_state,
-                provider="claude",
+                provider=provider,
                 project="zerg",
                 updated_at=_now(),
             )

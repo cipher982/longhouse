@@ -9,6 +9,7 @@ from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -718,7 +719,10 @@ def test_loop_inbox_approve_action_queues_same_session_continue_and_clears_item(
             api_app_ref.dependency_overrides = {}
 
 
-def test_loop_inbox_approve_action_routes_managed_local_continue_without_cloud_job(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_loop_inbox_approve_action_routes_managed_local_continue_without_cloud_job(
+    monkeypatch, tmp_path, provider
+):
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
 
@@ -761,6 +765,7 @@ def test_loop_inbox_approve_action_routes_managed_local_continue_without_cloud_j
             summary_title="Mac Continue",
             project="zerg",
             device_id=runner.name,
+            provider=provider,
             execution_home="managed_local",
             managed_transport="tmux",
             source_runner_id=runner.id,
@@ -980,7 +985,8 @@ def test_loop_inbox_end_to_end_phone_approve_flow(monkeypatch, tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
-def test_loop_inbox_reply_action_routes_managed_local_reply_without_cloud_job(monkeypatch, tmp_path):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_loop_inbox_reply_action_routes_managed_local_reply_without_cloud_job(monkeypatch, tmp_path, provider):
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
 
@@ -1023,6 +1029,7 @@ def test_loop_inbox_reply_action_routes_managed_local_reply_without_cloud_job(mo
             summary_title="Mac Reply",
             project="zerg",
             device_id=runner.name,
+            provider=provider,
             execution_home="managed_local",
             managed_transport="tmux",
             source_runner_id=runner.id,
