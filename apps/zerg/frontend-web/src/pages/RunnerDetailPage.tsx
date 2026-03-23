@@ -25,6 +25,7 @@ import {
   type RunnerNativeInstallMode,
 } from "../lib/runnerInstallCommands";
 import type { Runner, RunnerDoctorResponse, RunnerJob } from "../services/api";
+import LaunchSessionModal from "../components/LaunchSessionModal";
 import "../styles/runner-detail.css";
 
 type RunnerMetadataSummary = {
@@ -314,6 +315,7 @@ export default function RunnerDetailPage() {
   const [repairCopied, setRepairCopied] = useState(false);
   const [repairMode, setRepairMode] = useState<RunnerNativeInstallMode>("desktop");
   const [actionError, setActionError] = useState<string | null>(null);
+  const [launchModalOpen, setLaunchModalOpen] = useState(false);
 
   const allCapabilities = [
     { id: "exec.readonly", label: "Read-only execution", description: "Can run read-only commands" },
@@ -516,6 +518,11 @@ export default function RunnerDetailPage() {
                 <Badge variant={getVersionVariant(runner.version_status)}>
                   {versionStatusLabel(runner.version_status)}
                 </Badge>
+              )}
+              {runner.status === "online" && runner.capabilities?.includes("exec.full") && (
+                <Button variant="primary" size="sm" onClick={() => setLaunchModalOpen(true)}>
+                  Launch Session
+                </Button>
               )}
               <Button variant="ghost" size="sm" onClick={() => navigate("/runners")}>
                 ← Back
@@ -988,6 +995,12 @@ export default function RunnerDetailPage() {
           )}
         </div>
       </div>
+
+      <LaunchSessionModal
+        isOpen={launchModalOpen}
+        onClose={() => setLaunchModalOpen(false)}
+        runner={runner}
+      />
     </PageShell>
   );
 }
