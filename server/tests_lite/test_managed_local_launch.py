@@ -184,18 +184,16 @@ def test_build_entry_command_codex_injects_longhouse_session_id():
         managed_session_name="lh-zerg-codex",
     )
     inner = _inner_command(cmd)
-    assert "codex app-server --listen ws://127.0.0.1:0 --session-source cli" in inner
-    assert 'exec codex --enable tui_app_server --remote "$REMOTE_URL"' in inner
+    assert inner.endswith("exec codex")
     assert "claude-code" not in inner
     assert "--session-id" not in inner
     assert "export LONGHOUSE_SESSION_ID=" in inner
     assert "abc-123" in inner
-    assert "APP_SERVER_LOG=" in inner
-    assert "APP_SERVER_META=" in inner
-    assert 'curl -fsS "$READYZ_URL"' in inner
+    assert "codex app-server" not in inner
+    assert "--remote" not in inner
 
 
-def test_build_entry_command_codex_preserves_heredoc_structure():
+def test_build_entry_command_codex_does_not_depend_on_remote_tui():
     cmd = _build_entry_command(
         provider="codex",
         provider_session_id="abc-123",
@@ -203,12 +201,9 @@ def test_build_entry_command_codex_preserves_heredoc_structure():
         managed_session_name="lh-zerg-codex",
     )
     inner = _inner_command(cmd)
-    assert 'cat > "$APP_SERVER_META" <<EOF\n' in inner
-    assert 'LONGHOUSE_CODEX_APP_SERVER_PID="$APP_SERVER_PID"\n' in inner
-    assert 'LONGHOUSE_CODEX_APP_SERVER_URL="$REMOTE_URL"\n' in inner
-    assert 'LONGHOUSE_CODEX_APP_SERVER_HEALTHZ="$HEALTHZ_URL"\nEOF\n' in inner
-    assert "<<EOF;" not in inner
-    assert "; EOF" not in inner
+    assert "tui_app_server" not in inner
+    assert "APP_SERVER_" not in inner
+    assert "curl -fsS" not in inner
 
 
 def test_build_preflight_command_claude_checks_claude_code():
@@ -222,7 +217,6 @@ def test_build_preflight_command_codex_checks_codex():
     cmd = _build_preflight_command(provider="codex", cwd="/tmp/test")
     inner = _inner_command(cmd)
     assert "command -v codex" in inner
-    assert "command -v curl" in inner
     assert "command -v claude-code" not in inner
 
 
@@ -504,20 +498,17 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
 
             preflight_inner = _inner_command(dispatcher.calls[0]["command"])
             assert "command -v codex" in preflight_inner
-            assert "command -v curl" in preflight_inner
             assert "command -v claude-code" not in preflight_inner
 
             launch_inner = _inner_command(dispatcher.calls[1]["command"])
-            assert "codex app-server --listen ws://127.0.0.1:0 --session-source cli" in launch_inner
-            assert 'exec codex --enable tui_app_server --remote "$REMOTE_URL"' in launch_inner
+            assert "exec codex" in launch_inner
             assert "claude-code" not in launch_inner
 
             # Must inject LONGHOUSE_SESSION_ID so hook routes presence to Longhouse's UUID
             assert "LONGHOUSE_SESSION_ID" in launch_inner
             assert payload["provider_session_id"] in launch_inner
-            assert "APP_SERVER_LOG=" in launch_inner
-            assert "APP_SERVER_META=" in launch_inner
-            assert 'curl -fsS "$READYZ_URL"' in launch_inner
+            assert "codex app-server" not in launch_inner
+            assert "--remote" not in launch_inner
         finally:
             api_app_ref.dependency_overrides = {}
 
