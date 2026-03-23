@@ -240,6 +240,25 @@ def _make_fake_claude_home(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     claude_path.write_text(launcher, encoding="utf-8")
     claude_path.chmod(claude_path.stat().st_mode | stat.S_IXUSR)
 
+    fake_longhouse = textwrap.dedent(
+        """\
+        #!/bin/zsh
+        if [[ "$1" == "connect" && "$2" == "--hooks-only" ]]; then
+          mkdir -p "$HOME/.claude/hooks"
+          printf '#!/bin/zsh\nexit 0\n' > "$HOME/.claude/hooks/longhouse-hook.sh"
+          chmod +x "$HOME/.claude/hooks/longhouse-hook.sh"
+          printf '{\n  "hooks": {\n    "Stop": [\n      {\n        "hooks": [\n          {\n            "type": "command",\n            "command": "longhouse-hook.sh"\n          }\n        ]\n      }\n    ]\n  }\n}\n' > "$HOME/.claude/settings.json"
+          exit 0
+        fi
+
+        echo "unsupported fake longhouse args: $*" >&2
+        exit 2
+        """
+    )
+    longhouse_path = bin_dir / "longhouse"
+    longhouse_path.write_text(fake_longhouse, encoding="utf-8")
+    longhouse_path.chmod(longhouse_path.stat().st_mode | stat.S_IXUSR)
+
     shell_init_path = ":".join(
         [
             str(bin_dir),
