@@ -3,6 +3,8 @@
 Usage:
     longhouse serve         # Start the server
     longhouse status        # Show configuration
+    longhouse claude        # Launch managed-local Claude on this device
+    longhouse codex         # Launch managed-local Codex on this device
     longhouse config show   # Show effective configuration
     longhouse ship          # One-shot sync
     longhouse connect       # Foreground engine sync (watch + fallback scan)
@@ -18,6 +20,7 @@ import json
 import typer
 
 from zerg.cli.claude import claude
+from zerg.cli.codex import codex
 from zerg.cli.connect import app as connect_app
 from zerg.cli.doctor import doctor
 from zerg.cli.mcp_serve import mcp_server
@@ -81,6 +84,7 @@ app.command(name="status")(status)
 # Find commands by callback function name to avoid index-position bugs
 _cmd_lookup = {cmd.callback.__name__: cmd.callback for cmd in connect_app.registered_commands}
 app.command(name="claude")(claude)
+app.command(name="codex")(codex)
 app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
 app.command(name="connect")(_cmd_lookup["connect"])
