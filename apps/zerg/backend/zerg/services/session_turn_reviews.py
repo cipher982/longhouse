@@ -1263,7 +1263,7 @@ async def reply_to_pending_turn_review(
     if not clean_reply:
         raise ValueError("reply text must not be empty")
 
-    send_result = await _send_follow_up_to_managed_local_session(
+    send_result = await send_text_to_managed_local_session(
         db=db,
         owner_id=int(review.owner_id or 0),
         session=session,
