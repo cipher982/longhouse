@@ -8,6 +8,8 @@ use std::time::SystemTime;
 
 use walkdir::WalkDir;
 
+const DISCOVERY_MAX_DEPTH: usize = 6;
+
 /// Configuration for a session provider.
 #[derive(Clone)]
 pub struct ProviderConfig {
@@ -51,8 +53,11 @@ pub fn discover_all_files(providers: &[ProviderConfig]) -> Vec<(PathBuf, &'stati
     let mut files: Vec<(PathBuf, &'static str, SystemTime)> = Vec::new();
 
     for provider in providers {
+        // Provider transcript layouts are shallow; bounding depth keeps fallback
+        // discovery from wandering into unrelated or pathological directory trees.
         for entry in WalkDir::new(&provider.root)
             .follow_links(false)
+            .max_depth(DISCOVERY_MAX_DEPTH)
             .into_iter()
             .filter_map(|e| e.ok())
         {
