@@ -7,6 +7,7 @@
 //! - 0% CPU when idle (blocked on kernel filesystem events)
 //! - Current-thread tokio runtime, with blocking file work offloaded
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -101,7 +102,7 @@ struct PathTaskResult {
 
 struct DeferredRetry {
     due_at: Instant,
-    job: PathJob,
+    provider: &'static str,
 }
 
 struct DiscoveryTaskResult {
@@ -168,7 +169,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut scheduler = PathScheduler::new(max_in_flight);
     let mut in_flight = JoinSet::new();
     let mut discovery_tasks = JoinSet::new();
-    let mut deferred_retries = Vec::new();
+    let mut deferred_retries = HashMap::new();
 
     start_discovery_task(
         &mut discovery_tasks,
@@ -242,12 +243,13 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             task_result = in_flight.join_next(), if scheduler.has_in_flight() => {
                 match task_result {
                     Some(Ok(result)) => {
-                        let completed_job = result.job.clone();
-                        scheduler.complete(&completed_job.path, result.rerun_priority);
+                        let retry_path = result.job.path.clone();
+                        let retry_provider = result.job.provider;
+                        scheduler.complete(&retry_path, result.rerun_priority);
                         if let Some(delay) = result.local_retry_after {
-                            deferred_retries.push(DeferredRetry {
+                            deferred_retries.insert(retry_path, DeferredRetry {
                                 due_at: Instant::now() + delay,
-                                job: completed_job,
+                                provider: retry_provider,
                             });
                         }
                         if result.resolved_spool > 0 || result.failed_spool > 0 {
@@ -499,16 +501,17 @@ fn start_ready_jobs(
 
 fn drain_due_local_retries(
     scheduler: &mut PathScheduler,
-    deferred_retries: &mut Vec<DeferredRetry>,
+    deferred_retries: &mut HashMap<PathBuf, DeferredRetry>,
 ) {
     let now = Instant::now();
-    let mut idx = 0usize;
-    while idx < deferred_retries.len() {
-        if deferred_retries[idx].due_at <= now {
-            let retry = deferred_retries.remove(idx);
-            scheduler.enqueue(retry.job.path, retry.job.provider, WorkPriority::Retry);
-        } else {
-            idx += 1;
+    let ready_paths: Vec<_> = deferred_retries
+        .iter()
+        .filter_map(|(path, retry)| (retry.due_at <= now).then_some(path.clone()))
+        .collect();
+
+    for path in ready_paths {
+        if let Some(retry) = deferred_retries.remove(&path) {
+            scheduler.enqueue(path, retry.provider, WorkPriority::Retry);
         }
     }
 }
@@ -675,24 +678,22 @@ mod tests {
     fn test_drain_due_local_retries_enqueues_only_ready_paths() {
         let mut scheduler = PathScheduler::new(4);
         let now = Instant::now();
-        let mut deferred_retries = vec![
-            DeferredRetry {
+        let mut deferred_retries = HashMap::from([
+            (
+                PathBuf::from("/tmp/retry-now.jsonl"),
+                DeferredRetry {
                 due_at: now - Duration::from_secs(1),
-                job: PathJob {
-                    path: PathBuf::from("/tmp/retry-now.jsonl"),
                     provider: "claude",
-                    priority: WorkPriority::Watch,
                 },
-            },
-            DeferredRetry {
+            ),
+            (
+                PathBuf::from("/tmp/retry-later.jsonl"),
+                DeferredRetry {
                 due_at: now + Duration::from_secs(60),
-                job: PathJob {
-                    path: PathBuf::from("/tmp/retry-later.jsonl"),
                     provider: "claude",
-                    priority: WorkPriority::Watch,
                 },
-            },
-        ];
+            ),
+        ]);
 
         drain_due_local_retries(&mut scheduler, &mut deferred_retries);
 
@@ -700,9 +701,6 @@ mod tests {
         assert_eq!(launched.path, PathBuf::from("/tmp/retry-now.jsonl"));
         assert_eq!(launched.priority, WorkPriority::Retry);
         assert_eq!(deferred_retries.len(), 1);
-        assert_eq!(
-            deferred_retries[0].job.path,
-            PathBuf::from("/tmp/retry-later.jsonl")
-        );
+        assert!(deferred_retries.contains_key(&PathBuf::from("/tmp/retry-later.jsonl")));
     }
 }
