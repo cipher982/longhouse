@@ -39,9 +39,18 @@ pub struct DeadLetterItem {
     pub reason: String,
 }
 
+pub struct AckOnlyItem {
+    pub path_str: String,
+    pub provider: String,
+    pub offset: u64,
+    pub new_offset: u64,
+    pub session_id: String,
+}
+
 pub enum PreparedAction {
     Ship(ShipItem),
     DeadLetter(DeadLetterItem),
+    AckOnly(AckOnlyItem),
 }
 
 pub struct PreparedFile {
@@ -56,6 +65,7 @@ impl PreparedAction {
         match self {
             PreparedAction::Ship(item) => item.event_count,
             PreparedAction::DeadLetter(item) => item.event_count,
+            PreparedAction::AckOnly(_) => 0,
         }
     }
 
@@ -64,6 +74,7 @@ impl PreparedAction {
         match self {
             PreparedAction::Ship(item) => item.offset,
             PreparedAction::DeadLetter(item) => item.offset,
+            PreparedAction::AckOnly(item) => item.offset,
         }
     }
 
@@ -72,6 +83,7 @@ impl PreparedAction {
         match self {
             PreparedAction::Ship(item) => item.new_offset,
             PreparedAction::DeadLetter(item) => item.new_offset,
+            PreparedAction::AckOnly(item) => item.new_offset,
         }
     }
 }
@@ -373,6 +385,19 @@ fn log_suspicious_empty_parse(path_str: &str, file_size: u64, candidate_records:
     }
 }
 
+fn should_ack_empty_gemini_document(
+    provider: &str,
+    parse_result: &ParseResult,
+    offset: u64,
+    new_offset: u64,
+) -> bool {
+    provider == "gemini"
+        && parse_result.events.is_empty()
+        && parse_result.source_lines.is_empty()
+        && parse_result.candidate_records > 0
+        && new_offset > offset
+}
+
 fn event_range_for_offsets(
     events: &[parser::ParsedEvent],
     start_offset: u64,
@@ -439,8 +464,7 @@ fn prepare_whole_document_action(
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
 ) -> Result<Vec<PreparedAction>> {
-    let payload_session_id =
-        session_id_override.unwrap_or(&parse_result.metadata.session_id);
+    let payload_session_id = session_id_override.unwrap_or(&parse_result.metadata.session_id);
     let compressed = compressor::build_and_compress_with(
         payload_session_id,
         &parse_result.events,
@@ -486,8 +510,7 @@ fn materialize_ship_range(
     range: ShipRange,
     session_id_override: Option<&str>,
 ) -> Result<Vec<PreparedAction>> {
-    let payload_session_id =
-        session_id_override.unwrap_or(&parse_result.metadata.session_id);
+    let payload_session_id = session_id_override.unwrap_or(&parse_result.metadata.session_id);
     let compressed = compressor::build_and_compress_with_source_lines(
         payload_session_id,
         &parse_result.events[range.event_range.clone()],
@@ -651,14 +674,29 @@ pub fn prepare_path_range(
         }
     };
 
+    let new_offset = end_offset_cap
+        .map(|cap| parse_result.last_good_offset.min(cap))
+        .unwrap_or(parse_result.last_good_offset);
+
+    if should_ack_empty_gemini_document(provider, &parse_result, offset, new_offset) {
+        return Ok(Some(PreparedFile {
+            path_str: path_str.clone(),
+            offset,
+            new_offset,
+            actions: vec![PreparedAction::AckOnly(AckOnlyItem {
+                path_str,
+                provider: provider.to_string(),
+                offset,
+                new_offset,
+                session_id: parse_result.metadata.session_id.clone(),
+            })],
+        }));
+    }
+
     if parse_result.events.is_empty() && parse_result.source_lines.is_empty() {
         log_suspicious_empty_parse(&path_str, file_size, parse_result.candidate_records);
         return Ok(None);
     }
-
-    let new_offset = end_offset_cap
-        .map(|cap| parse_result.last_good_offset.min(cap))
-        .unwrap_or(parse_result.last_good_offset);
 
     if new_offset <= offset {
         return Ok(None);
@@ -741,7 +779,15 @@ pub fn prepare_file_batches(
         current_offset
     };
 
-    prepare_path_range(path, provider, offset, None, algo, max_batch_bytes, session_id_override)
+    prepare_path_range(
+        path,
+        provider,
+        offset,
+        None,
+        algo,
+        max_batch_bytes,
+        session_id_override,
+    )
 }
 
 async fn attempt_ship(
@@ -851,6 +897,22 @@ pub async fn ship_prepared_file(
                     &item.provider,
                 )?;
                 outcome.dead_lettered += 1;
+            }
+            PreparedAction::AckOnly(item) => {
+                tracing::debug!(
+                    path = %item.path_str,
+                    provider = %item.provider,
+                    offset = item.offset,
+                    new_offset = item.new_offset,
+                    "Acknowledging ignorable whole-document session without shipping"
+                );
+                file_state.set_offset(
+                    &item.path_str,
+                    item.new_offset,
+                    &item.session_id,
+                    &item.session_id,
+                    &item.provider,
+                )?;
             }
             PreparedAction::Ship(item) => match attempt_ship(item, client, tracker).await {
                 AttemptedShip::Shipped(item) => {
@@ -1048,6 +1110,15 @@ pub async fn replay_spool_batch_with_batch_bytes(
                         Some(&item.session_id),
                         &item.reason,
                     )?;
+                    file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
+                    if item.new_offset >= entry.end_offset {
+                        spool.mark_shipped(entry.id)?;
+                        entry_done = true;
+                    } else {
+                        spool.advance_start(entry.id, item.new_offset)?;
+                    }
+                }
+                PreparedAction::AckOnly(item) => {
                     file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
                     if item.new_offset >= entry.end_offset {
                         spool.mark_shipped(entry.id)?;
@@ -1734,6 +1805,7 @@ mod tests {
                 );
             }
             PreparedAction::Ship(_) => panic!("tiny batch limit should dead-letter whole doc"),
+            PreparedAction::AckOnly(_) => panic!("conversation gemini file should not ack-only"),
         }
 
         let prepared = prepare_file_batches(
@@ -1756,7 +1828,79 @@ mod tests {
             PreparedAction::DeadLetter(_) => {
                 panic!("normal batch limit should ship whole-document gemini payload")
             }
+            PreparedAction::AckOnly(_) => panic!("conversation gemini file should not ack-only"),
         }
+    }
+
+    #[test]
+    fn test_prepare_gemini_info_file_acknowledges_without_shipping() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session-gemini-info.json");
+        let gemini = serde_json::json!({
+            "sessionId": "61d59eea-a6ca-4ebf-a6e1-dc25c25296c4",
+            "startTime": "2026-02-22T01:05:34.121Z",
+            "messages": [
+                {
+                    "id": "3ece1c1b-6a6c-40af-8aa7-c6d6d991ab50",
+                    "timestamp": "2026-02-22T01:05:34.121Z",
+                    "type": "info",
+                    "content": "Update successful! The new version will be used on your next run."
+                }
+            ]
+        });
+        std::fs::write(&path, serde_json::to_vec_pretty(&gemini).unwrap()).unwrap();
+
+        let prepared = prepare_file_batches(
+            &path,
+            "gemini",
+            CompressionAlgo::Gzip,
+            &conn,
+            5 * 1024 * 1024,
+            None,
+        )
+        .unwrap();
+        let prepared = prepared.expect("gemini info file should no longer be skipped");
+
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::AckOnly(item) => {
+                assert_eq!(item.offset, 0);
+                assert_eq!(item.new_offset, std::fs::metadata(&path).unwrap().len());
+                assert_eq!(item.provider, "gemini");
+            }
+            PreparedAction::Ship(_) | PreparedAction::DeadLetter(_) => {
+                panic!("gemini info-only file should be acknowledged without shipping")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ship_prepared_file_ack_only_updates_offsets() {
+        let (_tmp, conn) = make_db();
+        let client = make_test_client("http://127.0.0.1:9");
+        let prepared = PreparedFile {
+            path_str: "/tmp/gemini-info.json".to_string(),
+            offset: 0,
+            new_offset: 413,
+            actions: vec![PreparedAction::AckOnly(AckOnlyItem {
+                path_str: "/tmp/gemini-info.json".to_string(),
+                provider: "gemini".to_string(),
+                offset: 0,
+                new_offset: 413,
+                session_id: "61d59eea-a6ca-4ebf-a6e1-dc25c25296c4".to_string(),
+            })],
+        };
+
+        let outcome = ship_prepared_file(prepared, &client, &conn, None)
+            .await
+            .unwrap();
+        let fs = FileState::new(&conn);
+        assert_eq!(outcome.events_shipped, 0);
+        assert_eq!(outcome.dead_lettered, 0);
+        assert!(outcome.fully_processed);
+        assert_eq!(fs.get_offset("/tmp/gemini-info.json").unwrap(), 413);
+        assert_eq!(fs.get_queued_offset("/tmp/gemini-info.json").unwrap(), 413);
     }
 
     #[test]
@@ -1796,6 +1940,7 @@ mod tests {
             .filter_map(|action| match action {
                 PreparedAction::Ship(item) => Some((item.offset, item.new_offset)),
                 PreparedAction::DeadLetter(_) => None,
+                PreparedAction::AckOnly(_) => None,
             })
             .collect();
         assert!(
@@ -1956,7 +2101,10 @@ mod tests {
         let line1_end = (line1.len() + 1) as u64;
         let line2_end = (line1.len() + 1 + line2.len() + 1) as u64;
         let file_end = std::fs::metadata(&path).unwrap().len();
-        assert!(file_end > line2_end, "test requires newer bytes beyond queued gap");
+        assert!(
+            file_end > line2_end,
+            "test requires newer bytes beyond queued gap"
+        );
 
         let fs = FileState::new(&conn);
         fs.set_offset(
@@ -1977,7 +2125,8 @@ mod tests {
         .unwrap();
 
         let prepared =
-            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None).unwrap();
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None)
+                .unwrap();
         assert!(
             prepared.is_none(),
             "fresh shipping must stop while an earlier queued gap is still unacked"
@@ -2275,6 +2424,7 @@ mod tests {
             .filter_map(|action| match action {
                 PreparedAction::Ship(item) => Some((item.offset, item.new_offset)),
                 PreparedAction::DeadLetter(_) => None,
+                PreparedAction::AckOnly(_) => None,
             })
             .collect();
         assert!(
