@@ -211,25 +211,8 @@ async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-    async def _fake_codex_exec(*, db, owner_id, session, text, commis_id=None, timeout_secs=300):
-        calls.append(
-            {
-                "owner_id": owner_id,
-                "session_id": str(session.id),
-                "text": text,
-                "commis_id": commis_id,
-                "timeout_secs": timeout_secs,
-                "transport": "codex_exec",
-            }
-        )
-        return SimpleNamespace(ok=True, exit_code=0, error=None)
-
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
     monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
-    monkeypatch.setattr(
-        "zerg.services.session_turn_reviews.run_codex_exec_resume_for_managed_local_session",
-        _fake_codex_exec,
-    )
     monkeypatch.setattr(
         "zerg.services.session_turn_reviews._load_policy",
         lambda _db, _owner_id: OikosOperatorPolicy(
@@ -273,15 +256,14 @@ async def test_turn_review_autopilot_routes_managed_local_continue_without_cloud
         assert calls[0]["session_id"] == str(session_id)
         assert calls[0]["text"] == "Run the pending targeted tests."
         assert calls[0]["commis_id"] == f"turn-review-{review.id}"
-        assert calls[0]["transport"] == ("codex_exec" if provider == "codex" else "tmux")
-        assert calls[0]["timeout_secs"] == (300 if provider == "codex" else 15)
+        assert calls[0]["transport"] == "tmux"
+        assert calls[0]["timeout_secs"] == 15
 
 
 @pytest.mark.asyncio
-async def test_turn_review_autopilot_codex_managed_local_does_not_fallback_to_tmux_when_exec_fails(
-    monkeypatch, tmp_path
-):
-    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_codex_exec_failure.db")
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+async def test_turn_review_autopilot_managed_local_marks_failure_when_send_fails(monkeypatch, tmp_path, provider):
+    SessionLocal = _make_db(tmp_path, f"turn_review_autopilot_managed_local_send_failure_{provider}.db")
 
     async def _fake_evaluate(**_kwargs):
         return LoopControllerDecision(
@@ -296,22 +278,15 @@ async def test_turn_review_autopilot_codex_managed_local_does_not_fallback_to_tm
             loop_thread_id=52,
         )
 
-    async def _fail_tmux(**_kwargs):
-        raise AssertionError("managed-local Codex continue must not fall back to tmux")
-
-    async def _fake_codex_exec(**_kwargs):
+    async def _fake_send_text(**_kwargs):
         return SimpleNamespace(
             ok=False,
             exit_code=17,
-            error="managed-local Codex session mapping missing",
+            error="runner send failed",
         )
 
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fail_tmux)
-    monkeypatch.setattr(
-        "zerg.services.session_turn_reviews.run_codex_exec_resume_for_managed_local_session",
-        _fake_codex_exec,
-    )
+    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
     monkeypatch.setattr(
         "zerg.services.session_turn_reviews._load_policy",
         lambda _db, _owner_id: OikosOperatorPolicy(
@@ -329,7 +304,7 @@ async def test_turn_review_autopilot_codex_managed_local_does_not_fallback_to_tm
             loop_mode="autopilot",
             user_text="finish the session detail page",
             assistant_text="Only targeted verification remains. Run the pending targeted tests.",
-            provider="codex",
+            provider=provider,
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
@@ -372,14 +347,7 @@ async def test_reply_to_pending_turn_review_routes_managed_local_reply_without_c
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-    async def _fail_codex_exec(**_kwargs):
-        raise AssertionError("reply path must stay on tmux")
-
     monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
-    monkeypatch.setattr(
-        "zerg.services.session_turn_reviews.run_codex_exec_resume_for_managed_local_session",
-        _fail_codex_exec,
-    )
 
     with SessionLocal() as db:
         user = _create_user(db, allow_continue=False)
