@@ -143,7 +143,7 @@ const backend = spawn('uv', [
         APP_PUBLIC_URL: '',
         PUBLIC_SITE_URL: '',
     },
-    cwd: join(__dirname, '..', 'backend'),
+    cwd: join(__dirname, '..', 'server'),
     // Inherit stdio so Playwright can detect startup and we can see errors
     stdio: 'inherit'
 });

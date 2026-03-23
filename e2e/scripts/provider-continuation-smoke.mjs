@@ -10,7 +10,7 @@ import { randomUUID } from "crypto";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const E2E_DIR = path.resolve(__dirname, "..");
-const BACKEND_DIR = path.resolve(E2E_DIR, "../backend");
+const BACKEND_DIR = path.resolve(E2E_DIR, "../server");
 const SHIP_SCRIPT = path.join(BACKEND_DIR, "scripts", "ship_claude_session.py");
 const ARTIFACT_DIR = path.resolve(
   process.env.PROVIDER_SMOKE_ARTIFACT_DIR?.trim() ||
