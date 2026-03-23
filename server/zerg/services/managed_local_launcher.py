@@ -75,10 +75,6 @@ _MANAGED_LOCAL_CAPTURE_ERROR_SNIPPETS = (
     "command not found: claude-code",
     "command not found: claude",
     "command not found: codex",
-    "command not found: eof",
-    "curl is not available",
-    "codex app-server exited before ready",
-    "codex app-server failed to become ready",
     "aws auth refresh timed out",
     "not logged in",
     "pane is dead",
@@ -96,7 +92,6 @@ _PROVIDER_PANE_COMMANDS = {
     "claude": {"claude", "node"},
     "codex": {"codex", "node"},
 }
-_MANAGED_CODEX_SESSION_DIR = "$HOME/.claude/longhouse-managed-sessions"
 
 
 def _resolve_runner(db: Session, owner_id: int, target: str):
@@ -166,60 +161,14 @@ def _build_entry_command(
 def _build_codex_entry_command(*, managed_session_id: str, managed_session_name: str) -> str:
     """Build the tmux entry command for a managed-local Codex session.
 
-    Managed-local Codex is terminal-first: tmux hosts a remote Codex TUI while
-    a sibling Codex app-server owns the underlying session/thread. This keeps
-    the terminal UX intact without letting Longhouse pretend keystroke
-    injection is the control plane.
+    Managed-local Codex is terminal-first for the current MVP: Longhouse owns
+    the tmux session and the user drives the live Codex TUI by attaching to it.
+    We deliberately avoid browser-side control paths for Codex until there is
+    a first-class provider control plane.
     """
-
-    safe_name = managed_session_name.strip() or managed_session_id
-    inner_lines = [
-        "set -euo pipefail",
-        f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}",
-        "source ~/.zshrc >/dev/null 2>&1 || true",
-        "command -v codex >/dev/null 2>&1 || { echo 'codex is not available' >&2; exit 12; }",
-        "command -v curl >/dev/null 2>&1 || { echo 'curl is not available' >&2; exit 13; }",
-        f'MANAGED_DIR="{_MANAGED_CODEX_SESSION_DIR}"',
-        'mkdir -p "$MANAGED_DIR"',
-        f'APP_SERVER_LOG="$MANAGED_DIR/{safe_name}.app-server.log"',
-        'APP_SERVER_META="$MANAGED_DIR/$LONGHOUSE_SESSION_ID.app-server.env"',
-        'rm -f "$APP_SERVER_LOG" "$APP_SERVER_META"',
-        'touch "$APP_SERVER_LOG"',
-        'codex app-server --listen ws://127.0.0.1:0 --session-source cli >/dev/null 2>>"$APP_SERVER_LOG" &',
-        "APP_SERVER_PID=$!",
-        "cleanup() {",
-        '  kill "$APP_SERVER_PID" >/dev/null 2>&1 || true',
-        '  wait "$APP_SERVER_PID" 2>/dev/null || true',
-        "}",
-        "trap cleanup EXIT INT TERM",
-        'REMOTE_URL=""',
-        'READYZ_URL=""',
-        'HEALTHZ_URL=""',
-        "for _ in {1..200}; do",
-        '  if ! kill -0 "$APP_SERVER_PID" 2>/dev/null; then',
-        '    echo "codex app-server exited before ready" >&2',
-        '    tail -n 40 "$APP_SERVER_LOG" >&2 || true',
-        "    break",
-        "  fi",
-        "  REMOTE_URL=$(sed -n 's/^  listening on: //p' \"$APP_SERVER_LOG\" | tail -n 1)",
-        "  READYZ_URL=$(sed -n 's/^  readyz: //p' \"$APP_SERVER_LOG\" | tail -n 1)",
-        "  HEALTHZ_URL=$(sed -n 's/^  healthz: //p' \"$APP_SERVER_LOG\" | tail -n 1)",
-        '  if [ -n "$REMOTE_URL" ] && [ -n "$READYZ_URL" ] && curl -fsS "$READYZ_URL" >/dev/null 2>&1; then',
-        '    cat > "$APP_SERVER_META" <<EOF',
-        'LONGHOUSE_CODEX_APP_SERVER_PID="$APP_SERVER_PID"',
-        'LONGHOUSE_CODEX_APP_SERVER_URL="$REMOTE_URL"',
-        'LONGHOUSE_CODEX_APP_SERVER_READYZ="$READYZ_URL"',
-        'LONGHOUSE_CODEX_APP_SERVER_HEALTHZ="$HEALTHZ_URL"',
-        "EOF",
-        '    exec codex --enable tui_app_server --remote "$REMOTE_URL"',
-        "  fi",
-        "  sleep 0.1",
-        "done",
-        'echo "codex app-server failed to become ready" >&2',
-        'tail -n 40 "$APP_SERVER_LOG" >&2 || true',
-        "exit 14",
-    ]
-    return f"zsh -lc {shlex.quote(chr(10).join(inner_lines))}"
+    del managed_session_name
+    inner = f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}; source ~/.zshrc >/dev/null 2>&1 || true; exec codex"
+    return f"zsh -lc {shlex.quote(inner)}"
 
 
 def _build_preflight_command(*, provider: str, cwd: str) -> str:
@@ -231,8 +180,6 @@ def _build_preflight_command(*, provider: str, cwd: str) -> str:
         f"test -d {quoted_cwd} || {{ echo 'working directory does not exist' >&2; exit 13; }}",
         f"printf {shlex.quote(_MANAGED_LOCAL_TMUX_TMPDIR_MARKER + '%s\\n')} \"${{TMUX_TMPDIR:-}}\"",
     ]
-    if provider == "codex":
-        checks.insert(2, "command -v curl >/dev/null 2>&1 || { echo 'curl is not available' >&2; exit 14; }")
     return f"zsh -lc {shlex.quote('; '.join(checks))}"
 
 
