@@ -1,8 +1,8 @@
 //! Path-keyed scheduler for daemon shipping work.
 //!
 //! Ensures at most one in-flight task per session file path while allowing
-//! bounded concurrency across unrelated files. Ready work is prioritized so
-//! live watcher events can preempt retry/scan work without losing deduping.
+//! bounded concurrency across unrelated files. Ready work is weighted so live
+//! watcher events get more slots without starving retry/scan work.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -14,6 +14,13 @@ pub enum WorkPriority {
     Retry,
     Scan,
 }
+
+const FAIR_SEQUENCE: [WorkPriority; 4] = [
+    WorkPriority::Watch,
+    WorkPriority::Watch,
+    WorkPriority::Retry,
+    WorkPriority::Scan,
+];
 
 /// One unit of daemon work keyed to a single file path.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,6 +45,7 @@ struct InFlightJob {
 /// Bounded scheduler that dedupes work by file path.
 pub struct PathScheduler {
     max_in_flight: usize,
+    fairness_cursor: usize,
     ready_watch: VecDeque<PathBuf>,
     ready_retry: VecDeque<PathBuf>,
     ready_scan: VecDeque<PathBuf>,
@@ -49,6 +57,7 @@ impl PathScheduler {
     pub fn new(max_in_flight: usize) -> Self {
         Self {
             max_in_flight: max_in_flight.max(1),
+            fairness_cursor: 0,
             ready_watch: VecDeque::new(),
             ready_retry: VecDeque::new(),
             ready_scan: VecDeque::new(),
@@ -80,16 +89,22 @@ impl PathScheduler {
         self.push_ready_path(path, priority);
     }
 
-    /// Return the next job that can start, respecting both priority and the
-    /// configured in-flight concurrency cap.
+    /// Return the next job that can start, respecting both the configured
+    /// in-flight concurrency cap and a simple weighted round-robin policy.
     pub fn pop_launchable(&mut self) -> Option<PathJob> {
         if self.in_flight.len() >= self.max_in_flight {
             return None;
         }
 
-        self.pop_ready_queue(WorkPriority::Watch)
-            .or_else(|| self.pop_ready_queue(WorkPriority::Retry))
-            .or_else(|| self.pop_ready_queue(WorkPriority::Scan))
+        for step in 0..FAIR_SEQUENCE.len() {
+            let idx = (self.fairness_cursor + step) % FAIR_SEQUENCE.len();
+            if let Some(job) = self.pop_ready_queue(FAIR_SEQUENCE[idx]) {
+                self.fairness_cursor = (idx + 1) % FAIR_SEQUENCE.len();
+                return Some(job);
+            }
+        }
+
+        None
     }
 
     /// Mark a path as completed. If the path was re-enqueued while running, or
@@ -242,5 +257,24 @@ mod tests {
         scheduler.complete(&path_a, None);
         let second = scheduler.pop_launchable().unwrap();
         assert_eq!(second.path, path_b);
+    }
+
+    #[test]
+    fn test_scheduler_gives_retry_and_scan_turns_under_watch_pressure() {
+        let mut scheduler = PathScheduler::new(8);
+
+        scheduler.enqueue(PathBuf::from("/tmp/watch-1.jsonl"), "claude", WorkPriority::Watch);
+        scheduler.enqueue(PathBuf::from("/tmp/watch-2.jsonl"), "claude", WorkPriority::Watch);
+        scheduler.enqueue(PathBuf::from("/tmp/watch-3.jsonl"), "claude", WorkPriority::Watch);
+        scheduler.enqueue(PathBuf::from("/tmp/watch-4.jsonl"), "claude", WorkPriority::Watch);
+        scheduler.enqueue(PathBuf::from("/tmp/retry.jsonl"), "claude", WorkPriority::Retry);
+        scheduler.enqueue(PathBuf::from("/tmp/scan.jsonl"), "claude", WorkPriority::Scan);
+
+        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Watch);
+        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Watch);
+        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Retry);
+        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Scan);
+        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Watch);
+        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Watch);
     }
 }
