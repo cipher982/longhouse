@@ -107,16 +107,24 @@ mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
 
 # Stop: also ship the session transcript via engine binary.
 # Done AFTER the outbox write so idle state is always recorded.
-# Use a fast immediate background ship plus a short delayed replay because
-# Claude can fire Stop before the final transcript tail is fully flushed.
+# Detach the ship loop with nohup because Claude can reap hook children as
+# soon as the hook exits, and retry for a few seconds because Stop can fire
+# before the transcript file exists or before the final tail is flushed.
 # Engine path is quoted to handle paths with spaces.
 ENGINE="__ENGINE_PATH__"
-if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]; then
-  (
-    "$ENGINE" ship --file "$TRANSCRIPT" --quiet &>/dev/null || true
-    sleep 1
-    "$ENGINE" ship --file "$TRANSCRIPT" --quiet &>/dev/null || true
-  ) &
+if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
+  nohup /bin/bash -c '
+    engine="$0"
+    transcript="$1"
+    for delay in 0 1 2 4; do
+      if [[ "$delay" -gt 0 ]]; then
+        sleep "$delay"
+      fi
+      if [[ -f "$transcript" ]]; then
+        "$engine" ship --file "$transcript" --quiet >/dev/null 2>&1 || true
+      fi
+    done
+  ' "$ENGINE" "$TRANSCRIPT" >/dev/null 2>&1 < /dev/null &
 fi
 
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
