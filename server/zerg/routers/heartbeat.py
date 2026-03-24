@@ -108,10 +108,6 @@ async def ingest_heartbeat(
         ).delete()
 
     ws = get_write_serializer()
-    if ws.is_configured:
-        await ws.execute(_do_heartbeat, label="heartbeat")
-    else:
-        _do_heartbeat(db)
-        db.commit()
+    await ws.execute_or_direct(_do_heartbeat, db, label="heartbeat")
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

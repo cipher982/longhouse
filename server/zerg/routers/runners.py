@@ -1118,14 +1118,7 @@ async def runner_websocket(
 
         try:
             ws = get_write_serializer()
-            if ws.is_configured:
-                await ws.execute(_mark_online, label="runner-online")
-            else:
-                runner.status = "online"
-                runner.last_seen_at = utc_now_naive()
-                if metadata:
-                    runner.runner_metadata = metadata
-                db.commit()
+            await ws.execute_or_direct(_mark_online, db, label="runner-online")
         except Exception as e:
             db.rollback()
             logger.error(f"Failed to mark runner {runner_id} online: {e}")
@@ -1184,18 +1177,13 @@ async def runner_websocket(
                         r.status = "offline"
 
                 try:
+                    # Rollback any dirty state from websocket message processing
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
                     ws = get_write_serializer()
-                    if ws.is_configured:
-                        await ws.execute(_mark_offline, label="runner-offline")
-                    else:
-                        try:
-                            db.rollback()
-                        except Exception:
-                            pass
-                        r = runner_crud.get_runner(db, runner_id)
-                        if r:
-                            r.status = "offline"
-                            db.commit()
+                    await ws.execute_or_direct(_mark_offline, db, label="runner-offline")
                     logger.info(f"Runner {runner_id} marked offline")
                 except Exception as e:
                     logger.warning(f"Failed to mark runner {runner_id} offline during cleanup: {e}")

@@ -1048,20 +1048,12 @@ async def ingest_session(
         from zerg.services.write_serializer import get_write_serializer
 
         ws = get_write_serializer()
-        if ws.is_configured:
-            # Route through single-writer serializer to eliminate lock contention
-            def _do_ingest(write_db):
-                store = AgentsStore(write_db)
-                r = store.ingest_session(data)
-                # Commit managed by ingest_session's chunk logic; final commit by serializer
-                return r
 
-            result = await ws.execute(_do_ingest, label="ingest", auto_commit=True)
-        else:
-            # Fallback for tests / unconfigured serializer
-            store = AgentsStore(db)
-            result = store.ingest_session(data)
-            db.commit()
+        def _do_ingest(write_db):
+            store = AgentsStore(write_db)
+            return store.ingest_session(data)
+
+        result = await ws.execute_or_direct(_do_ingest, db, label="ingest")
 
         return IngestResponse(
             session_id=str(result.session_id),
