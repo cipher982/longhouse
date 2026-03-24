@@ -46,6 +46,7 @@ from sqlalchemy.orm import sessionmaker
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+_MISSING = object()
 
 _DEFAULT_PRIORITY = 50
 _LABEL_PRIORITIES: dict[str, int] = {
@@ -189,11 +190,29 @@ class WriteSerializer:
         t1 = time.monotonic()
         queue_wait_ms = (t1 - t0) * 1000
 
+        worker_task = asyncio.create_task(asyncio.to_thread(self._run, fn, auto_commit, label))
+        current_task = asyncio.current_task()
+        uncancel = getattr(current_task, "uncancel", None) if current_task is not None else None
+        cancel_exc: asyncio.CancelledError | None = None
+        worker_exc: BaseException | None = None
+        result: T | object = _MISSING
+
         try:
-            result = await asyncio.to_thread(self._run, fn, auto_commit, label)
-        except Exception:
-            self._stats.errors += 1
-            raise
+            try:
+                result = await asyncio.shield(worker_task)
+            except asyncio.CancelledError as exc:
+                # A request timeout cancels the caller task, but the thread-backed
+                # write keeps running. Hold the writer slot until that work
+                # finishes so we never run overlapping SQLite writes.
+                cancel_exc = exc
+                if callable(uncancel):
+                    uncancel()
+                try:
+                    result = await asyncio.shield(worker_task)
+                except BaseException as exc_after_cancel:
+                    worker_exc = exc_after_cancel
+            except BaseException as exc:
+                worker_exc = exc
         finally:
             t2 = time.monotonic()
             exec_ms = (t2 - t1) * 1000
@@ -218,6 +237,23 @@ class WriteSerializer:
                 self._writer_active = False
                 self._wait_cond.notify_all()
 
+        if worker_exc is not None:
+            if isinstance(worker_exc, Exception):
+                self._stats.errors += 1
+            if cancel_exc is not None:
+                logger.warning(
+                    "WriteSerializer: %s finished with %s after cancellation",
+                    label or "unlabeled",
+                    type(worker_exc).__name__,
+                )
+                raise cancel_exc
+            raise worker_exc
+
+        if cancel_exc is not None:
+            raise cancel_exc
+
+        if result is _MISSING:
+            raise RuntimeError("WriteSerializer worker finished without returning a result")
         return result
 
     async def execute_or_direct(
