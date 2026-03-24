@@ -20,7 +20,7 @@ from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.session_execution_home import SessionExecutionHome
 
-_MANAGED_LOCAL_RUNTIME_SOURCE = "managed_local_transport"
+MANAGED_LOCAL_RUNTIME_SOURCE = "managed_local_transport"
 
 
 def _is_managed_local_session(session: AgentSession) -> bool:
@@ -48,7 +48,7 @@ def _emit_managed_local_phase_signal(
                 session_id=session.id,
                 provider=str(session.provider or "claude"),
                 device_id=str(session.device_id or session.source_runner_name or "") or None,
-                source=_MANAGED_LOCAL_RUNTIME_SOURCE,
+                source=MANAGED_LOCAL_RUNTIME_SOURCE,
                 kind="phase_signal",
                 phase=phase,
                 tool_name=None,
@@ -145,4 +145,18 @@ def mark_managed_local_turn_needs_user(
         session=session,
         phase="needs_user",
         dedupe_key=f"managed-local-needs-user:{session.id}:{dedupe_suffix or uuid4().hex}",
+    )
+
+
+def mark_managed_local_turn_blocked(
+    db: Session,
+    *,
+    session: AgentSession,
+    dedupe_suffix: str | None = None,
+) -> None:
+    _emit_managed_local_phase_signal(
+        db,
+        session=session,
+        phase="blocked",
+        dedupe_key=f"managed-local-blocked:{session.id}:{dedupe_suffix or uuid4().hex}",
     )

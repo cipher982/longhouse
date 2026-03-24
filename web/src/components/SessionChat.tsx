@@ -43,6 +43,8 @@ interface SSEDone {
   total_text_length: number;
   persisted_events?: number;
   persistence_error?: string | null;
+  sync_status?: "pending" | "complete" | "failed";
+  control_status?: "completed" | "needs_user" | "blocked" | "failed";
   timestamp: string;
 }
 
@@ -74,6 +76,23 @@ interface SessionChatProps {
 }
 
 export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider">;
+
+function getToolPrefix(toolNotices?: string[]): string {
+  return toolNotices?.length ? toolNotices.join("\n") + "\n\n" : "";
+}
+
+function getAssistantText(message: ChatMessage): string {
+  const toolPrefix = getToolPrefix(message.toolNotices);
+  return message.content.startsWith(toolPrefix) ? message.content.slice(toolPrefix.length).trim() : message.content.trim();
+}
+
+function getSyncPendingPlaceholder(controlStatus?: SSEDone["control_status"]): string {
+  if (controlStatus === "needs_user") {
+    return "Waiting locally. Transcript syncing...";
+  }
+
+  return "Completed locally. Transcript syncing...";
+}
 
 export function SessionChat({
   session,
@@ -141,9 +160,7 @@ export function SessionChat({
           setMessages((prev) =>
             prev.map((m) => {
               if (m.id !== assistantId) return m;
-              const toolPrefix = m.toolNotices?.length
-                ? m.toolNotices.join("\n") + "\n\n"
-                : "";
+              const toolPrefix = getToolPrefix(m.toolNotices);
               return { ...m, content: toolPrefix + delta.accumulated };
             }),
           );
@@ -157,12 +174,10 @@ export function SessionChat({
               if (m.id !== assistantId) return m;
               const notice = `[Using tool: ${tool.name}]`;
               const toolNotices = [...(m.toolNotices || []), notice];
-              const toolPrefix = toolNotices.join("\n") + "\n\n";
+              const toolPrefix = getToolPrefix(toolNotices);
               // Update content to include the new notice
               // Extract the accumulated text (content without tool prefix)
-              const existingToolPrefix = m.toolNotices?.length
-                ? m.toolNotices.join("\n") + "\n\n"
-                : "";
+              const existingToolPrefix = getToolPrefix(m.toolNotices);
               const accumulatedText = m.content.startsWith(existingToolPrefix)
                 ? m.content.slice(existingToolPrefix.length)
                 : m.content;
@@ -178,13 +193,35 @@ export function SessionChat({
         }
         case "done": {
           const done = data as SSEDone;
-          if (done.persistence_error) {
+          const persistedEvents = done.persisted_events ?? 0;
+          const syncStatus =
+            done.sync_status ??
+            (done.persistence_error ? "failed" : persistedEvents > 0 ? "complete" : undefined);
+          const isPendingSync = syncStatus === "pending";
+          const isPersisted = syncStatus === "complete" || (!syncStatus && persistedEvents > 0);
+          const hasPersistenceFailure = Boolean(done.persistence_error) && !isPendingSync;
+
+          if (hasPersistenceFailure && done.persistence_error) {
             setError(done.persistence_error);
           }
 
+          if (isPendingSync) {
+            setMessages((prev) =>
+              prev.map((m) => {
+                if (m.id !== assistantId || getAssistantText(m)) {
+                  return m;
+                }
+
+                return {
+                  ...m,
+                  content: getToolPrefix(m.toolNotices) + getSyncPendingPlaceholder(done.control_status),
+                };
+              }),
+            );
+          }
+
           const nextSessionId = done.shipped_session_id;
-          const persistedEvents = done.persisted_events ?? 0;
-          if (nextSessionId && persistedEvents > 0 && !done.persistence_error) {
+          if (nextSessionId && isPersisted && !hasPersistenceFailure) {
             if (nextSessionId === session.id) {
               void refreshCurrentSessionWorkspace().finally(() => {
                 setMessages([]);
