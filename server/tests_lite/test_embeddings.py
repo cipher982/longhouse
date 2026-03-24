@@ -2,9 +2,11 @@
 
 from datetime import datetime
 from datetime import timezone
+from types import SimpleNamespace
 from uuid import uuid4
 
 import numpy as np
+import pytest
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
@@ -15,6 +17,7 @@ from zerg.models.agents import SessionEmbedding
 from zerg.models.work import Insight  # noqa: F401
 from zerg.services.session_processing.embeddings import bytes_to_embedding
 from zerg.services.session_processing.embeddings import content_hash
+from zerg.services.session_processing.embeddings import embed_session
 from zerg.services.session_processing.embeddings import embedding_to_bytes
 from zerg.services.session_processing.embeddings import prepare_session_chunk
 from zerg.services.session_processing.embeddings import prepare_turn_chunks
@@ -216,3 +219,76 @@ def test_embedding_upsert(tmp_path):
 
         decoded = bytes_to_embedding(emb.embedding, 4)
         np.testing.assert_array_almost_equal(vec, decoded)
+
+
+@pytest.mark.asyncio
+async def test_embed_session_routes_write_phase_through_serializer(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    session_id = str(uuid4())
+    labels: list[str] = []
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_generate_embedding(_text, _config):
+        return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_processing.embeddings.generate_embedding", _fake_generate_embedding)
+
+    config = SimpleNamespace(provider="openai", model="test-model", dims=4, api_key="test-key")
+
+    with SessionLocal() as db:
+        db.add(
+            AgentSession(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="zerg",
+                started_at=datetime.now(timezone.utc),
+                needs_embedding=1,
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="Please fix the login bug",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="assistant",
+                content_text="I fixed the login bug.",
+                timestamp=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
+
+        count = await embed_session(session_id, session, events, config, db)
+        assert count == 2
+        assert labels == ["embeddings"]
+
+        db.expire_all()
+        stored = (
+            db.query(SessionEmbedding)
+            .filter(SessionEmbedding.session_id == session_id)
+            .order_by(SessionEmbedding.kind.asc(), SessionEmbedding.chunk_index.asc())
+            .all()
+        )
+        assert len(stored) == 2
+
+        refreshed_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert refreshed_session.needs_embedding == 0
