@@ -21,6 +21,7 @@ from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
+from zerg.auth.managed_local_hook_tokens import issue_managed_local_hook_token
 from zerg.crud import runner_crud
 from zerg.models.agents import AgentSession
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
@@ -60,6 +61,8 @@ class ManagedLocalLaunchParams:
     display_name: str | None = None
     loop_mode: str = "manual"
     managed_transport: str = ManagedSessionTransport.TMUX.value
+    hook_url: str | None = None
+    hook_token: str | None = None
 
 
 @dataclass(frozen=True)
@@ -157,20 +160,40 @@ def _build_entry_command(
     provider_session_id: str,
     display_name: str | None,
     managed_session_name: str | None = None,
+    hook_url: str | None = None,
+    hook_token: str | None = None,
 ) -> str:
+    env_exports = [f"export LONGHOUSE_SESSION_ID={shlex.quote(provider_session_id)}"]
+    if hook_url and hook_url.strip():
+        env_exports.append(f"export LONGHOUSE_HOOK_URL={shlex.quote(hook_url.strip())}")
+    if hook_token and hook_token.strip():
+        env_exports.append(f"export LONGHOUSE_HOOK_TOKEN={shlex.quote(hook_token.strip())}")
+
     if provider == "codex":
         return _build_codex_entry_command(
             managed_session_id=provider_session_id,
             managed_session_name=managed_session_name or provider_session_id,
+            env_exports=env_exports,
         )
     parts = ["claude-code", "--session-id", provider_session_id]
     if display_name and display_name.strip():
         parts.extend(["-n", display_name.strip()])
-    inner = "source ~/.zshrc >/dev/null 2>&1; exec " + " ".join(shlex.quote(part) for part in parts)
+    inner = "; ".join(
+        [
+            *env_exports,
+            "source ~/.zshrc >/dev/null 2>&1",
+            "exec " + " ".join(shlex.quote(part) for part in parts),
+        ]
+    )
     return f"zsh -lc {shlex.quote(inner)}"
 
 
-def _build_codex_entry_command(*, managed_session_id: str, managed_session_name: str) -> str:
+def _build_codex_entry_command(
+    *,
+    managed_session_id: str,
+    managed_session_name: str,
+    env_exports: list[str] | None = None,
+) -> str:
     """Build the tmux entry command for a managed-local Codex session.
 
     Managed-local Codex is terminal-first for the current MVP: Longhouse owns
@@ -179,10 +202,13 @@ def _build_codex_entry_command(*, managed_session_id: str, managed_session_name:
     a first-class provider control plane.
     """
     del managed_session_name
-    inner = (
-        f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}; "
-        "source ~/.zshrc >/dev/null 2>&1 || true; "
-        "exec codex --enable codex_hooks"
+    exports = list(env_exports or [f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}"])
+    inner = "; ".join(
+        [
+            *exports,
+            "source ~/.zshrc >/dev/null 2>&1 || true",
+            "exec codex --enable codex_hooks",
+        ]
     )
     return f"zsh -lc {shlex.quote(inner)}"
 
@@ -310,6 +336,14 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     project = _derive_project(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
     managed_session_name = normalize_tmux_session_name(f"{display_name}-{session_uuid.hex[:8]}")
+    hook_token = params.hook_token
+    if not hook_token and params.hook_url:
+        hook_token = issue_managed_local_hook_token(
+            owner_id=params.owner_id,
+            session_id=provider_session_id,
+            project=project,
+            device_id=runner.name,
+        )
 
     session = AgentSession(
         id=session_uuid,
@@ -348,6 +382,8 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         provider_session_id=provider_session_id,
         display_name=params.display_name,
         managed_session_name=managed_session_name,
+        hook_url=params.hook_url,
+        hook_token=hook_token,
     )
     launch_command = build_tmux_launch_command(
         session_name=managed_session_name,

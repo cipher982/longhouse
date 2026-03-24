@@ -32,11 +32,13 @@ from uuid import uuid4
 
 from fastapi import APIRouter
 from fastapi import Depends
+from fastapi import HTTPException
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
@@ -306,6 +308,11 @@ async def upsert_presence(
     if payload.state not in VALID_STATES:
         # Silently ignore unknown states rather than erroring hooks
         return
+    if isinstance(_token, ManagedLocalHookToken) and payload.session_id != _token.session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Managed-local hook token does not match session",
+        )
 
     project: Optional[str] = None
     if payload.cwd:

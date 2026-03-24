@@ -147,10 +147,6 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
 
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
         monkeypatch.setattr(
-            "zerg.routers.session_chat.ship_managed_local_claude_transcript",
-            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("direct ship should not run when transcript events already arrived")),
-        )
-        monkeypatch.setattr(
             "zerg.routers.session_chat._await_managed_local_turn_events",
             fake_wait_for_events,
         )
@@ -268,7 +264,6 @@ def test_chat_with_session_reports_claude_managed_local_persistence_timeout(monk
 
 def test_chat_with_session_returns_sync_pending_after_terminal_control_success(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
-    ship_calls: list[str] = []
     wait_calls = {"count": 0}
 
     with session_local() as db:
@@ -291,17 +286,12 @@ def test_chat_with_session_returns_sync_pending_after_terminal_control_success(m
             wait_calls["count"] += 1
             return []
 
-        async def fake_ship_transcript(*, db, owner_id, session, commis_id=None, timeout_secs=20):
-            ship_calls.append(str(session.id))
-            return SimpleNamespace(ok=True, exit_code=0, error=None)
-
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat.await_managed_local_turn_terminal", fake_wait_for_terminal)
         monkeypatch.setattr(
             "zerg.routers.session_chat._await_managed_local_turn_events",
             fake_wait_for_events,
         )
-        monkeypatch.setattr("zerg.routers.session_chat.ship_managed_local_claude_transcript", fake_ship_transcript)
 
         try:
             response = client.post(
@@ -321,7 +311,6 @@ def test_chat_with_session_returns_sync_pending_after_terminal_control_success(m
             )
             assert runtime_state.phase == "needs_user"
             assert runtime_state.phase_source == "semantic"
-            assert ship_calls == [str(source_session.id)]
             assert wait_calls["count"] >= 1
         finally:
             api_app_ref.dependency_overrides = {}
@@ -367,10 +356,6 @@ def test_chat_with_session_routes_codex_managed_local_without_cloud_continuation
             return None
 
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
-        monkeypatch.setattr(
-            "zerg.routers.session_chat.ship_managed_local_claude_transcript",
-            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("codex managed-local should not direct-ship Claude transcripts")),
-        )
         monkeypatch.setattr(
             "zerg.routers.session_chat._await_managed_local_turn_events",
             fake_wait_for_events,

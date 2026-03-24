@@ -15,6 +15,7 @@ from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.auth.managed_local_hook_tokens import validate_managed_local_hook_token
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentSession
@@ -189,8 +190,24 @@ class _FakeDispatcher:
 def test_build_entry_command_claude_includes_session_id():
     cmd = _build_entry_command(provider="claude", provider_session_id="abc-123", display_name=None)
     inner = _inner_command(cmd)
+    assert "export LONGHOUSE_SESSION_ID=abc-123" in inner
     assert "claude-code --session-id abc-123" in inner
     assert "codex" not in inner
+
+
+def test_build_entry_command_claude_includes_hook_target_overrides():
+    cmd = _build_entry_command(
+        provider="claude",
+        provider_session_id="abc-123",
+        display_name=None,
+        hook_url="https://david010.longhouse.ai",
+        hook_token="zdt_live_token",
+    )
+    inner = _inner_command(cmd)
+    assert "export LONGHOUSE_SESSION_ID=abc-123" in inner
+    assert "export LONGHOUSE_HOOK_URL=https://david010.longhouse.ai" in inner
+    assert "export LONGHOUSE_HOOK_TOKEN=zdt_live_token" in inner
+    assert "claude-code --session-id abc-123" in inner
 
 
 def test_build_entry_command_codex_injects_longhouse_session_id():
@@ -326,6 +343,15 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert "${HOME}/.claude/settings.json" in hooks_inner
             assert "cat > /tmp/longhouse-managed-" in launch_inner
             assert "__LONGHOUSE_MANAGED_LOCAL__" in launch_inner
+            assert "export LONGHOUSE_HOOK_URL=http://testserver" in launch_inner
+            token_fragment = launch_inner.split("export LONGHOUSE_HOOK_TOKEN=", 1)[1].split(";", 1)[0].strip()
+            hook_token = shlex.split(token_fragment)[0]
+            auth = validate_managed_local_hook_token(hook_token)
+            assert auth is not None
+            assert auth.owner_id == user.id
+            assert auth.session_id == payload["session_id"]
+            assert auth.project == "hiring"
+            assert auth.device_id == runner.name
             assert (
                 f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; "
                 "set-option -g remain-on-exit failed \\; "
@@ -492,6 +518,16 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             assert session.source_runner_name == "work-laptop"
             assert dispatcher.calls[0]["owner_id"] == user.id
             assert dispatcher.calls[0]["runner_id"] == runner.id
+            launch_inner = _inner_command(dispatcher.calls[2]["command"])
+            assert "export LONGHOUSE_HOOK_URL=http://testserver" in launch_inner
+            token_fragment = launch_inner.split("export LONGHOUSE_HOOK_TOKEN=", 1)[1].split(";", 1)[0].strip()
+            hook_token = shlex.split(token_fragment)[0]
+            auth = validate_managed_local_hook_token(hook_token)
+            assert auth is not None
+            assert auth.owner_id == user.id
+            assert auth.session_id == payload["session_id"]
+            assert auth.project == "hiring"
+            assert auth.device_id == "work-laptop"
         finally:
             api_app_ref.dependency_overrides = {}
 

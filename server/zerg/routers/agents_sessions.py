@@ -16,6 +16,7 @@ from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -75,11 +76,35 @@ async def list_sessions(
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
-    _auth: None = Depends(verify_agents_token),
+    _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionsListResponse:
     """List sessions with optional filters."""
     try:
+        if isinstance(_auth, ManagedLocalHookToken):
+            if project != _auth.project:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Managed-local hook token requires a matching project filter",
+                )
+            if (
+                provider is not None
+                or environment is not None
+                or include_test
+                or device_id is not None
+                or query is not None
+                or offset != 0
+                or limit > 5
+                or days_back > 7
+                or sort not in {None, "recency"}
+                or mode != "lexical"
+                or context_mode != "forensic"
+                or not hide_autonomous
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Managed-local hook token only supports bounded recent project lookup",
+                )
         if context_mode not in {"forensic", "active_context"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
