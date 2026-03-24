@@ -15,11 +15,13 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.managed_local_control import await_managed_local_turn_events
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 
 
@@ -108,6 +110,14 @@ def test_send_text_to_managed_local_session_emits_thinking_runtime_signal_for_cl
 
     with SessionLocal() as db:
         user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        existing_event = AgentEvent(
+            session_id=session.id,
+            role="assistant",
+            content_text="baseline",
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(existing_event)
+        db.commit()
 
         result = asyncio.run(
             send_text_to_managed_local_session(
@@ -119,6 +129,7 @@ def test_send_text_to_managed_local_session_emits_thinking_runtime_signal_for_cl
             )
         )
         assert result.ok is True
+        assert result.baseline_event_id == existing_event.id
 
         runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
         assert runtime_state.phase == "thinking"
@@ -131,6 +142,50 @@ def test_send_text_to_managed_local_session_emits_thinking_runtime_signal_for_cl
         assert dispatcher.calls[0]["commis_id"] == "managed-local-control-test"
         assert "export TMUX_TMPDIR=/tmp/lh-managed-control" in str(dispatcher.calls[0]["command"])
         assert "send-keys -t lh-zerg-managed-local -l -- continue" in str(dispatcher.calls[0]["command"])
+
+
+def test_await_managed_local_turn_events_returns_new_persisted_events(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        baseline = AgentEvent(
+            session_id=session.id,
+            role="assistant",
+            content_text="before",
+            timestamp=datetime.now(timezone.utc),
+        )
+        db.add(baseline)
+        db.commit()
+
+        async def _insert_later():
+            await asyncio.sleep(0.05)
+            with SessionLocal() as event_db:
+                event_db.add(
+                    AgentEvent(
+                        session_id=session.id,
+                        role="assistant",
+                        content_text="after",
+                        timestamp=datetime.now(timezone.utc),
+                    )
+                )
+                event_db.commit()
+
+        async def _run_wait():
+            writer = asyncio.create_task(_insert_later())
+            try:
+                return await await_managed_local_turn_events(
+                    db_bind=db.get_bind(),
+                    session_id=session.id,
+                    after_event_id=baseline.id,
+                    timeout_secs=1.0,
+                    poll_interval_secs=0.02,
+                )
+            finally:
+                await writer
+
+        events = asyncio.run(_run_wait())
+        assert [event.content_text for event in events] == ["after"]
 
 
 def test_send_text_to_managed_local_session_rejects_codex(tmp_path):
@@ -150,3 +205,51 @@ def test_send_text_to_managed_local_session_rejects_codex(tmp_path):
 
         assert result.ok is False
         assert result.error == "Managed-local Codex is terminal-driven right now; attach locally instead of sending web input."
+
+
+def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    with SessionLocal() as db:
+        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+
+        first = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="continue alpha",
+                commis_id="managed-local-control-first",
+            )
+        )
+        second = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="status? [ok]",
+                commis_id="managed-local-control-second",
+            )
+        )
+
+        assert first.ok is True
+        assert second.ok is True
+        assert len(dispatcher.calls) == 2
+        assert dispatcher.calls[0]["runner_id"] == runner.id
+        assert dispatcher.calls[1]["runner_id"] == runner.id
+        assert dispatcher.calls[0]["commis_id"] == "managed-local-control-first"
+        assert dispatcher.calls[1]["commis_id"] == "managed-local-control-second"
+        first_command = str(dispatcher.calls[0]["command"])
+        second_command = str(dispatcher.calls[1]["command"])
+        assert "send-keys -t lh-zerg-managed-local -l --" in first_command
+        assert "continue alpha" in first_command
+        assert "send-keys -t lh-zerg-managed-local -l --" in second_command
+        assert "status? [ok]" in second_command
+
+        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
+        assert runtime_state.phase == "thinking"
+        assert runtime_state.phase_source == "semantic"
+        assert runtime_state.last_runtime_signal_at is not None
+        assert runtime_state.device_id == runner.name
