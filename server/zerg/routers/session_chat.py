@@ -360,22 +360,23 @@ def _get_managed_local_latest_event_id(*, db_bind, session_id: UUID) -> int:
 
 
 def _managed_local_events_include_expected_turn(*, events: list[AgentEvent], expected_user_message: str) -> bool:
-    saw_user_prompt = False
-    saw_assistant_or_tool = False
+    saw_expected_user_prompt = False
 
     for event in events:
         role = str(getattr(event, "role", "") or "").strip().lower()
         content_text = str(getattr(event, "content_text", "") or "")
         tool_name = str(getattr(event, "tool_name", "") or "").strip()
         if role == "user" and content_text == expected_user_message:
-            saw_user_prompt = True
-        if tool_name:
-            saw_assistant_or_tool = True
+            saw_expected_user_prompt = True
             continue
+        if not saw_expected_user_prompt:
+            continue
+        if tool_name:
+            return True
         if role == "assistant" and content_text.strip():
-            saw_assistant_or_tool = True
+            return True
 
-    return saw_user_prompt and saw_assistant_or_tool
+    return False
 
 
 async def _await_managed_local_turn_events(
