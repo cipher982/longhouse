@@ -114,6 +114,12 @@ class SessionTurnReviewSummary(UTCBaseModel):
     run_id: Optional[int] = None
     actual_outcome: Optional[str] = None
     shadow_alignment: Optional[str] = None
+    assistant_turn_finished_at: Optional[datetime] = None
+    turn_loop_enqueued_at: Optional[datetime] = None
+    turn_loop_completed_at: Optional[datetime] = None
+    queue_latency_ms: Optional[int] = None
+    review_latency_ms: Optional[int] = None
+    processing_latency_ms: Optional[int] = None
     created_at: datetime
 
 
@@ -204,6 +210,60 @@ def _get_owned_run(db: Session, *, run_id: int, owner_id: int) -> Run | None:
     query = query.filter(Run.id == run_id)
     query = query.filter(Fiche.owner_id == owner_id)
     return query.first()
+
+
+def _normalize_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
+    normalized_start = _normalize_utc(start)
+    normalized_end = _normalize_utc(end)
+    if normalized_start is None or normalized_end is None:
+        return None
+    delta_ms = int((normalized_end - normalized_start).total_seconds() * 1000)
+    return delta_ms if delta_ms >= 0 else None
+
+
+def _build_turn_review_summary(row: SessionTurnReview) -> SessionTurnReviewSummary:
+    assistant_turn_finished_at = _normalize_utc(getattr(row, "assistant_turn_finished_at", None))
+    turn_loop_enqueued_at = _normalize_utc(getattr(row, "turn_loop_enqueued_at", None))
+    turn_loop_completed_at = _normalize_utc(getattr(row, "turn_loop_completed_at", None))
+    created_at = _normalize_utc(row.created_at)
+    return SessionTurnReviewSummary(
+        id=row.id,
+        session_id=str(row.session_id),
+        assistant_event_id=row.assistant_event_id,
+        turn_index=row.turn_index,
+        trigger_type=row.trigger_type,
+        loop_mode=row.loop_mode,
+        decision=row.decision,
+        summary=row.summary,
+        rationale=row.rationale,
+        turn_excerpt=row.turn_excerpt,
+        mode_capability=row.mode_capability,
+        mode_summary=row.mode_summary,
+        execution_state=row.execution_state,
+        recommended_action=row.recommended_action,
+        follow_up_prompt=row.follow_up_prompt,
+        blocked_reasons=[str(reason).strip() for reason in (row.blocked_reasons or []) if str(reason).strip()],
+        status=row.status,
+        reason=row.reason,
+        run_id=row.run_id,
+        actual_outcome=row.actual_outcome,
+        shadow_alignment=row.shadow_alignment,
+        assistant_turn_finished_at=assistant_turn_finished_at,
+        turn_loop_enqueued_at=turn_loop_enqueued_at,
+        turn_loop_completed_at=turn_loop_completed_at,
+        queue_latency_ms=_duration_ms(assistant_turn_finished_at, turn_loop_enqueued_at),
+        review_latency_ms=_duration_ms(assistant_turn_finished_at, created_at),
+        processing_latency_ms=_duration_ms(turn_loop_enqueued_at, turn_loop_completed_at),
+        created_at=created_at or row.created_at,
+    )
 
 
 @router.get("/runs", response_model=List[OikosRunSummary])
@@ -705,33 +765,7 @@ def list_session_turn_reviews(
         query = query.filter(SessionTurnReview.status == status)
 
     rows = query.order_by(SessionTurnReview.created_at.desc(), SessionTurnReview.id.desc()).limit(limit).all()
-    return [
-        SessionTurnReviewSummary(
-            id=row.id,
-            session_id=str(row.session_id),
-            assistant_event_id=row.assistant_event_id,
-            turn_index=row.turn_index,
-            trigger_type=row.trigger_type,
-            loop_mode=row.loop_mode,
-            decision=row.decision,
-            summary=row.summary,
-            rationale=row.rationale,
-            turn_excerpt=row.turn_excerpt,
-            mode_capability=row.mode_capability,
-            mode_summary=row.mode_summary,
-            execution_state=row.execution_state,
-            recommended_action=row.recommended_action,
-            follow_up_prompt=row.follow_up_prompt,
-            blocked_reasons=[str(reason).strip() for reason in (row.blocked_reasons or []) if str(reason).strip()],
-            status=row.status,
-            reason=row.reason,
-            run_id=row.run_id,
-            actual_outcome=row.actual_outcome,
-            shadow_alignment=row.shadow_alignment,
-            created_at=row.created_at,
-        )
-        for row in rows
-    ]
+    return [_build_turn_review_summary(row) for row in rows]
 
 
 @router.get("/loop-inbox", response_model=List[LoopInboxItem])

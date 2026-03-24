@@ -96,6 +96,12 @@ function makeTurnReview(overrides: Partial<SessionTurnReview> = {}): SessionTurn
     runId: 123,
     actualOutcome: "ignore",
     alignment: "more_conservative",
+    assistantTurnFinishedAt: "2026-03-17T10:59:54Z",
+    turnLoopEnqueuedAt: "2026-03-17T10:59:56Z",
+    turnLoopCompletedAt: "2026-03-17T11:00:01Z",
+    queueLatencyMs: 2000,
+    reviewLatencyMs: 6000,
+    processingLatencyMs: 5000,
     createdAt: "2026-03-17T11:00:00Z",
     ...overrides,
   };
@@ -190,6 +196,9 @@ describe("SessionContextPane", () => {
     expect(within(turnReview).getByText(/Recommended action: Continue Session/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Suggested next prompt: Run the pending targeted tests\./i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Live outcome: Ignore/i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Review recorded in 6\.0 s/i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Queue delay before turn-loop: 2\.0 s/i)).toBeInTheDocument();
+    expect(within(turnReview).getByText(/Turn-loop processing time: 5\.0 s/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Only targeted verification remains\. Run the pending targeted tests\./i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Autonomous continue cap reached/i)).toBeInTheDocument();
   });

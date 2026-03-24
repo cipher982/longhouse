@@ -2286,6 +2286,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/oikos/loop-inbox/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Loop Inbox
+         * @description Stream loop inbox snapshots for the authenticated owner.
+         */
+        get: operations["stream_loop_inbox_oikos_loop_inbox_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/oikos/loop-inbox/cards/{card_id}": {
         parameters: {
             query?: never;
@@ -4169,14 +4189,32 @@ export interface paths {
         put?: never;
         /**
          * Launch Managed Local
-         * @description Start a managed local Claude session inside tmux on a connected runner.
+         * @description Start a managed local AI agent session inside tmux on a connected runner.
          *
-         *     This is the first trustworthy laptop-first path:
-         *     - Longhouse launches stock Claude Code under tmux on the user's runner
-         *     - the session is explicitly marked managed_local
-         *     - later Loop/chat actions can target this exact session home
+         *     Supports both Claude and Codex providers. The tmux transport is
+         *     provider-agnostic — Longhouse owns the launch, lifecycle, and input routing.
          */
         post: operations["launch_managed_local_sessions_managed_local_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/managed-local/this-device": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Launch Managed Local This Device
+         * @description Start a managed local AI agent session on the calling machine's connected runner.
+         */
+        post: operations["launch_managed_local_this_device_sessions_managed_local_this_device_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5315,6 +5353,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/readyz": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Readyz Check
+         * @description Readiness probe: returns 503 when core dependencies are unavailable.
+         *
+         *     Unlike /health (which always returns 200 for observability), this endpoint
+         *     returns a non-2xx status code so load balancers and provisioners can gate
+         *     on it. Used by the Docker HEALTHCHECK and the control-plane wait_for_health.
+         */
+        get: operations["readyz_check_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/health": {
         parameters: {
             query?: never;
@@ -5496,7 +5558,7 @@ export interface components {
             runtime_version?: number | null;
             /**
              * Status
-             * @description Session status (working, idle, completed)
+             * @description Session status (working, active, idle, completed)
              */
             status: string;
             /**
@@ -7809,6 +7871,10 @@ export interface components {
             machine?: string | null;
             /** Provider */
             provider?: string | null;
+            /** Execution Home */
+            execution_home?: string | null;
+            /** Home Label */
+            home_label?: string | null;
             /** Loop Mode */
             loop_mode: string;
             /** Decision */
@@ -7867,7 +7933,9 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "approve_recommended_action" | "not_now";
+            action: "approve_recommended_action" | "reply_to_session" | "not_now";
+            /** Reply Text */
+            reply_text?: string | null;
         };
         /**
          * LoopInboxActionResult
@@ -7904,6 +7972,10 @@ export interface components {
             machine?: string | null;
             /** Provider */
             provider?: string | null;
+            /** Execution Home */
+            execution_home?: string | null;
+            /** Home Label */
+            home_label?: string | null;
             /** Loop Mode */
             loop_mode: string;
             /** Decision */
@@ -8078,7 +8150,7 @@ export interface components {
         };
         /**
          * ManagedLocalSessionLaunchRequest
-         * @description Request to start a managed local Claude session on a runner.
+         * @description Request to start a managed local AI agent session on a runner.
          */
         ManagedLocalSessionLaunchRequest: {
             /**
@@ -8091,6 +8163,12 @@ export interface components {
              * @description Working directory on the source runner
              */
             cwd: string;
+            /**
+             * Provider
+             * @description AI provider CLI to launch (claude or codex)
+             * @default claude
+             */
+            provider: string;
             /**
              * Project
              * @description Optional project label
@@ -8108,7 +8186,7 @@ export interface components {
             git_branch?: string | null;
             /**
              * Display Name
-             * @description Optional Claude display name for the session
+             * @description Optional display name for the session
              */
             display_name?: string | null;
             /**
@@ -8129,6 +8207,8 @@ export interface components {
         ManagedLocalSessionLaunchResponse: {
             /** Session Id */
             session_id: string;
+            /** Provider */
+            provider: string;
             /** Provider Session Id */
             provider_session_id: string;
             execution_home: components["schemas"]["SessionExecutionHome"];
@@ -8142,6 +8222,53 @@ export interface components {
             managed_session_name: string;
             /** Attach Command */
             attach_command: string;
+        };
+        /**
+         * ManagedLocalThisDeviceLaunchRequest
+         * @description Request to start a managed local AI agent session on the calling device.
+         */
+        ManagedLocalThisDeviceLaunchRequest: {
+            /**
+             * Cwd
+             * @description Working directory on this device
+             */
+            cwd: string;
+            /**
+             * Provider
+             * @description AI provider CLI to launch (claude or codex)
+             * @default claude
+             */
+            provider: string;
+            /**
+             * Project
+             * @description Optional project label
+             */
+            project?: string | null;
+            /**
+             * Git Repo
+             * @description Optional git repository path
+             */
+            git_repo?: string | null;
+            /**
+             * Git Branch
+             * @description Optional git branch name
+             */
+            git_branch?: string | null;
+            /**
+             * Display Name
+             * @description Optional display name for the session
+             */
+            display_name?: string | null;
+            /**
+             * @description manual | assist | autopilot
+             * @default manual
+             */
+            loop_mode: components["schemas"]["SessionLoopMode"];
+            /**
+             * Machine Name
+             * @description Optional local Longhouse machine label override used to resolve this device's runner
+             */
+            machine_name?: string | null;
         };
         /**
          * ManagedSessionTransport
@@ -9884,7 +10011,7 @@ export interface components {
             runtime_version?: number | null;
             /**
              * Status
-             * @description Derived runtime status (working, idle, completed)
+             * @description Derived runtime status (working, active, idle, completed)
              */
             status?: string | null;
             /**
@@ -9988,6 +10115,11 @@ export interface components {
              */
             origin_label?: string | null;
             /**
+             * @description Execution home: legacy|managed_local|managed_hosted|cloud_takeover
+             * @default legacy
+             */
+            execution_home: components["schemas"]["SessionExecutionHome"];
+            /**
              * Branched From Event Id
              * @description Event id where this continuation branched
              */
@@ -10004,11 +10136,6 @@ export interface components {
              * @default false
              */
             is_sidechain: boolean;
-            /**
-             * @description Execution home: legacy|managed_local|managed_hosted|cloud_takeover
-             * @default legacy
-             */
-            execution_home: components["schemas"]["SessionExecutionHome"];
             /** @description Managed transport when Longhouse owns the session runtime */
             managed_transport?: components["schemas"]["ManagedSessionTransport"] | null;
             /**
@@ -10021,6 +10148,11 @@ export interface components {
              * @description Runner name for managed local sessions
              */
             source_runner_name?: string | null;
+            /**
+             * Attach Command
+             * @description Local reattach command for managed local tmux sessions
+             */
+            attach_command?: string | null;
             /**
              * @description Session loop mode: manual|assist|autopilot
              * @default manual
@@ -10151,6 +10283,18 @@ export interface components {
             actual_outcome?: string | null;
             /** Shadow Alignment */
             shadow_alignment?: string | null;
+            /** Assistant Turn Finished At */
+            assistant_turn_finished_at?: string | null;
+            /** Turn Loop Enqueued At */
+            turn_loop_enqueued_at?: string | null;
+            /** Turn Loop Completed At */
+            turn_loop_completed_at?: string | null;
+            /** Queue Latency Ms */
+            queue_latency_ms?: number | null;
+            /** Review Latency Ms */
+            review_latency_ms?: number | null;
+            /** Processing Latency Ms */
+            processing_latency_ms?: number | null;
             /**
              * Created At
              * Format: date-time
@@ -10585,6 +10729,49 @@ export interface components {
             /** Events */
             events: components["schemas"]["TimelineEvent"][];
             summary: components["schemas"]["TimelineSummary"];
+        };
+        /** TimelineSessionCardResponse */
+        TimelineSessionCardResponse: {
+            /**
+             * Thread Id
+             * @description Logical thread/task root UUID
+             */
+            thread_id: string;
+            /**
+             * Timeline Anchor At
+             * @description Anchor used for timeline ordering and grouping
+             */
+            timeline_anchor_at?: string | null;
+            head: components["schemas"]["SessionResponse"];
+            detail: components["schemas"]["SessionResponse"];
+            root: components["schemas"]["SessionResponse"];
+            /**
+             * Continuation Count
+             * @description Concrete continuation count in this logical thread
+             */
+            continuation_count: number;
+            /**
+             * Started Origin Label
+             * @description Origin label for where the thread started
+             */
+            started_origin_label?: string | null;
+            /**
+             * Head Origin Label
+             * @description Origin label for the current writable head
+             */
+            head_origin_label?: string | null;
+        };
+        /** TimelineSessionsListResponse */
+        TimelineSessionsListResponse: {
+            /** Sessions */
+            sessions: components["schemas"]["TimelineSessionCardResponse"][];
+            /** Total */
+            total: number;
+            /**
+             * Has Real Sessions
+             * @default true
+             */
+            has_real_sessions: boolean;
         };
         /**
          * TimelineSummary
@@ -15473,6 +15660,40 @@ export interface operations {
             };
         };
     };
+    stream_loop_inbox_oikos_loop_inbox_stream_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_loop_inbox_action_card_by_card_id_oikos_loop_inbox_cards__card_id__get: {
         parameters: {
             query?: {
@@ -18568,6 +18789,41 @@ export interface operations {
             };
         };
     };
+    launch_managed_local_this_device_sessions_managed_local_this_device_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ManagedLocalThisDeviceLaunchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedLocalSessionLaunchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_session_lock_status_sessions__session_id__lock_get: {
         parameters: {
             query?: {
@@ -18841,7 +19097,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SessionsListResponse"];
+                    "application/json": components["schemas"]["TimelineSessionsListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -18968,7 +19224,7 @@ export interface operations {
             query?: {
                 /** @description Filter by project */
                 project?: string | null;
-                /** @description Filter by status (working, idle, completed) */
+                /** @description Filter by status (working, active, idle, completed) */
                 status?: string | null;
                 /** @description Filter by attention (auto) */
                 attention?: string | null;
@@ -19833,7 +20089,7 @@ export interface operations {
             query?: {
                 /** @description Filter by project */
                 project?: string | null;
-                /** @description Filter by status (working, idle, completed) */
+                /** @description Filter by status (working, active, idle, completed) */
                 status?: string | null;
                 /** @description Filter by attention (auto) */
                 attention?: string | null;
@@ -20807,6 +21063,26 @@ export interface operations {
         };
     };
     livez_check_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    readyz_check_get: {
         parameters: {
             query?: never;
             header?: never;

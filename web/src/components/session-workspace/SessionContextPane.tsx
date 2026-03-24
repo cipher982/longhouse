@@ -69,6 +69,17 @@ function formatRecommendedAction(value: string | null): string | null {
     .join(" ");
 }
 
+function formatLatency(value: number | null): string | null {
+  if (value == null || !Number.isFinite(value) || value < 0) {
+    return null;
+  }
+  if (value < 1000) {
+    return `${Math.round(value)} ms`;
+  }
+  const seconds = value / 1000;
+  return `${seconds >= 10 ? seconds.toFixed(0) : seconds.toFixed(1)} s`;
+}
+
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="session-context-meta-row">
@@ -110,6 +121,9 @@ export function SessionContextPane({
   const recommendedAction = formatRecommendedAction(latestTurnReview?.recommendedAction ?? null);
   const actualOutcome = formatRecommendedAction(latestTurnReview?.actualOutcome ?? null);
   const followUpPrompt = latestTurnReview?.followUpPrompt?.trim() || null;
+  const queueLatency = formatLatency(latestTurnReview?.queueLatencyMs ?? null);
+  const reviewLatency = formatLatency(latestTurnReview?.reviewLatencyMs ?? null);
+  const processingLatency = formatLatency(latestTurnReview?.processingLatencyMs ?? null);
   const runtime = resolveSessionRuntimeState(session);
   const executionHomeLabel =
     session.execution_home === "legacy" ? null : getExecutionHomeLabel(session.execution_home);
@@ -252,6 +266,15 @@ export function SessionContextPane({
             ) : null}
             {actualOutcome ? (
               <div className="session-shadow-review__meta">Live outcome: {actualOutcome}</div>
+            ) : null}
+            {reviewLatency ? (
+              <div className="session-shadow-review__meta">Review recorded in {reviewLatency}</div>
+            ) : null}
+            {queueLatency ? (
+              <div className="session-shadow-review__meta">Queue delay before turn-loop: {queueLatency}</div>
+            ) : null}
+            {processingLatency ? (
+              <div className="session-shadow-review__meta">Turn-loop processing time: {processingLatency}</div>
             ) : null}
             {latestTurnReview.turnExcerpt ? (
               <div className="session-shadow-review__mode">{latestTurnReview.turnExcerpt}</div>
