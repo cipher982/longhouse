@@ -22,7 +22,6 @@ DISPLAY_NAME="Hosted Managed Local Claude Stress"
 LOOP_MODE="assist"
 CHAT_TIMEOUT_SECS="180"
 VERIFY_TIMEOUT_SECS="30"
-SSH_TARGET="zerg"
 MACHINE_NAME="${MACHINE_NAME:-}"
 if [[ -z "$MACHINE_NAME" && -f "$HOME/.claude/longhouse-machine-name" ]]; then
   MACHINE_NAME="$(tr -d '\r\n' < "$HOME/.claude/longhouse-machine-name")"
@@ -35,7 +34,7 @@ Usage:
 
 Launch a real hosted managed-local Claude session on this device, then send
 repeated simple one-line prompts through the real `/api/sessions/{id}/chat`
-route and verify each turn against hosted session events.
+route and verify each turn against the live tmux pane ground truth.
 
 Requirements:
   - CONTROL_PLANE_ADMIN_TOKEN or ADMIN_TOKEN
@@ -52,8 +51,7 @@ Options:
   --display-name <name>     Display name for launch
   --loop-mode <mode>        manual|assist|autopilot (default: assist)
   --chat-timeout-secs <n>   Per-turn SSE read timeout (default: 180)
-  --verify-timeout-secs <n> Poll timeout for hosted events verification (default: 30)
-  --ssh-target <host>       SSH target for hosted SQLite fallback (default: zerg)
+  --verify-timeout-secs <n> Poll timeout for tmux-pane verification (default: 30)
   --machine-name <name>     Optional explicit Longhouse machine label override
   -h, --help                Show help
 EOF
@@ -109,11 +107,6 @@ while (($# > 0)); do
     --verify-timeout-secs)
       [[ -n "${2:-}" ]] || { echo "--verify-timeout-secs requires a value" >&2; exit 1; }
       VERIFY_TIMEOUT_SECS="$2"
-      shift 2
-      ;;
-    --ssh-target)
-      [[ -n "${2:-}" ]] || { echo "--ssh-target requires a value" >&2; exit 1; }
-      SSH_TARGET="$2"
       shift 2
       ;;
     --machine-name)
@@ -175,7 +168,6 @@ export LH_STRESS_DISPLAY_NAME="$DISPLAY_NAME"
 export LH_STRESS_LOOP_MODE="$LOOP_MODE"
 export LH_STRESS_CHAT_TIMEOUT_SECS="$CHAT_TIMEOUT_SECS"
 export LH_STRESS_VERIFY_TIMEOUT_SECS="$VERIFY_TIMEOUT_SECS"
-export LH_STRESS_SSH_TARGET="$SSH_TARGET"
 export LH_STRESS_MACHINE_NAME="$MACHINE_NAME"
 
 cd "$ROOT_DIR"
@@ -185,16 +177,20 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import re
 import shlex
 import shutil
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from typing import Iterable
 from typing import Iterator
 
 import httpx
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
+from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
+from zerg.services.managed_local_tmux import build_tmux_capture_command
+from zerg.services.managed_local_tmux import build_tmux_has_session_command
 
 
 @dataclass(frozen=True)
@@ -234,117 +230,139 @@ def build_prompts(*, count: int, prefix: str) -> list[tuple[str, str]]:
     return prompts
 
 
-def fetch_events_via_api(*, client: httpx.Client, api_url: str, device_token: str, session_id: str) -> list[dict]:
-    response = client.get(
-        f"{api_url.rstrip('/')}/api/agents/sessions/{session_id}/events",
-        headers={"X-Agents-Token": device_token},
-        params={"limit": 1000, "branch_mode": "head", "context_mode": "forensic"},
-    )
-    response.raise_for_status()
-    payload = response.json()
-    events = payload.get("events", [])
-    if not isinstance(events, list):
-        raise RuntimeError("Events payload missing list")
-    return events
-
-
-def fetch_events_via_ssh(*, ssh_target: str, subdomain: str, session_id: str, prompt: str, token: str) -> list[dict]:
-    if shutil.which("ssh") is None:
-        raise RuntimeError("ssh is not available for hosted fallback verification")
-
-    remote_script = f"""
-python3 - <<'__LH_REMOTE_PY__'
-import json
-import sqlite3
-
-session_id = {session_id!r}
-prompt = {prompt!r}
-token = {token!r}
-conn = sqlite3.connect('/data/longhouse.db')
-conn.row_factory = sqlite3.Row
-rows = conn.execute(
-    \"\"\"
-    SELECT id, role, content_text
-    FROM events
-    WHERE session_id = ?
-      AND (
-        (role = 'user' AND content_text = ?)
-        OR
-        (role = 'assistant' AND instr(content_text, ?) > 0)
-      )
-    ORDER BY id DESC
-    LIMIT 100
-    \"\"\",
-    [session_id, prompt, token],
-).fetchall()
-print(json.dumps([dict(row) for row in rows]))
-__LH_REMOTE_PY__
-"""
-    container_name = f"longhouse-{subdomain}"
-    completed = subprocess.run(
-        [
-            "ssh",
-            ssh_target,
-            f"docker exec -i {shlex.quote(container_name)} bash -lc {shlex.quote(remote_script)}",
-        ],
+def _run_local_shell(command: str, *, timeout: float = 20.0) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        shell=True,
+        executable="/bin/zsh",
         capture_output=True,
         text=True,
         check=False,
+        timeout=timeout,
     )
-    if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "hosted ssh fallback failed")
-    payload = json.loads(completed.stdout)
-    if not isinstance(payload, list):
-        raise RuntimeError("hosted ssh fallback returned invalid payload")
-    return payload
 
 
-def fetch_events(
+def _parse_tmux_tmpdir_from_attach_command(attach_command: str) -> str | None:
+    parts = shlex.split(attach_command)
+    if len(parts) < 3 or parts[0] != "zsh" or parts[1] != "-lc":
+        return None
+    inner = parts[2]
+    match = re.search(r"(^|;)\s*export TMUX_TMPDIR=(.+?)(?=;|$)", inner)
+    if match is None:
+        return None
+    assignment = shlex.split(f"TMUX_TMPDIR={match.group(2)}")
+    if len(assignment) != 1 or not assignment[0].startswith("TMUX_TMPDIR="):
+        return None
+    value = assignment[0].split("=", 1)[1].strip()
+    return value or None
+
+
+def _tmux_wrapped_command(*, tmux_tmpdir: str | None, tmux_command: str) -> str:
+    inner = [build_managed_local_shell_prelude(tmux_tmpdir=tmux_tmpdir), tmux_command]
+    return f"zsh -lc {shlex.quote('; '.join(inner))}"
+
+
+def _run_tmux_action(*, session_name: str, tmux_tmpdir: str | None, args: list[str], timeout: float = 15.0) -> subprocess.CompletedProcess[str]:
+    tmux_command = " ".join(
+        [f"tmux -L {shlex.quote(MANAGED_LOCAL_TMUX_SERVER_LABEL)}"]
+        + [shlex.quote(part) for part in args]
+    )
+    return _run_local_shell(_tmux_wrapped_command(tmux_tmpdir=tmux_tmpdir, tmux_command=tmux_command), timeout=timeout)
+
+
+def _has_tmux_session(*, session_name: str, tmux_tmpdir: str | None) -> bool:
+    completed = _run_local_shell(
+        build_tmux_has_session_command(session_name=session_name, tmux_tmpdir=tmux_tmpdir),
+        timeout=10.0,
+    )
+    return completed.returncode == 0
+
+
+def _capture_tmux_pane(*, session_name: str, tmux_tmpdir: str | None, lines: int = 200) -> str:
+    completed = _run_local_shell(
+        build_tmux_capture_command(session_name=session_name, lines=lines, tmux_tmpdir=tmux_tmpdir),
+        timeout=15.0,
+    )
+    return (completed.stdout or completed.stderr or "").strip()
+
+
+def _handle_known_gate(*, session_name: str, tmux_tmpdir: str | None, pane: str) -> str | None:
+    if "Choose the text style" in pane:
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "Enter"])
+        return "theme"
+    if "Press Enter to continue" in pane:
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "Enter"])
+        return "security_notes"
+    if "Yes, I trust this folder" in pane:
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "Enter"])
+        return "trust_workspace"
+    if "Bypass Permissions mode" in pane and "Yes, I accept" in pane:
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "2"])
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "Enter"])
+        return "bypass_permissions"
+    return None
+
+
+def _pane_is_ready(pane: str) -> bool:
+    if "❯" not in pane:
+        return False
+    blocked_markers = (
+        "Choose the text style",
+        "Press Enter to continue",
+        "Yes, I trust this folder",
+        "Bypass Permissions mode",
+    )
+    return not any(marker in pane for marker in blocked_markers)
+
+
+def _pane_contains_exact_token_line(pane: str, token: str) -> bool:
+    return any(line.strip() == token for line in pane.splitlines())
+
+
+def _wait_for_ready_prompt(*, session_name: str, tmux_tmpdir: str | None, timeout_secs: float) -> tuple[str, list[str]]:
+    deadline = time.monotonic() + timeout_secs
+    handled: list[str] = []
+    last_pane = ""
+    while time.monotonic() < deadline:
+        pane = _capture_tmux_pane(session_name=session_name, tmux_tmpdir=tmux_tmpdir)
+        last_pane = pane
+        action = _handle_known_gate(session_name=session_name, tmux_tmpdir=tmux_tmpdir, pane=pane)
+        if action is not None:
+            handled.append(action)
+            time.sleep(2.0)
+            continue
+        if _pane_is_ready(pane):
+            return pane, handled
+        time.sleep(1.0)
+    raise RuntimeError(
+        "Claude never reached a usable idle prompt.\n"
+        f"Handled gates: {handled}\n"
+        f"Last pane:\n{last_pane[-4000:]}"
+    )
+
+
+def _wait_for_turn_in_tmux(
     *,
-    client: httpx.Client,
-    api_url: str,
-    device_token: str,
-    session_id: str,
-    ssh_target: str,
-    subdomain: str,
+    session_name: str,
+    tmux_tmpdir: str | None,
     prompt: str,
     token: str,
-) -> list[dict]:
-    try:
-        return fetch_events_via_api(
-            client=client,
-            api_url=api_url,
-            device_token=device_token,
-            session_id=session_id,
-        )
-    except Exception:
-        return fetch_events_via_ssh(
-            ssh_target=ssh_target,
-            subdomain=subdomain,
-            session_id=session_id,
-            prompt=prompt,
-            token=token,
-        )
-
-
-def count_exact_user_events(events: list[dict], prompt: str) -> int:
-    return sum(1 for event in events if event.get("role") == "user" and event.get("content_text") == prompt)
-
-
-def summarize_new_batch(events: list[dict], *, after_event_id: int, prompt: str, token: str) -> tuple[int, list[str], int]:
-    exact_user = 0
-    assistant_messages: list[str] = []
-    max_event_id = after_event_id
-    for event in events:
-        event_id = int(event.get("id") or 0)
-        if event_id <= after_event_id:
-            continue
-        max_event_id = max(max_event_id, event_id)
-        if event.get("role") == "user" and event.get("content_text") == prompt:
-            exact_user += 1
-        if event.get("role") == "assistant" and event.get("content_text") and token in str(event["content_text"]):
-            assistant_messages.append(str(event["content_text"]))
-    return exact_user, assistant_messages, max_event_id
+    timeout_secs: float,
+) -> tuple[str, bool, bool]:
+    deadline = time.monotonic() + timeout_secs
+    last_pane = ""
+    while time.monotonic() < deadline:
+        pane = _capture_tmux_pane(session_name=session_name, tmux_tmpdir=tmux_tmpdir)
+        last_pane = pane
+        prompt_seen = prompt in pane
+        token_seen = _pane_contains_exact_token_line(pane, token)
+        if prompt_seen and token_seen and _pane_is_ready(pane):
+            return pane, prompt_seen, token_seen
+        time.sleep(1.0)
+    raise RuntimeError(
+        f"Timed out waiting for Claude tmux confirmation for token {token}.\n"
+        f"Last pane:\n{last_pane[-4000:]}"
+    )
 
 
 def main() -> int:
@@ -362,7 +380,9 @@ def main() -> int:
     chat_timeout_secs = float(os.environ["LH_STRESS_CHAT_TIMEOUT_SECS"])
     verify_timeout_secs = float(os.environ["LH_STRESS_VERIFY_TIMEOUT_SECS"])
     machine_name = os.environ.get("LH_STRESS_MACHINE_NAME", "").strip()
-    ssh_target = os.environ.get("LH_STRESS_SSH_TARGET", "zerg").strip() or "zerg"
+
+    if shutil.which("tmux") is None:
+        raise RuntimeError("tmux is required for hosted managed-local Claude tmux verification")
 
     timeout = httpx.Timeout(connect=20.0, read=chat_timeout_secs, write=20.0, pool=20.0)
     with httpx.Client(timeout=timeout) as client:
@@ -389,28 +409,37 @@ def main() -> int:
             raise RuntimeError(f"launch status={launch.status_code} body={launch.text[:400]}")
         launch_payload = launch.json()
         session_id = str(launch_payload["session_id"])
+        session_name = str(launch_payload["managed_session_name"])
+        attach_command = str(launch_payload["attach_command"])
+        tmux_tmpdir = _parse_tmux_tmpdir_from_attach_command(attach_command)
         print(f"Tenant: {subdomain}")
         print(f"Session: {session_id}")
-        print(f"Attach: {launch_payload['attach_command']}")
+        print(f"Tmux session: {session_name}")
+        if tmux_tmpdir:
+            print(f"TMUX_TMPDIR: {tmux_tmpdir}")
+        print(f"Attach: {attach_command}")
+
+        session_deadline = time.monotonic() + verify_timeout_secs
+        while time.monotonic() < session_deadline:
+            if _has_tmux_session(session_name=session_name, tmux_tmpdir=tmux_tmpdir):
+                break
+            time.sleep(1.0)
+        else:
+            raise RuntimeError(f"tmux session {session_name!r} never appeared")
+
+        ready_pane, handled_gates = _wait_for_ready_prompt(
+            session_name=session_name,
+            tmux_tmpdir=tmux_tmpdir,
+            timeout_secs=verify_timeout_secs,
+        )
+        print(f"Ready: yes handled_gates={','.join(handled_gates) if handled_gates else 'none'}")
+        if ready_pane:
+            print(f"Initial pane tail:\n{ready_pane[-600:]}")
 
         prompts = build_prompts(count=turn_count, prefix=prompt_prefix)
 
         for idx, (prompt, token) in enumerate(prompts, start=1):
-            before_events = fetch_events(
-                client=client,
-                api_url=api_url,
-                device_token=device_token,
-                session_id=session_id,
-                ssh_target=ssh_target,
-                subdomain=subdomain,
-                prompt=prompt,
-                token=token,
-            )
-            before_exact = count_exact_user_events(before_events, prompt)
-            before_event_id = max((int(event.get("id") or 0) for event in before_events), default=0)
-
             sse_error = None
-            done_payload = None
             status_code = 0
             try:
                 with client.stream(
@@ -431,72 +460,38 @@ def main() -> int:
                                 sse_error = str(parsed.get("error") or event.data)
                             except json.JSONDecodeError:
                                 sse_error = event.data
-                        elif event.event == "done":
-                            try:
-                                parsed_done = json.loads(event.data)
-                                if isinstance(parsed_done, dict):
-                                    done_payload = parsed_done
-                            except json.JSONDecodeError:
-                                done_payload = {"raw": event.data}
             except Exception as exc:
                 sse_error = f"{type(exc).__name__}: {exc}"
+            tmux_error = None
+            prompt_seen = False
+            token_seen = False
+            pane_tail = ""
+            if status_code == 200 and sse_error is None:
+                try:
+                    pane, prompt_seen, token_seen = _wait_for_turn_in_tmux(
+                        session_name=session_name,
+                        tmux_tmpdir=tmux_tmpdir,
+                        prompt=prompt,
+                        token=token,
+                        timeout_secs=verify_timeout_secs,
+                    )
+                    pane_tail = pane[-800:]
+                except Exception as exc:
+                    tmux_error = f"{type(exc).__name__}: {exc}"
+                    pane_tail = _capture_tmux_pane(session_name=session_name, tmux_tmpdir=tmux_tmpdir)[-1200:]
 
-            deadline = time.monotonic() + verify_timeout_secs
-            exact_in_new_batch = 0
-            assistant_messages: list[str] = []
-            after_event_id = before_event_id
-            while time.monotonic() < deadline:
-                after_events = fetch_events(
-                    client=client,
-                    api_url=api_url,
-                    device_token=device_token,
-                    session_id=session_id,
-                    ssh_target=ssh_target,
-                    subdomain=subdomain,
-                    prompt=prompt,
-                    token=token,
-                )
-                exact_in_new_batch, assistant_messages, after_event_id = summarize_new_batch(
-                    after_events,
-                    after_event_id=before_event_id,
-                    prompt=prompt,
-                    token=token,
-                )
-                if exact_in_new_batch == 1 and (assistant_messages or (done_payload and int(done_payload.get("persisted_events", 0)) > 0)):
-                    break
-                time.sleep(1.0)
-
-            total_exact = count_exact_user_events(
-                fetch_events(
-                    client=client,
-                    api_url=api_url,
-                    device_token=device_token,
-                    session_id=session_id,
-                    ssh_target=ssh_target,
-                    subdomain=subdomain,
-                    prompt=prompt,
-                    token=token,
-                ),
-                prompt,
-            )
-            persisted_events = int(done_payload.get("persisted_events", 0)) if isinstance(done_payload, dict) else 0
-            ok = (
-                status_code == 200
-                and sse_error is None
-                and exact_in_new_batch == 1
-                and total_exact == before_exact + 1
-                and (assistant_messages or persisted_events > 0)
-            )
+            ok = status_code == 200 and sse_error is None and tmux_error is None and prompt_seen and token_seen
             label = "ok" if ok else "fail"
             print(
                 f"[{idx}/{len(prompts)}] {label} status={status_code} prompt={prompt!r} "
-                f"token={token} new_exact={exact_in_new_batch} total_exact={total_exact} persisted={persisted_events} "
-                f"assistant_events={len(assistant_messages)}"
+                f"token={token} tmux_prompt_seen={int(prompt_seen)} tmux_token_seen={int(token_seen)}"
             )
-            if assistant_messages:
-                print(f"  assistant: {assistant_messages[0][:160]}")
             if sse_error:
                 print(f"  sse_error: {sse_error}")
+            if tmux_error:
+                print(f"  tmux_error: {tmux_error}")
+            if pane_tail:
+                print(f"  pane_tail:\n{pane_tail}")
             if not ok:
                 return 1
             if delay_secs:
