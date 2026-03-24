@@ -27,6 +27,7 @@ import os
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
+from uuid import UUID
 from uuid import uuid4
 
 from fastapi import APIRouter
@@ -54,6 +55,7 @@ from zerg.services.session_runtime import coerce_session_uuid
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+from zerg.services.write_serializer import get_write_serializer
 from zerg.surfaces.adapters.operator import OperatorSurfaceAdapter
 from zerg.utils.time import UTCBaseModel
 
@@ -176,6 +178,20 @@ def _build_presence_wakeup_key(payload: PresenceIn, tool_name: str | None) -> st
     return f"presence:{payload.session_id}:{payload.state}:{normalized_tool}"
 
 
+async def _persist_wakeup(fallback_db: Session, **kwargs: object) -> None:
+    """Write a wakeup ledger row via the serializer (or fallback session)."""
+    ws = get_write_serializer()
+    if ws.is_configured:
+
+        def _do(wdb: Session) -> None:
+            append_wakeup(wdb, **kwargs)  # type: ignore[arg-type]
+
+        await ws.execute(_do, label="wakeup-ledger")
+    else:
+        append_wakeup(fallback_db, **kwargs)  # type: ignore[arg-type]
+        fallback_db.commit()
+
+
 async def _maybe_invoke_operator_wakeup(
     *,
     db: Session,
@@ -192,7 +208,7 @@ async def _maybe_invoke_operator_wakeup(
     wakeup_key = _build_presence_wakeup_key(payload, tool_name)
     owner_id = _resolve_owner_id(db, token)
     if owner_id is None:
-        append_wakeup(
+        await _persist_wakeup(
             db,
             owner_id=None,
             source="presence",
@@ -204,12 +220,11 @@ async def _maybe_invoke_operator_wakeup(
             wakeup_key=wakeup_key,
             payload=surface_payload,
         )
-        db.commit()
         logger.debug("Skipping operator wakeup for session %s: no owner resolved", payload.session_id)
         return
     policy = get_operator_policy(db, owner_id)
     if not policy.enabled:
-        append_wakeup(
+        await _persist_wakeup(
             db,
             owner_id=owner_id,
             source="presence",
@@ -221,7 +236,6 @@ async def _maybe_invoke_operator_wakeup(
             wakeup_key=wakeup_key,
             payload=surface_payload,
         )
-        db.commit()
         logger.debug(
             "Skipping operator wakeup for session %s: operator mode disabled for owner %s",
             payload.session_id,
@@ -257,7 +271,7 @@ async def _maybe_invoke_operator_wakeup(
             surface_adapter=OperatorSurfaceAdapter(owner_id=owner_id),
             surface_payload=ledger_payload,
         )
-        append_wakeup(
+        await _persist_wakeup(
             db,
             owner_id=owner_id,
             source="presence",
@@ -269,9 +283,8 @@ async def _maybe_invoke_operator_wakeup(
             run_id=run_id,
             payload=ledger_payload,
         )
-        db.commit()
     except Exception:
-        append_wakeup(
+        await _persist_wakeup(
             db,
             owner_id=owner_id,
             source="presence",
@@ -283,7 +296,6 @@ async def _maybe_invoke_operator_wakeup(
             wakeup_key=wakeup_key,
             payload=ledger_payload,
         )
-        db.commit()
         logger.exception("Failed to invoke operator wakeup for session %s", payload.session_id)
 
 
@@ -339,53 +351,53 @@ async def upsert_presence(
     runtime_dedupe_key = payload.dedupe_key or (
         f"presence:{payload.session_id}:{payload.state}:{effective_tool_name or '-'}:{now.isoformat()}"
     )
-    ingest_runtime_events(
-        db,
-        [
-            RuntimeEventIngest(
-                runtime_key=runtime_key,
-                session_id=coerce_session_uuid(payload.session_id),
-                provider=runtime_provider,
-                device_id=getattr(_token, "device_id", None),
-                source="claude_hook",
-                kind="phase_signal",
-                phase=payload.state,
-                tool_name=effective_tool_name,
-                occurred_at=now,
-                freshness_ms=phase_freshness_ms(payload.state),
-                dedupe_key=runtime_dedupe_key,
-                payload={},
-            )
-        ],
+    # Build runtime event for serialized write
+    runtime_event = RuntimeEventIngest(
+        runtime_key=runtime_key,
+        session_id=coerce_session_uuid(payload.session_id),
+        provider=runtime_provider,
+        device_id=getattr(_token, "device_id", None),
+        source="claude_hook",
+        kind="phase_signal",
+        phase=payload.state,
+        tool_name=effective_tool_name,
+        occurred_at=now,
+        freshness_ms=phase_freshness_ms(payload.state),
+        dedupe_key=runtime_dedupe_key,
+        payload={},
     )
 
-    # Auto-resume snoozed sessions on genuine work-restart signals only.
-    # blocked/needs_user are pause states — user must come back deliberately.
-    if payload.state in _AUTO_RESUME_STATES:
-        try:
-            from uuid import UUID
+    # Bundle runtime-event ingest + auto-resume into one serialized write.
+    auto_resume = payload.state in _AUTO_RESUME_STATES
+    _session_id_str = payload.session_id
+    _now = now
 
-            session_uuid = UUID(payload.session_id)
-            db.query(AgentSession).filter(
-                AgentSession.id == session_uuid,
-                AgentSession.user_state == "snoozed",
-            ).update(
-                {"user_state": "active", "user_state_at": now},
-                synchronize_session=False,
-            )
-        except (ValueError, AttributeError):
-            pass  # session_id not a valid UUID — skip silently
+    def _do_presence_writes(write_db: Session) -> None:
+        ingest_runtime_events(write_db, [runtime_event])
+        if auto_resume:
+            try:
+                session_uuid = UUID(_session_id_str)
+                write_db.query(AgentSession).filter(
+                    AgentSession.id == session_uuid,
+                    AgentSession.user_state == "snoozed",
+                ).update(
+                    {"user_state": "active", "user_state_at": _now},
+                    synchronize_session=False,
+                )
+            except (ValueError, AttributeError):
+                pass
 
-    db.commit()
+    ws = get_write_serializer()
+    if ws.is_configured:
+        await ws.execute(_do_presence_writes, label="presence")
+    else:
+        _do_presence_writes(db)
+        db.commit()
+
     if payload.state in _OPERATOR_WAKE_STATES and not should_wake_operator and operator_master_switch_enabled():
         owner_id = _resolve_owner_id(db, _token)
         if owner_id is not None and get_operator_policy(db, owner_id).enabled:
-            wakeup_payload = _build_operator_surface_payload(
-                payload=payload,
-                project=project,
-                tool_name=effective_tool_name,
-            )
-            append_wakeup(
+            await _persist_wakeup(
                 db,
                 owner_id=owner_id,
                 source="presence",
@@ -395,9 +407,12 @@ async def upsert_presence(
                 session_id=payload.session_id,
                 conversation_id=_OPERATOR_CONVERSATION_ID,
                 wakeup_key=_build_presence_wakeup_key(payload, effective_tool_name),
-                payload=wakeup_payload,
+                payload=_build_operator_surface_payload(
+                    payload=payload,
+                    project=project,
+                    tool_name=effective_tool_name,
+                ),
             )
-            db.commit()
     if should_wake_operator:
         await _maybe_invoke_operator_wakeup(
             db=db,
