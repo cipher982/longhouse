@@ -42,6 +42,7 @@ from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentEvent
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
+from zerg.request_urls import get_request_public_base_url
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_BLOCKED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
@@ -1294,7 +1295,7 @@ async def launch_managed_local(
     Supports both Claude and Codex providers. The tmux transport is
     provider-agnostic — Longhouse owns the launch, lifecycle, and input routing.
     """
-    hook_url = str(request.base_url).rstrip("/")
+    hook_url = get_request_public_base_url(request)
     try:
         result = await launch_managed_local_session(
             db,
@@ -1337,7 +1338,7 @@ async def launch_managed_local_this_device(
     machine_name = (body.machine_name or "").strip() or str(getattr(device_token, "device_id", "") or "").strip()
     if not machine_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not determine this device name")
-    hook_url = str(request.base_url).rstrip("/")
+    hook_url = get_request_public_base_url(request)
 
     try:
         result = await launch_managed_local_session(

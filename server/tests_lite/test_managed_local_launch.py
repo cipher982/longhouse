@@ -532,6 +532,51 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             api_app_ref.dependency_overrides = {}
 
 
+def test_launch_managed_local_this_device_prefers_forwarded_https_hook_url(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        runner.name = "cinder"
+        db.commit()
+        db.refresh(runner)
+
+        device_token = SimpleNamespace(owner_id=user.id, device_id="cinder", id="token-1")
+        client, api_app_ref = _make_device_client(db, device_token)
+        dispatcher = _FakeDispatcher(preflight_tmux_tmpdir="/tmp/lh-managed-launch")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                headers={
+                    "X-Agents-Token": "zdt_test_token",
+                    "host": "david010.longhouse.ai",
+                    "x-forwarded-proto": "https",
+                },
+                json={
+                    "machine_name": "cinder",
+                    "cwd": "/Users/davidrose/git/zeta/hiring",
+                    "project": "hiring",
+                    "display_name": "Hiring session",
+                    "loop_mode": "assist",
+                },
+            )
+            assert response.status_code == 200, response.text
+            launch_inner = _inner_command(dispatcher.calls[2]["command"])
+            assert "export LONGHOUSE_HOOK_URL=https://david010.longhouse.ai" in launch_inner
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
     """Launching with provider=codex creates a codex session with codex-specific preflight."""
     session_local = _make_db(tmp_path)

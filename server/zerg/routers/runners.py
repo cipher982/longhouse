@@ -31,6 +31,7 @@ from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import User
+from zerg.request_urls import get_request_public_base_url
 from zerg.schemas.runner_schemas import EnrollTokenResponse
 from zerg.schemas.runner_schemas import RunnerDoctorResponse
 from zerg.schemas.runner_schemas import RunnerJobListResponse
@@ -548,7 +549,7 @@ def create_enroll_token(
     else:
         # In local/demo environments, derive the canonical URL from the current request
         # so runner enrollment still works without APP_PUBLIC_URL.
-        api_url = str(request.base_url).rstrip("/")
+        api_url = get_request_public_base_url(request)
 
     runner_image = settings.runner_docker_image
     requested_capabilities = "exec.full"
