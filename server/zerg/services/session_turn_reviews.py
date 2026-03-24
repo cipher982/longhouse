@@ -140,7 +140,8 @@ def _is_managed_local_codex_session(session: AgentSession) -> bool:
 
 
 def _supports_same_session_continue(session: AgentSession) -> bool:
-    return (session.provider or "").strip().lower() == "claude"
+    provider = (session.provider or "").strip().lower()
+    return provider == "claude" or _is_managed_local_codex_session(session)
 
 
 def _resume_backend_for_session(session: AgentSession) -> str | None:
@@ -1243,9 +1244,6 @@ async def approve_pending_turn_review(
             actual_outcome="failed",
         )
         raise RuntimeError("missing_session")
-    if _is_managed_local_codex_session(session):
-        raise ValueError("Managed-local Codex follow-ups are terminal-driven right now; open the full session instead.")
-
     job: CommisJob | None
     if str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value:
         sent = await _continue_managed_local_session(db=db, review=review, session=session)
@@ -1315,9 +1313,6 @@ async def reply_to_pending_turn_review(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         raise ValueError("reply is only supported for managed local sessions")
-    if _is_managed_local_codex_session(session):
-        raise ValueError("Managed-local Codex follow-ups are terminal-driven right now; open the full session instead.")
-
     clean_reply = str(reply_text or "").strip()
     if not clean_reply:
         raise ValueError("reply text must not be empty")

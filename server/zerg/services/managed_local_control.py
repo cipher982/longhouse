@@ -8,14 +8,18 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionPresence
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_runtime import mark_managed_local_input_sent
+from zerg.services.managed_local_tmux import build_tmux_paste_text_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import ManagedSessionTransport
@@ -49,6 +53,45 @@ def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )
+
+
+def _get_managed_local_presence_updated_at(*, db_bind, session_id: UUID) -> datetime | None:
+    with Session(bind=db_bind) as poll_db:
+        row = poll_db.query(SessionPresence).filter(SessionPresence.session_id == str(session_id)).one_or_none()
+        return row.updated_at if row is not None else None
+
+
+async def await_managed_local_presence_update(
+    *,
+    db_bind,
+    session_id: UUID,
+    after_updated_at: datetime | None,
+    timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
+    poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
+) -> SessionPresence | None:
+    """Wait until a managed-local session gets a newer presence update."""
+
+    def _to_utc_timestamp(value: datetime | None) -> float | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc).timestamp()
+        return value.timestamp()
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    baseline_ts = _to_utc_timestamp(after_updated_at)
+
+    while loop.time() < deadline:
+        with Session(bind=db_bind) as poll_db:
+            row = poll_db.query(SessionPresence).filter(SessionPresence.session_id == str(session_id)).one_or_none()
+            if row is not None and row.updated_at is not None:
+                row_ts = _to_utc_timestamp(row.updated_at)
+                if baseline_ts is None or (row_ts is not None and row_ts > baseline_ts):
+                    return row
+        await asyncio.sleep(poll_interval_secs)
+
+    return None
 
 
 async def await_managed_local_turn_events(
@@ -106,11 +149,6 @@ async def send_text_to_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
-    if str(getattr(session, "provider", "") or "").strip().lower() == "codex":
-        return ManagedLocalSendResult(
-            ok=False,
-            error="Managed-local Codex is terminal-driven right now; attach locally instead of sending web input.",
-        )
     if str(getattr(session, "managed_transport", "") or "").strip() != ManagedSessionTransport.TMUX.value:
         return ManagedLocalSendResult(ok=False, error="Managed local session does not use tmux transport")
     if not getattr(session, "source_runner_id", None):
@@ -118,17 +156,27 @@ async def send_text_to_managed_local_session(
     if not getattr(session, "managed_session_name", None):
         return ManagedLocalSendResult(ok=False, error="Managed local session is missing tmux metadata")
 
+    provider = str(getattr(session, "provider", "") or "").strip().lower()
     baseline_event_id = get_managed_local_latest_event_id(db=db, session_id=session.id)
+    baseline_presence_updated_at = _get_managed_local_presence_updated_at(db_bind=db.get_bind(), session_id=session.id)
+    if provider == "codex":
+        command = build_tmux_paste_text_command(
+            session_name=str(session.managed_session_name),
+            text=text,
+            tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
+        )
+    else:
+        command = build_tmux_send_text_command(
+            session_name=str(session.managed_session_name),
+            text=text,
+            tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
+        )
     dispatcher = get_runner_job_dispatcher()
     result = await dispatcher.dispatch_job(
         db=db,
         owner_id=owner_id,
         runner_id=int(session.source_runner_id),
-        command=build_tmux_send_text_command(
-            session_name=str(session.managed_session_name),
-            text=text,
-            tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
-        ),
+        command=command,
         timeout_secs=timeout_secs,
         commis_id=commis_id,
         run_id=None,
@@ -153,20 +201,39 @@ async def send_text_to_managed_local_session(
         )
 
     if verify_turn_started:
-        persisted_events = await await_managed_local_turn_events(
-            db_bind=db.get_bind(),
-            session_id=session.id,
-            after_event_id=baseline_event_id,
-            timeout_secs=float(verification_timeout_secs if verification_timeout_secs is not None else MANAGED_LOCAL_EVENT_TIMEOUT_SECS),
+        verification_timeout = float(
+            verification_timeout_secs if verification_timeout_secs is not None else MANAGED_LOCAL_EVENT_TIMEOUT_SECS
         )
-        if not persisted_events:
-            return ManagedLocalSendResult(
-                ok=False,
-                exit_code=0,
-                baseline_event_id=baseline_event_id,
-                error="Managed local session did not produce new timeline events after send",
-                verified_turn_started=False,
+        if provider == "codex":
+            presence = await await_managed_local_presence_update(
+                db_bind=db.get_bind(),
+                session_id=session.id,
+                after_updated_at=baseline_presence_updated_at,
+                timeout_secs=verification_timeout,
             )
+            if presence is None:
+                return ManagedLocalSendResult(
+                    ok=False,
+                    exit_code=0,
+                    baseline_event_id=baseline_event_id,
+                    error="Managed local Codex session did not acknowledge the prompt after send",
+                    verified_turn_started=False,
+                )
+        else:
+            persisted_events = await await_managed_local_turn_events(
+                db_bind=db.get_bind(),
+                session_id=session.id,
+                after_event_id=baseline_event_id,
+                timeout_secs=verification_timeout,
+            )
+            if not persisted_events:
+                return ManagedLocalSendResult(
+                    ok=False,
+                    exit_code=0,
+                    baseline_event_id=baseline_event_id,
+                    error="Managed local session did not produce new timeline events after send",
+                    verified_turn_started=False,
+                )
 
     mark_managed_local_input_sent(
         db,

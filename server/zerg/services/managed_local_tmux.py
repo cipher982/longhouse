@@ -193,3 +193,27 @@ def build_tmux_send_text_command(*, session_name: str, text: str, tmux_tmpdir: s
             commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} -l -- {_quote(line)}")
         commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} Enter")
     return _wrap_managed_local_shell_command(" && ".join(commands), tmux_tmpdir=tmux_tmpdir)
+
+
+def build_tmux_paste_text_command(*, session_name: str, text: str, tmux_tmpdir: str | None = None) -> str:
+    """Build a tmux command that pastes text as bracketed paste, then submits.
+
+    Codex's composer distinguishes literal typing from paste handling. Using a
+    named tmux buffer plus `paste-buffer -pr` preserves multiline text inside a
+    bracketed paste transaction, then a final Enter submits the composed turn.
+    """
+
+    name = normalize_tmux_session_name(session_name, prefix="")
+    raw = str(text or "")
+    if not raw.strip():
+        raise ValueError("text must not be empty")
+    normalized = raw.replace("\r\n", "\n").replace("\r", "\n")
+    if normalized.endswith("\n"):
+        normalized = normalized[:-1]
+    buffer_name = normalize_tmux_session_name(f"send-{name}", prefix="")
+    commands = [
+        f"{_tmux_prefix()} set-buffer -b {_quote(buffer_name)} {_quote(normalized)}",
+        f"{_tmux_prefix()} paste-buffer -dpr -b {_quote(buffer_name)} -t {_quote(name)}",
+        f"{_tmux_prefix()} send-keys -t {_quote(name)} Enter",
+    ]
+    return _wrap_managed_local_shell_command(" && ".join(commands), tmux_tmpdir=tmux_tmpdir)

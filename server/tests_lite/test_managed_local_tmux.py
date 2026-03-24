@@ -9,6 +9,7 @@ from zerg.services.managed_local_tmux import build_tmux_current_command_command
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
 from zerg.services.managed_local_tmux import build_tmux_kill_session_command
 from zerg.services.managed_local_tmux import build_tmux_launch_command
+from zerg.services.managed_local_tmux import build_tmux_paste_text_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
 from zerg.services.managed_local_tmux import build_tmux_set_remain_on_exit_command
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
@@ -114,3 +115,17 @@ def test_build_tmux_send_text_command_sends_enter_literal_before_keypress():
     inner = _wrapped_inner(build_tmux_send_text_command(session_name="lh-demo", text="Enter"))
     assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo -l -- Enter" in inner
     assert inner.count(f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo Enter") == 1
+
+
+def test_build_tmux_paste_text_command_uses_named_buffer_and_bracketed_paste():
+    inner = _wrapped_inner(build_tmux_paste_text_command(session_name="lh-demo", text="continue"))
+    assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} set-buffer -b send-lh-demo continue" in inner
+    assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} paste-buffer -dpr -b send-lh-demo -t lh-demo" in inner
+    assert inner.count(f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo Enter") == 1
+
+
+def test_build_tmux_paste_text_command_preserves_multiline_text():
+    inner = _wrapped_inner(build_tmux_paste_text_command(session_name="lh-demo", text="continue\nand run tests"))
+    assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} set-buffer -b send-lh-demo" in inner
+    assert "continue\nand run tests" in inner
+    assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} paste-buffer -dpr -b send-lh-demo -t lh-demo" in inner
