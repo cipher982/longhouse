@@ -38,3 +38,35 @@ def test_managed_local_launch_route_uses_longer_timeout_budget():
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_accept_token_route_uses_longer_timeout_budget():
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.post("/api/auth/accept-token")
+    async def accept_token():
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.post("/api/auth/accept-token")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_agents_ingest_route_uses_longer_timeout_budget():
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.post("/api/agents/ingest")
+    async def ingest():
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.post("/api/agents/ingest")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}

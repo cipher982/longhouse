@@ -1031,8 +1031,6 @@ async def start_wal_checkpoint_loop() -> None:
                 row = result.fetchone()
                 if row and row[1] > 0:
                     logger.info("WAL checkpoint: %d pages written, %d remaining", row[1], row[2])
-                # Periodic PRAGMA optimize lets SQLite update its query planner stats
-                conn.exec_driver_sql("PRAGMA optimize")
 
     async def _loop():
         while True:
