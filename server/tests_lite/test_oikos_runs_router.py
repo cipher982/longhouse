@@ -1129,8 +1129,36 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
             api_app_ref.dependency_overrides = {}
 
 
-def test_loop_inbox_codex_managed_local_hides_remote_control_actions(tmp_path):
+def test_loop_inbox_codex_managed_local_routes_remote_control_actions(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
+    calls: list[dict[str, object]] = []
+
+    async def _fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+                "timeout_secs": timeout_secs,
+                "transport": "tmux",
+                "verify_turn_started": verify_turn_started,
+                "verification_timeout_secs": verification_timeout_secs,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
 
     with session_local() as db:
         owner = User(
@@ -1185,6 +1213,8 @@ def test_loop_inbox_codex_managed_local_hides_remote_control_actions(tmp_path):
             assert card_response.status_code == 200, card_response.text
             card_payload = card_response.json()
             assert card_payload["available_actions"] == [
+                "approve_recommended_action",
+                "reply_to_session",
                 "not_now",
                 "open_full_session",
             ]
@@ -1193,15 +1223,39 @@ def test_loop_inbox_codex_managed_local_hides_remote_control_actions(tmp_path):
                 f"/api/oikos/loop-inbox/cards/{review.id}/actions",
                 json={"action": "approve_recommended_action"},
             )
-            assert approve_response.status_code == 409, approve_response.text
-            assert "terminal-driven right now" in approve_response.json()["detail"]
+            assert approve_response.status_code == 200, approve_response.text
+            approve_payload = approve_response.json()
+            assert approve_payload["action"] == "approve_recommended_action"
+            assert approve_payload["status"] == "acted"
+            assert approve_payload["reason"] == "continue_session"
+            assert approve_payload["queued_job_id"] is None
+
+            review.execution_state = "needs_human"
+            review.decision = "wait"
+            review.recommended_action = "wait"
+            review.follow_up_prompt = None
+            review.status = "enqueued"
+            review.reason = "notify_user"
+            review.actual_outcome = None
+            db.commit()
+            db.refresh(review)
 
             reply_response = client.post(
                 f"/api/oikos/loop-inbox/cards/{review.id}/actions",
                 json={"action": "reply_to_session", "reply_text": "keep going"},
             )
-            assert reply_response.status_code == 409, reply_response.text
-            assert "terminal-driven right now" in reply_response.json()["detail"]
+            assert reply_response.status_code == 200, reply_response.text
+            reply_payload = reply_response.json()
+            assert reply_payload["action"] == "reply_to_session"
+            assert reply_payload["status"] == "acted"
+            assert reply_payload["reason"] == "reply_to_session"
+            assert reply_payload["queued_job_id"] is None
+
+            assert len(calls) == 2
+            assert calls[0]["text"] == "Run the pending targeted tests."
+            assert calls[0]["commis_id"] == f"turn-review-{review.id}"
+            assert calls[1]["text"] == "keep going"
+            assert calls[1]["commis_id"] == f"turn-review-reply-{review.id}"
         finally:
             api_app_ref.dependency_overrides = {}
 

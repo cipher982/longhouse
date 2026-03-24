@@ -17,10 +17,12 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.managed_local_control import await_managed_local_presence_update
 from zerg.services.managed_local_control import await_managed_local_turn_events
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 
@@ -188,11 +190,13 @@ def test_await_managed_local_turn_events_returns_new_persisted_events(tmp_path):
         assert [event.content_text for event in events] == ["after"]
 
 
-def test_send_text_to_managed_local_session_rejects_codex(tmp_path):
+def test_send_text_to_managed_local_session_uses_bracketed_paste_for_codex(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        user, runner, session = _seed_user_runner_and_session(db, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
@@ -203,8 +207,13 @@ def test_send_text_to_managed_local_session_rejects_codex(tmp_path):
             )
         )
 
-        assert result.ok is False
-        assert result.error == "Managed-local Codex is terminal-driven right now; attach locally instead of sending web input."
+        assert result.ok is True
+        assert len(dispatcher.calls) == 1
+        assert dispatcher.calls[0]["runner_id"] == runner.id
+        command = str(dispatcher.calls[0]["command"])
+        assert "set-buffer -b send-lh-zerg-managed-local continue" in command
+        assert "paste-buffer -dpr -b send-lh-zerg-managed-local -t lh-zerg-managed-local" in command
+        assert "send-keys -t lh-zerg-managed-local Enter" in command
 
 
 def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monkeypatch, tmp_path):
@@ -330,3 +339,145 @@ def test_send_text_to_managed_local_session_reports_verification_failure_without
         assert result.error == "Managed local session did not produce new timeline events after send"
         runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).all()
         assert runtime_state == []
+
+
+def test_await_managed_local_presence_update_returns_newer_row(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        baseline = datetime.now(timezone.utc)
+        db.add(
+            SessionPresence(
+                session_id=str(session.id),
+                state="idle",
+                provider="codex",
+                cwd=session.cwd,
+                project=session.project,
+                updated_at=baseline,
+            )
+        )
+        db.commit()
+
+        async def _update_later():
+            await asyncio.sleep(0.05)
+            with SessionLocal() as event_db:
+                row = event_db.query(SessionPresence).filter(SessionPresence.session_id == str(session.id)).one()
+                row.state = "thinking"
+                row.updated_at = datetime.now(timezone.utc)
+                event_db.commit()
+
+        async def _run_wait():
+            writer = asyncio.create_task(_update_later())
+            try:
+                return await await_managed_local_presence_update(
+                    db_bind=db.get_bind(),
+                    session_id=session.id,
+                    after_updated_at=baseline,
+                    timeout_secs=1.0,
+                    poll_interval_secs=0.02,
+                )
+            finally:
+                await writer
+
+        row = asyncio.run(_run_wait())
+        assert row is not None
+        assert row.state == "thinking"
+
+
+def test_send_text_to_managed_local_session_verifies_codex_via_presence(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    async def _fake_wait_for_presence(*, db_bind, session_id, after_updated_at, timeout_secs, poll_interval_secs=1.0):
+        assert db_bind is not None
+        assert timeout_secs == 2.5
+        assert after_updated_at is not None
+        return SessionPresence(
+            session_id=str(session_id),
+            state="thinking",
+            provider="codex",
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.await_managed_local_presence_update",
+        _fake_wait_for_presence,
+    )
+
+    with SessionLocal() as db:
+        user, runner, session = _seed_user_runner_and_session(db, provider="codex")
+        db.add(
+            SessionPresence(
+                session_id=str(session.id),
+                state="idle",
+                provider="codex",
+                cwd=session.cwd,
+                project=session.project,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="continue",
+                commis_id="managed-local-codex-verified",
+                verify_turn_started=True,
+                verification_timeout_secs=2.5,
+            )
+        )
+
+        assert result.ok is True
+        assert result.verified_turn_started is True
+        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
+        assert runtime_state.phase == "thinking"
+        assert runtime_state.device_id == runner.name
+
+
+def test_send_text_to_managed_local_session_reports_codex_presence_verification_failure(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    async def _fake_wait_for_presence(**_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.await_managed_local_presence_update",
+        _fake_wait_for_presence,
+    )
+
+    with SessionLocal() as db:
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
+        db.add(
+            SessionPresence(
+                session_id=str(session.id),
+                state="idle",
+                provider="codex",
+                cwd=session.cwd,
+                project=session.project,
+                updated_at=datetime.now(timezone.utc),
+            )
+        )
+        db.commit()
+
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="continue",
+                commis_id="managed-local-codex-verify-fail",
+                verify_turn_started=True,
+                verification_timeout_secs=1.0,
+            )
+        )
+
+        assert result.ok is False
+        assert result.verified_turn_started is False
+        assert result.error == "Managed local Codex session did not acknowledge the prompt after send"

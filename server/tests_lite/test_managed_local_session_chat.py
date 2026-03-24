@@ -205,22 +205,73 @@ def test_chat_with_session_reports_claude_managed_local_send_failure(monkeypatch
             api_app_ref.dependency_overrides = {}
 
 
-def test_chat_with_session_rejects_managed_local_codex_web_input(tmp_path):
+def test_chat_with_session_routes_codex_managed_local_without_cloud_continuation(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
+    calls: list[dict[str, object]] = []
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
         source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
         client, api_app_ref = _make_client(db, user)
 
+        async def fake_wait_for_events(**_kwargs):
+            return [
+                SimpleNamespace(
+                    id=101,
+                    role="assistant",
+                    content_text="Local codex tmux reply",
+                    tool_name=None,
+                    tool_call_id=None,
+                )
+            ]
+
+        def fail_cloud_target(*_args, **_kwargs):
+            raise AssertionError("managed_local chat should not create cloud continuations")
+
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            calls.append(
+                {
+                    "owner_id": owner_id,
+                    "session_id": str(session.id),
+                    "runner_id": session.source_runner_id,
+                    "text": text,
+                    "commis_id": commis_id,
+                    "timeout_secs": timeout_secs,
+                }
+            )
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat._await_managed_local_turn_events",
+            fake_wait_for_events,
+        )
+        monkeypatch.setattr(
+            session_chat.AgentsStore,
+            "ensure_cloud_continuation_target",
+            fail_cloud_target,
+        )
+
         try:
             response = client.post(
                 f"/api/sessions/{source_session.id}/chat",
                 json={"message": "continue"},
             )
-            assert response.status_code == 409, response.text
-            assert response.json()["detail"] == (
-                "Managed-local Codex is terminal-driven right now; attach locally instead of sending web input."
+            assert response.status_code == 200, response.text
+            body = response.text
+            assert "Local codex tmux reply" in body
+            assert '"created_continuation": false' in body
+            assert f'"session_id": "{source_session.id}"' in body
+            assert f'"shipped_session_id": "{source_session.id}"' in body
+            runtime_state = (
+                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).one()
             )
+            assert runtime_state.phase == "idle"
+            assert runtime_state.phase_source == "semantic"
+            assert len(calls) == 1
+            assert calls[0]["runner_id"] == runner.id
+            assert calls[0]["owner_id"] == user.id
+            assert calls[0]["session_id"] == str(source_session.id)
+            assert calls[0]["text"] == "continue"
         finally:
             api_app_ref.dependency_overrides = {}

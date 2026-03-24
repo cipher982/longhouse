@@ -283,9 +283,9 @@ async def test_turn_review_autopilot_routes_claude_managed_local_continue_withou
 
 
 @pytest.mark.asyncio
-async def test_turn_review_autopilot_managed_local_codex_stays_notify_only(monkeypatch, tmp_path):
-    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_managed_local_codex_notify.db")
-    invoke_calls: list[dict[str, object]] = []
+async def test_turn_review_autopilot_managed_local_codex_routes_tmux_follow_up(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_managed_local_codex_tmux.db")
+    calls: list[dict[str, object]] = []
 
     async def _fake_evaluate(**_kwargs):
         return LoopControllerDecision(
@@ -300,23 +300,33 @@ async def test_turn_review_autopilot_managed_local_codex_stays_notify_only(monke
             loop_thread_id=52,
         )
 
-    async def _fail_send_text(**_kwargs):
-        raise AssertionError("managed-local Codex autopilot should not send tmux input")
-
-    async def _fake_invoke(owner_id, message, message_id, **kwargs):
-        invoke_calls.append(
+    async def _fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
+        calls.append(
             {
                 "owner_id": owner_id,
-                "message": message,
-                "message_id": message_id,
-                **kwargs,
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+                "timeout_secs": timeout_secs,
+                "transport": "tmux",
+                "verify_turn_started": verify_turn_started,
+                "verification_timeout_secs": verification_timeout_secs,
             }
         )
-        return 654
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
 
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fail_send_text)
-    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
     monkeypatch.setattr(
         "zerg.services.session_turn_reviews._load_policy",
         lambda _db, _owner_id: OikosOperatorPolicy(
@@ -347,20 +357,24 @@ async def test_turn_review_autopilot_managed_local_codex_stays_notify_only(monke
 
         review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
         assert review is not None
-        assert review.execution_state == "awaiting_user_approval"
-        assert review.status == "enqueued"
-        assert review.reason == "notify_user"
-        assert review.actual_outcome is None
-        assert review.run_id == 654
+        assert review.execution_state == "would_auto_continue"
+        assert review.status == "acted"
+        assert review.reason == "continue_session"
+        assert review.actual_outcome == "continue_session"
+        assert review.run_id is None
 
         jobs = db.query(CommisJob).all()
         assert jobs == []
 
-        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session_id).one()
-        assert runtime_state.phase == "needs_user"
-
-        assert len(invoke_calls) == 1
-        assert invoke_calls[0]["owner_id"] == user.id
+        assert len(calls) == 1
+        assert calls[0]["owner_id"] == user.id
+        assert calls[0]["session_id"] == str(session_id)
+        assert calls[0]["text"] == "Run the pending targeted tests."
+        assert calls[0]["commis_id"] == f"turn-review-{review.id}"
+        assert calls[0]["transport"] == "tmux"
+        assert calls[0]["timeout_secs"] == 15
+        assert calls[0]["verify_turn_started"] is True
+        assert calls[0]["verification_timeout_secs"] == 15.0
 
 
 @pytest.mark.asyncio
@@ -466,8 +480,38 @@ async def test_reply_to_pending_turn_review_routes_claude_managed_local_reply_wi
 
 
 @pytest.mark.asyncio
-async def test_reply_to_pending_turn_review_rejects_managed_local_codex(tmp_path):
-    SessionLocal = _make_db(tmp_path, "turn_review_reply_managed_local_codex_reject.db")
+async def test_reply_to_pending_turn_review_routes_codex_managed_local_reply_without_cloud_job(
+    monkeypatch, tmp_path
+):
+    SessionLocal = _make_db(tmp_path, "turn_review_reply_managed_local_codex.db")
+    calls: list[dict[str, object]] = []
+
+    async def _fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+                "timeout_secs": timeout_secs,
+                "transport": "tmux",
+                "verify_turn_started": verify_turn_started,
+                "verification_timeout_secs": verification_timeout_secs,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
 
     with SessionLocal() as db:
         user = _create_user(db, allow_continue=False)
@@ -512,15 +556,29 @@ async def test_reply_to_pending_turn_review_rejects_managed_local_codex(tmp_path
         db.commit()
         db.refresh(review)
 
-        with pytest.raises(
-            ValueError,
-            match="Managed-local Codex follow-ups are terminal-driven right now; open the full session instead.",
-        ):
-            await reply_to_pending_turn_review(
-                db=db,
-                review=review,
-                reply_text="keep going with the hiring shortlist",
-            )
+        await reply_to_pending_turn_review(
+            db=db,
+            review=review,
+            reply_text="keep going with the hiring shortlist",
+        )
+
+        jobs = db.query(CommisJob).all()
+        assert jobs == []
+
+        db.refresh(review)
+        assert review.status == "acted"
+        assert review.reason == "reply_to_session"
+        assert review.actual_outcome == "delegated_follow_up"
+
+        assert len(calls) == 1
+        assert calls[0]["owner_id"] == user.id
+        assert calls[0]["session_id"] == str(session_id)
+        assert calls[0]["text"] == "keep going with the hiring shortlist"
+        assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
+        assert calls[0]["transport"] == "tmux"
+        assert calls[0]["timeout_secs"] == 15
+        assert calls[0]["verify_turn_started"] is True
+        assert calls[0]["verification_timeout_secs"] == 15.0
 
 
 @pytest.mark.asyncio
