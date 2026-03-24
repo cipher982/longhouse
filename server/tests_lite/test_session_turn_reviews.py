@@ -711,6 +711,134 @@ async def test_turn_review_marks_managed_local_attention_phase(monkeypatch, tmp_
         assert runtime_state.last_runtime_signal_at is not None
 
 
+@pytest.mark.asyncio
+async def test_turn_review_serializer_wraps_create_and_complete_hot_path(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_serializer_create_complete.db")
+    labels: list[str] = []
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="wait",
+            summary="The session needs user attention.",
+            rationale="The assistant completed a turn but needs direction before continuing.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"wait"}',
+            loop_thread_id=91,
+        )
+
+    async def _noop_execute(*, db, review):
+        return None
+
+    async def _noop_wakeup(*, db, review):
+        return None
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_execute_recorded_turn_review", _noop_execute)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_enqueue_turn_review_operator_wakeup", _noop_wakeup)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="what should we do next?",
+            assistant_text="I finished the last turn and need your direction on the next step.",
+        )
+
+        enqueued_at = _now()
+        review = await maybe_process_session_turn_loop(
+            db=db,
+            session_id=str(session_id),
+            freshness_reference_at=enqueued_at,
+        )
+        assert review is not None
+        db.refresh(review)
+
+        assert labels == ["turn-review-create", "turn-review-complete"]
+        assert _normalize_test_utc(review.assistant_turn_finished_at) is not None
+        assert _normalize_test_utc(review.turn_loop_enqueued_at) == _normalize_test_utc(enqueued_at)
+        assert _normalize_test_utc(review.turn_loop_completed_at) is not None
+
+
+@pytest.mark.asyncio
+async def test_turn_review_serializer_wraps_existing_review_timing_updates(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_serializer_existing.db")
+    labels: list[str] = []
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.get_write_serializer", lambda: _FakeSerializer())
+
+    with SessionLocal() as db:
+        user = _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="what should we do next?",
+            assistant_text="I finished the last turn and need your direction on the next step.",
+        )
+
+        review = SessionTurnReview(
+            session_id=session_id,
+            owner_id=user.id,
+            assistant_event_id=2,
+            turn_index=1,
+            trigger_type="turn.completed",
+            loop_mode="assist",
+            decision="wait",
+            summary="Awaiting your direction on the next step.",
+            rationale="This review already exists and only needs timing fields stamped.",
+            turn_excerpt="I finished the last turn and need your direction on the next step.",
+            mode_capability="notify_only",
+            mode_summary="Suggest or escalate from completed turns, but wait for user approval before continuing.",
+            execution_state="needs_human",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=[],
+            status="recorded",
+            reason=None,
+        )
+        db.add(review)
+        db.commit()
+        review_id = int(review.id)
+
+        enqueued_at = _now()
+        result = await maybe_record_session_turn_review(
+            db=db,
+            session_id=str(session_id),
+            freshness_reference_at=enqueued_at,
+        )
+        assert result is not None
+        assert int(result.id) == review_id
+        db.refresh(result)
+
+        assert labels == ["turn-review-existing"]
+        assert _normalize_test_utc(result.assistant_turn_finished_at) is not None
+        assert _normalize_test_utc(result.turn_loop_enqueued_at) == _normalize_test_utc(enqueued_at)
+
+
 def test_classify_turn_review_outcome_keeps_notify_reviews_actionable_without_jobs(tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_notify_without_jobs.db")
 
