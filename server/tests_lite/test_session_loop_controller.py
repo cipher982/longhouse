@@ -167,3 +167,42 @@ async def test_loop_controller_isolates_threads_per_session(monkeypatch, tmp_pat
         assert session_a.loop_thread_id is not None
         assert session_b.loop_thread_id is not None
         assert session_a.loop_thread_id != session_b.loop_thread_id
+
+
+@pytest.mark.asyncio
+async def test_loop_controller_routes_thread_writes_through_serializer(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "loop_controller_serializer.db")
+    fake_response = (
+        '{"decision":"continue","summary":"Continue the same session.",'
+        '"rationale":"One bounded next step remains.",'
+        '"recommended_action":"continue_session",'
+        '"follow_up_prompt":"Run the pending targeted tests.",'
+        '"blocked_reasons":[]}'
+    )
+    fake_client = _FakeClient(fake_response)
+    serializer_labels: list[str] = []
+
+    class _FakeSerializer:
+        async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True):
+            serializer_labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    monkeypatch.setattr(
+        "zerg.services.session_loop_controller.get_llm_client_with_db_fallback",
+        lambda *_args, **_kwargs: (fake_client, "gpt-test", "openai"),
+    )
+    monkeypatch.setattr(
+        "zerg.services.session_loop_controller.get_write_serializer",
+        lambda: _FakeSerializer(),
+    )
+
+    with SessionLocal() as db:
+        user = _create_user(db)
+        session = _create_session(db)
+
+        decision = await _run_controller(db, owner_id=user.id, session=session)
+        assert decision.decision == "continue"
+        assert serializer_labels == ["loop-thread", "loop-thread-message", "loop-thread-message"]
