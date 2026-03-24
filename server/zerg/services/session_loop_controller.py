@@ -24,6 +24,7 @@ from zerg.models_config import get_llm_client_with_db_fallback
 from zerg.models_config import get_model_for_use_case
 from zerg.services.session_processing import safe_parse_json
 from zerg.services.thread_service import ThreadService
+from zerg.services.write_serializer import get_write_serializer
 
 logger = logging.getLogger(__name__)
 
@@ -281,18 +282,48 @@ async def evaluate_session_turn_with_llm(
     metadata: dict[str, Any] | None = None,
 ) -> LoopControllerDecision:
     """Evaluate one completed assistant turn with the per-session controller."""
-    loop_thread = get_or_create_session_loop_thread(db, owner_id=owner_id, session=session)
+    ws = get_write_serializer()
 
-    messages = _build_controller_messages(loop_thread_id=loop_thread.id, payload=payload, db=db)
+    def _ensure_loop_thread(write_db: Session) -> int:
+        write_session = write_db.query(AgentSession).filter(AgentSession.id == session.id).first()
+        if write_session is None:
+            raise RuntimeError(f"Session {session.id} missing while preparing loop thread")
+        loop_thread = get_or_create_session_loop_thread(write_db, owner_id=owner_id, session=write_session)
+        return int(loop_thread.id)
+
+    loop_thread_id = await ws.execute_or_direct(_ensure_loop_thread, db, label="loop-thread")
+    db.expire_all()
+
+    messages = _build_controller_messages(loop_thread_id=loop_thread_id, payload=payload, db=db)
     prompt_json = json.dumps(payload, indent=2, ensure_ascii=False)
-    create_thread_message(
+
+    def _persist_controller_message(
+        write_db: Session,
+        *,
+        role: str,
+        content: str,
+        message_metadata: dict[str, Any],
+    ) -> None:
+        create_thread_message(
+            write_db,
+            thread_id=loop_thread_id,
+            role=role,
+            content=content,
+            processed=True,
+            internal=True,
+            message_metadata=message_metadata,
+            commit=False,
+        )
+
+    await ws.execute_or_direct(
+        lambda write_db: _persist_controller_message(
+            write_db,
+            role="user",
+            content=prompt_json,
+            message_metadata={"kind": "loop_turn_payload", **(metadata or {})},
+        ),
         db,
-        thread_id=loop_thread.id,
-        role="user",
-        content=prompt_json,
-        processed=True,
-        internal=True,
-        message_metadata={"kind": "loop_turn_payload", **(metadata or {})},
+        label="loop-thread-message",
     )
 
     client, model_id, provider = get_llm_client_with_db_fallback(_LOOP_CONTROLLER_USE_CASE, db=db)
@@ -307,23 +338,24 @@ async def evaluate_session_turn_with_llm(
             response_format={"type": "json_object"},
         )
         raw = (response.choices[0].message.content or "").strip()
-        decision = _parse_decision(raw, model_id=model_id, loop_thread_id=loop_thread.id)
+        decision = _parse_decision(raw, model_id=model_id, loop_thread_id=loop_thread_id)
     finally:
         await client.close()
 
-    create_thread_message(
+    await ws.execute_or_direct(
+        lambda write_db: _persist_controller_message(
+            write_db,
+            role="assistant",
+            content=decision.raw_response or "",
+            message_metadata={
+                "kind": "loop_turn_decision",
+                "model_id": decision.model_id,
+                "decision": decision.decision,
+                **(metadata or {}),
+            },
+        ),
         db,
-        thread_id=loop_thread.id,
-        role="assistant",
-        content=decision.raw_response or "",
-        processed=True,
-        internal=True,
-        message_metadata={
-            "kind": "loop_turn_decision",
-            "model_id": decision.model_id,
-            "decision": decision.decision,
-            **(metadata or {}),
-        },
+        label="loop-thread-message",
     )
     return decision
 
