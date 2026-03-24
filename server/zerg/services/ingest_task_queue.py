@@ -208,14 +208,14 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
 
 async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
     if task_type == "summary":
-        from zerg.routers.agents import _generate_summary_impl
+        from zerg.services.session_summaries import generate_summary_impl
 
-        await _generate_summary_impl(session_id)
+        await generate_summary_impl(session_id)
         return
     if task_type == "embedding":
-        from zerg.routers.agents import _generate_embeddings_impl
+        from zerg.services.session_summaries import generate_embeddings_impl
 
-        await _generate_embeddings_impl(session_id)
+        await generate_embeddings_impl(session_id)
         return
     if task_type == "turn_loop":
 

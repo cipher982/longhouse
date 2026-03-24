@@ -56,7 +56,7 @@ def test_optional_none_datetime():
 
 def test_session_response_model():
     """SessionResponse (a real API model) should serialize datetimes with Z."""
-    from zerg.routers.agents import SessionResponse
+    from zerg.services.session_views import SessionResponse
 
     resp = SessionResponse(
         id="test-session-id",

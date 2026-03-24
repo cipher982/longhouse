@@ -131,7 +131,7 @@ def test_demo_reset_blocked_when_auth_enabled(tmp_path):
 
     client = _client(factory)
     try:
-        with patch("zerg.routers.agents.get_settings") as mock_settings:
+        with patch("zerg.routers.agents_demo.get_settings") as mock_settings:
             mock_settings.return_value.auth_disabled = False
             mock_settings.return_value.testing = True
             resp = client.delete("/agents/demo", headers={"X-Agents-Token": "dev"})

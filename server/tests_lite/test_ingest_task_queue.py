@@ -384,7 +384,7 @@ async def test_worker_marks_done_on_success(tmp_path):
     ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
         with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
-            with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
+            with patch("zerg.services.session_summaries.generate_summary_impl", new_callable=AsyncMock):
                 await _execute_task("task-1", "s1", "summary")
 
     tasks = _get_tasks(factory, status="done")
@@ -419,7 +419,7 @@ async def test_worker_requeues_timed_out_embedding_task(tmp_path, monkeypatch):
     ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
         with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
-            with patch("zerg.routers.agents._generate_embeddings_impl", new=AsyncMock(side_effect=_hang)):
+            with patch("zerg.services.session_summaries.generate_embeddings_impl", new=AsyncMock(side_effect=_hang)):
                 await _execute_task("task-embedding-timeout", "s1", "embedding")
 
     tasks = _get_tasks(factory, status="pending")
@@ -486,7 +486,7 @@ async def test_summary_task_does_not_run_turn_loop_anymore(tmp_path, monkeypatch
     ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
         with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
-            with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
+            with patch("zerg.services.session_summaries.generate_summary_impl", new_callable=AsyncMock):
                 with patch(
                     "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
                     new_callable=AsyncMock,
@@ -921,7 +921,7 @@ async def test_worker_requeues_on_failure_within_max_attempts(tmp_path):
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
         with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
             with patch(
-                "zerg.routers.agents._generate_summary_impl",
+                "zerg.services.session_summaries.generate_summary_impl",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("boom"),
             ):
@@ -947,7 +947,7 @@ async def test_worker_marks_failed_on_exhausted_attempts(tmp_path):
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
         with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
             with patch(
-                "zerg.routers.agents._generate_summary_impl",
+                "zerg.services.session_summaries.generate_summary_impl",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("final failure"),
             ):

@@ -29,8 +29,32 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.models.agents import AgentSession
-from zerg.routers import agents as agents_router
+from zerg.routers import agents_briefings as _briefings_router
+from zerg.routers import agents_demo as _demo_router
+from zerg.routers import agents_search as _search_router
+from zerg.routers import agents_sessions as _sessions_router
 from zerg.services.agents_store import AgentsStore
+from zerg.services.session_runtime import load_runtime_state_map
+from zerg.services.session_views import ActiveSessionsResponse
+from zerg.services.session_views import BriefingResponse
+from zerg.services.session_views import DemoSeedResponse
+from zerg.services.session_views import EventsListResponse
+from zerg.services.session_views import FiltersResponse
+from zerg.services.session_views import RecallResponse
+from zerg.services.session_views import SemanticSearchResponse
+from zerg.services.session_views import SessionActionRequest
+from zerg.services.session_views import SessionActionResponse
+from zerg.services.session_views import SessionLoopModeRequest
+from zerg.services.session_views import SessionLoopModeResponse
+from zerg.services.session_views import SessionPreviewResponse
+from zerg.services.session_views import SessionProjectionResponse
+from zerg.services.session_views import SessionResponse
+from zerg.services.session_views import SessionsSummaryResponse
+from zerg.services.session_views import SessionThreadResponse
+from zerg.services.session_views import build_session_response
+from zerg.services.session_views import load_presence_map
+from zerg.services.session_views import normalize_utc_datetime
+from zerg.services.session_views import resolve_runtime_overlay
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -48,9 +72,9 @@ TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
 class TimelineSessionCardResponse(UTCBaseModel):
     thread_id: str = Field(..., description="Logical thread/task root UUID")
     timeline_anchor_at: datetime | None = Field(None, description="Anchor used for timeline ordering and grouping")
-    head: agents_router.SessionResponse
-    detail: agents_router.SessionResponse
-    root: agents_router.SessionResponse
+    head: SessionResponse
+    detail: SessionResponse
+    root: SessionResponse
     continuation_count: int = Field(..., description="Concrete continuation count in this logical thread")
     started_origin_label: str | None = Field(None, description="Origin label for where the thread started")
     head_origin_label: str | None = Field(None, description="Origin label for the current writable head")
@@ -80,7 +104,7 @@ def _build_session_response_map(
     *,
     db: Session,
     session_ids: list[str],
-) -> dict[str, agents_router.SessionResponse]:
+) -> dict[str, SessionResponse]:
     if not session_ids:
         return {}
 
@@ -91,20 +115,20 @@ def _build_session_response_map(
         return {}
 
     activity_map = store.get_last_activity_map([session.id for session in sessions])
-    presence_map = agents_router._load_presence_map(db, [session.id for session in sessions])
-    runtime_state_map = agents_router.load_runtime_state_map(db, [session.id for session in sessions])
+    presence_map = load_presence_map(db, [session.id for session in sessions])
+    runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
     first_user_map = store.get_first_message_map([session.id for session in sessions], role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = {}
     now = datetime.now(timezone.utc)
 
-    response_map: dict[str, agents_router.SessionResponse] = {}
+    response_map: dict[str, SessionResponse] = {}
     for session in sessions:
-        response = agents_router._build_session_response(
+        response = build_session_response(
             store,
             session,
             thread_cache=thread_cache,
-            last_activity_at=agents_router._normalize_utc_datetime(activity_map.get(session.id) or session.ended_at or session.started_at),
-            runtime_overlay=agents_router._resolve_runtime_overlay(
+            last_activity_at=normalize_utc_datetime(activity_map.get(session.id) or session.ended_at or session.started_at),
+            runtime_overlay=resolve_runtime_overlay(
                 session,
                 last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
                 presence_map=presence_map,
@@ -347,16 +371,16 @@ async def _timeline_sessions_stream(
         await asyncio.sleep(TIMELINE_STREAM_POLL_SECONDS)
 
 
-@router.get("/briefing", response_model=agents_router.BriefingResponse)
+@router.get("/briefing", response_model=BriefingResponse)
 async def get_timeline_briefing(
     project: str = Query(..., description="Project name to get briefing for"),
     limit: int = Query(5, ge=1, le=20, description="Max sessions to include"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.get_briefing(project=project, limit=limit, db=db, _auth=None, _single=None)
+    return await _briefings_router.get_briefing(project=project, limit=limit, db=db, _auth=None, _single=None)
 
 
-@router.get("/sessions/semantic", response_model=agents_router.SemanticSearchResponse)
+@router.get("/sessions/semantic", response_model=SemanticSearchResponse)
 async def semantic_search_timeline_sessions(
     query: str = Query(..., description="Search query"),
     project: Optional[str] = Query(None, description="Filter by project"),
@@ -367,7 +391,7 @@ async def semantic_search_timeline_sessions(
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.semantic_search_sessions(
+    return await _search_router.semantic_search_sessions(
         query=query,
         project=project,
         provider=provider,
@@ -381,7 +405,7 @@ async def semantic_search_timeline_sessions(
     )
 
 
-@router.get("/recall", response_model=agents_router.RecallResponse)
+@router.get("/recall", response_model=RecallResponse)
 async def recall_timeline_sessions(
     query: str = Query(..., description="What to search for"),
     project: Optional[str] = Query(None, description="Filter by project"),
@@ -391,7 +415,7 @@ async def recall_timeline_sessions(
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.recall_sessions(
+    return await _search_router.recall_sessions(
         query=query,
         project=project,
         since_days=since_days,
@@ -430,7 +454,7 @@ async def list_timeline_sessions(
         # Query-driven search remains on the legacy raw-session contract for now.
         # The thread-card contract in this route is only authoritative for the
         # default no-query timeline path.
-        raw_response = await agents_router.list_sessions(
+        raw_response = await _sessions_router.list_sessions(
             project=project,
             provider=provider,
             environment=environment,
@@ -520,7 +544,7 @@ async def stream_timeline_sessions(
     )
 
 
-@router.get("/sessions/summary", response_model=agents_router.SessionsSummaryResponse)
+@router.get("/sessions/summary", response_model=SessionsSummaryResponse)
 async def list_timeline_session_summaries(
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
@@ -534,7 +558,7 @@ async def list_timeline_session_summaries(
     hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.list_session_summaries(
+    return await _sessions_router.list_session_summaries(
         project=project,
         provider=provider,
         environment=environment,
@@ -551,7 +575,7 @@ async def list_timeline_session_summaries(
     )
 
 
-@router.get("/sessions/active", response_model=agents_router.ActiveSessionsResponse)
+@router.get("/sessions/active", response_model=ActiveSessionsResponse)
 async def list_timeline_active_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, active, idle, completed)"),
@@ -560,7 +584,7 @@ async def list_timeline_active_sessions(
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.list_active_sessions(
+    return await _sessions_router.list_active_sessions(
         project=project,
         status_filter=status_filter,
         attention=attention,
@@ -572,13 +596,13 @@ async def list_timeline_active_sessions(
     )
 
 
-@router.get("/sessions/{session_id}/preview", response_model=agents_router.SessionPreviewResponse)
+@router.get("/sessions/{session_id}/preview", response_model=SessionPreviewResponse)
 async def preview_timeline_session(
     session_id: UUID,
     last_n: int = Query(6, ge=2, le=20, description="Number of messages to return"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.preview_session(
+    return await _sessions_router.preview_session(
         session_id=session_id,
         last_n=last_n,
         db=db,
@@ -587,29 +611,29 @@ async def preview_timeline_session(
     )
 
 
-@router.get("/filters", response_model=agents_router.FiltersResponse)
+@router.get("/filters", response_model=FiltersResponse)
 async def get_timeline_filters(
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.get_filters(days_back=days_back, db=db, _auth=None, _single=None)
+    return await _sessions_router.get_filters(days_back=days_back, db=db, _auth=None, _single=None)
 
 
-@router.post("/demo", response_model=agents_router.DemoSeedResponse)
+@router.post("/demo", response_model=DemoSeedResponse)
 async def seed_timeline_demo_sessions(
     replace: bool = Query(False, description="Delete existing demo sessions before seeding fresh demo data"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.seed_demo_sessions(replace=replace, db=db, _auth=None, _single=None)
+    return await _demo_router.seed_demo_sessions(replace=replace, db=db, _auth=None, _single=None)
 
 
-@router.post("/sessions/{session_id}/action", response_model=agents_router.SessionActionResponse)
+@router.post("/sessions/{session_id}/action", response_model=SessionActionResponse)
 async def set_timeline_session_action(
     session_id: UUID,
-    body: agents_router.SessionActionRequest,
+    body: SessionActionRequest,
     db: Session = Depends(get_db),
 ):
-    return await agents_router.set_session_action(
+    return await _sessions_router.set_session_action(
         session_id=session_id,
         body=body,
         db=db,
@@ -618,13 +642,13 @@ async def set_timeline_session_action(
     )
 
 
-@router.patch("/sessions/{session_id}/loop-mode", response_model=agents_router.SessionLoopModeResponse)
+@router.patch("/sessions/{session_id}/loop-mode", response_model=SessionLoopModeResponse)
 async def set_timeline_session_loop_mode(
     session_id: UUID,
-    body: agents_router.SessionLoopModeRequest,
+    body: SessionLoopModeRequest,
     db: Session = Depends(get_db),
 ):
-    return await agents_router.set_session_loop_mode(
+    return await _sessions_router.set_session_loop_mode(
         session_id=session_id,
         body=body,
         db=db,
@@ -633,23 +657,23 @@ async def set_timeline_session_loop_mode(
     )
 
 
-@router.get("/sessions/{session_id}", response_model=agents_router.SessionResponse)
+@router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_timeline_session(
     session_id: UUID,
     db: Session = Depends(get_db),
 ):
-    return await agents_router.get_session(session_id=session_id, db=db, _auth=None, _single=None)
+    return await _sessions_router.get_session(session_id=session_id, db=db, _auth=None, _single=None)
 
 
-@router.get("/sessions/{session_id}/thread", response_model=agents_router.SessionThreadResponse)
+@router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)
 async def get_timeline_session_thread(
     session_id: UUID,
     db: Session = Depends(get_db),
 ):
-    return await agents_router.get_session_thread(session_id=session_id, db=db, _auth=None, _single=None)
+    return await _sessions_router.get_session_thread(session_id=session_id, db=db, _auth=None, _single=None)
 
 
-@router.get("/sessions/{session_id}/events", response_model=agents_router.EventsListResponse)
+@router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
 async def get_timeline_session_events(
     session_id: UUID,
     roles: Optional[str] = Query(None, description="Comma-separated roles to filter"),
@@ -661,7 +685,7 @@ async def get_timeline_session_events(
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.get_session_events(
+    return await _sessions_router.get_session_events(
         session_id=session_id,
         roles=roles,
         tool_name=tool_name,
@@ -676,7 +700,7 @@ async def get_timeline_session_events(
     )
 
 
-@router.get("/sessions/{session_id}/projection", response_model=agents_router.SessionProjectionResponse)
+@router.get("/sessions/{session_id}/projection", response_model=SessionProjectionResponse)
 async def get_timeline_session_projection(
     session_id: UUID,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
@@ -684,7 +708,7 @@ async def get_timeline_session_projection(
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
     db: Session = Depends(get_db),
 ):
-    return await agents_router.get_session_projection(
+    return await _sessions_router.get_session_projection(
         session_id=session_id,
         branch_mode=branch_mode,
         limit=limit,
@@ -701,7 +725,7 @@ async def export_timeline_session(
     branch_mode: str = Query("head", description="Branch projection mode for export: head|all"),
     db: Session = Depends(get_db),
 ) -> Response:
-    return await agents_router.export_session(
+    return await _sessions_router.export_session(
         session_id=session_id,
         branch_mode=branch_mode,
         db=db,
