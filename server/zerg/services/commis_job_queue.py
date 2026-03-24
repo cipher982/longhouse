@@ -24,9 +24,12 @@ import os
 import socket
 from typing import TYPE_CHECKING
 
+from sqlalchemy import bindparam
 from sqlalchemy import text
+from sqlalchemy import update
 
 from zerg.database import db_session
+from zerg.models.models import CommisJob
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -64,24 +67,32 @@ def claim_jobs(
     if worker_id is None:
         worker_id = get_worker_id()
 
-    # ORDER BY id ASC as tie-breaker for deterministic FIFO when timestamps match
+    queued_rows = (
+        db.query(CommisJob.id)
+        .filter(CommisJob.status == "queued")
+        .order_by(CommisJob.created_at.asc(), CommisJob.id.asc())
+        .limit(limit)
+        .all()
+    )
+    queued_ids = [int(row.id if hasattr(row, "id") else row[0]) for row in queued_rows]
+    if not queued_ids:
+        return []
+
     result = db.execute(
-        text("""
-            UPDATE commis_jobs
-            SET status = 'running',
-                started_at = datetime('now'),
-                claimed_at = datetime('now'),
-                heartbeat_at = datetime('now'),
-                worker_id = :worker_id
-            WHERE id IN (
-                SELECT id FROM commis_jobs
-                WHERE status = 'queued'
-                ORDER BY created_at ASC, id ASC
-                LIMIT :limit
-            )
-            RETURNING id
-        """),
-        {"limit": limit, "worker_id": worker_id},
+        update(CommisJob)
+        .where(
+            CommisJob.id.in_(bindparam("job_ids", expanding=True)),
+            CommisJob.status == "queued",
+        )
+        .values(
+            status="running",
+            started_at=text("datetime('now')"),
+            claimed_at=text("datetime('now')"),
+            heartbeat_at=text("datetime('now')"),
+            worker_id=worker_id,
+        )
+        .returning(CommisJob.id),
+        {"job_ids": queued_ids},
     )
     job_ids = [row[0] for row in result.fetchall()]
     db.commit()

@@ -281,6 +281,22 @@ def _claim_next_job_sync(owner: QueueOwner) -> QueueJob | None:
     owner_key = _owner_key(owner)
 
     def _claim(conn: sqlite3.Connection) -> QueueJob | None:
+        candidate = conn.execute(
+            """
+            SELECT id FROM job_queue
+            WHERE (
+                status = 'queued' AND scheduled_for <= :now
+            ) OR (
+                status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= :now)
+            )
+            ORDER BY scheduled_for ASC, created_at ASC
+            LIMIT 1
+            """,
+            {"now": now_str},
+        ).fetchone()
+        if candidate is None:
+            return None
+
         row = conn.execute(
             """
             UPDATE job_queue
@@ -290,19 +306,15 @@ def _claim_next_job_sync(owner: QueueOwner) -> QueueJob | None:
                 lease_expires_at = :lease_expires_at,
                 started_at = COALESCE(started_at, :now),
                 updated_at = :now
-            WHERE id = (
-                SELECT id FROM job_queue
-                WHERE (
-                    status = 'queued' AND scheduled_for <= :now
-                ) OR (
-                    status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= :now)
-                )
-                ORDER BY scheduled_for ASC, created_at ASC
-                LIMIT 1
-            )
+            WHERE id = :id
+              AND (
+                  status = 'queued'
+                  OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= :now))
+              )
             RETURNING id, job_id, scheduled_for, attempts, max_attempts, status, last_error
             """,
             {
+                "id": candidate["id"],
                 "lease_owner": owner_key,
                 "lease_expires_at": lease_expires,
                 "now": now_str,
