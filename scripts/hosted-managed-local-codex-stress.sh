@@ -22,6 +22,7 @@ DISPLAY_NAME="Hosted Managed Local Codex Stress"
 LOOP_MODE="assist"
 CHAT_TIMEOUT_SECS="30"
 VERIFY_TIMEOUT_SECS="30"
+DURABILITY_TIMEOUT_SECS="20"
 MACHINE_NAME="${MACHINE_NAME:-}"
 if [[ -z "$MACHINE_NAME" && -f "$HOME/.claude/longhouse-machine-name" ]]; then
   MACHINE_NAME="$(tr -d '\r\n' < "$HOME/.claude/longhouse-machine-name")"
@@ -52,6 +53,8 @@ Options:
   --loop-mode <mode>        manual|assist|autopilot (default: assist)
   --chat-timeout-secs <n>   Max wait for `/chat` SSE before failing (default: 30)
   --verify-timeout-secs <n> Poll timeout for tmux-pane verification (default: 30)
+  --durability-timeout-secs <n>
+                            Max follow-up wait for transcript durability when sync_status=pending (default: 20)
   --machine-name <name>     Optional explicit Longhouse machine label override
   -h, --help                Show help
 EOF
@@ -107,6 +110,11 @@ while (($# > 0)); do
     --verify-timeout-secs)
       [[ -n "${2:-}" ]] || { echo "--verify-timeout-secs requires a value" >&2; exit 1; }
       VERIFY_TIMEOUT_SECS="$2"
+      shift 2
+      ;;
+    --durability-timeout-secs)
+      [[ -n "${2:-}" ]] || { echo "--durability-timeout-secs requires a value" >&2; exit 1; }
+      DURABILITY_TIMEOUT_SECS="$2"
       shift 2
       ;;
     --machine-name)
@@ -168,6 +176,7 @@ export LH_STRESS_DISPLAY_NAME="$DISPLAY_NAME"
 export LH_STRESS_LOOP_MODE="$LOOP_MODE"
 export LH_STRESS_CHAT_TIMEOUT_SECS="$CHAT_TIMEOUT_SECS"
 export LH_STRESS_VERIFY_TIMEOUT_SECS="$VERIFY_TIMEOUT_SECS"
+export LH_STRESS_DURABILITY_TIMEOUT_SECS="$DURABILITY_TIMEOUT_SECS"
 export LH_STRESS_MACHINE_NAME="$MACHINE_NAME"
 
 cd "$ROOT_DIR"
@@ -189,7 +198,6 @@ from typing import Iterable
 from typing import Iterator
 
 import httpx
-from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_capture_command
@@ -209,6 +217,25 @@ class ChatRouteResult:
     saw_done: bool = False
     stream_timed_out: bool = False
     done_payload: dict[str, object] | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DonePayloadCheck:
+    ok: bool
+    sync_status: str | None = None
+    control_status: str | None = None
+    persisted_events: int = 0
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DurabilityCheck:
+    ok: bool
+    attempts: int = 0
+    total_events: int = 0
+    prompt_seen: bool = False
+    token_seen: bool = False
     error: str | None = None
 
 
@@ -308,7 +335,11 @@ def _pane_is_ready(pane: str) -> bool:
 
 
 def _pane_contains_exact_token_line(pane: str, token: str) -> bool:
-    for line in pane.splitlines():
+    return _text_contains_exact_token_line(pane, token)
+
+
+def _text_contains_exact_token_line(text: str, token: str) -> bool:
+    for line in text.splitlines():
         stripped = line.strip()
         if stripped == token:
             return True
@@ -355,6 +386,165 @@ def _wait_for_turn_in_tmux(
         f"Timed out waiting for Codex tmux confirmation for token {token}.\n"
         f"Last pane:\n{last_pane[-4000:]}"
     )
+
+
+def _coerce_int(value: object, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _validate_done_payload(*, session_id: str, done_payload: dict[str, object] | None) -> DonePayloadCheck:
+    if done_payload is None:
+        return DonePayloadCheck(ok=False, error="missing done payload")
+    if done_payload.get("created_continuation") is not False:
+        return DonePayloadCheck(
+            ok=False,
+            error=f"expected created_continuation=false, got {done_payload.get('created_continuation')!r}",
+        )
+    if str(done_payload.get("shipped_session_id") or "") != session_id:
+        return DonePayloadCheck(
+            ok=False,
+            error=f"expected shipped_session_id={session_id}, got {done_payload.get('shipped_session_id')!r}",
+        )
+
+    exit_code_raw = done_payload.get("exit_code")
+    try:
+        exit_code = int(exit_code_raw)
+    except (TypeError, ValueError):
+        return DonePayloadCheck(ok=False, error=f"expected exit_code=0, got {exit_code_raw!r}")
+    if exit_code != 0:
+        return DonePayloadCheck(ok=False, error=f"expected exit_code=0, got {exit_code_raw!r}")
+
+    persistence_error = done_payload.get("persistence_error")
+    if persistence_error is not None:
+        return DonePayloadCheck(ok=False, error=f"unexpected persistence_error={persistence_error!r}")
+
+    control_status_raw = str(done_payload.get("control_status") or "").strip().lower()
+    control_status = control_status_raw or None
+    if control_status in {"failed", "error"}:
+        return DonePayloadCheck(ok=False, error=f"unexpected control_status={control_status!r}")
+
+    sync_status_raw = str(done_payload.get("sync_status") or "").strip().lower()
+    persisted_events = _coerce_int(done_payload.get("persisted_events"), default=0)
+    if sync_status_raw:
+        if sync_status_raw not in {"pending", "complete"}:
+            return DonePayloadCheck(ok=False, error=f"unexpected sync_status={sync_status_raw!r}")
+        return DonePayloadCheck(
+            ok=True,
+            sync_status=sync_status_raw,
+            control_status=control_status,
+            persisted_events=persisted_events,
+        )
+
+    if persisted_events <= 0:
+        return DonePayloadCheck(
+            ok=False,
+            error="expected sync_status in {'pending','complete'} or legacy persisted_events>0 success",
+        )
+    return DonePayloadCheck(
+        ok=True,
+        sync_status="complete",
+        control_status=control_status,
+        persisted_events=persisted_events,
+    )
+
+
+def _fetch_session_events(
+    *,
+    client: httpx.Client,
+    api_url: str,
+    device_token: str,
+    session_id: str,
+) -> tuple[list[dict[str, object]], int]:
+    response = client.get(
+        f"{api_url.rstrip('/')}/api/agents/sessions/{session_id}/events",
+        headers={"X-Agents-Token": device_token},
+        params={"limit": 500, "branch_mode": "head"},
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"events status={response.status_code} body={response.text[:400]}")
+    payload = response.json()
+    events = payload.get("events")
+    if not isinstance(events, list):
+        raise RuntimeError(f"malformed events payload: {payload!r}")
+    return events, _coerce_int(payload.get("total"), default=len(events))
+
+
+def _events_contain_turn(events: Iterable[dict[str, object]], *, prompt: str, token: str) -> tuple[bool, bool]:
+    prompt_seen = False
+    token_seen = False
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        role = str(event.get("role") or "").strip().lower()
+        content_text = str(event.get("content_text") or "")
+        if role == "user" and content_text == prompt:
+            prompt_seen = True
+        if role == "assistant" and _text_contains_exact_token_line(content_text, token):
+            token_seen = True
+    return prompt_seen, token_seen
+
+
+def _wait_for_transcript_durability(
+    *,
+    client: httpx.Client,
+    api_url: str,
+    device_token: str,
+    session_id: str,
+    prompt: str,
+    token: str,
+    timeout_secs: float,
+    poll_interval_secs: float = 1.0,
+) -> DurabilityCheck:
+    deadline = time.monotonic() + timeout_secs
+    attempts = 0
+    last_total = 0
+    last_prompt_seen = False
+    last_token_seen = False
+    last_error = ""
+
+    while True:
+        attempts += 1
+        try:
+            events, total_events = _fetch_session_events(
+                client=client,
+                api_url=api_url,
+                device_token=device_token,
+                session_id=session_id,
+            )
+        except Exception as exc:
+            last_error = f"{type(exc).__name__}: {exc}"
+        else:
+            last_total = total_events
+            last_prompt_seen, last_token_seen = _events_contain_turn(events, prompt=prompt, token=token)
+            if last_prompt_seen and last_token_seen:
+                return DurabilityCheck(
+                    ok=True,
+                    attempts=attempts,
+                    total_events=last_total,
+                    prompt_seen=True,
+                    token_seen=True,
+                )
+            last_error = (
+                f"prompt_seen={int(last_prompt_seen)} token_seen={int(last_token_seen)} total_events={last_total}"
+            )
+
+        if time.monotonic() >= deadline:
+            return DurabilityCheck(
+                ok=False,
+                attempts=attempts,
+                total_events=last_total,
+                prompt_seen=last_prompt_seen,
+                token_seen=last_token_seen,
+                error=(
+                    "Transcript durability did not land before timeout "
+                    f"(prompt={int(last_prompt_seen)} token={int(last_token_seen)} total_events={last_total}); "
+                    f"last_check={last_error}"
+                ),
+            )
+        time.sleep(poll_interval_secs)
 
 
 def _send_chat_via_api(
@@ -490,6 +680,7 @@ def main() -> int:
     loop_mode = os.environ["LH_STRESS_LOOP_MODE"]
     chat_timeout_secs = float(os.environ["LH_STRESS_CHAT_TIMEOUT_SECS"])
     verify_timeout_secs = float(os.environ["LH_STRESS_VERIFY_TIMEOUT_SECS"])
+    durability_timeout_secs = float(os.environ["LH_STRESS_DURABILITY_TIMEOUT_SECS"])
     machine_name = os.environ.get("LH_STRESS_MACHINE_NAME", "").strip()
 
     if shutil.which("tmux") is None:
@@ -561,6 +752,8 @@ def main() -> int:
             prompt_seen = False
             token_seen = False
             pane_tail = ""
+            done_check = DonePayloadCheck(ok=False, error="done payload not evaluated")
+            durability_check: DurabilityCheck | None = None
             if chat_result.status_code == 200:
                 try:
                     pane, prompt_seen, token_seen = _wait_for_turn_in_tmux(
@@ -575,32 +768,62 @@ def main() -> int:
                     tmux_error = f"{type(exc).__name__}: {exc}"
                     pane_tail = _capture_tmux_pane(session_name=session_name, tmux_tmpdir=tmux_tmpdir)[-1200:]
 
-            done_payload_error = validate_managed_local_chat_done_payload(
+            done_check = _validate_done_payload(
                 session_id=session_id,
                 done_payload=chat_result.done_payload,
             )
+            if (
+                done_check.ok
+                and done_check.sync_status == "pending"
+                and chat_result.status_code == 200
+                and chat_result.error is None
+                and tmux_error is None
+                and prompt_seen
+                and token_seen
+            ):
+                durability_check = _wait_for_transcript_durability(
+                    client=client,
+                    api_url=api_url,
+                    device_token=device_token,
+                    session_id=session_id,
+                    prompt=prompt,
+                    token=token,
+                    timeout_secs=durability_timeout_secs,
+                )
 
             ok = (
                 chat_result.status_code == 200
                 and chat_result.error is None
-                and done_payload_error is None
+                and done_check.ok
                 and tmux_error is None
                 and prompt_seen
                 and token_seen
+                and (durability_check is None or durability_check.ok)
             )
             label = "ok" if ok else "fail"
             print(
                 f"[{idx}/{len(prompts)}] {label} status={chat_result.status_code} prompt={prompt!r} "
                 f"token={token} tmux_prompt_seen={int(prompt_seen)} tmux_token_seen={int(token_seen)} "
                 f"api_done={int(chat_result.saw_done)} api_delta={int(chat_result.saw_assistant_delta)} "
-                f"api_timed_out={int(chat_result.stream_timed_out)}"
+                f"api_timed_out={int(chat_result.stream_timed_out)} "
+                f"sync_status={done_check.sync_status or 'missing'} "
+                f"control_status={done_check.control_status or 'missing'}"
             )
             if chat_result.error:
                 print(f"  api_error: {chat_result.error}")
             if chat_result.done_payload is not None:
                 print(f"  done_payload: {json.dumps(chat_result.done_payload, sort_keys=True)}")
-            if done_payload_error:
-                print(f"  done_payload_error: {done_payload_error}")
+            if done_check.error:
+                print(f"  done_payload_error: {done_check.error}")
+            if durability_check is not None:
+                print(
+                    "  durability_check: "
+                    f"ok={int(durability_check.ok)} attempts={durability_check.attempts} "
+                    f"prompt_seen={int(durability_check.prompt_seen)} token_seen={int(durability_check.token_seen)} "
+                    f"total_events={durability_check.total_events}"
+                )
+                if durability_check.error:
+                    print(f"  durability_error: {durability_check.error}")
             if tmux_error:
                 print(f"  tmux_error: {tmux_error}")
             if pane_tail:

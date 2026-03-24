@@ -71,6 +71,7 @@ class TurnRunResult:
     http_status: int
     sse_error: str | None
     done_payload: dict[str, object] | None
+    sync_status: str | None
     delivery: PromptDeliveryCheck
 
 
@@ -170,6 +171,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--delay-secs", type=float, default=0.0, help="Delay between turns.")
     parser.add_argument("--prompt-prefix", default="lh-claude-stress", help="Prompt prefix for generated messages.")
     parser.add_argument("--timeout-secs", type=float, default=60.0, help="HTTP timeout per request.")
+    parser.add_argument(
+        "--durability-timeout-secs",
+        type=float,
+        default=20.0,
+        help="Follow-up wait for prompt durability when the done payload reports sync_status=pending.",
+    )
     args = parser.parse_args()
 
     if not args.session_id and not args.cwd:
@@ -255,6 +262,7 @@ def _run_stress_turn(
     prompt: str,
     index: int,
     session_factory,
+    durability_timeout_secs: float,
 ) -> TurnRunResult:
     with session_factory() as db:
         session = _fetch_managed_local_claude_session(db, session_id)
@@ -264,6 +272,7 @@ def _run_stress_turn(
     sse_error: str | None = None
     done_payload: dict[str, object] | None = None
     status_code = 0
+    sync_status: str | None = None
 
     with client.stream(
         "POST",
@@ -279,6 +288,7 @@ def _run_stress_turn(
                 http_status=response.status_code,
                 sse_error=response.text[:400],
                 done_payload=None,
+                sync_status=None,
                 delivery=PromptDeliveryCheck(
                     ok=False,
                     exact_user_events_before=before_count,
@@ -301,27 +311,43 @@ def _run_stress_turn(
                     parsed_done = json.loads(event.data)
                     if isinstance(parsed_done, dict):
                         done_payload = parsed_done
+                        raw_sync_status = str(parsed_done.get("sync_status") or "").strip().lower()
+                        if raw_sync_status:
+                            sync_status = raw_sync_status
                 except json.JSONDecodeError:
                     done_payload = {"raw": event.data}
 
-    with session_factory() as db:
-        session = _fetch_managed_local_claude_session(db, session_id)
-        new_events = _fetch_new_events(db, session.id, before_event_id)
-        delivery = assess_prompt_delivery(
-            prompt=prompt,
-            exact_user_events_before=before_count,
-            new_events=new_events,
-        )
-        actual_total = _count_exact_user_events(db, session.id, prompt)
-        if actual_total != before_count + delivery.exact_user_events_in_new_batch:
-            delivery = PromptDeliveryCheck(
-                ok=False,
+    if sync_status is None and isinstance(done_payload, dict):
+        persisted_events = done_payload.get("persisted_events")
+        try:
+            if int(persisted_events or 0) > 0:
+                sync_status = "complete"
+        except (TypeError, ValueError):
+            sync_status = None
+
+    deadline = time.monotonic() + (durability_timeout_secs if sync_status == "pending" else 0.0)
+    while True:
+        with session_factory() as db:
+            session = _fetch_managed_local_claude_session(db, session_id)
+            new_events = _fetch_new_events(db, session.id, after_event_id=before_event_id)
+            delivery = assess_prompt_delivery(
+                prompt=prompt,
                 exact_user_events_before=before_count,
-                exact_user_events_after=actual_total,
-                exact_user_events_in_new_batch=delivery.exact_user_events_in_new_batch,
-                assistant_messages=delivery.assistant_messages,
-                error="Prompt total count drifted after send",
+                new_events=new_events,
             )
+            actual_total = _count_exact_user_events(db, session.id, prompt)
+            if actual_total != before_count + delivery.exact_user_events_in_new_batch:
+                delivery = PromptDeliveryCheck(
+                    ok=False,
+                    exact_user_events_before=before_count,
+                    exact_user_events_after=actual_total,
+                    exact_user_events_in_new_batch=delivery.exact_user_events_in_new_batch,
+                    assistant_messages=delivery.assistant_messages,
+                    error="Prompt total count drifted after send",
+                )
+        if delivery.ok or sync_status != "pending" or time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
 
     ok = status_code == 200 and sse_error is None and delivery.ok
     return TurnRunResult(
@@ -331,6 +357,7 @@ def _run_stress_turn(
         http_status=status_code,
         sse_error=sse_error,
         done_payload=done_payload,
+        sync_status=sync_status,
         delivery=delivery,
     )
 
@@ -369,6 +396,7 @@ def main() -> int:
                 prompt=prompt,
                 index=idx,
                 session_factory=session_factory,
+                durability_timeout_secs=args.durability_timeout_secs,
             )
             assistant_summary = (
                 result.delivery.assistant_messages[0][:120]
@@ -386,7 +414,8 @@ def main() -> int:
                 f"status={result.http_status} prompt={prompt!r} "
                 f"new_exact={result.delivery.exact_user_events_in_new_batch} "
                 f"total_exact={result.delivery.exact_user_events_after} "
-                f"persisted={persisted_events}"
+                f"persisted={persisted_events} "
+                f"sync_status={result.sync_status or 'missing'}"
             )
             if assistant_summary:
                 print(f"  assistant: {assistant_summary}")
