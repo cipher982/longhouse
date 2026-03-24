@@ -119,13 +119,38 @@ async def _handle_exec_chunk(
     if not (job_id and stream and data):
         return
 
-    job = runner_crud.get_job(db, job_id)
-    if not job or job.runner_id != runner_id or job.owner_id != owner_id:
+    def _write_chunk(wdb: Session) -> dict | None:
+        job = runner_crud.get_job(wdb, job_id)
+        if not job or job.runner_id != runner_id or job.owner_id != owner_id:
+            return None
+        updated_job = runner_crud.update_job_output(wdb, job_id, stream, data)
+        if not updated_job:
+            return None
+        return {
+            "commis_id": updated_job.commis_id,
+            "run_id": updated_job.run_id,
+        }
+
+    try:
+        ws = get_write_serializer()
+        if ws.is_configured:
+            updated_job = await ws.execute(_write_chunk, label="runner-output", auto_commit=False)
+        else:
+            updated_job = _write_chunk(db)
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.error("Failed to persist exec_chunk for runner %s, job %s: %s", runner_id, job_id, exc)
+        return
+
+    if not updated_job:
         logger.warning(f"Ignoring exec_chunk for invalid job {job_id} from runner {runner_id}")
         return
 
-    updated_job = runner_crud.update_job_output(db, job_id, stream, data)
-    if not updated_job or not updated_job.commis_id:
+    commis_id = updated_job.get("commis_id")
+    if not commis_id:
         return
 
     output_buffer = get_commis_output_buffer()
@@ -133,7 +158,7 @@ async def _handle_exec_chunk(
     # Resolve commis job metadata once (cached in buffer)
     commis_job_id = None
     trace_id = None
-    meta = output_buffer.get_meta(updated_job.commis_id)
+    meta = output_buffer.get_meta(commis_id)
     last_resolved_at = 0
     if meta:
         commis_job_id = meta.job_id
@@ -145,7 +170,7 @@ async def _handle_exec_chunk(
         commis_job = (
             db.query(CommisJob)
             .filter(
-                CommisJob.commis_id == updated_job.commis_id,
+                CommisJob.commis_id == commis_id,
                 CommisJob.owner_id == owner_id,
             )
             .order_by(CommisJob.id.desc())
@@ -157,7 +182,7 @@ async def _handle_exec_chunk(
 
         # Mark as resolved (even if not found, to trigger throttling)
         output_buffer.append_output(
-            commis_id=updated_job.commis_id,
+            commis_id=commis_id,
             stream=stream,
             data="",  # Don't append data here, just updating meta
             job_id=commis_job_id,
@@ -167,14 +192,15 @@ async def _handle_exec_chunk(
         )
 
     run_id_int = None
-    if updated_job.run_id is not None:
+    run_id = updated_job.get("run_id")
+    if run_id is not None:
         try:
-            run_id_int = int(updated_job.run_id)
+            run_id_int = int(run_id)
         except (TypeError, ValueError):
             run_id_int = None
 
     output_buffer.append_output(
-        commis_id=updated_job.commis_id,
+        commis_id=commis_id,
         stream=stream,
         data=data,
         runner_job_id=job_id,
@@ -189,7 +215,7 @@ async def _handle_exec_chunk(
         MAX_CHUNK_CHARS = 4000
         payload = {
             "job_id": commis_job_id,
-            "commis_id": updated_job.commis_id,
+            "commis_id": commis_id,
             "runner_job_id": job_id,
             "stream": stream,
             "data": data[-MAX_CHUNK_CHARS:] if len(data) > MAX_CHUNK_CHARS else data,
@@ -198,6 +224,139 @@ async def _handle_exec_chunk(
             "owner_id": owner_id,
         }
         await event_bus.publish(EventType.COMMIS_OUTPUT_CHUNK, payload)
+
+
+async def _handle_exec_done(
+    db: Session,
+    message: dict,
+    runner_id: int,
+    owner_id: int,
+    job_dispatcher,
+) -> None:
+    """Process an exec_done message from a runner."""
+
+    job_id = message.get("job_id")
+    exit_code = message.get("exit_code")
+    duration_ms = message.get("duration_ms")
+    logger.info(f"Exec done from runner {runner_id}, job {job_id}, exit_code {exit_code}")
+
+    if job_id is None or exit_code is None:
+        return
+
+    def _persist_completion(wdb: Session) -> dict | None:
+        job = runner_crud.get_job(wdb, job_id)
+        if not job or job.runner_id != runner_id or job.owner_id != owner_id:
+            return None
+        updated_job = runner_crud.update_job_completed(wdb, job_id, exit_code, duration_ms or 0)
+        if not updated_job:
+            return None
+        return {
+            "stdout": updated_job.stdout_trunc or "",
+            "stderr": updated_job.stderr_trunc or "",
+        }
+
+    try:
+        ws = get_write_serializer()
+        if ws.is_configured:
+            persisted = await ws.execute(_persist_completion, label="runner-job-complete", auto_commit=False)
+        else:
+            persisted = _persist_completion(db)
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.error("Failed to persist exec_done from runner %s, job %s: %s", runner_id, job_id, exc)
+        job_dispatcher.complete_job(
+            job_id,
+            {
+                "ok": False,
+                "error": {
+                    "type": "execution_error",
+                    "message": f"Failed to persist runner completion: {exc}",
+                },
+            },
+            runner_id,
+        )
+        return
+
+    if not persisted:
+        logger.warning(f"Ignoring exec_done for invalid job {job_id} from runner {runner_id}")
+        return
+
+    result = {
+        "ok": True,
+        "data": {
+            "job_id": job_id,
+            "exit_code": exit_code,
+            "stdout": persisted["stdout"],
+            "stderr": persisted["stderr"],
+            "duration_ms": duration_ms or 0,
+        },
+    }
+    job_dispatcher.complete_job(job_id, result, runner_id)
+
+
+async def _handle_exec_error(
+    db: Session,
+    message: dict,
+    runner_id: int,
+    owner_id: int,
+    job_dispatcher,
+) -> None:
+    """Process an exec_error message from a runner."""
+
+    job_id = message.get("job_id")
+    error = message.get("error")
+    logger.error(f"Exec error from runner {runner_id}, job {job_id}: {error}")
+
+    if not job_id or not error:
+        return
+
+    def _persist_error(wdb: Session) -> bool:
+        job = runner_crud.get_job(wdb, job_id)
+        if not job or job.runner_id != runner_id or job.owner_id != owner_id:
+            return False
+        updated_job = runner_crud.update_job_error(wdb, job_id, error)
+        return updated_job is not None
+
+    try:
+        ws = get_write_serializer()
+        if ws.is_configured:
+            persisted = await ws.execute(_persist_error, label="runner-job-error", auto_commit=False)
+        else:
+            persisted = _persist_error(db)
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.error("Failed to persist exec_error from runner %s, job %s: %s", runner_id, job_id, exc)
+        job_dispatcher.complete_job(
+            job_id,
+            {
+                "ok": False,
+                "error": {
+                    "type": "execution_error",
+                    "message": f"Failed to persist runner error state: {exc}",
+                },
+            },
+            runner_id,
+        )
+        return
+
+    if not persisted:
+        logger.warning(f"Ignoring exec_error for invalid job {job_id} from runner {runner_id}")
+        return
+
+    result = {
+        "ok": False,
+        "error": {
+            "type": "execution_error",
+            "message": error,
+        },
+    }
+    job_dispatcher.complete_job(job_id, result, runner_id)
 
 
 # ---------------------------------------------------------------------------
@@ -991,60 +1150,10 @@ async def runner_websocket(
                     await _handle_exec_chunk(db, message, runner_id, owner_id)
 
                 elif message_type == "exec_done":
-                    # Handle job completion
-                    job_id = message.get("job_id")
-                    exit_code = message.get("exit_code")
-                    duration_ms = message.get("duration_ms")
-                    logger.info(f"Exec done from runner {runner_id}, job {job_id}, exit_code {exit_code}")
-
-                    # Update job status in database
-                    if job_id is not None and exit_code is not None:
-                        job = runner_crud.get_job(db, job_id)
-                        if not job or job.runner_id != runner_id or job.owner_id != owner_id:
-                            logger.warning(f"Ignoring exec_done for invalid job {job_id} from runner {runner_id}")
-                            continue
-
-                        runner_crud.update_job_completed(db, job_id, exit_code, duration_ms or 0)
-
-                        # Get final job state to return
-                        job = runner_crud.get_job(db, job_id)
-                        if job:
-                            result = {
-                                "ok": True,
-                                "data": {
-                                    "job_id": job_id,
-                                    "exit_code": exit_code,
-                                    "stdout": job.stdout_trunc or "",
-                                    "stderr": job.stderr_trunc or "",
-                                    "duration_ms": duration_ms or 0,
-                                },
-                            }
-                            job_dispatcher.complete_job(job_id, result, runner_id)
+                    await _handle_exec_done(db, message, runner_id, owner_id, job_dispatcher)
 
                 elif message_type == "exec_error":
-                    # Handle job error
-                    job_id = message.get("job_id")
-                    error = message.get("error")
-                    logger.error(f"Exec error from runner {runner_id}, job {job_id}: {error}")
-
-                    # Update job status in database
-                    if job_id and error:
-                        job = runner_crud.get_job(db, job_id)
-                        if not job or job.runner_id != runner_id or job.owner_id != owner_id:
-                            logger.warning(f"Ignoring exec_error for invalid job {job_id} from runner {runner_id}")
-                            continue
-
-                        runner_crud.update_job_error(db, job_id, error)
-
-                        # Notify waiting dispatcher
-                        result = {
-                            "ok": False,
-                            "error": {
-                                "type": "execution_error",
-                                "message": error,
-                            },
-                        }
-                        job_dispatcher.complete_job(job_id, result, runner_id)
+                    await _handle_exec_error(db, message, runner_id, owner_id, job_dispatcher)
 
                 else:
                     logger.warning(f"Unknown message type from runner {runner_id}: {message_type}")

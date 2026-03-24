@@ -218,12 +218,25 @@ class RunnerJobDispatcher:
                 "error": {"type": "execution_error", "message": "No result received"},
             }
 
+        except asyncio.CancelledError:
+            with self._pending_lock:
+                self._pending_jobs.pop(job.id, None)
+            self.clear_active_job(runner_id)
+            try:
+                runner_crud.update_job_error(db, job.id, "Dispatch cancelled")
+            except Exception:
+                logger.exception("Failed to persist cancellation cleanup for job %s", job.id)
+            raise
+
         except Exception as e:
             # Unexpected error
             with self._pending_lock:
                 self._pending_jobs.pop(job.id, None)
             self.clear_active_job(runner_id)
-            runner_crud.update_job_error(db, job.id, str(e))
+            try:
+                runner_crud.update_job_error(db, job.id, str(e))
+            except Exception:
+                logger.exception("Failed to persist error cleanup for job %s", job.id)
             logger.exception(f"Error dispatching job {job.id}")
             return {
                 "ok": False,
