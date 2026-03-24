@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 import sys
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,17 @@ def _run_attach_command(attach_command: str) -> int:
     parts = shlex.split(attach_command)
     completed = subprocess.run(parts, check=False)
     return int(completed.returncode)
+
+
+def _build_session_url(url: str, session_id: str) -> str:
+    return f"{url.rstrip('/')}/timeline/{session_id}"
+
+
+def _open_session_url(session_url: str) -> bool:
+    try:
+        return bool(webbrowser.open(session_url))
+    except Exception:
+        return False
 
 
 def _load_api_credentials(
@@ -136,6 +148,41 @@ def _launch_managed_local_from_api(
     )
 
 
+def _finalize_managed_local_launch(
+    *,
+    provider_label: str,
+    base_url: str,
+    result: ManagedLocalLaunchResponse,
+    open_browser: bool,
+    attach: bool,
+) -> None:
+    session_url = _build_session_url(base_url, result.session_id)
+    typer.secho(f"Managed local {provider_label} session launched on this device.", fg=typer.colors.GREEN)
+    typer.echo(f"Session ID: {result.session_id}")
+    typer.echo(f"Provider session ID: {result.provider_session_id}")
+    typer.echo(f"Session URL: {session_url}")
+    typer.echo(f"Attach: {result.attach_command}")
+
+    if open_browser:
+        typer.echo("Opening session in browser...")
+        if not _open_session_url(session_url):
+            typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
+
+    if not attach:
+        return
+    if not _interactive_stdio():
+        typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
+        return
+
+    typer.echo("Attaching...")
+    exit_code = _run_attach_command(result.attach_command)
+    if exit_code != 0:
+        typer.secho(
+            f"Auto-attach exited with code {exit_code}. Run the printed attach command manually.",
+            fg=typer.colors.YELLOW,
+        )
+
+
 def claude(
     cwd: Path = typer.Option(
         Path("."),
@@ -157,6 +204,11 @@ def claude(
         True,
         "--attach/--no-attach",
         help="Auto-attach to the managed local session when running interactively.",
+    ),
+    open_browser: bool = typer.Option(
+        False,
+        "--open/--no-open",
+        help="Open the session detail page in the default browser after launch.",
     ),
     url: str | None = typer.Option(
         None,
@@ -193,22 +245,10 @@ def claude(
         machine_name=machine_name,
         provider="claude",
     )
-
-    typer.secho("Managed local Claude session launched on this device.", fg=typer.colors.GREEN)
-    typer.echo(f"Session ID: {result.session_id}")
-    typer.echo(f"Provider session ID: {result.provider_session_id}")
-    typer.echo(f"Attach: {result.attach_command}")
-
-    if not attach:
-        return
-    if not _interactive_stdio():
-        typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
-        return
-
-    typer.echo("Attaching...")
-    exit_code = _run_attach_command(result.attach_command)
-    if exit_code != 0:
-        typer.secho(
-            f"Auto-attach exited with code {exit_code}. Run the printed attach command manually.",
-            fg=typer.colors.YELLOW,
-        )
+    _finalize_managed_local_launch(
+        provider_label="Claude",
+        base_url=resolved_url,
+        result=result,
+        open_browser=open_browser,
+        attach=attach,
+    )

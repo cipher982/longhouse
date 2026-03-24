@@ -103,6 +103,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
 def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp_path):
     runner = CliRunner()
     attach_calls: list[str] = []
+    open_calls: list[str] = []
 
     monkeypatch.setattr(
         claude_cli,
@@ -122,6 +123,7 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
     )
     monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: True)
     monkeypatch.setattr(claude_cli, "_run_attach_command", lambda command: attach_calls.append(command) or 0)
+    monkeypatch.setattr(claude_cli, "_open_session_url", lambda url: open_calls.append(url) or True)
 
     result = runner.invoke(
         app,
@@ -135,6 +137,7 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
             "assist",
             "--name",
             "Demo session",
+            "--open",
         ],
     )
 
@@ -143,6 +146,9 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
     assert "Managed local Claude session launched on this device." in result.output
     assert "Session ID: session-123" in result.output
     assert "Provider session ID: provider-123" in result.output
+    assert "Session URL: https://longhouse.test/timeline/session-123" in result.output
     assert "Attach: zsh -lc 'exec tmux attach -t lh-demo'" in result.output
+    assert "Opening session in browser..." in result.output
     assert "Attaching..." in result.output
+    assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert attach_calls == ["zsh -lc 'exec tmux attach -t lh-demo'"]
