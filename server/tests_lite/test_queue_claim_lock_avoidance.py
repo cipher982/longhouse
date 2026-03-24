@@ -93,7 +93,8 @@ def test_claim_jobs_updates_selected_commis_rows():
     assert len(db.execute_calls) == 1
     _stmt, params = db.execute_calls[0]
     assert params == {"job_ids": [11, 12]}
-    assert db.commit_calls == 1
+    # commit is handled by the WriteSerializer caller, not by claim_jobs itself
+    assert db.commit_calls == 0
 
 
 def test_claim_jobs_updates_real_commis_rows(tmp_path):
@@ -115,6 +116,9 @@ def test_claim_jobs_updates_real_commis_rows(tmp_path):
         db.commit()
 
         claimed = claim_jobs(db, 5, "worker-1")
+        # In production the WriteSerializer auto-commits after claim_jobs returns.
+        # Simulate that here so the ORM identity map sees the updated rows.
+        db.commit()
         claimed_rows = db.query(CommisJob).filter(CommisJob.id.in_(claimed)).order_by(CommisJob.id.asc()).all()
 
         assert len(claimed) == 2

@@ -350,24 +350,32 @@ class CommisJobProcessor:
 
         Runs every HEARTBEAT_INTERVAL_SECONDS and reclaims any jobs
         that haven't received a heartbeat within STALE_THRESHOLD_SECONDS.
+
+        Writes routed through WriteSerializer for SQLite safety.
         """
+        from zerg.services.write_serializer import get_write_serializer
+
         while self._running:
             try:
-                for commis_id in self._iter_commis_ids():
+                ws = get_write_serializer()
+                if ws.is_configured:
+                    for commis_id in self._iter_commis_ids():
 
-                    def _reclaim(cid=commis_id):
-                        token = set_test_commis_id(cid) if cid else None
-                        try:
-                            with db_session() as db:
+                        def _reclaim(db, cid=commis_id):
+                            token = set_test_commis_id(cid) if cid else None
+                            try:
                                 return reclaim_stale_jobs(db)
-                        finally:
-                            if token is not None:
-                                reset_test_commis_id(token)
+                            finally:
+                                if token is not None:
+                                    reset_test_commis_id(token)
 
-                    reclaimed = await asyncio.to_thread(_reclaim)
-                    if reclaimed > 0:
-                        label = commis_id or "default"
-                        logger.info(f"Reclaimed {reclaimed} stale commis jobs (db={label})")
+                        reclaimed = await ws.execute(
+                            lambda db, cid=commis_id: _reclaim(db, cid),
+                            label="commis-reclaim",
+                        )
+                        if reclaimed > 0:
+                            label = commis_id or "default"
+                            logger.info(f"Reclaimed {reclaimed} stale commis jobs (db={label})")
             except Exception as e:
                 logger.exception(f"Error in stale job reclaim loop: {e}")
 
@@ -382,15 +390,23 @@ class CommisJobProcessor:
         is still alive. If the worker crashes, heartbeats stop, and
         the stale reclaim loop will reset the job to 'queued'.
 
+        Writes routed through WriteSerializer for SQLite safety.
+
         Args:
             job_id: The job ID to send heartbeats for
         """
+        from zerg.services.write_serializer import get_write_serializer
+
         token = set_test_commis_id(commis_id) if commis_id else None
         try:
             while (commis_id, job_id) in self._running_jobs:
                 try:
-                    with db_session() as db:
-                        success = update_heartbeat(db, job_id, self._worker_id)
+                    ws = get_write_serializer()
+                    if ws.is_configured:
+                        success = await ws.execute(
+                            lambda db: update_heartbeat(db, job_id, self._worker_id),
+                            label="commis-heartbeat",
+                        )
                         if not success:
                             # Job was cancelled or reclaimed - stop heartbeating
                             logger.warning(f"Heartbeat failed for job {job_id} - job may have been reclaimed")
@@ -409,22 +425,29 @@ class CommisJobProcessor:
         Uses dialect-aware atomic job claiming:
         - Postgres: FOR UPDATE SKIP LOCKED
         - SQLite: BEGIN IMMEDIATE + UPDATE RETURNING
+
+        Writes routed through WriteSerializer for SQLite safety.
         """
+        from zerg.services.write_serializer import get_write_serializer
+
+        ws = get_write_serializer()
+        if not ws.is_configured:
+            return
+
         tasks = []
         total_claimed = 0
 
         for commis_id in self._iter_commis_ids():
 
-            def _claim(cid=commis_id):
+            def _claim(db, cid=commis_id):
                 token = set_test_commis_id(cid) if cid else None
                 try:
-                    with db_session() as db:
-                        return claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
+                    return claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
                 finally:
                     if token is not None:
                         reset_test_commis_id(token)
 
-            job_ids = await asyncio.to_thread(_claim)
+            job_ids = await ws.execute(lambda db, cid=commis_id: _claim(db, cid), label="commis-claim")
 
             if not job_ids:
                 continue

@@ -28,7 +28,6 @@ from sqlalchemy import bindparam
 from sqlalchemy import text
 from sqlalchemy import update
 
-from zerg.database import db_session
 from zerg.models.models import CommisJob
 
 if TYPE_CHECKING:
@@ -95,7 +94,7 @@ def claim_jobs(
         {"job_ids": queued_ids},
     )
     job_ids = [row[0] for row in result.fetchall()]
-    db.commit()
+    # No commit here — caller (WriteSerializer) handles commit.
     return job_ids
 
 
@@ -124,7 +123,7 @@ def update_heartbeat(db: Session, job_id: int, worker_id: str) -> bool:
         """),
         {"job_id": job_id, "worker_id": worker_id},
     )
-    db.commit()
+    # No commit here — caller (WriteSerializer) handles commit.
     return result.rowcount > 0
 
 
@@ -163,7 +162,7 @@ def reclaim_stale_jobs(db: Session) -> int:
         """),
         {"threshold": str(threshold)},
     )
-    db.commit()
+    # No commit here — caller (WriteSerializer) handles commit.
     count = result.rowcount
     if count > 0:
         logger.warning(f"Reclaimed {count} stale commis jobs")
@@ -172,5 +171,9 @@ def reclaim_stale_jobs(db: Session) -> int:
 
 async def reclaim_stale_jobs_async() -> int:
     """Async wrapper for stale job reclaim (for background tasks)."""
-    with db_session() as db:
-        return reclaim_stale_jobs(db)
+    from zerg.services.write_serializer import get_write_serializer
+
+    ws = get_write_serializer()
+    if not ws.is_configured:
+        return 0
+    return await ws.execute(lambda db: reclaim_stale_jobs(db), label="commis-reclaim-async")

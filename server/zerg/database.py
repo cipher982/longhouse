@@ -150,9 +150,9 @@ except ImportError:
     pass
 
 
-def _configure_sqlite_engine(engine: Engine) -> None:
+def _configure_sqlite_engine(engine: Engine, *, busy_timeout_ms: int | None = None) -> None:
     """Configure SQLite pragmas for concurrency and durability."""
-    busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "30000"))
+    _busy_timeout_ms = busy_timeout_ms if busy_timeout_ms is not None else int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
     synchronous = os.getenv("SQLITE_SYNCHRONOUS", "NORMAL").strip().upper() or "NORMAL"
     journal_mode = os.getenv("SQLITE_JOURNAL_MODE", "WAL").strip().upper() or "WAL"
     foreign_keys = os.getenv("SQLITE_FOREIGN_KEYS", "ON").strip().upper() or "ON"
@@ -167,17 +167,20 @@ def _configure_sqlite_engine(engine: Engine) -> None:
             cursor.execute(f"PRAGMA journal_mode={journal_mode}")
             cursor.execute(f"PRAGMA synchronous={synchronous}")
             cursor.execute(f"PRAGMA foreign_keys={foreign_keys}")
-            cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
+            cursor.execute(f"PRAGMA busy_timeout={_busy_timeout_ms}")
             cursor.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
+            # Analyze query planner stats on first connect for long-lived connections
+            cursor.execute("PRAGMA optimize=0x10002")
         finally:
             cursor.close()
 
 
-def make_engine(db_url: str, **kwargs) -> Engine:
+def make_engine(db_url: str, *, busy_timeout_ms: int | None = None, **kwargs) -> Engine:
     """Create a SQLAlchemy engine with the given URL and options.
 
     Args:
         db_url: Database connection URL
+        busy_timeout_ms: Override busy_timeout (default from env or 5000ms)
         **kwargs: Additional arguments for create_engine
 
     Returns:
@@ -208,16 +211,16 @@ def make_engine(db_url: str, **kwargs) -> Engine:
     # In-memory SQLite (sqlite:// with no path) requires StaticPool to keep
     # a single connection alive — otherwise each pool checkout creates a new
     # empty database.  File-backed SQLite uses the default QueuePool.
+    _busy_timeout = busy_timeout_ms if busy_timeout_ms is not None else int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
     is_memory = parsed.database in (None, "", ":memory:")
     if is_memory:
         kwargs.setdefault("poolclass", StaticPool)
     else:
         if "timeout" not in connect_args:
-            busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "30000"))
-            connect_args["timeout"] = busy_timeout_ms / 1000.0
+            connect_args["timeout"] = _busy_timeout / 1000.0
 
     engine = create_engine(db_url, **kwargs)
-    _configure_sqlite_engine(engine)
+    _configure_sqlite_engine(engine, busy_timeout_ms=_busy_timeout)
     return engine
 
 
@@ -285,11 +288,43 @@ def get_session_factory() -> sessionmaker:
 if _settings.database_url:
     default_engine = make_engine(_settings.database_url)
     default_session_factory = make_sessionmaker(default_engine)
+
+    # Dedicated write engine: single connection (StaticPool) so the
+    # WriteSerializer is the only thing that ever writes.  30s busy_timeout
+    # for the writer — it's the serialized path so contention is near-zero.
+    _write_engine = make_engine(
+        _settings.database_url,
+        busy_timeout_ms=30000,
+        poolclass=StaticPool,
+    )
+    _write_session_factory = make_sessionmaker(_write_engine)
 else:
     # Unit tests will override these in conftest.py before any actual usage
     logger.warning("DATABASE_URL not set - using placeholder (will be overridden by tests)")
     default_engine = None  # type: ignore[assignment]
     default_session_factory = None  # type: ignore[assignment]
+    _write_engine = None
+    _write_session_factory = None
+
+
+def configure_write_serializer() -> None:
+    """Configure the WriteSerializer with the dedicated write engine.
+
+    Call once at startup (from lifespan) after database_url is set.
+    No-op if write engine is not available (tests).
+    """
+    if _write_session_factory is None:
+        return
+    from zerg.services.write_serializer import get_write_serializer
+
+    ws = get_write_serializer()
+    if not ws.is_configured:
+        ws.configure(_write_session_factory)
+
+
+def get_write_engine() -> Engine | None:
+    """Return the dedicated write engine (for WAL checkpoint etc.)."""
+    return _write_engine
 
 
 def get_db(session_factory: Any = None) -> Iterator[Session]:
@@ -996,6 +1031,8 @@ async def start_wal_checkpoint_loop() -> None:
                 row = result.fetchone()
                 if row and row[1] > 0:
                     logger.info("WAL checkpoint: %d pages written, %d remaining", row[1], row[2])
+                # Periodic PRAGMA optimize lets SQLite update its query planner stats
+                conn.exec_driver_sql("PRAGMA optimize")
 
     async def _loop():
         while True:

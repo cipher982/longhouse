@@ -37,6 +37,7 @@ from zerg.database import get_session_factory
 from zerg.models.agents import SessionTask
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 from zerg.services.session_turn_reviews import turn_loop_retry_needed
+from zerg.services.write_serializer import get_write_serializer
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +127,10 @@ async def run_ingest_task_worker(poll_seconds: float = WORKER_POLL_SECONDS) -> N
 
 async def _process_batch() -> None:
     while True:
-        # Run sync DB claim in a thread to avoid blocking the event loop.
-        # _claim_pending does a query + commit that can block on SQLite
-        # busy_timeout (30s) if a write lock is held.
-        tasks = await asyncio.to_thread(_claim_pending_thread)
+        ws = get_write_serializer()
+        if not ws.is_configured:
+            return
+        tasks = await ws.execute(lambda db: _claim_pending(db, CLAIM_LIMIT), label="task-claim")
 
         if not tasks:
             return
@@ -140,16 +141,6 @@ async def _process_batch() -> None:
             # Task was re-queued; break so the outer worker sleep provides a
             # yield before we re-claim — prevents event-loop starvation.
             break
-
-
-def _claim_pending_thread() -> list[tuple[str, str, str]]:
-    """Thread-safe wrapper for _claim_pending."""
-    factory = get_session_factory()
-    db = factory()
-    try:
-        return _claim_pending(db, CLAIM_LIMIT)
-    finally:
-        db.close()
 
 
 def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
@@ -177,12 +168,13 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
         task.attempts = (task.attempts or 0) + 1
         task.updated_at = now
         claimed.append((task.id, task.session_id, task.task_type))
-    db.commit()
+    # No commit — serializer auto-commits
     return claimed
 
 
 async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
     """Execute a single task. Returns True if the task was re-queued (RetryTaskLater)."""
+    ws = get_write_serializer()
     timeout_seconds = TASK_TIMEOUT_SECONDS.get(task_type)
     try:
         if timeout_seconds is None:
@@ -190,7 +182,7 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
         else:
             await asyncio.wait_for(_run_task_impl(task_id, session_id, task_type), timeout=timeout_seconds)
 
-        await asyncio.to_thread(_mark_status, task_id, "done", None, False)
+        await ws.execute(lambda db: _mark_status(db, task_id, "done", None, False), label="task-done")
         logger.debug("Ingest task %s (%s/%s) done", task_id, task_type, session_id)
         return False
     except RetryTaskLater as e:
@@ -198,22 +190,19 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
         # RetryTaskLater means "not yet" (session still active), not a real failure.
         # Reset to pending WITHOUT consuming the retry budget so we never drop a
         # turn review just because the session was actively running for >6 seconds.
-        await asyncio.to_thread(_reset_for_retry_later, task_id, str(e))
+        await ws.execute(lambda db, _e=str(e): _reset_for_retry_later(db, task_id, _e), label="task-retry")
         return True
     except asyncio.TimeoutError:
         timeout_label = f"{timeout_seconds:g}s" if timeout_seconds is not None else "unknown"
         logger.warning("Ingest task %s (%s/%s) timed out after %s", task_id, task_type, session_id, timeout_label)
-        await asyncio.to_thread(
-            _mark_status,
-            task_id,
-            "failed",
-            f"{task_type} task timed out after {timeout_label}",
-            True,
+        await ws.execute(
+            lambda db, _msg=f"{task_type} task timed out after {timeout_label}": _mark_status(db, task_id, "failed", _msg, True),
+            label="task-timeout",
         )
         return False
     except Exception as e:
         logger.exception("Ingest task %s (%s/%s) failed", task_id, task_type, session_id)
-        await asyncio.to_thread(_mark_status, task_id, "failed", str(e), True)
+        await ws.execute(lambda db, _e=str(e): _mark_status(db, task_id, "failed", _e, True), label="task-fail")
         return False
 
 
@@ -260,7 +249,7 @@ async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
     logger.warning("Unknown task_type %r for session %s", task_type, session_id)
 
 
-def _reset_for_retry_later(task_id: str, error: str) -> None:
+def _reset_for_retry_later(db, task_id: str, error: str) -> None:
     """Reset a task to pending without consuming its retry budget.
 
     Used by RetryTaskLater — the signal means "not yet" (e.g. session is still
@@ -270,52 +259,37 @@ def _reset_for_retry_later(task_id: str, error: str) -> None:
     Applies exponential backoff by pushing updated_at into the future so
     _claim_pending (which orders by updated_at) naturally delays re-pickup:
     2s → 4s → 8s → 16s (capped).
+
+    Called via WriteSerializer — no commit/rollback/close needed.
     """
-    factory = get_session_factory()
-    db = factory()
-    try:
-        task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
-        if not task:
-            return
-        # Undo the attempt increment from _claim_pending
-        task.attempts = max(0, (task.attempts or 1) - 1)
-        task.retry_later_count = (task.retry_later_count or 0) + 1
+    task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
+    if not task:
+        return
+    # Undo the attempt increment from _claim_pending
+    task.attempts = max(0, (task.attempts or 1) - 1)
+    task.retry_later_count = (task.retry_later_count or 0) + 1
+    task.status = "pending"
+    task.error = error[:1000] if error else None
+    # Exponential backoff: 2^count * base, capped at max
+    delay = min(
+        RETRY_LATER_BASE_SECONDS * (2 ** (task.retry_later_count - 1)),
+        RETRY_LATER_MAX_SECONDS,
+    )
+    task.updated_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+
+
+def _mark_status(db, task_id: str, final_status: str, error: str | None, retry: bool) -> None:
+    """Update task status. Called via WriteSerializer — no commit/rollback/close needed."""
+    task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
+    if not task:
+        return
+    if retry and task.attempts < task.max_attempts:
         task.status = "pending"
-        task.error = error[:1000] if error else None
-        # Exponential backoff: 2^count * base, capped at max
-        delay = min(
-            RETRY_LATER_BASE_SECONDS * (2 ** (task.retry_later_count - 1)),
-            RETRY_LATER_MAX_SECONDS,
-        )
-        task.updated_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
-        db.commit()
-    except Exception:
-        logger.exception("Failed to reset task %s for retry later", task_id)
-        db.rollback()
-    finally:
-        db.close()
-
-
-def _mark_status(task_id: str, final_status: str, error: str | None, retry: bool) -> None:
-    factory = get_session_factory()
-    db = factory()
-    try:
-        task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
-        if not task:
-            return
-        if retry and task.attempts < task.max_attempts:
-            task.status = "pending"
-            logger.info("Task %s re-queued (attempt %d/%d)", task_id, task.attempts, task.max_attempts)
-        else:
-            task.status = final_status
-            if retry:
-                logger.warning("Task %s exhausted %d attempts → failed", task_id, task.max_attempts)
-        # Always overwrite error: clears stale error on success, records new on failure
-        task.error = error[:1000] if error is not None else None
-        task.updated_at = datetime.now(timezone.utc)
-        db.commit()
-    except Exception:
-        logger.exception("Failed to update task %s status", task_id)
-        db.rollback()
-    finally:
-        db.close()
+        logger.info("Task %s re-queued (attempt %d/%d)", task_id, task.attempts, task.max_attempts)
+    else:
+        task.status = final_status
+        if retry:
+            logger.warning("Task %s exhausted %d attempts → failed", task_id, task.max_attempts)
+    # Always overwrite error: clears stale error on success, records new on failure
+    task.error = error[:1000] if error is not None else None
+    task.updated_at = datetime.now(timezone.utc)

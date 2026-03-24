@@ -373,15 +373,17 @@ async def lifespan(app: FastAPI):
         # Create DB tables if they don't exist
         initialize_database()
 
+        # Configure the single-writer serializer (must happen after DB init)
+        from zerg.database import configure_write_serializer
+
+        configure_write_serializer()
+
         # SQLite-lite mode is allowed; warn that some PG-only features are reduced.
         try:
             from zerg.database import default_engine
 
             if not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
-                logger.warning(
-                    "SQLite mode enabled: single-writer concurrency and reduced locking guarantees. "
-                    "See VISION.md (SQLite-only OSS Pivot section) for constraints."
-                )
+                logger.info("SQLite mode: single-writer serializer active. " "See VISION.md (SQLite-only OSS Pivot section) for details.")
         except Exception as _e:
             logger.error(str(_e))
             raise
@@ -1457,6 +1459,18 @@ async def health_check():
             migration_status["log_error"] = str(e)
 
     checks["migration"] = migration_status
+
+    # 7. Write serializer metrics (informational)
+    try:
+        from zerg.services.write_serializer import get_write_serializer
+
+        ws = get_write_serializer()
+        if ws.is_configured:
+            checks["write_serializer"] = {"status": "pass", **ws.get_metrics()}
+        else:
+            checks["write_serializer"] = {"status": "skip", "reason": "not configured"}
+    except Exception as e:
+        checks["write_serializer"] = {"status": "warn", "error": str(e)}
 
     health_status["checks"] = checks
     return health_status
