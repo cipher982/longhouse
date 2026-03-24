@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
+from sqlalchemy import text as sa_text
 
 from .content import redact_secrets
 from .content import strip_noise
@@ -225,9 +226,8 @@ async def embed_session(
     This separation prevents the DB write lock from being held during API calls,
     which caused SQLite "database is locked" errors under concurrent backfill.
     """
-    from sqlalchemy import text as sa_text
-
     from zerg.models.agents import SessionEmbedding
+    from zerg.services.write_serializer import get_write_serializer
 
     # Convert ORM events to dicts for transcript building
     event_dicts = [
@@ -264,79 +264,82 @@ async def embed_session(
             logger.exception("Failed to generate turn embedding %d for %s", chunk.chunk_index, session_id)
 
     # --- Phase 2: Write all results in one short DB transaction ---
-    count = 0
-    session_embedding_ok = False
+    def _persist_embeddings(write_db: "DBSession") -> int:
+        count = 0
+        session_embedding_ok = False
 
-    if session_pending:
-        existing = (
-            db.query(SessionEmbedding)
-            .filter(
-                SessionEmbedding.session_id == session_id,
-                SessionEmbedding.kind == "session",
-                SessionEmbedding.chunk_index == -1,
-                SessionEmbedding.model == config.model,
-            )
-            .first()
-        )
-        if existing:
-            existing.embedding = session_pending.vec_bytes
-            existing.content_hash = session_pending.chunk.content_hash
-            existing.dims = config.dims
-        else:
-            db.add(
-                SessionEmbedding(
-                    session_id=session_id,
-                    kind="session",
-                    chunk_index=-1,
-                    model=config.model,
-                    dims=config.dims,
-                    embedding=session_pending.vec_bytes,
-                    content_hash=session_pending.chunk.content_hash,
+        if session_pending:
+            existing = (
+                write_db.query(SessionEmbedding)
+                .filter(
+                    SessionEmbedding.session_id == session_id,
+                    SessionEmbedding.kind == "session",
+                    SessionEmbedding.chunk_index == -1,
+                    SessionEmbedding.model == config.model,
                 )
+                .first()
             )
-        count += 1
-        session_embedding_ok = True
-
-    for pending in turn_pending:
-        existing = (
-            db.query(SessionEmbedding)
-            .filter(
-                SessionEmbedding.session_id == session_id,
-                SessionEmbedding.kind == "turn",
-                SessionEmbedding.chunk_index == pending.chunk.chunk_index,
-                SessionEmbedding.model == config.model,
-            )
-            .first()
-        )
-        if existing:
-            existing.embedding = pending.vec_bytes
-            existing.content_hash = pending.chunk.content_hash
-            existing.dims = config.dims
-            existing.event_index_start = pending.chunk.event_index_start
-            existing.event_index_end = pending.chunk.event_index_end
-        else:
-            db.add(
-                SessionEmbedding(
-                    session_id=session_id,
-                    kind="turn",
-                    chunk_index=pending.chunk.chunk_index,
-                    model=config.model,
-                    dims=config.dims,
-                    embedding=pending.vec_bytes,
-                    content_hash=pending.chunk.content_hash,
-                    event_index_start=pending.chunk.event_index_start,
-                    event_index_end=pending.chunk.event_index_end,
+            if existing:
+                existing.embedding = session_pending.vec_bytes
+                existing.content_hash = session_pending.chunk.content_hash
+                existing.dims = config.dims
+            else:
+                write_db.add(
+                    SessionEmbedding(
+                        session_id=session_id,
+                        kind="session",
+                        chunk_index=-1,
+                        model=config.model,
+                        dims=config.dims,
+                        embedding=session_pending.vec_bytes,
+                        content_hash=session_pending.chunk.content_hash,
+                    )
                 )
+            count += 1
+            session_embedding_ok = True
+
+        for pending in turn_pending:
+            existing = (
+                write_db.query(SessionEmbedding)
+                .filter(
+                    SessionEmbedding.session_id == session_id,
+                    SessionEmbedding.kind == "turn",
+                    SessionEmbedding.chunk_index == pending.chunk.chunk_index,
+                    SessionEmbedding.model == config.model,
+                )
+                .first()
             )
-        count += 1
+            if existing:
+                existing.embedding = pending.vec_bytes
+                existing.content_hash = pending.chunk.content_hash
+                existing.dims = config.dims
+                existing.event_index_start = pending.chunk.event_index_start
+                existing.event_index_end = pending.chunk.event_index_end
+            else:
+                write_db.add(
+                    SessionEmbedding(
+                        session_id=session_id,
+                        kind="turn",
+                        chunk_index=pending.chunk.chunk_index,
+                        model=config.model,
+                        dims=config.dims,
+                        embedding=pending.vec_bytes,
+                        content_hash=pending.chunk.content_hash,
+                        event_index_start=pending.chunk.event_index_start,
+                        event_index_end=pending.chunk.event_index_end,
+                    )
+                )
+            count += 1
 
-    # Only clear the flag when the session-level embedding succeeded so
-    # backfill can retry on transient failures.
-    if session_embedding_ok:
-        db.execute(
-            sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"),
-            {"sid": session_id},
-        )
-    db.commit()
+        # Only clear the flag when the session-level embedding succeeded so
+        # backfill can retry on transient failures.
+        if session_embedding_ok:
+            write_db.execute(
+                sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"),
+                {"sid": session_id},
+            )
 
-    return count
+        return count
+
+    ws = get_write_serializer()
+    return await ws.execute_or_direct(_persist_embeddings, db, label="embeddings")
