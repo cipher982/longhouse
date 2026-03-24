@@ -143,6 +143,27 @@ class WriteSerializer:
 
             return result
 
+    async def execute_or_direct(
+        self,
+        fn: Callable[[Session], T],
+        fallback_db: Session | None = None,
+        *,
+        label: str = "",
+        auto_commit: bool = True,
+    ) -> T:
+        """Execute via serializer if configured, otherwise run directly on fallback_db.
+
+        This eliminates the need for if/else blocks at every callsite.
+        """
+        if self._configured:
+            return await self.execute(fn, label=label, auto_commit=auto_commit)
+        if fallback_db is None:
+            raise RuntimeError("WriteSerializer not configured and no fallback_db provided")
+        result = fn(fallback_db)
+        if auto_commit:
+            fallback_db.commit()
+        return result
+
     def execute_sync(
         self,
         fn: Callable[[Session], T],

@@ -181,15 +181,11 @@ def _build_presence_wakeup_key(payload: PresenceIn, tool_name: str | None) -> st
 async def _persist_wakeup(fallback_db: Session, **kwargs: object) -> None:
     """Write a wakeup ledger row via the serializer (or fallback session)."""
     ws = get_write_serializer()
-    if ws.is_configured:
 
-        def _do(wdb: Session) -> None:
-            append_wakeup(wdb, **kwargs)  # type: ignore[arg-type]
+    def _do(wdb: Session) -> None:
+        append_wakeup(wdb, **kwargs)  # type: ignore[arg-type]
 
-        await ws.execute(_do, label="wakeup-ledger")
-    else:
-        append_wakeup(fallback_db, **kwargs)  # type: ignore[arg-type]
-        fallback_db.commit()
+    await ws.execute_or_direct(_do, fallback_db, label="wakeup-ledger")
 
 
 async def _maybe_invoke_operator_wakeup(
@@ -388,11 +384,7 @@ async def upsert_presence(
                 pass
 
     ws = get_write_serializer()
-    if ws.is_configured:
-        await ws.execute(_do_presence_writes, label="presence")
-    else:
-        _do_presence_writes(db)
-        db.commit()
+    await ws.execute_or_direct(_do_presence_writes, db, label="presence")
 
     if payload.state in _OPERATOR_WAKE_STATES and not should_wake_operator and operator_master_switch_enabled():
         owner_id = _resolve_owner_id(db, _token)

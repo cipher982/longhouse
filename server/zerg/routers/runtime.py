@@ -29,17 +29,12 @@ async def ingest_runtime_event_batch(
     """Ingest normalized runtime events and materialize runtime state."""
     try:
         ws = get_write_serializer()
-        if ws.is_configured:
-            events = payload.events
+        events = payload.events
 
-            def _do(wdb: Session) -> RuntimeEventBatchResult:
-                return ingest_runtime_events(wdb, events)
+        def _do(wdb: Session) -> RuntimeEventBatchResult:
+            return ingest_runtime_events(wdb, events)
 
-            return await ws.execute(_do, label="runtime-events")
-        else:
-            result = ingest_runtime_events(db, payload.events)
-            db.commit()
-            return result
+        return await ws.execute_or_direct(_do, db, label="runtime-events")
     except HTTPException:
         raise
     except Exception as exc:
