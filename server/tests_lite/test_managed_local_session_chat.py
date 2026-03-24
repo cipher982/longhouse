@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime
 from datetime import timezone
 from types import SimpleNamespace
@@ -123,6 +124,14 @@ def test_managed_local_events_include_expected_turn_requires_current_prompt_and_
         events=[
             SimpleNamespace(role="system", content_text="snapshot", tool_name=None),
             SimpleNamespace(role="assistant", content_text="done", tool_name=None),
+        ],
+        expected_user_message=prompt,
+    )
+
+    assert not session_chat._managed_local_events_include_expected_turn(
+        events=[
+            SimpleNamespace(role="assistant", content_text="older reply", tool_name=None),
+            SimpleNamespace(role="user", content_text=prompt, tool_name=None),
         ],
         expected_user_message=prompt,
     )
@@ -512,6 +521,8 @@ def test_chat_with_session_lets_natural_events_win_before_forcing_claude_sync(mo
 def test_chat_with_session_prefers_natural_events_even_after_force_sync_starts(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     ship_calls = {"count": 0}
+    ship_finished = {"value": False}
+    ship_cancelled = {"value": False}
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
@@ -550,7 +561,12 @@ def test_chat_with_session_prefers_natural_events_even_after_force_sync_starts(m
 
         async def fake_ship(*, db, owner_id, session, commis_id=None, timeout_secs=20):
             ship_calls["count"] += 1
-            await asyncio.sleep(0.2)
+            try:
+                await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                ship_cancelled["value"] = True
+                raise
+            ship_finished["value"] = True
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
@@ -564,16 +580,83 @@ def test_chat_with_session_prefers_natural_events_even_after_force_sync_starts(m
         monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS", 0.1)
 
         try:
+            started_at = time.monotonic()
             response = client.post(
                 f"/api/sessions/{source_session.id}/chat",
                 json={"message": "continue"},
             )
+            elapsed = time.monotonic() - started_at
             assert response.status_code == 200, response.text
             body = response.text
             assert "Natural tmux reply after force sync start" in body
             assert '"sync_status": "complete"' in body
             assert '"persisted_events": 2' in body
             assert ship_calls["count"] == 1
+            assert not ship_finished["value"]
+            assert ship_cancelled["value"] is True
+            assert elapsed < 0.4
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_chat_with_session_waits_for_codex_events_after_terminal_success(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        async def fake_wait_for_terminal(**_kwargs):
+            return SimpleNamespace(
+                phase="idle",
+                control_status="completed",
+                runtime_event_id=91,
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+        async def fake_wait_for_events(**_kwargs):
+            assert _kwargs.get("expected_user_message") == "continue"
+            await asyncio.sleep(0.01)
+            return [
+                SimpleNamespace(
+                    id=101,
+                    role="user",
+                    content_text="continue",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+                SimpleNamespace(
+                    id=102,
+                    role="assistant",
+                    content_text="Codex reply after terminal success",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+            ]
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat.await_managed_local_turn_terminal", fake_wait_for_terminal)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat._await_managed_local_turn_events",
+            fake_wait_for_events,
+        )
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS", 0.05)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 200, response.text
+            body = response.text
+            assert "Codex reply after terminal success" in body
+            assert '"sync_status": "complete"' in body
+            assert '"persisted_events": 2' in body
+            assert '"control_status": "completed"' in body
         finally:
             api_app_ref.dependency_overrides = {}
 
