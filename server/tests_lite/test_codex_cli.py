@@ -97,6 +97,7 @@ def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path
 def test_codex_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp_path):
     runner = CliRunner()
     attach_calls: list[str] = []
+    open_calls: list[str] = []
 
     monkeypatch.setattr(
         codex_cli,
@@ -114,8 +115,9 @@ def test_codex_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp_
             source_runner_name="work-laptop",
         ),
     )
-    monkeypatch.setattr(codex_cli, "_interactive_stdio", lambda: True)
-    monkeypatch.setattr(codex_cli, "_run_attach_command", lambda command: attach_calls.append(command) or 0)
+    monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(claude_cli, "_run_attach_command", lambda command: attach_calls.append(command) or 0)
+    monkeypatch.setattr(claude_cli, "_open_session_url", lambda url: open_calls.append(url) or True)
 
     result = runner.invoke(
         app,
@@ -129,6 +131,7 @@ def test_codex_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp_
             "autopilot",
             "--name",
             "Demo session",
+            "--open",
         ],
     )
 
@@ -137,6 +140,9 @@ def test_codex_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp_
     assert "Managed local Codex session launched on this device." in result.output
     assert "Session ID: session-123" in result.output
     assert "Provider session ID: provider-123" in result.output
+    assert "Session URL: https://longhouse.test/timeline/session-123" in result.output
     assert "Attach: zsh -lc 'exec tmux attach -t lh-demo'" in result.output
+    assert "Opening session in browser..." in result.output
     assert "Attaching..." in result.output
+    assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert attach_calls == ["zsh -lc 'exec tmux attach -t lh-demo'"]

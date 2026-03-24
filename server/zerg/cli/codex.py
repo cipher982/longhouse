@@ -14,6 +14,7 @@ ManagedLocalLaunchResponse = managed_local_cli.ManagedLocalLaunchResponse
 _interactive_stdio = managed_local_cli._interactive_stdio
 _load_api_credentials = managed_local_cli._load_api_credentials
 _run_attach_command = managed_local_cli._run_attach_command
+_finalize_managed_local_launch = managed_local_cli._finalize_managed_local_launch
 
 
 def _launch_managed_local_from_api(
@@ -60,6 +61,11 @@ def codex(
         "--attach/--no-attach",
         help="Auto-attach to the managed local session when running interactively.",
     ),
+    open_browser: bool = typer.Option(
+        False,
+        "--open/--no-open",
+        help="Open the session detail page in the default browser after launch.",
+    ),
     url: str | None = typer.Option(
         None,
         "--url",
@@ -95,22 +101,10 @@ def codex(
         name=name,
         machine_name=machine_name,
     )
-
-    typer.secho("Managed local Codex session launched on this device.", fg=typer.colors.GREEN)
-    typer.echo(f"Session ID: {result.session_id}")
-    typer.echo(f"Provider session ID: {result.provider_session_id}")
-    typer.echo(f"Attach: {result.attach_command}")
-
-    if not attach:
-        return
-    if not _interactive_stdio():
-        typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
-        return
-
-    typer.echo("Attaching...")
-    exit_code = _run_attach_command(result.attach_command)
-    if exit_code != 0:
-        typer.secho(
-            f"Auto-attach exited with code {exit_code}. Run the printed attach command manually.",
-            fg=typer.colors.YELLOW,
-        )
+    _finalize_managed_local_launch(
+        provider_label="Codex",
+        base_url=resolved_url,
+        result=result,
+        open_browser=open_browser,
+        attach=attach,
+    )
