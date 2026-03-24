@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ _TURN_OPERATOR_CONVERSATION_ID = "operator:main"
 _RECENT_EVENT_LIMIT = 160
 _TURN_EXCERPT_MAX_CHARS = 4000
 _TURN_REVIEW_FRESH_WINDOW_MINUTES = 10
+_TURN_CONTROLLER_TIMEOUT_SECONDS = 15.0
 _EXPECTED_IGNORE_OUTCOME = "ignore"
 _EXPECTED_NOTIFY_OUTCOME = "notify_user"
 _EXPECTED_CONTINUE_OUTCOME = "continue_session"
@@ -787,25 +789,28 @@ async def _record_session_turn_review(
         review_reason = "missing_owner"
     else:
         try:
-            controller_decision = await evaluate_session_turn_with_llm(
-                db=db,
-                owner_id=owner_id,
-                session=session,
-                payload=build_loop_controller_payload(
+            controller_decision = await asyncio.wait_for(
+                evaluate_session_turn_with_llm(
+                    db=db,
+                    owner_id=owner_id,
                     session=session,
-                    turn_text=turn.text,
-                    last_user_text=turn.last_user_text,
-                    turn_index=turn.turn_index,
-                    assistant_event_id=turn.assistant_event_id,
-                    auto_continue_streak=auto_continue_streak,
-                    dialog_tail=dialog_tail,
+                    payload=build_loop_controller_payload(
+                        session=session,
+                        turn_text=turn.text,
+                        last_user_text=turn.last_user_text,
+                        turn_index=turn.turn_index,
+                        assistant_event_id=turn.assistant_event_id,
+                        auto_continue_streak=auto_continue_streak,
+                        dialog_tail=dialog_tail,
+                    ),
+                    metadata={
+                        "session_id": str(session.id),
+                        "assistant_event_id": turn.assistant_event_id,
+                        "turn_index": turn.turn_index,
+                        "trigger_type": _TURN_TRIGGER_TYPE,
+                    },
                 ),
-                metadata={
-                    "session_id": str(session.id),
-                    "assistant_event_id": turn.assistant_event_id,
-                    "turn_index": turn.turn_index,
-                    "trigger_type": _TURN_TRIGGER_TYPE,
-                },
+                timeout=_TURN_CONTROLLER_TIMEOUT_SECONDS,
             )
             outcome = TurnOutcome(
                 decision=controller_decision.decision,
@@ -814,6 +819,19 @@ async def _record_session_turn_review(
                 recommended_action=controller_decision.recommended_action,
                 follow_up_prompt=controller_decision.follow_up_prompt,
                 blocked_reasons=controller_decision.blocked_reasons,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Loop controller evaluation timed out for session %s event %s after %.1fs",
+                session.id,
+                turn.assistant_event_id,
+                _TURN_CONTROLLER_TIMEOUT_SECONDS,
+            )
+            outcome = _failure_outcome(
+                "Loop controller timed out, so Oikos is surfacing this completed turn for review.",
+                "The loop controller did not answer quickly enough for the hot path, so Oikos is falling back to a "
+                "conservative user-approval checkpoint instead of delaying the loop card.",
+                blocked_reason="Loop controller timed out.",
             )
         except Exception:
             logger.exception(

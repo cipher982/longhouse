@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -1182,3 +1183,30 @@ async def test_turn_review_marks_controller_failures(monkeypatch, tmp_path):
         assert review.status == "failed"
         assert review.reason == "controller_error"
         assert "Loop controller evaluation failed." in (review.blocked_reasons or [])
+
+
+@pytest.mark.asyncio
+async def test_turn_review_falls_back_to_conservative_review_on_controller_timeout(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_controller_timeout.db")
+
+    async def _timeout(**_kwargs):
+        raise asyncio.TimeoutError()
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _timeout)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=True)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="continue if the next step is obvious",
+            assistant_text="Only targeted verification remains.",
+        )
+
+        review = await maybe_record_session_turn_review(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.decision == "ask_user"
+        assert review.status == "recorded"
+        assert review.execution_state == "needs_human"
+        assert "Loop controller timed out." in (review.blocked_reasons or [])
+        assert "timed out" in review.summary.lower()
