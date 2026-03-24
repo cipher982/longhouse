@@ -1009,17 +1009,17 @@ class TestInstancesAPI:
         resp = client.post(f"/api/instances/{inst.id}/reprovision", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         data = resp.json()
-        assert data["status"] == "provisioning"
+        # Reprovision now blocks until wait_for_health succeeds, promoting to active
+        assert data["status"] == "active"
         assert data["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
         prov.run_migration_preflight.assert_called_once_with("inst1", data_path="/tmp/test-data/inst1")
         prov.deprovision_instance.assert_called_once()
         prov.provision_instance.assert_called_once()
-        _, call_kwargs = prov.provision_instance.call_args
-        assert call_kwargs["data_path"] == "/tmp/test-data/inst1"
+        prov.wait_for_health.assert_called_once()
         _, call_kwargs = prov.provision_instance.call_args
         assert call_kwargs["data_path"] == "/tmp/test-data/inst1"
         db_session.refresh(inst)
-        assert inst.last_health_at is None
+        assert inst.last_health_at is not None
         assert inst.data_path == "/tmp/test-data/inst1"
 
     @patch("control_plane.routers.instances.Provisioner")
