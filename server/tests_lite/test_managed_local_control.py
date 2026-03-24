@@ -24,8 +24,8 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.managed_local_control import await_managed_local_hook_phase_update
 from zerg.services.managed_local_control import await_managed_local_presence_update
-from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import await_managed_local_turn_events
+from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import build_managed_local_claude_ship_command
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_control import ship_managed_local_claude_transcript
@@ -270,7 +270,7 @@ def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_pa
 
         assert "command -v longhouse-engine" in command
         assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
-        assert f'--session-id {session.id}' in command
+        assert f"--session-id {session.id}" in command
         assert "for delay in 0 1 2 4 8" in command
         assert "--json" in command
         assert "events_shipped" in command
@@ -357,8 +357,9 @@ def test_ship_managed_local_claude_transcript_dispatches_runner_job(monkeypatch,
         command = str(dispatcher.calls[0]["command"])
         assert "command -v longhouse-engine" in command
         assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
-        assert f'--session-id {session.id}' in command
+        assert f"--session-id {session.id}" in command
         assert "--json" in command
+        assert "total_shipped=0" in command
 
 
 def test_send_text_to_managed_local_session_can_require_active_hook_phase(monkeypatch, tmp_path):
@@ -421,9 +422,7 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase(monkey
         assert result.verified_turn_started is True
 
 
-def test_send_text_to_managed_local_session_reports_verification_failure_without_runtime_signal(
-    monkeypatch, tmp_path
-):
+def test_send_text_to_managed_local_session_reports_verification_failure_without_runtime_signal(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)

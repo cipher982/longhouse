@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timezone
@@ -106,6 +107,35 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
     return session
 
 
+def test_managed_local_events_include_expected_turn_requires_current_prompt_and_reply():
+    prompt = "continue"
+
+    assert session_chat._managed_local_events_include_expected_turn(
+        events=[
+            SimpleNamespace(role="system", content_text="snapshot", tool_name=None),
+            SimpleNamespace(role="user", content_text=prompt, tool_name=None),
+            SimpleNamespace(role="assistant", content_text="done", tool_name=None),
+        ],
+        expected_user_message=prompt,
+    )
+
+    assert not session_chat._managed_local_events_include_expected_turn(
+        events=[
+            SimpleNamespace(role="system", content_text="snapshot", tool_name=None),
+            SimpleNamespace(role="assistant", content_text="done", tool_name=None),
+        ],
+        expected_user_message=prompt,
+    )
+
+    assert not session_chat._managed_local_events_include_expected_turn(
+        events=[
+            SimpleNamespace(role="user", content_text=prompt, tool_name=None),
+            SimpleNamespace(role="system", content_text="snapshot", tool_name=None),
+        ],
+        expected_user_message=prompt,
+    )
+
+
 def test_chat_with_session_routes_claude_managed_local_without_cloud_continuation(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
@@ -175,7 +205,9 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
             assert '"created_continuation": false' in body
             assert f'"session_id": "{source_session.id}"' in body
             assert f'"shipped_session_id": "{source_session.id}"' in body
-            runtime_state_rows = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
+            runtime_state_rows = (
+                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
+            )
             assert runtime_state_rows == []
             assert len(calls) == 1
             assert calls[0]["runner_id"] == runner.id
@@ -253,7 +285,10 @@ def test_chat_with_session_reports_claude_managed_local_persistence_timeout(monk
             assert '"created_continuation": false' in body
             assert '"sync_status": "failed"' in body
             assert '"control_status": "failed"' in body
-            assert '"persistence_error": "Message was sent to the managed local session, but Longhouse did not observe a completed turn yet."' in body
+            assert (
+                '"persistence_error": "Message was sent to the managed local session, but Longhouse did not '
+                'observe a completed turn yet."'
+            ) in body
             assert '"exit_code": 0' in body
         finally:
             api_app_ref.dependency_overrides = {}
@@ -262,6 +297,7 @@ def test_chat_with_session_reports_claude_managed_local_persistence_timeout(monk
 def test_chat_with_session_returns_sync_pending_after_terminal_control_success(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     wait_calls = {"count": 0}
+    ship_calls = {"count": 0}
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
@@ -283,12 +319,17 @@ def test_chat_with_session_returns_sync_pending_after_terminal_control_success(m
             wait_calls["count"] += 1
             return []
 
+        async def fake_ship(*, db, owner_id, session, commis_id=None, timeout_secs=20):
+            ship_calls["count"] += 1
+            return SimpleNamespace(ok=False, exit_code=13, error="no new transcript events")
+
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat.await_managed_local_turn_terminal", fake_wait_for_terminal)
         monkeypatch.setattr(
             "zerg.routers.session_chat._await_managed_local_turn_events",
             fake_wait_for_events,
         )
+        monkeypatch.setattr("zerg.routers.session_chat.ship_managed_local_claude_transcript", fake_ship)
 
         try:
             response = client.post(
@@ -303,9 +344,93 @@ def test_chat_with_session_returns_sync_pending_after_terminal_control_success(m
             assert '"sync_status": "pending"' in body
             assert '"control_status": "needs_user"' in body
             assert f'"shipped_session_id": "{source_session.id}"' in body
-            runtime_state_rows = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
+            runtime_state_rows = (
+                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
+            )
             assert runtime_state_rows == []
             assert wait_calls["count"] >= 1
+            assert ship_calls["count"] == 1
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_chat_with_session_uses_direct_ship_to_upgrade_pending_claude_turn(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    events_ready = asyncio.Event()
+    ship_calls: list[dict[str, object]] = []
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        async def fake_wait_for_terminal(**_kwargs):
+            return SimpleNamespace(
+                phase="idle",
+                control_status="completed",
+                runtime_event_id=88,
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+        async def fake_wait_for_events(**_kwargs):
+            assert _kwargs.get("expected_user_message") == "continue"
+            await events_ready.wait()
+            return [
+                SimpleNamespace(
+                    id=101,
+                    role="user",
+                    content_text="continue",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+                SimpleNamespace(
+                    id=102,
+                    role="assistant",
+                    content_text="Local tmux reply",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+            ]
+
+        async def fake_ship(*, db, owner_id, session, commis_id=None, timeout_secs=20):
+            ship_calls.append(
+                {
+                    "owner_id": owner_id,
+                    "session_id": str(session.id),
+                    "commis_id": commis_id,
+                    "timeout_secs": timeout_secs,
+                }
+            )
+            events_ready.set()
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat.await_managed_local_turn_terminal", fake_wait_for_terminal)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat._await_managed_local_turn_events",
+            fake_wait_for_events,
+        )
+        monkeypatch.setattr("zerg.routers.session_chat.ship_managed_local_claude_transcript", fake_ship)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 200, response.text
+            body = response.text
+            assert "Local tmux reply" in body
+            assert '"sync_status": "complete"' in body
+            assert '"control_status": "completed"' in body
+            assert '"persisted_events": 2' in body
+            assert len(ship_calls) == 1
+            assert ship_calls[0]["owner_id"] == user.id
+            assert ship_calls[0]["session_id"] == str(source_session.id)
+            assert ship_calls[0]["commis_id"]
+            assert ship_calls[0]["timeout_secs"] == 20
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -374,7 +499,9 @@ def test_chat_with_session_routes_codex_managed_local_without_cloud_continuation
             assert '"created_continuation": false' in body
             assert f'"session_id": "{source_session.id}"' in body
             assert f'"shipped_session_id": "{source_session.id}"' in body
-            runtime_state_rows = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
+            runtime_state_rows = (
+                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
+            )
             assert runtime_state_rows == []
             assert len(calls) == 1
             assert calls[0]["runner_id"] == runner.id

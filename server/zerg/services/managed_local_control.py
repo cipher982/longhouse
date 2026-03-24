@@ -151,19 +151,21 @@ def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
         '[ -n "$engine" ] || { echo "longhouse-engine is not available" >&2; exit 12; }',
         f'transcript="{transcript_path}"',
         'tmp_json="$(mktemp)"',
+        "total_shipped=0",
         (
             "for delay in 0 1 2 4 8; do "
             'if [ "$delay" -gt 0 ]; then sleep "$delay"; fi; '
             '[ -f "$transcript" ] || continue; '
             f'"$engine" ship --file "$transcript" --session-id {shlex.quote(longhouse_session_id)} --json '
             '>"$tmp_json" 2>/dev/null || true; '
-            'if grep -Eq \'"events_shipped"[[:space:]]*:[[:space:]]*[1-9][0-9]*\' "$tmp_json"; then '
-            'rm -f "$tmp_json"; '
-            "exit 0; "
-            "fi; "
+            'shipped="$(grep -Eo \'"events_shipped"[[:space:]]*:[[:space:]]*[0-9]+\' "$tmp_json" '
+            "| grep -Eo '[0-9]+' | head -1 || true)\"; "
+            '[ -n "$shipped" ] || shipped=0; '
+            "total_shipped=$((total_shipped + shipped)); "
             "done"
         ),
         'rm -f "$tmp_json"',
+        '[ "$total_shipped" -gt 0 ] && exit 0',
         'echo "Managed local Claude transcript did not ship new events" >&2',
         "exit 13",
     ]
