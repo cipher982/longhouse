@@ -269,8 +269,12 @@ def validate_device_token(token: str, db: Session) -> DeviceToken | None:
 
     # Debounce last_used_at writes — at most once per hour per token.
     # Every-request writes cause SQLite write-lock contention under load.
-    now = datetime.now(timezone.utc)
-    if device_token.last_used_at is None or (now - device_token.last_used_at).total_seconds() > 3600:
+    # Use naive UTC to match SQLite's stored datetimes (no tzinfo).
+    now = datetime.utcnow()
+    last = device_token.last_used_at
+    if last is not None and last.tzinfo is not None:
+        last = last.replace(tzinfo=None)
+    if last is None or (now - last).total_seconds() > 3600:
         device_token.last_used_at = now
         db.commit()
 
