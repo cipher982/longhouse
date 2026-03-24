@@ -58,7 +58,18 @@ def _strip_quotes(value: str) -> str:
 
 
 def _queue_db_url() -> str:
-    return _strip_quotes(os.getenv("JOB_QUEUE_DB_URL") or os.getenv("DATABASE_URL") or "")
+    explicit = _strip_quotes(os.getenv("JOB_QUEUE_DB_URL") or "")
+    if explicit:
+        return explicit
+    # Derive a separate queue DB alongside the main database to avoid
+    # write contention — the job queue uses raw sqlite3 connections that
+    # would bypass the WriteSerializer on the main DB.
+    main_url = _strip_quotes(os.getenv("DATABASE_URL") or "")
+    if not main_url:
+        return ""
+    if main_url.endswith(".db"):
+        return main_url.replace(".db", "-queue.db")
+    return main_url + "-queue"
 
 
 def _queue_db_path() -> str:
