@@ -23,12 +23,18 @@ from starlette.types import Send
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 15
+MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS = 45
 
 # Paths that are excluded from the timeout enforcement.
 _SKIP_PATHS = ("/readyz", "/health")
 
 # Path fragments that indicate a streaming / long-lived connection.
 _STREAMING_FRAGMENTS = ("/stream", "/chat", "/ws")
+
+# Route-specific timeout overrides for legitimate long-running requests.
+_TIMEOUT_OVERRIDES = {
+    "/sessions/managed-local": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,
+}
 
 
 class RequestTimeoutMiddleware:
@@ -72,6 +78,12 @@ class RequestTimeoutMiddleware:
             await self.app(scope, receive, send)
             return
 
+        timeout = self.timeout
+        for prefix, override in _TIMEOUT_OVERRIDES.items():
+            if api_path.startswith(prefix):
+                timeout = override
+                break
+
         # Enforce timeout.
         response_started = False
 
@@ -84,13 +96,13 @@ class RequestTimeoutMiddleware:
         try:
             await asyncio.wait_for(
                 self.app(scope, receive, send_wrapper),
-                timeout=self.timeout,
+                timeout=timeout,
             )
         except asyncio.TimeoutError:
             method = scope.get("method", "?")
             logger.warning(
                 "Request timed out after %.1fs: %s %s",
-                self.timeout,
+                timeout,
                 method,
                 path,
             )
