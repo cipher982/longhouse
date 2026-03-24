@@ -167,7 +167,7 @@ class PresenceCache:
         if not dirty:
             return
 
-        try:
+        def _sync_flush():
             from zerg.database import db_session
 
             with db_session() as db:
@@ -199,6 +199,9 @@ class PresenceCache:
                     db.execute(stmt)
                     entry.dirty = False
                 db.commit()
+
+        try:
+            await asyncio.to_thread(_sync_flush)
             logger.debug("Flushed %d presence entries to DB", len(dirty))
         except Exception:
             logger.exception("Failed to flush %d presence entries", len(dirty))

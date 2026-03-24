@@ -977,16 +977,20 @@ async def start_wal_checkpoint_loop() -> None:
 
     global _wal_checkpoint_task
 
+    def _do_checkpoint():
+        """Run checkpoint in a thread — never block the event loop."""
+        if default_engine is not None:
+            with default_engine.connect() as conn:
+                result = conn.exec_driver_sql("PRAGMA wal_checkpoint(PASSIVE)")
+                row = result.fetchone()
+                if row and row[1] > 0:
+                    logger.info("WAL checkpoint: %d pages written, %d remaining", row[1], row[2])
+
     async def _loop():
         while True:
             try:
                 await asyncio.sleep(WAL_CHECKPOINT_INTERVAL)
-                if default_engine is not None:
-                    with default_engine.connect() as conn:
-                        result = conn.exec_driver_sql("PRAGMA wal_checkpoint(PASSIVE)")
-                        row = result.fetchone()
-                        if row and row[1] > 0:
-                            logger.debug("WAL checkpoint: %d pages written, %d remaining", row[1], row[2])
+                await asyncio.to_thread(_do_checkpoint)
             except asyncio.CancelledError:
                 return
             except Exception:
