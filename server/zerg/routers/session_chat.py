@@ -95,6 +95,7 @@ MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 1.0
 MANAGED_LOCAL_STABLE_POLLS = 1
 MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 5.0
+MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS = 1.0
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
     [
         "Message was sent to the managed local session, but Longhouse ",
@@ -423,20 +424,27 @@ async def _force_managed_local_claude_sync(
     owner_id: int,
     source_session,
     request_id: str,
-) -> None:
+):
     with Session(bind=db_bind) as ship_db:
-        ship_result = await ship_managed_local_claude_transcript(
+        return await ship_managed_local_claude_transcript(
             db=ship_db,
             owner_id=owner_id,
             session=source_session,
             commis_id=request_id,
         )
-    if not ship_result.ok:
-        logger.warning(
-            "Managed-local Claude direct ship failed for %s: %s",
-            source_session.id,
-            ship_result.error or f"exit_code={ship_result.exit_code}",
-        )
+
+
+async def _await_managed_local_events_task(
+    events_task: asyncio.Task[list[AgentEvent]],
+    *,
+    timeout_secs: float,
+) -> list[AgentEvent]:
+    if events_task.done():
+        return events_task.result() or []
+    try:
+        return await asyncio.wait_for(asyncio.shield(events_task), timeout=timeout_secs)
+    except asyncio.TimeoutError:
+        return []
 
 
 async def _stream_managed_local_output(
@@ -553,24 +561,38 @@ async def _stream_managed_local_output(
                 terminal_result = await terminal_task
 
         if not new_events and terminal_result is not None:
-            if str(getattr(source_session, "provider", "") or "").strip().lower() == "claude":
-                await _force_managed_local_claude_sync(
+            new_events = await _await_managed_local_events_task(
+                events_task,
+                timeout_secs=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
+            )
+
+            ship_result = None
+            if not new_events and str(getattr(source_session, "provider", "") or "").strip().lower() == "claude":
+                ship_result = await _force_managed_local_claude_sync(
                     db_bind=db.get_bind(),
                     owner_id=owner_id,
                     source_session=source_session,
                     request_id=request_id,
                 )
+                new_events = await _await_managed_local_events_task(
+                    events_task,
+                    timeout_secs=MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS,
+                )
 
-            if not events_task.done():
-                try:
-                    new_events = await asyncio.wait_for(
-                        asyncio.shield(events_task),
-                        timeout=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
+            if ship_result is not None and not ship_result.ok:
+                log_message = ship_result.error or f"exit_code={ship_result.exit_code}"
+                if new_events:
+                    logger.debug(
+                        "Managed-local Claude direct ship found no extra events for %s: %s",
+                        source_session.id,
+                        log_message,
                     )
-                except asyncio.TimeoutError:
-                    new_events = []
-            else:
-                new_events = events_task.result() or []
+                else:
+                    logger.warning(
+                        "Managed-local Claude direct ship failed for %s: %s",
+                        source_session.id,
+                        log_message,
+                    )
 
         if not new_events and terminal_result is None:
             if not events_task.done():
@@ -611,7 +633,10 @@ async def _stream_managed_local_output(
         ).encode()
         return
 
-    control_status = terminal_result.control_status if terminal_result is not None else MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
+    if terminal_result is None:
+        control_status = MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
+    else:
+        control_status = terminal_result.control_status
 
     if not new_events and terminal_result is not None:
         yield SSEEvent(
@@ -1178,7 +1203,9 @@ async def chat_with_session(
         )
 
     # Non-managed-local continuation requires Claude (spawns claude subprocess)
-    if source_session.provider != "claude" and source_session.execution_home != SessionExecutionHome.MANAGED_LOCAL.value:
+    is_non_claude_resume = source_session.provider != "claude"
+    is_non_managed_local_resume = source_session.execution_home != SessionExecutionHome.MANAGED_LOCAL.value
+    if is_non_claude_resume and is_non_managed_local_resume:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Non-managed-local continuation is only supported for Claude (got {source_session.provider})",
