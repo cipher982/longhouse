@@ -52,6 +52,7 @@ from zerg.services.runner_doctor import diagnose_runner
 from zerg.services.runner_health import build_runner_response
 from zerg.services.runner_health import normalize_runner_binary_tag
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
+from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
@@ -944,22 +945,29 @@ async def runner_websocket(
         # Register connection
         connection_manager.register(owner_id, runner_id, websocket)
 
-        # Update runner status to online
-        runner.status = "online"
-        runner.last_seen_at = utc_now_naive()
-        if metadata:
-            runner.runner_metadata = metadata
+        # Update runner status to online via serializer
+        _rid = runner_id
+        _meta = metadata if metadata else None
 
-            # Validate runner capabilities match what's in the database
-            reported_caps = metadata.get("capabilities", [])
-            if reported_caps and set(reported_caps) != set(runner.capabilities):
-                logger.warning(f"Runner {runner_id} capability mismatch: DB={runner.capabilities}, reported={reported_caps}")
+        def _mark_online(wdb: Session) -> None:
+            r = runner_crud.get_runner(wdb, _rid)
+            if r:
+                r.status = "online"
+                r.last_seen_at = utc_now_naive()
+                if _meta:
+                    r.runner_metadata = _meta
 
         try:
-            db.commit()
+            ws = get_write_serializer()
+            if ws.is_configured:
+                await ws.execute(_mark_online, label="runner-online")
+            else:
+                runner.status = "online"
+                runner.last_seen_at = utc_now_naive()
+                if metadata:
+                    runner.runner_metadata = metadata
+                db.commit()
         except Exception as e:
-            # If DB commit fails, the session is poisoned until rollback.
-            # Close the websocket so the runner will reconnect cleanly.
             db.rollback()
             logger.error(f"Failed to mark runner {runner_id} online: {e}")
             await _safe_close_runner_websocket(websocket, code=1011, reason="Server DB error")
@@ -1059,23 +1067,28 @@ async def runner_websocket(
 
             # Only mark runner offline if we actually unregistered it (wasn't replaced)
             if was_unregistered:
-                try:
-                    # If the session is in a failed state (e.g. earlier flush error), reset it first.
-                    db.rollback()
-                except Exception:
-                    pass
+                _rid = runner_id
+
+                def _mark_offline(wdb: Session) -> None:
+                    r = runner_crud.get_runner(wdb, _rid)
+                    if r:
+                        r.status = "offline"
 
                 try:
-                    runner = runner_crud.get_runner(db, runner_id)
-                    if runner:
-                        runner.status = "offline"
-                        db.commit()
-                        logger.info(f"Runner {runner_id} marked offline")
+                    ws = get_write_serializer()
+                    if ws.is_configured:
+                        await ws.execute(_mark_offline, label="runner-offline")
+                    else:
+                        try:
+                            db.rollback()
+                        except Exception:
+                            pass
+                        r = runner_crud.get_runner(db, runner_id)
+                        if r:
+                            r.status = "offline"
+                            db.commit()
+                    logger.info(f"Runner {runner_id} marked offline")
                 except Exception as e:
-                    try:
-                        db.rollback()
-                    except Exception:
-                        pass
                     logger.warning(f"Failed to mark runner {runner_id} offline during cleanup: {e}")
 
         try:
