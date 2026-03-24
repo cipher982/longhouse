@@ -26,7 +26,6 @@ from fastapi import WebSocketDisconnect
 from fastapi import status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.exc import StaleDataError
 
 from zerg.crud import runner_crud
 from zerg.database import get_db
@@ -56,6 +55,10 @@ from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
+
+# In-memory runner heartbeat timestamps — avoids a DB write every 30s per runner.
+# Populated by WebSocket heartbeat messages; read by health checks.
+runner_heartbeat_cache: dict[str, object] = {}
 
 router = APIRouter(
     prefix="/runners",
@@ -916,9 +919,6 @@ async def runner_websocket(
             return
 
         # Import here for use in heartbeat updates
-        from sqlalchemy import update
-
-        from zerg.models.models import Runner as RunnerModel
 
         auth = authenticate_runner_identity(
             db,
@@ -974,26 +974,10 @@ async def runner_websocket(
                 message_type = message.get("type")
 
                 if message_type == "heartbeat":
-                    # Update last_seen_at (no log - too noisy at 30s intervals)
-                    try:
-                        stmt = update(RunnerModel).where(RunnerModel.id == runner_id).values(last_seen_at=utc_now_naive())
-                        result = db.execute(stmt)
-                        if result.rowcount != 1:
-                            db.rollback()
-                            logger.warning(f"Runner {runner_id} missing during heartbeat (rowcount={result.rowcount})")
-                            await _safe_close_runner_websocket(websocket, code=1008, reason="Runner not found")
-                            break
-                        db.commit()
-                    except StaleDataError as e:
-                        db.rollback()
-                        logger.warning(f"Runner {runner_id} stale during heartbeat: {e}")
-                        await _safe_close_runner_websocket(websocket, code=1011, reason="Stale runner state")
-                        break
-                    except Exception as e:
-                        db.rollback()
-                        logger.error(f"DB error during heartbeat for runner {runner_id}: {e}")
-                        await _safe_close_runner_websocket(websocket, code=1011, reason="Server DB error")
-                        break
+                    # Track in memory only — no DB write per heartbeat.
+                    # DB is updated on connect/disconnect; health checks
+                    # use runner_heartbeat_cache for liveness.
+                    runner_heartbeat_cache[runner_id] = utc_now_naive()
 
                 elif message_type == "exec_chunk":
                     await _handle_exec_chunk(db, message, runner_id, owner_id)

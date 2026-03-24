@@ -622,6 +622,72 @@ class AgentsStore:
         except Exception as exc:
             logger.warning("FTS5 rebuild failed: %s", exc)
 
+    def _disable_fts_triggers(self) -> bool:
+        """Drop FTS triggers to avoid per-row overhead during bulk ingest.
+
+        Returns True if triggers were dropped (and must be re-created).
+        """
+        if not self._fts_available():
+            return False
+        try:
+            self.db.execute(text("DROP TRIGGER IF EXISTS events_ai"))
+            self.db.execute(text("DROP TRIGGER IF EXISTS events_ad"))
+            self.db.execute(text("DROP TRIGGER IF EXISTS events_au"))
+            return True
+        except Exception:
+            logger.warning("Failed to drop FTS triggers (non-fatal)", exc_info=True)
+            return False
+
+    def _reenable_fts_triggers(self) -> None:
+        """Re-create FTS triggers after bulk ingest."""
+        try:
+            self.db.execute(
+                text("""
+                CREATE TRIGGER IF NOT EXISTS events_ai AFTER INSERT ON events BEGIN
+                  INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
+                  VALUES (new.id, new.content_text, new.tool_output_text, new.tool_name, new.role, new.session_id);
+                END
+            """)
+            )
+            self.db.execute(
+                text("""
+                CREATE TRIGGER IF NOT EXISTS events_ad AFTER DELETE ON events BEGIN
+                  INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
+                  VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                END
+            """)
+            )
+            self.db.execute(
+                text("""
+                CREATE TRIGGER IF NOT EXISTS events_au AFTER UPDATE ON events BEGIN
+                  INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
+                  VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                  INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
+                  VALUES (new.id, new.content_text, new.tool_output_text, new.tool_name, new.role, new.session_id);
+                END
+            """)
+            )
+        except Exception:
+            logger.exception("Failed to re-create FTS triggers")
+
+    def _backfill_fts_for_session(self, session_id) -> None:
+        """Batch-insert FTS entries for all events in a session that are missing from FTS."""
+        if not self._fts_available():
+            return
+        try:
+            self.db.execute(
+                text("""
+                    INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
+                    SELECT e.id, e.content_text, e.tool_output_text, e.tool_name, e.role, e.session_id
+                    FROM events e
+                    WHERE e.session_id = :sid
+                      AND e.id NOT IN (SELECT rowid FROM events_fts)
+                """),
+                {"sid": str(session_id)},
+            )
+        except Exception:
+            logger.warning("FTS backfill for session %s failed (non-fatal)", session_id, exc_info=True)
+
     def _fts_query(self, raw: str) -> str:
         """Normalize raw text into a safe FTS query."""
         cleaned = (raw or "").replace('"', '""').strip()
@@ -1359,6 +1425,10 @@ class AgentsStore:
         leaf_uuid_hint: str | None = None
         latest_inserted_timestamp: datetime | None = None
 
+        # Disable FTS triggers during bulk insert — we backfill afterward.
+        # This avoids per-row FTS index updates that extend write lock hold time.
+        fts_triggers_dropped = len(data.events) > 10 and self._disable_fts_triggers()
+
         for event_data in data.events:
             event_hash = self._compute_event_hash(event_data)
             event_uuid, parent_event_uuid = self._extract_event_lineage(event_data.raw_json)
@@ -1398,6 +1468,12 @@ class AgentsStore:
                     latest_inserted_timestamp = normalized_timestamp
             else:
                 events_skipped += 1
+
+        # Re-enable FTS triggers and batch-backfill new events into the FTS index.
+        if fts_triggers_dropped:
+            self._reenable_fts_triggers()
+            if events_inserted > 0:
+                self._backfill_fts_for_session(session_id)
 
         source_paths = {line.source_path for line in source_lines}
         latest_line_by_offset, _ = self._list_branch_source_lines(session_id, ingest_branch.id, source_paths)

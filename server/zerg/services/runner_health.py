@@ -174,10 +174,16 @@ def assess_runner_health(
     heartbeat_interval_ms = _heartbeat_interval_ms(metadata)
     stale_after_seconds = _stale_after_seconds(heartbeat_interval_ms)
 
+    # Prefer in-memory heartbeat cache (updated every 30s without DB writes).
+    from zerg.routers.runners import runner_heartbeat_cache
+
+    runner_id = getattr(runner, "id", None)
+    effective_last_seen = (runner_heartbeat_cache.get(runner_id) if runner_id else None) or runner.last_seen_at
+
     last_seen_age_seconds: int | None = None
     is_stale = False
-    if runner.last_seen_at is not None:
-        delta = now - runner.last_seen_at
+    if effective_last_seen is not None:
+        delta = now - effective_last_seen
         last_seen_age_seconds = max(0, int(delta.total_seconds()))
         is_stale = last_seen_age_seconds > stale_after_seconds
 
@@ -215,11 +221,11 @@ def assess_runner_health(
         effective_status = "revoked"
         status_reason = "revoked"
         status_summary = "Revoked. This runner cannot reconnect."
-    elif is_connected is True and runner.last_seen_at is None:
+    elif is_connected is True and effective_last_seen is None:
         effective_status = "online"
         status_reason = "connected"
         status_summary = "Online. Live runner connection is active."
-    elif runner.last_seen_at is None:
+    elif effective_last_seen is None:
         effective_status = "offline"
         status_reason = "never_connected"
         status_summary = "Offline. This runner has never connected."
