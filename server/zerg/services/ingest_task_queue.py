@@ -124,12 +124,10 @@ async def run_ingest_task_worker(poll_seconds: float = WORKER_POLL_SECONDS) -> N
 
 async def _process_batch() -> None:
     while True:
-        factory = get_session_factory()
-        db = factory()
-        try:
-            tasks = _claim_pending(db, CLAIM_LIMIT)
-        finally:
-            db.close()
+        # Run sync DB claim in a thread to avoid blocking the event loop.
+        # _claim_pending does a query + commit that can block on SQLite
+        # busy_timeout (30s) if a write lock is held.
+        tasks = await asyncio.to_thread(_claim_pending_thread)
 
         if not tasks:
             return
@@ -140,6 +138,16 @@ async def _process_batch() -> None:
             # Task was re-queued; break so the outer worker sleep provides a
             # yield before we re-claim — prevents event-loop starvation.
             break
+
+
+def _claim_pending_thread() -> list[tuple[str, str, str]]:
+    """Thread-safe wrapper for _claim_pending."""
+    factory = get_session_factory()
+    db = factory()
+    try:
+        return _claim_pending(db, CLAIM_LIMIT)
+    finally:
+        db.close()
 
 
 def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
@@ -176,7 +184,7 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
         else:
             await asyncio.wait_for(_run_task_impl(task_id, session_id, task_type), timeout=timeout_seconds)
 
-        _mark_status(task_id, "done", error=None, retry=False)
+        await asyncio.to_thread(_mark_status, task_id, "done", None, False)
         logger.debug("Ingest task %s (%s/%s) done", task_id, task_type, session_id)
         return False
     except RetryTaskLater as e:
@@ -184,21 +192,22 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
         # RetryTaskLater means "not yet" (session still active), not a real failure.
         # Reset to pending WITHOUT consuming the retry budget so we never drop a
         # turn review just because the session was actively running for >6 seconds.
-        _reset_for_retry_later(task_id, str(e))
+        await asyncio.to_thread(_reset_for_retry_later, task_id, str(e))
         return True
     except asyncio.TimeoutError:
         timeout_label = f"{timeout_seconds:g}s" if timeout_seconds is not None else "unknown"
         logger.warning("Ingest task %s (%s/%s) timed out after %s", task_id, task_type, session_id, timeout_label)
-        _mark_status(
+        await asyncio.to_thread(
+            _mark_status,
             task_id,
             "failed",
-            error=f"{task_type} task timed out after {timeout_label}",
-            retry=True,
+            f"{task_type} task timed out after {timeout_label}",
+            True,
         )
         return False
     except Exception as e:
         logger.exception("Ingest task %s (%s/%s) failed", task_id, task_type, session_id)
-        _mark_status(task_id, "failed", error=str(e), retry=True)
+        await asyncio.to_thread(_mark_status, task_id, "failed", str(e), True)
         return False
 
 
@@ -214,19 +223,29 @@ async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
         await _generate_embeddings_impl(session_id)
         return
     if task_type == "turn_loop":
+
+        def _get_task_created_at():
+            factory = get_session_factory()
+            db = factory()
+            try:
+                task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
+                return getattr(task, "created_at", None)
+            finally:
+                db.close()
+
+        freshness_ref = await asyncio.to_thread(_get_task_created_at)
         factory = get_session_factory()
         db = factory()
         try:
-            task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
             review = await maybe_process_session_turn_loop(
                 db=db,
                 session_id=session_id,
-                freshness_reference_at=getattr(task, "created_at", None),
+                freshness_reference_at=freshness_ref,
             )
             if review is None and turn_loop_retry_needed(
                 db=db,
                 session_id=session_id,
-                freshness_reference_at=getattr(task, "created_at", None),
+                freshness_reference_at=freshness_ref,
             ):
                 raise RetryTaskLater("waiting for active session presence to settle before creating turn review")
         finally:
