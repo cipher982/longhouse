@@ -673,7 +673,10 @@ async def _summarize_and_persist(
 
     Returns the SessionSummary or None if the transcript was empty.
     """
+    from sqlalchemy import update as sa_update
+
     from zerg.services.session_processing import summarize_events
+    from zerg.services.write_serializer import get_write_serializer
 
     event_dicts = _events_to_dicts(events)
 
@@ -691,13 +694,28 @@ async def _summarize_and_persist(
     if not summary:
         return None
 
-    session.summary = summary.summary
-    session.summary_title = summary.title
-    session.summary_event_count = len(events)
-    # Advance ID cursor so incremental summaries skip already-processed events
-    if events:
-        session.last_summarized_event_id = events[-1].id
-    db.commit()
+    new_last_event_id = events[-1].id if events else None
+
+    def _do_persist(write_db: Session) -> int:
+        result = write_db.execute(
+            sa_update(AgentSession)
+            .where(AgentSession.id == session.id)
+            .values(
+                summary=summary.summary,
+                summary_title=summary.title,
+                summary_event_count=len(events),
+                last_summarized_event_id=new_last_event_id,
+            )
+        )
+        return int(result.rowcount or 0)
+
+    ws = get_write_serializer()
+    updated = await ws.execute_or_direct(_do_persist, db, label="summary-backfill")
+    if updated > 0:
+        session.summary = summary.summary
+        session.summary_title = summary.title
+        session.summary_event_count = len(events)
+        session.last_summarized_event_id = new_last_event_id
     return summary
 
 
@@ -706,6 +724,7 @@ async def _set_structured_title_if_empty(session_id: str) -> None:
     from sqlalchemy import update as sa_update
 
     from zerg.database import get_session_factory
+    from zerg.services.write_serializer import get_write_serializer
 
     factory = get_session_factory()
     db = factory()
@@ -720,17 +739,22 @@ async def _set_structured_title_if_empty(session_id: str) -> None:
             # No project/branch — use a generic date-based title
             date_str = (session.started_at or datetime.now(timezone.utc)).strftime("%b %-d")
             title = f"Session · {date_str}"
+
+        def _do_update(write_db: Session) -> int:
+            result = write_db.execute(
+                sa_update(AgentSession)
+                .where(AgentSession.id == session_id)
+                .where(AgentSession.summary_title.is_(None))
+                .values(summary_title=title)
+            )
+            return int(result.rowcount or 0)
+
         # WHERE summary_title IS NULL prevents overwriting a concurrently-set LLM title
-        result = db.execute(
-            sa_update(AgentSession)
-            .where(AgentSession.id == session_id)
-            .where(AgentSession.summary_title.is_(None))
-            .values(summary_title=title)
-        )
-        if result.rowcount == 0:
+        ws = get_write_serializer()
+        updated = await ws.execute_or_direct(_do_update, db, label="summary-title")
+        if updated == 0:
             logger.debug("Structured title skipped for session %s (title set concurrently)", session_id)
             return
-        db.commit()
         logger.debug("Set structured title %r for session %s", title, session_id)
     except Exception:
         logger.exception("Failed to set structured title for session %s", session_id)
@@ -745,6 +769,7 @@ async def _generate_summary_impl(session_id: str) -> None:
     from zerg.database import get_session_factory
     from zerg.models_config import get_llm_client_with_db_fallback
     from zerg.services.session_processing import incremental_summary
+    from zerg.services.write_serializer import get_write_serializer
 
     settings = get_settings()
 
@@ -771,6 +796,7 @@ async def _generate_summary_impl(session_id: str) -> None:
 
     session_factory = get_session_factory()
     db = session_factory()
+    ws = get_write_serializer()
     try:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if not session:
@@ -834,9 +860,12 @@ async def _generate_summary_impl(session_id: str) -> None:
                 # Legacy: guard on count for sessions that haven't migrated to ID cursor yet
                 stmt = stmt.where(AgentSession.summary_event_count == (session.summary_event_count or 0))
 
-            result = db.execute(stmt.values(**values))
-            if result.rowcount > 0:
-                db.commit()
+            def _do_update(write_db: Session) -> int:
+                result = write_db.execute(stmt.values(**values))
+                return int(result.rowcount or 0)
+
+            updated = await ws.execute_or_direct(_do_update, db, label="summary")
+            if updated > 0:
                 if summary:
                     logger.info("Updated summary for session %s: %s", session_id, summary.title)
                 else:
@@ -2113,7 +2142,7 @@ async def list_sessions(
             if x_search_mode_header:
                 from fastapi.responses import JSONResponse
 
-                return JSONResponse(content=response.model_dump(), headers={"X-Search-Mode": x_search_mode_header})
+                return JSONResponse(content=response.model_dump(mode="json"), headers={"X-Search-Mode": x_search_mode_header})
             return response
 
         store = AgentsStore(db)

@@ -113,6 +113,28 @@ def test_list_sessions_includes_summary(tmp_path):
         assert session["is_writable_head"] is True
 
 
+def test_list_sessions_hybrid_mode_serializes_datetimes(tmp_path):
+    """Hybrid-mode JSON responses should render datetimes without a manual JSONResponse crash."""
+    factory = _make_db(tmp_path)
+    db = factory()
+    try:
+        _seed_session(
+            db,
+            summary="Hybrid-mode serialization check.",
+            summary_title="Hybrid Response",
+            environment="work-macbook",
+        )
+    finally:
+        db.close()
+
+    for client in _get_client(factory):
+        resp = client.get("/agents/sessions?mode=hybrid&days_back=1&limit=5")
+        assert resp.status_code == 200, resp.text
+        assert resp.headers.get("x-search-mode") == "lexical-fallback"
+        payload = resp.json()
+        assert isinstance(payload["sessions"][0]["started_at"], str)
+
+
 def test_get_session_includes_summary(tmp_path):
     """GET /agents/sessions/{id} returns summary and summary_title fields."""
     factory = _make_db(tmp_path)
