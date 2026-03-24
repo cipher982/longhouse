@@ -529,6 +529,48 @@ class TestGenerateSummaryBackground:
         db.close()
 
     @pytest.mark.asyncio
+    async def test_generate_summary_routes_write_through_serializer(self, tmp_path):
+        """Background summary updates should use the write serializer when configured."""
+        db = _setup_db(tmp_path)
+        session = _seed_session(db, num_events=6)
+
+        from zerg.routers.agents import _generate_summary_impl
+
+        factory = sessionmaker(bind=db.get_bind())
+        mock_client = _mock_llm_client(
+            '{"title": "Fix Login Bug", "summary": "Fixed the login validation issue in auth.py."}'
+        )
+        mock_settings = MagicMock()
+        mock_settings.testing = False
+        mock_settings.llm_disabled = False
+        serializer_labels: list[str] = []
+
+        class _FakeSerializer:
+            async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True):
+                serializer_labels.append(label)
+                result = fn(fallback_db)
+                if auto_commit:
+                    fallback_db.commit()
+                return result
+
+        with (
+            patch("zerg.database.get_session_factory", return_value=factory),
+            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
+            patch(
+                "zerg.models_config.get_llm_client_with_db_fallback",
+                return_value=(mock_client, "test-model", "openai"),
+            ),
+            patch("zerg.services.write_serializer.get_write_serializer", return_value=_FakeSerializer()),
+        ):
+            await _generate_summary_impl(str(session.id))
+
+        db.refresh(session)
+        assert session.summary_title == "Fix Login Bug"
+        assert serializer_labels == ["summary"]
+
+        db.close()
+
+    @pytest.mark.asyncio
     async def test_handles_llm_error_gracefully(self, tmp_path):
         """_generate_summary_impl should re-raise LLM errors so the task queue can retry."""
         db = _setup_db(tmp_path)

@@ -148,6 +148,36 @@ async def test_structured_title_date_fallback_when_no_project_or_branch(tmp_path
     assert updated.summary_title.startswith("Session · ")
 
 
+@pytest.mark.asyncio
+async def test_structured_title_routes_write_through_serializer(tmp_path):
+    """Structured title fallback should use the write serializer when configured."""
+    from zerg.routers.agents import _set_structured_title_if_empty
+
+    factory = _make_db(tmp_path, "serializer.db")
+    session = _seed_session(factory, project="myproject", git_branch="main")
+    serializer_labels: list[str] = []
+
+    class _FakeSerializer:
+        async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True):
+            serializer_labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    with (
+        patch("zerg.database.get_session_factory", return_value=factory),
+        patch("zerg.services.write_serializer.get_write_serializer", return_value=_FakeSerializer()),
+    ):
+        await _set_structured_title_if_empty(str(session.id))
+
+    db = factory()
+    updated = db.query(AgentSession).filter(AgentSession.id == session.id).first()
+    db.close()
+    assert serializer_labels == ["summary-title"]
+    assert updated.summary_title == "myproject · main"
+
+
 # ---------------------------------------------------------------------------
 # Tests: first_user_message in sessions list response
 # ---------------------------------------------------------------------------

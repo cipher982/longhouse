@@ -236,7 +236,7 @@ def get_device_token(
 def validate_device_token(token: str, db: Session) -> DeviceToken | None:
     """Validate a device token and return the DeviceToken if valid.
 
-    Updates last_used_at on successful validation.
+    Updates last_used_at on successful validation when safe to do so.
 
     Security: Uses constant-time comparison to prevent timing attacks.
     The DB lookup by hash is O(1) via index, and we add an explicit
@@ -269,12 +269,16 @@ def validate_device_token(token: str, db: Session) -> DeviceToken | None:
 
     # Debounce last_used_at writes — at most once per hour per token.
     # Every-request writes cause SQLite write-lock contention under load.
-    # Use naive UTC to match SQLite's stored datetimes (no tzinfo).
+    # When the write serializer is active, keep auth validation read-only.
+    from zerg.services.write_serializer import get_write_serializer
+
     now = datetime.utcnow()
     last = device_token.last_used_at
     if last is not None and last.tzinfo is not None:
         last = last.replace(tzinfo=None)
     if last is None or (now - last).total_seconds() > 3600:
+        if get_write_serializer().is_configured:
+            return device_token
         device_token.last_used_at = now
         db.commit()
 
