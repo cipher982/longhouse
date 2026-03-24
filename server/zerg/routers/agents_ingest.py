@@ -2,6 +2,7 @@
 
 import gzip
 import logging
+from uuid import UUID
 
 import zstandard
 from fastapi import APIRouter
@@ -11,6 +12,7 @@ from fastapi import Request
 from fastapi import status
 from sqlalchemy.orm import Session
 
+from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -65,7 +67,7 @@ async def decompress_if_gzipped(request: Request) -> bytes:
 async def ingest_session(
     request: Request,
     db: Session = Depends(get_db),
-    device_token: DeviceToken | None = Depends(verify_agents_token),
+    auth_token: DeviceToken | ManagedLocalHookToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> IngestResponse:
     """Ingest a session with events.
@@ -101,14 +103,24 @@ async def ingest_session(
                 detail=f"Invalid payload: {e}",
             )
 
-        if device_token:
-            if data.device_id and data.device_id != device_token.device_id:
+        if isinstance(auth_token, ManagedLocalHookToken):
+            hook_session_id = UUID(auth_token.session_id)
+            if data.id is not None and data.id != hook_session_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Managed-local hook token does not match session",
+                )
+            data.id = hook_session_id
+            if auth_token.device_id:
+                data.device_id = auth_token.device_id
+        elif auth_token:
+            if data.device_id and data.device_id != auth_token.device_id:
                 logger.debug(
                     "Device ID mismatch: payload %s != token %s, using token device_id",
                     data.device_id,
-                    device_token.device_id,
+                    auth_token.device_id,
                 )
-            data.device_id = device_token.device_id
+            data.device_id = auth_token.device_id
 
         from zerg.services.write_serializer import get_write_serializer
 

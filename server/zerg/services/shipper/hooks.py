@@ -75,7 +75,24 @@ IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE <<< "$(
   ] | join("\\u001f")'
 )"
 
+[ -n "$LONGHOUSE_SESSION_ID" ] && SESSION_ID="$LONGHOUSE_SESSION_ID"
 [ -z "$SESSION_ID" ] && exit 0
+
+TARGET_URL="${LONGHOUSE_HOOK_URL:-}"
+TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
+MANAGED_SESSION_ID="${LONGHOUSE_SESSION_ID:-}"
+
+emit_presence() {
+  payload="$1"
+  if [[ -n "$TARGET_URL" ]] && [[ -n "$TARGET_TOKEN" ]] && command -v curl >/dev/null 2>&1; then
+    printf '%s' "$payload" | curl -sf --connect-timeout 0.5 --max-time 1.5 \\
+      -H "Content-Type: application/json" \\
+      -H "X-Agents-Token: $TARGET_TOKEN" \\
+      --data-binary @- \\
+      "${TARGET_URL%/}/api/agents/presence" >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
 
 # Map event → presence state
 case "$EVENT" in
@@ -94,16 +111,20 @@ case "$EVENT" in
   *)                              exit 0 ;;
 esac
 
-# Write presence to outbox (atomic: write to .tmp.* then rename to prs.*.json)
-# Temp file starts with '.' so the daemon skips it during the write.
-# Final file starts with 'prs.' — daemon picks it up, POSTs, deletes.
-OUTBOX="$HOME/.claude/outbox"
-[ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
-TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
-jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
+PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
       --arg tool "$TOOL" --arg cwd "$CWD" \\
-  '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}' > "$TMPFILE"
-mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+  '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}')
+
+if ! emit_presence "$PAYLOAD"; then
+  # Write presence to outbox (atomic: write to .tmp.* then rename to prs.*.json)
+  # Temp file starts with '.' so the daemon skips it during the write.
+  # Final file starts with 'prs.' — daemon picks it up, POSTs, deletes.
+  OUTBOX="$HOME/.claude/outbox"
+  [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
+  TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
+  printf '%s\n' "$PAYLOAD" > "$TMPFILE"
+  mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+fi
 
 # Stop: also ship the session transcript via engine binary.
 # Done AFTER the outbox write so idle state is always recorded.
@@ -114,17 +135,30 @@ mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
 ENGINE="__ENGINE_PATH__"
 if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
   nohup /bin/bash -c '
-    engine="$0"
-    transcript="$1"
+    engine="$1"
+    transcript="$2"
+    managed_session_id="$3"
+    target_url="$4"
+    target_token="$5"
+    ship_args=()
+    if [[ -n "$target_url" ]]; then
+      ship_args+=(--url "$target_url")
+    fi
+    if [[ -n "$target_token" ]]; then
+      ship_args+=(--token "$target_token")
+    fi
+    if [[ -n "$managed_session_id" ]]; then
+      ship_args+=(--session-id "$managed_session_id")
+    fi
     for delay in 0 1 2 4; do
       if [[ "$delay" -gt 0 ]]; then
         sleep "$delay"
       fi
       if [[ -f "$transcript" ]]; then
-        "$engine" ship --file "$transcript" --quiet >/dev/null 2>&1 || true
+        "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true
       fi
     done
-  ' "$ENGINE" "$TRANSCRIPT" >/dev/null 2>&1 < /dev/null &
+  ' _ "$ENGINE" "$TRANSCRIPT" "$MANAGED_SESSION_ID" "$TARGET_URL" "$TARGET_TOKEN" >/dev/null 2>&1 < /dev/null &
 fi
 
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
@@ -146,11 +180,15 @@ if [[ "$SOURCE" != "startup" ]]; then exit 0; fi
 PROJECT=$(basename "$CWD")
 if [[ -z "$PROJECT" ]]; then exit 0; fi
 
-TOKEN_FILE="$HOME/.claude/longhouse-device-token"
-URL_FILE="$HOME/.claude/longhouse-url"
-if [[ ! -f "$TOKEN_FILE" ]] || [[ ! -f "$URL_FILE" ]]; then exit 0; fi
-TOKEN=$(cat "$TOKEN_FILE" | tr -d '[:space:]')
-URL=$(cat "$URL_FILE" | tr -d '[:space:]')
+TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
+URL="${LONGHOUSE_HOOK_URL:-}"
+if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]; then
+  TOKEN_FILE="$HOME/.claude/longhouse-device-token"
+  URL_FILE="$HOME/.claude/longhouse-url"
+  if [[ ! -f "$TOKEN_FILE" ]] || [[ ! -f "$URL_FILE" ]]; then exit 0; fi
+  TOKEN=$(cat "$TOKEN_FILE" | tr -d '[:space:]')
+  URL=$(cat "$URL_FILE" | tr -d '[:space:]')
+fi
 
 # URL-encode the project name so paths with spaces or special chars work.
 PROJECT_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$PROJECT" 2>/dev/null || printf '%s' "$PROJECT")
@@ -204,6 +242,21 @@ else
   SID="$CODEX_SESSION_ID"
 fi
 
+TARGET_URL="${LONGHOUSE_HOOK_URL:-}"
+TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
+
+emit_presence() {
+  payload="$1"
+  if [[ -n "$TARGET_URL" ]] && [[ -n "$TARGET_TOKEN" ]] && command -v curl >/dev/null 2>&1; then
+    printf '%s' "$payload" | curl -sf --connect-timeout 0.5 --max-time 1.5 \\
+      -H "Content-Type: application/json" \\
+      -H "X-Agents-Token: $TARGET_TOKEN" \\
+      --data-binary @- \\
+      "${TARGET_URL%/}/api/agents/presence" >/dev/null 2>&1 && return 0
+  fi
+  return 1
+}
+
 # Map event -> presence state
 case "$EVENT" in
   SessionStart)         STATE="idle" ;;
@@ -212,26 +265,36 @@ case "$EVENT" in
   *)                    exit 0 ;;
 esac
 
-# Write presence to outbox (same outbox the engine daemon drains for Claude).
-# Atomic: write to .tmp.* then rename to prs.*.json
-OUTBOX="$HOME/.claude/outbox"
-[ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
-TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
-jq -n --arg sid "$SID" --arg st "$STATE" \\
+PAYLOAD=$(jq -n --arg sid "$SID" --arg st "$STATE" \\
       --arg tool "" --arg cwd "$CWD" --arg provider "codex" \\
-  '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider}' > "$TMPFILE"
-mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+  '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider}')
+
+if ! emit_presence "$PAYLOAD"; then
+  # Write presence to outbox (same outbox the engine daemon drains for Claude).
+  # Atomic: write to .tmp.* then rename to prs.*.json
+  OUTBOX="$HOME/.claude/outbox"
+  [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
+  TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
+  printf '%s\n' "$PAYLOAD" > "$TMPFILE"
+  mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+fi
 
 # Stop: ship the session transcript via engine binary.
 # For managed-local sessions, --session-id overrides the ingest UUID so the
 # transcript lands on the Longhouse-owned session, not a duplicate.
 ENGINE="__ENGINE_PATH__"
 if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]; then
+  ship_args=()
   if [ -n "$LONGHOUSE_SESSION_ID" ]; then
-    "$ENGINE" ship --file "$TRANSCRIPT" --session-id "$LONGHOUSE_SESSION_ID" &>/dev/null &
-  else
-    "$ENGINE" ship --file "$TRANSCRIPT" &>/dev/null &
+    ship_args+=(--session-id "$LONGHOUSE_SESSION_ID")
   fi
+  if [ -n "$TARGET_URL" ]; then
+    ship_args+=(--url "$TARGET_URL")
+  fi
+  if [ -n "$TARGET_TOKEN" ]; then
+    ship_args+=(--token "$TARGET_TOKEN")
+  fi
+  "$ENGINE" ship --file "$TRANSCRIPT" "${ship_args[@]}" &>/dev/null &
 fi
 
 exit 0

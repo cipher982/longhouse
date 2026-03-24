@@ -28,6 +28,7 @@ from uuid import UUID
 from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
+from fastapi import Request
 from fastapi import status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -52,7 +53,6 @@ from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_PENDIN
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
 from zerg.services.managed_local_control import send_text_to_managed_local_session
-from zerg.services.managed_local_control import ship_managed_local_claude_transcript
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
@@ -96,7 +96,6 @@ SUPPORTED_SESSION_CHAT_BACKENDS = {
 MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 1.0
 MANAGED_LOCAL_STABLE_POLLS = 1
-MANAGED_LOCAL_DIRECT_SHIP_TIMEOUT_SECS = 8
 MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 5.0
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
     [
@@ -432,7 +431,6 @@ async def _stream_managed_local_output(
         db=db,
         session_id=source_session.id,
     )
-    provider = str(getattr(source_session, "provider", "") or "").strip().lower()
     send_result = await send_text_to_managed_local_session(
         db=db,
         owner_id=owner_id,
@@ -515,29 +513,6 @@ async def _stream_managed_local_output(
                     new_events = []
             else:
                 new_events = events_task.result() or []
-
-            if not new_events and provider == "claude":
-                ship_result = await ship_managed_local_claude_transcript(
-                    db=db,
-                    owner_id=owner_id,
-                    session=source_session,
-                    commis_id=f"{request_id}:ship",
-                    timeout_secs=MANAGED_LOCAL_DIRECT_SHIP_TIMEOUT_SECS,
-                )
-                if not ship_result.ok:
-                    logger.warning(
-                        "[%s] Managed-local Claude direct ship fallback failed for %s: %s",
-                        request_id,
-                        source_session.id,
-                        ship_result.error,
-                    )
-                new_events = await _await_managed_local_turn_events(
-                    db_bind=db.get_bind(),
-                    session_id=source_session.id,
-                    after_event_id=baseline_event_id,
-                    timeout_secs=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
-                    poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
-                )
 
         if not new_events and terminal_result is None:
             if not events_task.done():
@@ -1310,6 +1285,7 @@ async def chat_with_session(
 @router.post("/managed-local", response_model=ManagedLocalSessionLaunchResponse)
 async def launch_managed_local(
     body: ManagedLocalSessionLaunchRequest,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_oikos_user),
 ):
@@ -1318,6 +1294,7 @@ async def launch_managed_local(
     Supports both Claude and Codex providers. The tmux transport is
     provider-agnostic — Longhouse owns the launch, lifecycle, and input routing.
     """
+    hook_url = str(request.base_url).rstrip("/")
     try:
         result = await launch_managed_local_session(
             db,
@@ -1332,6 +1309,7 @@ async def launch_managed_local(
                 display_name=body.display_name,
                 loop_mode=body.loop_mode.value,
                 managed_transport=body.managed_transport.value,
+                hook_url=hook_url,
             ),
         )
     except ManagedLocalLaunchError as exc:
@@ -1348,6 +1326,7 @@ async def launch_managed_local(
 @router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)
 async def launch_managed_local_this_device(
     body: ManagedLocalThisDeviceLaunchRequest,
+    request: Request,
     db: Session = Depends(get_db),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -1358,6 +1337,7 @@ async def launch_managed_local_this_device(
     machine_name = (body.machine_name or "").strip() or str(getattr(device_token, "device_id", "") or "").strip()
     if not machine_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not determine this device name")
+    hook_url = str(request.base_url).rstrip("/")
 
     try:
         result = await launch_managed_local_session(
@@ -1372,6 +1352,7 @@ async def launch_managed_local_this_device(
                 git_branch=body.git_branch,
                 display_name=body.display_name,
                 loop_mode=body.loop_mode.value,
+                hook_url=hook_url,
             ),
         )
     except ManagedLocalLaunchError as exc:
