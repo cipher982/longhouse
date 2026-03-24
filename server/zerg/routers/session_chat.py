@@ -53,6 +53,7 @@ from zerg.services.managed_local_control import await_managed_local_turn_termina
 from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
 from zerg.services.managed_local_control import get_managed_local_presence_updated_at
 from zerg.services.managed_local_control import send_text_to_managed_local_session
+from zerg.services.managed_local_control import ship_managed_local_claude_transcript
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
@@ -356,11 +357,31 @@ def _get_managed_local_latest_event_id(*, db_bind, session_id: UUID) -> int:
         return int(latest or 0)
 
 
+def _managed_local_events_include_expected_turn(*, events: list[AgentEvent], expected_user_message: str) -> bool:
+    saw_user_prompt = False
+    saw_assistant_or_tool = False
+
+    for event in events:
+        role = str(getattr(event, "role", "") or "").strip().lower()
+        content_text = str(getattr(event, "content_text", "") or "")
+        tool_name = str(getattr(event, "tool_name", "") or "").strip()
+        if role == "user" and content_text == expected_user_message:
+            saw_user_prompt = True
+        if tool_name:
+            saw_assistant_or_tool = True
+            continue
+        if role == "assistant" and content_text.strip():
+            saw_assistant_or_tool = True
+
+    return saw_user_prompt and saw_assistant_or_tool
+
+
 async def _await_managed_local_turn_events(
     *,
     db_bind,
     session_id: UUID,
     after_event_id: int,
+    expected_user_message: str | None = None,
     timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
     poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
 ) -> list[AgentEvent]:
@@ -378,15 +399,44 @@ async def _await_managed_local_turn_events(
                 stable_polls = 0
 
             if stable_polls >= MANAGED_LOCAL_STABLE_POLLS:
-                return _fetch_managed_local_events_since(
+                events = _fetch_managed_local_events_since(
                     db_bind=db_bind,
                     session_id=session_id,
                     after_event_id=after_event_id,
                 )
+                if expected_user_message and not _managed_local_events_include_expected_turn(
+                    events=events,
+                    expected_user_message=expected_user_message,
+                ):
+                    await asyncio.sleep(poll_interval_secs)
+                    continue
+                return events
 
         await asyncio.sleep(poll_interval_secs)
 
     return []
+
+
+async def _force_managed_local_claude_sync(
+    *,
+    db_bind,
+    owner_id: int,
+    source_session,
+    request_id: str,
+) -> None:
+    with Session(bind=db_bind) as ship_db:
+        ship_result = await ship_managed_local_claude_transcript(
+            db=ship_db,
+            owner_id=owner_id,
+            session=source_session,
+            commis_id=request_id,
+        )
+    if not ship_result.ok:
+        logger.warning(
+            "Managed-local Claude direct ship failed for %s: %s",
+            source_session.id,
+            ship_result.error or f"exit_code={ship_result.exit_code}",
+        )
 
 
 async def _stream_managed_local_output(
@@ -480,6 +530,7 @@ async def _stream_managed_local_output(
             db_bind=db.get_bind(),
             session_id=source_session.id,
             after_event_id=baseline_event_id,
+            expected_user_message=message,
         )
     )
 
@@ -502,10 +553,18 @@ async def _stream_managed_local_output(
                 terminal_result = await terminal_task
 
         if not new_events and terminal_result is not None:
+            if str(getattr(source_session, "provider", "") or "").strip().lower() == "claude":
+                await _force_managed_local_claude_sync(
+                    db_bind=db.get_bind(),
+                    owner_id=owner_id,
+                    source_session=source_session,
+                    request_id=request_id,
+                )
+
             if not events_task.done():
                 try:
                     new_events = await asyncio.wait_for(
-                        events_task,
+                        asyncio.shield(events_task),
                         timeout=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
                     )
                 except asyncio.TimeoutError:
