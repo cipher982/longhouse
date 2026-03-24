@@ -166,7 +166,12 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
             )
             assert response.status_code == 200, response.text
             body = response.text
+            assert "event: system" in body
+            assert "event: assistant_delta" in body
+            assert "event: done" in body
             assert "Local tmux reply" in body
+            assert '"persisted_events": 1' in body
+            assert '"persistence_error": null' in body
             assert '"created_continuation": false' in body
             assert f'"session_id": "{source_session.id}"' in body
             assert f'"shipped_session_id": "{source_session.id}"' in body
@@ -205,9 +210,56 @@ def test_chat_with_session_reports_claude_managed_local_send_failure(monkeypatch
             )
             assert response.status_code == 200, response.text
             body = response.text
+            assert "event: error" in body
+            assert "event: done" in body
             assert "Runner send failed" in body
             assert '"persisted_events": 0' in body
             assert '"created_continuation": false' in body
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_chat_with_session_reports_claude_managed_local_persistence_timeout(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    ship_calls: list[str] = []
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        async def fake_ship_transcript(*, db, owner_id, session, commis_id=None, timeout_secs=20):
+            ship_calls.append(str(session.id))
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        async def fake_wait_for_events(**_kwargs):
+            return []
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat.ship_managed_local_claude_transcript", fake_ship_transcript)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat._await_managed_local_turn_events",
+            fake_wait_for_events,
+        )
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 200, response.text
+            body = response.text
+            assert "event: error" in body
+            assert "event: done" in body
+            assert session_chat._MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE in body
+            assert '"persisted_events": 0' in body
+            assert '"created_continuation": false' in body
+            assert '"persistence_error": "Message was sent to the managed local session, but Longhouse did not observe a completed turn yet."' in body
+            assert '"exit_code": 0' in body
+            assert ship_calls == [str(source_session.id)]
         finally:
             api_app_ref.dependency_overrides = {}
 

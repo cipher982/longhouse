@@ -189,6 +189,7 @@ from typing import Iterable
 from typing import Iterator
 
 import httpx
+from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_capture_command
@@ -602,21 +603,10 @@ def main() -> int:
                     tmux_error = f"{type(exc).__name__}: {exc}"
                     pane_tail = _capture_tmux_pane(session_name=session_name, tmux_tmpdir=tmux_tmpdir)[-1200:]
 
-            done_payload_error = None
-            if chat_result.done_payload is not None:
-                done_payload = chat_result.done_payload
-                if done_payload.get("created_continuation") is not False:
-                    done_payload_error = f"expected created_continuation=false, got {done_payload.get('created_continuation')!r}"
-                elif str(done_payload.get("shipped_session_id") or "") != session_id:
-                    done_payload_error = (
-                        f"expected shipped_session_id={session_id}, got {done_payload.get('shipped_session_id')!r}"
-                    )
-                elif int(done_payload.get("persisted_events") or 0) <= 0:
-                    done_payload_error = f"expected persisted_events>0, got {done_payload.get('persisted_events')!r}"
-                elif done_payload.get("persistence_error") is not None:
-                    done_payload_error = f"unexpected persistence_error={done_payload.get('persistence_error')!r}"
-                elif int(done_payload.get("exit_code") or 1) != 0:
-                    done_payload_error = f"expected exit_code=0, got {done_payload.get('exit_code')!r}"
+            done_payload_error = validate_managed_local_chat_done_payload(
+                session_id=session_id,
+                done_payload=chat_result.done_payload,
+            )
 
             ok = (
                 chat_result.status_code == 200

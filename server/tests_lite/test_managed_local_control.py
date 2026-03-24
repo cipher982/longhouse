@@ -27,6 +27,7 @@ from zerg.services.managed_local_control import await_managed_local_turn_events
 from zerg.services.managed_local_control import build_managed_local_claude_ship_command
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_control import ship_managed_local_claude_transcript
+from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
 
 
 def _make_db(tmp_path):
@@ -283,6 +284,40 @@ def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_pa
         assert "--json" in command
         assert "events_shipped" in command
         assert "Managed local Claude transcript did not ship new events" in command
+
+
+def test_validate_managed_local_chat_done_payload_accepts_successful_zero_exit_code():
+    session_id = "9aa6380c-ec1d-4a3b-a221-fa7feb96fcb6"
+
+    error = validate_managed_local_chat_done_payload(
+        session_id=session_id,
+        done_payload={
+            "created_continuation": False,
+            "shipped_session_id": session_id,
+            "persisted_events": 2,
+            "persistence_error": None,
+            "exit_code": 0,
+        },
+    )
+
+    assert error is None
+
+
+def test_validate_managed_local_chat_done_payload_rejects_nonzero_exit_code():
+    session_id = "9aa6380c-ec1d-4a3b-a221-fa7feb96fcb6"
+
+    error = validate_managed_local_chat_done_payload(
+        session_id=session_id,
+        done_payload={
+            "created_continuation": False,
+            "shipped_session_id": session_id,
+            "persisted_events": 2,
+            "persistence_error": None,
+            "exit_code": 3,
+        },
+    )
+
+    assert error == "expected exit_code=0, got 3"
 
 
 def test_ship_managed_local_claude_transcript_dispatches_runner_job(monkeypatch, tmp_path):
