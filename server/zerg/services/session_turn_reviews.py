@@ -30,6 +30,7 @@ from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.session_loop_controller import build_loop_controller_payload
 from zerg.services.session_loop_controller import evaluate_session_turn_with_llm
+from zerg.services.write_serializer import get_write_serializer
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
 
@@ -567,7 +568,12 @@ def _build_turn_review_notification_text(*, review: SessionTurnReview, session: 
     return "\n".join(line.strip() for line in lines if str(line).strip())
 
 
-def _supersede_older_actionable_reviews(*, db: Session, review: SessionTurnReview) -> int:
+def _supersede_older_actionable_reviews(
+    *,
+    db: Session,
+    review: SessionTurnReview,
+    commit: bool = True,
+) -> int:
     from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_IGNORED
     from zerg.services.oikos_wakeup_ledger import finalize_wakeups_for_run
 
@@ -598,9 +604,35 @@ def _supersede_older_actionable_reviews(*, db: Session, review: SessionTurnRevie
         row.actual_outcome = _EXPECTED_IGNORE_OUTCOME
         row.shadow_alignment = _classify_alignment(_expected_outcome(row), _EXPECTED_IGNORE_OUTCOME)
 
-    db.commit()
-    db.refresh(review)
+    if commit:
+        db.commit()
+        db.refresh(review)
     return len(rows)
+
+
+async def _persist_review_timing_fields(
+    *,
+    db: Session,
+    review_id: int,
+    label: str,
+    assistant_turn_finished_at: datetime | None = None,
+    turn_loop_enqueued_at: datetime | None = None,
+    turn_loop_completed_at: datetime | None = None,
+) -> bool:
+    ws = get_write_serializer()
+
+    def _do_update(wdb: Session) -> bool:
+        row = wdb.query(SessionTurnReview).filter(SessionTurnReview.id == review_id).first()
+        if row is None:
+            return False
+        return _stamp_review_timing_fields(
+            row,
+            assistant_turn_finished_at=assistant_turn_finished_at,
+            turn_loop_enqueued_at=turn_loop_enqueued_at,
+            turn_loop_completed_at=turn_loop_completed_at,
+        )
+
+    return await ws.execute_or_direct(_do_update, db, label=label)
 
 
 async def _send_turn_review_telegram_notification(
@@ -764,13 +796,17 @@ async def _record_session_turn_review(
         .first()
     )
     if existing is not None:
-        if _stamp_review_timing_fields(
-            existing,
+        existing_id = int(existing.id)
+        updated = await _persist_review_timing_fields(
+            db=db,
+            review_id=existing_id,
+            label="turn-review-existing",
             assistant_turn_finished_at=turn.assistant_timestamp,
             turn_loop_enqueued_at=freshness_reference_at,
-        ):
-            db.commit()
-            db.refresh(existing)
+        )
+        if updated:
+            db.expire_all()
+            existing = db.query(SessionTurnReview).filter(SessionTurnReview.id == existing_id).first()
         return existing, False
 
     owner_id = _resolve_owner_id(db)
@@ -856,32 +892,39 @@ async def _record_session_turn_review(
     mode_application = _build_mode_application(session=session, policy=policy, outcome=outcome)
     recommended_action_value = mode_application["recommended_action"]
 
-    review = SessionTurnReview(
-        session_id=session.id,
-        owner_id=owner_id,
-        assistant_event_id=turn.assistant_event_id,
-        turn_index=turn.turn_index,
-        trigger_type=_TURN_TRIGGER_TYPE,
-        loop_mode=_coerce_loop_mode(getattr(session, "loop_mode", None)).value,
-        decision=outcome.decision,
-        summary=outcome.summary,
-        rationale=outcome.rationale,
-        turn_excerpt=turn.text[:_TURN_EXCERPT_MAX_CHARS],
-        mode_capability=str(mode_application["mode_capability"]),
-        mode_summary=str(mode_application["mode_summary"]),
-        execution_state=str(mode_application["execution_state"]),
-        recommended_action=str(recommended_action_value) if recommended_action_value else None,
-        follow_up_prompt=outcome.follow_up_prompt,
-        blocked_reasons=list(outcome.blocked_reasons),
-        status=review_status,
-        reason=review_reason,
-        assistant_turn_finished_at=turn.assistant_timestamp,
-        turn_loop_enqueued_at=_normalize_utc(freshness_reference_at),
-    )
-    db.add(review)
-    db.commit()
-    db.refresh(review)
-    _supersede_older_actionable_reviews(db=db, review=review)
+    ws = get_write_serializer()
+
+    def _create_review(wdb: Session) -> int:
+        review = SessionTurnReview(
+            session_id=session.id,
+            owner_id=owner_id,
+            assistant_event_id=turn.assistant_event_id,
+            turn_index=turn.turn_index,
+            trigger_type=_TURN_TRIGGER_TYPE,
+            loop_mode=_coerce_loop_mode(getattr(session, "loop_mode", None)).value,
+            decision=outcome.decision,
+            summary=outcome.summary,
+            rationale=outcome.rationale,
+            turn_excerpt=turn.text[:_TURN_EXCERPT_MAX_CHARS],
+            mode_capability=str(mode_application["mode_capability"]),
+            mode_summary=str(mode_application["mode_summary"]),
+            execution_state=str(mode_application["execution_state"]),
+            recommended_action=str(recommended_action_value) if recommended_action_value else None,
+            follow_up_prompt=outcome.follow_up_prompt,
+            blocked_reasons=list(outcome.blocked_reasons),
+            status=review_status,
+            reason=review_reason,
+            assistant_turn_finished_at=turn.assistant_timestamp,
+            turn_loop_enqueued_at=_normalize_utc(freshness_reference_at),
+        )
+        wdb.add(review)
+        wdb.flush()
+        _supersede_older_actionable_reviews(db=wdb, review=review, commit=False)
+        return int(review.id)
+
+    review_id = await ws.execute_or_direct(_create_review, db, label="turn-review-create")
+    db.expire_all()
+    review = db.query(SessionTurnReview).filter(SessionTurnReview.id == review_id).first()
     return review, True
 
 
@@ -1422,9 +1465,17 @@ async def maybe_process_session_turn_loop(
                     review.id,
                     review.session_id,
                 )
-    if _stamp_review_timing_fields(review, turn_loop_completed_at=datetime.now(timezone.utc)):
-        db.commit()
-        db.refresh(review)
+    completed_at = datetime.now(timezone.utc)
+    review_id = int(review.id)
+    updated = await _persist_review_timing_fields(
+        db=db,
+        review_id=review_id,
+        label="turn-review-complete",
+        turn_loop_completed_at=completed_at,
+    )
+    if updated:
+        db.expire_all()
+        review = db.query(SessionTurnReview).filter(SessionTurnReview.id == review_id).first()
     return review
 
 
