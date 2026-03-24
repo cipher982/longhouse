@@ -14,6 +14,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.write_serializer import get_write_serializer
 
 router = APIRouter(prefix="/agents/runtime", tags=["agents"])
 
@@ -27,9 +28,18 @@ async def ingest_runtime_event_batch(
 ) -> RuntimeEventBatchResult:
     """Ingest normalized runtime events and materialize runtime state."""
     try:
-        result = ingest_runtime_events(db, payload.events)
-        db.commit()
-        return result
+        ws = get_write_serializer()
+        if ws.is_configured:
+            events = payload.events
+
+            def _do(wdb: Session) -> RuntimeEventBatchResult:
+                return ingest_runtime_events(wdb, events)
+
+            return await ws.execute(_do, label="runtime-events")
+        else:
+            result = ingest_runtime_events(db, payload.events)
+            db.commit()
+            return result
     except HTTPException:
         raise
     except Exception as exc:
