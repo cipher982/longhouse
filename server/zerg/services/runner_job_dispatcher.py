@@ -16,6 +16,7 @@ import asyncio
 import logging
 import threading
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 from typing import Dict
 from typing import Optional
@@ -24,8 +25,11 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
 from zerg.services.runner_connection_manager import get_runner_connection_manager
+from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
+
+_STALE_ACTIVE_JOB_GRACE_SECS = 10
 
 
 @dataclass
@@ -69,6 +73,11 @@ class RunnerJobDispatcher:
         with self._runner_active_jobs_lock:
             return runner_id not in self._runner_active_jobs
 
+    def get_active_job_id(self, runner_id: int) -> str | None:
+        """Return the active job ID for a runner, if any."""
+        with self._runner_active_jobs_lock:
+            return self._runner_active_jobs.get(runner_id)
+
     def mark_job_active(self, runner_id: int, job_id: str) -> None:
         """Mark a job as active on a runner.
 
@@ -80,16 +89,71 @@ class RunnerJobDispatcher:
             self._runner_active_jobs[runner_id] = job_id
         logger.debug(f"Marked job {job_id} as active on runner {runner_id}")
 
-    def clear_active_job(self, runner_id: int) -> None:
+    def clear_active_job(self, runner_id: int, *, expected_job_id: str | None = None) -> str | None:
         """Clear the active job for a runner.
 
         Args:
             runner_id: ID of the runner
+            expected_job_id: Optional job ID guard. When provided, only clear
+                the slot if the runner is still active on that specific job.
         """
         with self._runner_active_jobs_lock:
+            current_job_id = self._runner_active_jobs.get(runner_id)
+            if current_job_id is None:
+                return None
+            if expected_job_id is not None and current_job_id != expected_job_id:
+                return None
             job_id = self._runner_active_jobs.pop(runner_id, None)
         if job_id:
             logger.debug(f"Cleared active job {job_id} from runner {runner_id}")
+        return job_id
+
+    def _drop_pending_job(self, job_id: str) -> PendingJob | None:
+        """Remove and return a pending job entry, if present."""
+        with self._pending_lock:
+            return self._pending_jobs.pop(job_id, None)
+
+    def _reclaim_stale_active_job(self, db: Session, runner_id: int) -> bool:
+        """Reclaim an active runner slot if its tracked job is terminal or stale."""
+        job_id = self.get_active_job_id(runner_id)
+        if not job_id:
+            return False
+
+        job = runner_crud.get_job(db, job_id)
+        if job is None:
+            self._drop_pending_job(job_id)
+            self.clear_active_job(runner_id, expected_job_id=job_id)
+            logger.warning("Reclaimed missing active runner job %s on runner %s", job_id, runner_id)
+            return True
+
+        if job.status not in {"queued", "running"}:
+            self._drop_pending_job(job_id)
+            self.clear_active_job(runner_id, expected_job_id=job_id)
+            logger.warning(
+                "Reclaimed runner %s active slot from terminal job %s (status=%s)",
+                runner_id,
+                job_id,
+                job.status,
+            )
+            return True
+
+        reference_ts = job.started_at or job.created_at
+        if reference_ts is None:
+            return False
+
+        deadline = reference_ts + timedelta(seconds=max(int(job.timeout_secs or 0), 0) + _STALE_ACTIVE_JOB_GRACE_SECS)
+        if utc_now_naive() <= deadline:
+            return False
+
+        self._drop_pending_job(job_id)
+        self.clear_active_job(runner_id, expected_job_id=job_id)
+        runner_crud.update_job_timeout(db, job_id)
+        logger.warning(
+            "Reclaimed stale active runner job %s on runner %s after timeout window elapsed",
+            job_id,
+            runner_id,
+        )
+        return True
 
     async def dispatch_job(
         self,
@@ -117,13 +181,16 @@ class RunnerJobDispatcher:
         """
         # Check if runner can accept a job
         if not self.can_accept_job(runner_id):
-            return {
-                "ok": False,
-                "error": {
-                    "type": "execution_error",
-                    "message": "Runner is busy with another job",
-                },
-            }
+            if self._reclaim_stale_active_job(db, runner_id):
+                logger.info("Recovered runner %s from stale active-job state before dispatch", runner_id)
+            else:
+                return {
+                    "ok": False,
+                    "error": {
+                        "type": "execution_error",
+                        "message": "Runner is busy with another job",
+                    },
+                }
 
         # Get runner connection
         connection_manager = get_runner_connection_manager()
@@ -176,9 +243,8 @@ class RunnerJobDispatcher:
 
             if not success:
                 # Failed to send message, clean up
-                with self._pending_lock:
-                    self._pending_jobs.pop(job.id, None)
-                self.clear_active_job(runner_id)
+                self._drop_pending_job(job.id)
+                self.clear_active_job(runner_id, expected_job_id=job.id)
                 runner_crud.update_job_error(db, job.id, "Failed to send command to runner")
                 return {
                     "ok": False,
@@ -198,9 +264,8 @@ class RunnerJobDispatcher:
 
             if not completed:
                 # Job timed out waiting for response
-                with self._pending_lock:
-                    self._pending_jobs.pop(job.id, None)
-                self.clear_active_job(runner_id)
+                self._drop_pending_job(job.id)
+                self.clear_active_job(runner_id, expected_job_id=job.id)
                 runner_crud.update_job_timeout(db, job.id)
                 return {
                     "ok": False,
@@ -211,28 +276,26 @@ class RunnerJobDispatcher:
                 }
 
             # Event was set - return the result
-            with self._pending_lock:
-                self._pending_jobs.pop(job.id, None)
+            self._drop_pending_job(job.id)
             return pending.result or {
                 "ok": False,
                 "error": {"type": "execution_error", "message": "No result received"},
             }
 
         except asyncio.CancelledError:
-            with self._pending_lock:
-                self._pending_jobs.pop(job.id, None)
-            self.clear_active_job(runner_id)
+            self._drop_pending_job(job.id)
+            self.clear_active_job(runner_id, expected_job_id=job.id)
             try:
-                runner_crud.update_job_error(db, job.id, "Dispatch cancelled")
+                runner_crud.update_job_timeout(db, job.id)
             except Exception:
                 logger.exception("Failed to persist cancellation cleanup for job %s", job.id)
+            logger.warning("Dispatch of runner job %s was cancelled before completion", job.id)
             raise
 
         except Exception as e:
             # Unexpected error
-            with self._pending_lock:
-                self._pending_jobs.pop(job.id, None)
-            self.clear_active_job(runner_id)
+            self._drop_pending_job(job.id)
+            self.clear_active_job(runner_id, expected_job_id=job.id)
             try:
                 runner_crud.update_job_error(db, job.id, str(e))
             except Exception:
@@ -267,7 +330,16 @@ class RunnerJobDispatcher:
 
         # Clear active job tracking
         if runner_id is not None:
-            self.clear_active_job(runner_id)
+            cleared_job_id = self.clear_active_job(runner_id, expected_job_id=job_id)
+            if cleared_job_id is None:
+                active_job_id = self.get_active_job_id(runner_id)
+                if active_job_id is not None:
+                    logger.warning(
+                        "Received completion for job %s on runner %s, but runner is active on %s",
+                        job_id,
+                        runner_id,
+                        active_job_id,
+                    )
 
         if pending:
             pending.result = result
