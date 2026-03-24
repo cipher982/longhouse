@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.device_token import DeviceToken
+from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -100,7 +101,7 @@ class TokenListResponse(BaseModel):
 
 
 @router.post("/tokens", response_model=CreateTokenResponse, status_code=status.HTTP_201_CREATED)
-def create_device_token(
+async def create_device_token(
     request: CreateTokenRequest,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
@@ -114,24 +115,32 @@ def create_device_token(
     plain_token = generate_device_token()
     token_hash = hash_token(plain_token)
 
-    # Create database record
-    device_token = DeviceToken(
-        owner_id=current_user.id,
-        device_id=request.device_id,
-        token_hash=token_hash,
-    )
+    ws = get_write_serializer()
 
-    db.add(device_token)
-    db.commit()
-    db.refresh(device_token)
+    def _create_token(wdb: Session) -> tuple[str, str, datetime]:
+        device_token = DeviceToken(
+            owner_id=current_user.id,
+            device_id=request.device_id,
+            token_hash=token_hash,
+        )
+        wdb.add(device_token)
+        wdb.flush()
+        wdb.refresh(device_token)
+        return str(device_token.id), device_token.device_id, device_token.created_at
+
+    token_id, device_id, created_at = await ws.execute_or_direct(
+        _create_token,
+        db,
+        label="device-token-create",
+    )
 
     logger.info(f"Created device token for user {current_user.id} device {request.device_id}")
 
     return CreateTokenResponse(
-        id=str(device_token.id),
-        device_id=device_token.device_id,
+        id=token_id,
+        device_id=device_id,
         token=plain_token,
-        created_at=device_token.created_at,
+        created_at=created_at,
     )
 
 
@@ -171,7 +180,7 @@ def list_device_tokens(
 
 
 @router.delete("/tokens/{token_id}", status_code=status.HTTP_204_NO_CONTENT)
-def revoke_device_token(
+async def revoke_device_token(
     token_id: UUID,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
@@ -181,24 +190,30 @@ def revoke_device_token(
     A revoked token can no longer be used for authentication.
     This action cannot be undone.
     """
-    # Find the token
-    token = db.query(DeviceToken).filter(DeviceToken.id == token_id, DeviceToken.owner_id == current_user.id).first()
+    ws = get_write_serializer()
 
-    if not token:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Token {token_id} not found",
-        )
+    def _revoke_token(wdb: Session) -> None:
+        token = wdb.query(DeviceToken).filter(DeviceToken.id == token_id, DeviceToken.owner_id == current_user.id).first()
 
-    if token.revoked_at is not None:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Token is already revoked",
-        )
+        if not token:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Token {token_id} not found",
+            )
 
-    # Revoke the token
-    token.revoked_at = datetime.now(timezone.utc)
-    db.commit()
+        if token.revoked_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Token is already revoked",
+            )
+
+        token.revoked_at = datetime.now(timezone.utc)
+
+    await ws.execute_or_direct(
+        _revoke_token,
+        db,
+        label="device-token-revoke",
+    )
 
     logger.info(f"Revoked device token {token_id} for user {current_user.id}")
 
@@ -270,8 +285,6 @@ def validate_device_token(token: str, db: Session) -> DeviceToken | None:
     # Debounce last_used_at writes — at most once per hour per token.
     # Every-request writes cause SQLite write-lock contention under load.
     # When the write serializer is active, keep auth validation read-only.
-    from zerg.services.write_serializer import get_write_serializer
-
     now = datetime.utcnow()
     last = device_token.last_used_at
     if last is not None and last.tzinfo is not None:

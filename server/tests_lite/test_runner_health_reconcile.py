@@ -134,6 +134,76 @@ async def test_reconcile_sends_one_telegram_alert_per_incident(tmp_path: Path):
         db.close()
 
 
+async def test_reconcile_commits_runner_and_incident_before_alert_await(tmp_path: Path):
+    db = _make_db(tmp_path)
+    try:
+        now = utc_now_naive()
+        SessionLocal = make_sessionmaker(db.get_bind())
+        user = User(email="owner@test.local", role="ADMIN", context={"telegram_chat_id": "1234"})
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        runner = Runner(
+            owner_id=user.id,
+            name="zerg",
+            auth_secret_hash="hash",
+            capabilities=["exec.full"],
+            status="online",
+            last_seen_at=now - timedelta(minutes=12),
+            runner_metadata={"install_mode": "server", "capabilities": ["exec.full"], "heartbeat_interval_ms": 30000},
+        )
+        db.add(runner)
+        db.commit()
+        db.refresh(runner)
+
+        incident = RunnerHealthIncident(
+            owner_id=user.id,
+            runner_id=runner.id,
+            incident_type="offline",
+            status=OPEN_INCIDENT_STATUS,
+            reason_code="stale_heartbeat",
+            summary="Old summary",
+            opened_at=now - timedelta(minutes=6),
+            last_observed_at=now - timedelta(minutes=10),
+            context={},
+        )
+        db.add(incident)
+        db.commit()
+
+        observed: dict[str, object] = {}
+
+        async def _send_telegram_alert(_user, _text):
+            with SessionLocal() as probe_db:
+                stored_runner = probe_db.query(Runner).filter(Runner.id == runner.id).one()
+                stored_incident = (
+                    probe_db.query(RunnerHealthIncident)
+                    .filter(RunnerHealthIncident.id == incident.id)
+                    .one()
+                )
+                observed["runner_status"] = stored_runner.status
+                observed["incident_summary"] = stored_incident.summary
+                observed["incident_last_observed_at"] = stored_incident.last_observed_at
+            return True
+
+        with (
+            patch(
+                "zerg.services.runner_health_reconciler.get_runner_connection_manager",
+                return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
+            ),
+            patch("zerg.services.runner_health_reconciler._send_telegram_alert", _send_telegram_alert),
+            patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=False),
+        ):
+            result = await reconcile_runner_health(db, now=now)
+
+        assert result["alerts_sent"] == 1
+        assert observed["runner_status"] == "offline"
+        assert observed["incident_summary"] == "Offline. Last heartbeat 720s ago."
+        assert observed["incident_last_observed_at"] == now
+    finally:
+        db.close()
+
+
 async def test_reconcile_resolves_non_proactive_incident_for_on_demand_runner(tmp_path: Path):
     db = _make_db(tmp_path)
     try:

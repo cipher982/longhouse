@@ -477,6 +477,11 @@ async def reconcile_runner_health(
                 if created:
                     result["incidents_opened"] += 1
 
+                # Persist status/incident changes before any awaited side effects.
+                # Otherwise a flush from the open incident can hold SQLite's writer
+                # lock across alert delivery or Oikos wakeups.
+                db.commit()
+
                 owner = user_cache.get(runner.owner_id)
                 if runner.owner_id not in user_cache:
                     owner = db.query(User).filter(User.id == runner.owner_id).first()
@@ -491,6 +496,7 @@ async def reconcile_runner_health(
                     now=now,
                 ):
                     result["alerts_sent"] += 1
+                db.commit()
 
                 if owner is not None and await _maybe_enqueue_oikos_wakeup(
                     db,
@@ -500,6 +506,8 @@ async def reconcile_runner_health(
                     now=now,
                 ):
                     result["wakeups_sent"] += 1
+                db.commit()
+                continue
             elif incident is not None:
                 _resolve_open_incident(incident, runner=runner, health=health, now=now)
                 result["incidents_resolved"] += 1
