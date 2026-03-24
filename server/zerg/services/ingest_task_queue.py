@@ -48,6 +48,8 @@ TASK_TIMEOUT_SECONDS: dict[str, float] = {
     "summary": 180.0,
     "embedding": 30.0,
 }
+RETRY_LATER_BASE_SECONDS = 2.0
+RETRY_LATER_MAX_SECONDS = 16.0
 
 
 class RetryTaskLater(Exception):
@@ -157,14 +159,18 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
         (SessionTask.task_type == "summary", 1),
         else_=2,
     )
-    pending_query = db.query(SessionTask).filter(SessionTask.status == "pending")
+    now = datetime.now(timezone.utc)
+    pending_query = db.query(SessionTask).filter(
+        SessionTask.status == "pending",
+        # Skip tasks in exponential backoff (updated_at pushed into the future)
+        SessionTask.updated_at <= now,
+    )
     # RetryLater paths bump updated_at when they yield, so claim by updated_at
     # before created_at to keep a single re-queued task from pinning the queue.
     pending = pending_query.order_by(priority, SessionTask.updated_at, SessionTask.created_at, SessionTask.id).limit(limit).all()
     if not pending:
         return []
 
-    now = datetime.now(timezone.utc)
     claimed = []
     for task in pending:
         task.status = "running"
@@ -260,6 +266,10 @@ def _reset_for_retry_later(task_id: str, error: str) -> None:
     Used by RetryTaskLater — the signal means "not yet" (e.g. session is still
     actively running), not a real failure. We undo the attempt increment that
     _claim_pending applied so the retry budget is preserved for genuine errors.
+
+    Applies exponential backoff by pushing updated_at into the future so
+    _claim_pending (which orders by updated_at) naturally delays re-pickup:
+    2s → 4s → 8s → 16s (capped).
     """
     factory = get_session_factory()
     db = factory()
@@ -269,9 +279,15 @@ def _reset_for_retry_later(task_id: str, error: str) -> None:
             return
         # Undo the attempt increment from _claim_pending
         task.attempts = max(0, (task.attempts or 1) - 1)
+        task.retry_later_count = (task.retry_later_count or 0) + 1
         task.status = "pending"
         task.error = error[:1000] if error else None
-        task.updated_at = datetime.now(timezone.utc)
+        # Exponential backoff: 2^count * base, capped at max
+        delay = min(
+            RETRY_LATER_BASE_SECONDS * (2 ** (task.retry_later_count - 1)),
+            RETRY_LATER_MAX_SECONDS,
+        )
+        task.updated_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
         db.commit()
     except Exception:
         logger.exception("Failed to reset task %s for retry later", task_id)

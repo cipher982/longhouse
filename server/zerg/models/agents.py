@@ -536,6 +536,7 @@ class SessionTask(AgentsBase):
     status = Column(String(16), nullable=False, default="pending")
     attempts = Column(Integer, nullable=False, server_default=text("0"))
     max_attempts = Column(Integer, nullable=False, server_default=text("3"))
+    retry_later_count = Column(Integer, nullable=False, server_default=text("0"))
     error = Column(Text, nullable=True)
     created_at = Column(
         DateTime(timezone=True),
