@@ -306,6 +306,45 @@ def test_claim_pending_prioritizes_turn_loop_before_summary_and_embedding(tmp_pa
     assert [task_type for _, _, task_type in claimed] == ["turn_loop", "summary", "embedding"]
 
 
+def test_claim_pending_deprioritizes_recently_requeued_turn_loop_tasks(tmp_path):
+    """A re-queued turn-loop should yield to newer turn-loop work in the same priority band."""
+    factory = _make_db(tmp_path, "claim_requeued_turn_loop.db")
+    db = factory()
+    older_created_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+    newer_created_at = older_created_at + timedelta(seconds=10)
+    db.add(
+        SessionTask(
+            id="task-older",
+            session_id="session-older",
+            task_type="turn_loop",
+            status="pending",
+            attempts=0,
+            error="waiting for active session presence to settle before creating turn review",
+            created_at=older_created_at,
+            updated_at=datetime.now(timezone.utc),
+        )
+    )
+    db.add(
+        SessionTask(
+            id="task-newer",
+            session_id="session-newer",
+            task_type="turn_loop",
+            status="pending",
+            attempts=0,
+            created_at=newer_created_at,
+            updated_at=newer_created_at,
+        )
+    )
+    db.commit()
+    db.close()
+
+    db = factory()
+    claimed = _claim_pending(db, limit=1)
+    db.close()
+
+    assert claimed == [("task-newer", "session-newer", "turn_loop")]
+
+
 def test_claim_pending_empty_returns_empty(tmp_path):
     """_claim_pending returns empty list when no pending tasks."""
     factory = _make_db(tmp_path, "claim_empty.db")

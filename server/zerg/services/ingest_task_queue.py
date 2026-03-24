@@ -150,7 +150,9 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
         else_=2,
     )
     pending_query = db.query(SessionTask).filter(SessionTask.status == "pending")
-    pending = pending_query.order_by(priority, SessionTask.created_at, SessionTask.id).limit(limit).all()
+    # RetryLater paths bump updated_at when they yield, so claim by updated_at
+    # before created_at to keep a single re-queued task from pinning the queue.
+    pending = pending_query.order_by(priority, SessionTask.updated_at, SessionTask.created_at, SessionTask.id).limit(limit).all()
     if not pending:
         return []
 
