@@ -3,16 +3,14 @@
 Uses in-memory SQLite with inline setup (no shared conftest).
 """
 
-import time
 from unittest.mock import patch
 
-import pytest
-
 from zerg.auth import refresh_tokens
-from zerg.database import Base, make_engine, make_sessionmaker
+from zerg.database import Base
+from zerg.database import make_engine
+from zerg.database import make_sessionmaker
 from zerg.models.refresh_session import RefreshSession
 from zerg.models.user import User
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -190,7 +188,7 @@ def test_revoke_family(tmp_path):
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
         user = _seed_user(db)
-        raw = refresh_tokens.create(db, user_id=user.id)
+        refresh_tokens.create(db, user_id=user.id)
         db.commit()
 
         row = db.query(RefreshSession).first()
@@ -239,7 +237,7 @@ def test_cleanup_expired(tmp_path):
     SessionLocal = _make_db(tmp_path)
     with SessionLocal() as db:
         user = _seed_user(db)
-        raw = refresh_tokens.create(db, user_id=user.id)
+        refresh_tokens.create(db, user_id=user.id)
         db.commit()
 
         # Backdate
@@ -297,6 +295,53 @@ def test_refresh_endpoint_issues_new_tokens(tmp_path):
     assert body["expires_in"] == 600  # 10 minutes
 
 
+def test_refresh_endpoint_routes_writes_through_write_serializer(tmp_path):
+    """POST /auth/refresh should route refresh-session writes through WriteSerializer."""
+    import os
+
+    os.environ.setdefault("AUTH_DISABLED", "0")
+
+    SessionLocal = _make_db(tmp_path)
+    from zerg.main import api_app
+
+    def _override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    from zerg.database import get_db
+
+    api_app.dependency_overrides[get_db] = _override_db
+
+    with SessionLocal() as db:
+        user = _seed_user(db)
+        raw_rt = refresh_tokens.create(db, user_id=user.id)
+        db.commit()
+
+    labels: list[str] = []
+
+    class _FakeSerializer:
+        async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True, priority=None):
+            labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    from fastapi.testclient import TestClient
+
+    with patch("zerg.routers.auth_browser.get_write_serializer", return_value=_FakeSerializer()):
+        client = TestClient(api_app)
+        resp = client.post("/auth/refresh", cookies={"longhouse_refresh": raw_rt})
+
+    api_app.dependency_overrides.pop(get_db, None)
+
+    assert resp.status_code == 200
+    assert labels == ["refresh-session"]
+
+
 def test_refresh_endpoint_rejects_missing_cookie(tmp_path):
     """POST /auth/refresh without a cookie returns 401."""
     SessionLocal = _make_db(tmp_path)
@@ -321,3 +366,53 @@ def test_refresh_endpoint_rejects_missing_cookie(tmp_path):
     api_app.dependency_overrides.pop(get_db, None)
 
     assert resp.status_code == 401
+
+
+def test_logout_endpoint_routes_refresh_family_revoke_through_write_serializer(tmp_path):
+    """POST /auth/logout should revoke the RT family via WriteSerializer."""
+    SessionLocal = _make_db(tmp_path)
+    from zerg.main import api_app
+
+    def _override_db():
+        db = SessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    from zerg.database import get_db
+
+    api_app.dependency_overrides[get_db] = _override_db
+
+    with SessionLocal() as db:
+        user = _seed_user(db)
+        raw_rt = refresh_tokens.create(db, user_id=user.id)
+        db.commit()
+        row = db.query(RefreshSession).filter_by(token_hash=refresh_tokens._hash_token(raw_rt)).one()
+        family_id = row.family_id
+
+    labels: list[str] = []
+
+    class _FakeSerializer:
+        async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True, priority=None):
+            labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    from fastapi.testclient import TestClient
+
+    with patch("zerg.routers.auth_browser.get_write_serializer", return_value=_FakeSerializer()):
+        client = TestClient(api_app)
+        resp = client.post("/auth/logout", cookies={"longhouse_refresh": raw_rt})
+
+    api_app.dependency_overrides.pop(get_db, None)
+
+    assert resp.status_code == 204
+    assert labels == ["refresh-session"]
+
+    with SessionLocal() as db:
+        rows = db.query(RefreshSession).filter(RefreshSession.family_id == family_id).all()
+        assert rows
+        assert all(row.revoked_at is not None for row in rows)

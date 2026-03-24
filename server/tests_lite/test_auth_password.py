@@ -94,3 +94,35 @@ def test_password_login_rejects_legacy_user_mismatch(tmp_path):
         users = db.query(User).all()
         assert len(users) == 1
         assert users[0].email == "local@longhouse"
+
+
+def test_password_login_routes_refresh_session_write_through_serializer(tmp_path):
+    """Password login should issue the browser refresh session via WriteSerializer."""
+    sf = _make_db(tmp_path)
+
+    settings = SimpleNamespace(
+        longhouse_password="secret",
+        longhouse_password_hash=None,
+        single_tenant=True,
+        testing=False,
+    )
+    labels: list[str] = []
+
+    class _FakeSerializer:
+        async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True, priority=None):
+            labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    with (
+        patch.dict(os.environ, {"OWNER_EMAIL": "alice@example.com"}, clear=False),
+        patch("zerg.routers.auth_browser.get_settings", return_value=settings),
+        patch("zerg.routers.auth_browser.get_write_serializer", return_value=_FakeSerializer()),
+    ):
+        for client in _get_client(sf):
+            resp = client.post("/auth/password", json={"password": "secret"})
+            assert resp.status_code == 200
+
+    assert labels == ["refresh-session"]
