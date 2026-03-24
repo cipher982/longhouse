@@ -576,6 +576,17 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("session_turn_reviews table migration skipped (table may not exist yet)", exc_info=True)
 
+    # session_tasks table migrations
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_tasks)"))}
+            if columns:
+                if "retry_later_count" not in columns:
+                    conn.execute(text("ALTER TABLE session_tasks ADD COLUMN retry_later_count INTEGER NOT NULL DEFAULT 0"))
+                conn.commit()
+    except Exception:
+        logger.debug("session_tasks table migration skipped (table may not exist yet)", exc_info=True)
+
     # insights table migrations
     try:
         with engine.connect() as conn:
