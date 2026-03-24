@@ -31,6 +31,7 @@ from zerg.crud import get_user_by_email
 from zerg.database import get_db
 from zerg.schemas.schemas import TokenOut
 from zerg.services import sso_keys as sso_keys_service
+from zerg.services.write_serializer import get_write_serializer
 
 
 def _configure_shared_imports() -> None:
@@ -49,7 +50,7 @@ normalize_local_return_to = importlib.import_module("longhouse_shared.redirects"
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-def _accept_token(response: Response, token: str, db: Session) -> TokenOut:
+async def _accept_token(response: Response, token: str, db: Session) -> TokenOut:
     if not token:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -139,15 +140,19 @@ def _accept_token(response: Response, token: str, db: Session) -> TokenOut:
     _set_session_cookie(response, access_token, at_seconds)
 
     # Issue refresh token so the browser session survives beyond the AT lifetime.
-    raw_rt = refresh_tokens.create(db, user_id=user.id)
-    db.commit()
+    ws = get_write_serializer()
+    raw_rt = await ws.execute_or_direct(
+        lambda wdb, _user_id=user.id: refresh_tokens.create(wdb, user_id=_user_id),
+        db,
+        label="refresh-session",
+    )
     _set_refresh_cookie(response, raw_rt, 90 * 24 * 60 * 60)
 
     return TokenOut(access_token=access_token, expires_in=at_seconds)
 
 
 @router.post("/accept-token", response_model=TokenOut)
-def accept_token(response: Response, body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:
+async def accept_token(response: Response, body: dict[str, str], db: Session = Depends(get_db)) -> TokenOut:
     """Accept a JWT token from cross-subdomain auth redirect."""
     token = body.get("token")
     if not token or not isinstance(token, str):
@@ -155,13 +160,13 @@ def accept_token(response: Response, body: dict[str, str], db: Session = Depends
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="token must be provided",
         )
-    return _accept_token(response, token, db)
+    return await _accept_token(response, token, db)
 
 
 @router.get("/accept-token")
-def accept_token_redirect(token: str, response: Response, return_to: str | None = None, db: Session = Depends(get_db)):
+async def accept_token_redirect(token: str, response: Response, return_to: str | None = None, db: Session = Depends(get_db)):
     """Accept a hosted login token, set the cookie, and continue to the app."""
-    _accept_token(response, token, db)
+    await _accept_token(response, token, db)
     redirect = RedirectResponse(normalize_local_return_to(return_to) or "/timeline", status_code=302)
     for header_name, header_value in response.headers.items():
         if header_name.lower() == "set-cookie":

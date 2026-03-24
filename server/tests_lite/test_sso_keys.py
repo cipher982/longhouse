@@ -254,6 +254,39 @@ def test_accept_token_validates_with_cp_keys(tmp_path):
     api_app.dependency_overrides.pop(get_db, None)
 
 
+def test_accept_token_routes_refresh_session_creation_through_write_serializer(tmp_path):
+    """accept_token should route refresh-session writes through WriteSerializer when configured."""
+    from fastapi.testclient import TestClient
+
+    app, cleanup = _setup_test_db(tmp_path)
+    secret = "test-secret"
+    token = _make_jwt(
+        {"sub": "99", "email": "alice@example.com", "instance": "alice", "exp": int(time.time()) + 300},
+        secret,
+    )
+    serializer_labels: list[str] = []
+
+    class _FakeSerializer:
+        async def execute_or_direct(self, fn, fallback_db, *, label="", auto_commit=True):
+            serializer_labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    with (
+        patch("zerg.services.sso_keys.get_sso_keys", return_value=[secret]),
+        patch("zerg.routers.auth_sso.get_write_serializer", return_value=_FakeSerializer()),
+        patch.dict("os.environ", {"INSTANCE_ID": "alice"}),
+    ):
+        client = TestClient(app)
+        resp = client.post("/auth/accept-token", json={"token": token})
+
+    assert resp.status_code == 200, resp.text
+    assert serializer_labels == ["refresh-session"]
+    cleanup()
+
+
 # ---------------------------------------------------------------------------
 # Instance claim validation tests
 # ---------------------------------------------------------------------------
