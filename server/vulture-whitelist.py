@@ -35,6 +35,9 @@ exc_tb = None
 # FastAPI route handlers (called by framework, not directly)
 oikos_run_cancel = None
 
+# WriteSerializer public API (execute_sync used for startup-time writes)
+execute_sync = None
+
 # Pytest fixtures in test files need these parameters even if unused
 force_macos = None
 src = None

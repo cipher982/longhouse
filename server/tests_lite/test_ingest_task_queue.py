@@ -43,6 +43,7 @@ from zerg.services.ingest_task_queue import _claim_pending
 from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 from zerg.services.ingest_task_queue import reset_stale_running_tasks
 from zerg.services.session_loop_controller import LoopControllerDecision
+from zerg.services.write_serializer import WriteSerializer
 from zerg.session_loop_mode import SessionLoopMode
 
 # ---------------------------------------------------------------------------
@@ -73,6 +74,13 @@ def _get_turn_reviews(factory):
     reviews = db.query(SessionTurnReview).order_by(SessionTurnReview.id).all()
     db.close()
     return reviews
+
+
+def _make_write_serializer(factory):
+    """Create a WriteSerializer configured with the test session factory."""
+    ws = WriteSerializer()
+    ws.configure(factory)
+    return ws
 
 
 def _seed_completion_task(
@@ -283,6 +291,7 @@ def test_claim_pending_marks_running(tmp_path):
 
     db = factory()
     claimed = _claim_pending(db, limit=10)
+    db.commit()
     db.close()
 
     assert len(claimed) == 3
@@ -301,6 +310,7 @@ def test_claim_pending_prioritizes_turn_loop_before_summary_and_embedding(tmp_pa
 
     db = factory()
     claimed = _claim_pending(db, limit=10)
+    db.commit()
     db.close()
 
     assert [task_type for _, _, task_type in claimed] == ["turn_loop", "summary", "embedding"]
@@ -340,6 +350,7 @@ def test_claim_pending_deprioritizes_recently_requeued_turn_loop_tasks(tmp_path)
 
     db = factory()
     claimed = _claim_pending(db, limit=1)
+    db.commit()
     db.close()
 
     assert claimed == [("task-newer", "session-newer", "turn_loop")]
@@ -370,9 +381,11 @@ async def test_worker_marks_done_on_success(tmp_path):
     db.commit()
     db.close()
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            await _execute_task("task-1", "s1", "summary")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
+                await _execute_task("task-1", "s1", "summary")
 
     tasks = _get_tasks(factory, status="done")
     assert len(tasks) == 1
@@ -403,9 +416,11 @@ async def test_worker_requeues_timed_out_embedding_task(tmp_path, monkeypatch):
 
     monkeypatch.setitem(TASK_TIMEOUT_SECONDS, "embedding", 0.01)
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.routers.agents._generate_embeddings_impl", new=AsyncMock(side_effect=_hang)):
-            await _execute_task("task-embedding-timeout", "s1", "embedding")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch("zerg.routers.agents._generate_embeddings_impl", new=AsyncMock(side_effect=_hang)):
+                await _execute_task("task-embedding-timeout", "s1", "embedding")
 
     tasks = _get_tasks(factory, status="pending")
     assert len(tasks) == 1
@@ -446,7 +461,8 @@ async def test_process_batch_reprioritizes_new_turn_loop_work_between_tasks(tmp_
         finally:
             db.close()
 
-    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+    ws = _make_write_serializer(factory)
+    with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
         with patch("zerg.services.ingest_task_queue._execute_task", new=AsyncMock(side_effect=_fake_execute)):
             await _process_batch()
 
@@ -467,13 +483,15 @@ async def test_summary_task_does_not_run_turn_loop_anymore(tmp_path, monkeypatch
         task_type="summary",
     )
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
-            with patch(
-                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-                new_callable=AsyncMock,
-            ) as evaluate:
-                await _execute_task(task_id, session_id, "summary")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch("zerg.routers.agents._generate_summary_impl", new_callable=AsyncMock):
+                with patch(
+                    "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                    new_callable=AsyncMock,
+                ) as evaluate:
+                    await _execute_task(task_id, session_id, "summary")
 
     evaluate.assert_not_awaited()
     tasks = _get_tasks(factory, status="done")
@@ -509,13 +527,15 @@ async def test_turn_loop_task_wakes_operator_for_recent_completed_idle_session(t
         },
     )
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch(
-            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-            new=AsyncMock(return_value=_continue_decision()),
-        ):
-            with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=321)) as invoke_oikos:
-                await _execute_task(task_id, session_id, "turn_loop")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=321)) as invoke_oikos:
+                    await _execute_task(task_id, session_id, "turn_loop")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
@@ -605,13 +625,15 @@ async def test_turn_loop_task_uses_latest_assistant_turn_timestamp_when_session_
     finally:
         db.close()
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch(
-            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-            new=AsyncMock(return_value=_continue_decision()),
-        ):
-            with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=777)) as invoke_oikos:
-                await _execute_task(task_id, session_id, "turn_loop")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=777)) as invoke_oikos:
+                    await _execute_task(task_id, session_id, "turn_loop")
 
     reviews = _get_turn_reviews(factory)
     tasks = _get_tasks(factory, status="done")
@@ -657,13 +679,15 @@ async def test_turn_loop_task_processes_stale_completed_turn_from_durable_queue(
     finally:
         db.close()
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch(
-            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-            new=AsyncMock(return_value=_continue_decision()),
-        ):
-            with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=888)) as invoke_oikos:
-                await _execute_task(task_id, session_id, "turn_loop")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=888)) as invoke_oikos:
+                    await _execute_task(task_id, session_id, "turn_loop")
 
     reviews = _get_turn_reviews(factory)
     tasks = _get_tasks(factory, status="done")
@@ -695,9 +719,11 @@ async def test_turn_loop_task_skips_operator_when_session_is_still_active(tmp_pa
         presence_updated_at=datetime.now(timezone.utc),
     )
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
-            await _execute_task(task_id, session_id, "turn_loop")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
+                await _execute_task(task_id, session_id, "turn_loop")
 
     invoke_oikos.assert_not_awaited()
 
@@ -735,13 +761,15 @@ async def test_turn_loop_task_reviews_completed_turn_even_when_session_is_paused
         },
     )
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch(
-            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-            new=AsyncMock(return_value=_continue_decision()),
-        ):
-            with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=654)) as invoke_oikos:
-                await _execute_task(task_id, session_id, "turn_loop")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                with patch("zerg.services.oikos_service.invoke_oikos", new=AsyncMock(return_value=654)) as invoke_oikos:
+                    await _execute_task(task_id, session_id, "turn_loop")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
@@ -780,12 +808,14 @@ async def test_turn_loop_task_autopilot_enqueues_same_session_resume_job(tmp_pat
         },
     )
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch(
-            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-            new=AsyncMock(return_value=_continue_decision()),
-        ):
-            await _execute_task(task_id, session_id, "turn_loop")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                await _execute_task(task_id, session_id, "turn_loop")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
@@ -828,9 +858,11 @@ async def test_turn_loop_task_skips_operator_for_historical_completed_session(tm
         presence_state=None,
     )
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
-            await _execute_task(task_id, session_id, "turn_loop")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch("zerg.services.oikos_service.invoke_oikos", new_callable=AsyncMock) as invoke_oikos:
+                await _execute_task(task_id, session_id, "turn_loop")
 
     invoke_oikos.assert_not_awaited()
 
@@ -856,12 +888,14 @@ async def test_turn_loop_task_skips_operator_when_user_policy_disables_it(tmp_pa
         user_context={"preferences": {"operator_mode": {"enabled": False}}},
     )
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch(
-            "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
-            new=AsyncMock(return_value=_continue_decision()),
-        ):
-            await _execute_task(task_id, session_id, "turn_loop")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                await _execute_task(task_id, session_id, "turn_loop")
 
     tasks = _get_tasks(factory, status="done")
     reviews = _get_turn_reviews(factory)
@@ -883,13 +917,15 @@ async def test_worker_requeues_on_failure_within_max_attempts(tmp_path):
     db.commit()
     db.close()
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch(
-            "zerg.routers.agents._generate_summary_impl",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("boom"),
-        ):
-            await _execute_task("task-2", "s1", "summary")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.routers.agents._generate_summary_impl",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("boom"),
+            ):
+                await _execute_task("task-2", "s1", "summary")
 
     tasks = _get_tasks(factory, status="pending")
     assert len(tasks) == 1
@@ -907,13 +943,15 @@ async def test_worker_marks_failed_on_exhausted_attempts(tmp_path):
     db.commit()
     db.close()
 
+    ws = _make_write_serializer(factory)
     with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
-        with patch(
-            "zerg.routers.agents._generate_summary_impl",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("final failure"),
-        ):
-            await _execute_task("task-3", "s1", "summary")
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.routers.agents._generate_summary_impl",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("final failure"),
+            ):
+                await _execute_task("task-3", "s1", "summary")
 
     tasks = _get_tasks(factory, status="failed")
     assert len(tasks) == 1

@@ -167,41 +167,44 @@ class PresenceCache:
         if not dirty:
             return
 
-        def _sync_flush():
-            from zerg.database import db_session
+        from zerg.services.write_serializer import get_write_serializer
 
-            with db_session() as db:
-                from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+        ws = get_write_serializer()
+        if not ws.is_configured:
+            return  # startup race — skip silently
 
-                for entry in dirty:
-                    stmt = (
-                        sqlite_insert(SessionPresence)
-                        .values(
-                            session_id=entry.session_id,
-                            state=entry.state,
-                            tool_name=entry.tool_name,
-                            cwd=entry.cwd,
-                            project=entry.project,
-                            provider=entry.provider,
-                            updated_at=entry.updated_at,
-                        )
-                        .on_conflict_do_update(
-                            index_elements=["session_id"],
-                            set_={
-                                "state": entry.state,
-                                "tool_name": entry.tool_name,
-                                "cwd": entry.cwd,
-                                "project": entry.project,
-                                "updated_at": entry.updated_at,
-                            },
-                        )
+        def _do_flush(db):
+            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+            for entry in dirty:
+                stmt = (
+                    sqlite_insert(SessionPresence)
+                    .values(
+                        session_id=entry.session_id,
+                        state=entry.state,
+                        tool_name=entry.tool_name,
+                        cwd=entry.cwd,
+                        project=entry.project,
+                        provider=entry.provider,
+                        updated_at=entry.updated_at,
                     )
-                    db.execute(stmt)
-                    entry.dirty = False
-                db.commit()
+                    .on_conflict_do_update(
+                        index_elements=["session_id"],
+                        set_={
+                            "state": entry.state,
+                            "tool_name": entry.tool_name,
+                            "cwd": entry.cwd,
+                            "project": entry.project,
+                            "updated_at": entry.updated_at,
+                        },
+                    )
+                )
+                db.execute(stmt)
+                entry.dirty = False
+            # auto_commit=True by default, so serializer commits
 
         try:
-            await asyncio.to_thread(_sync_flush)
+            await ws.execute(_do_flush, label="presence-flush")
             logger.debug("Flushed %d presence entries to DB", len(dirty))
         except Exception:
             logger.exception("Failed to flush %d presence entries", len(dirty))
