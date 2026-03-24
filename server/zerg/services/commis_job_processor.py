@@ -354,16 +354,20 @@ class CommisJobProcessor:
         while self._running:
             try:
                 for commis_id in self._iter_commis_ids():
-                    token = set_test_commis_id(commis_id) if commis_id else None
-                    try:
-                        with db_session() as db:
-                            reclaimed = reclaim_stale_jobs(db)
-                            if reclaimed > 0:
-                                label = commis_id or "default"
-                                logger.info(f"Reclaimed {reclaimed} stale commis jobs (db={label})")
-                    finally:
-                        if token is not None:
-                            reset_test_commis_id(token)
+
+                    def _reclaim(cid=commis_id):
+                        token = set_test_commis_id(cid) if cid else None
+                        try:
+                            with db_session() as db:
+                                return reclaim_stale_jobs(db)
+                        finally:
+                            if token is not None:
+                                reset_test_commis_id(token)
+
+                    reclaimed = await asyncio.to_thread(_reclaim)
+                    if reclaimed > 0:
+                        label = commis_id or "default"
+                        logger.info(f"Reclaimed {reclaimed} stale commis jobs (db={label})")
             except Exception as e:
                 logger.exception(f"Error in stale job reclaim loop: {e}")
 
@@ -410,13 +414,17 @@ class CommisJobProcessor:
         total_claimed = 0
 
         for commis_id in self._iter_commis_ids():
-            token = set_test_commis_id(commis_id) if commis_id else None
-            try:
-                with db_session() as db:
-                    job_ids = claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
-            finally:
-                if token is not None:
-                    reset_test_commis_id(token)
+
+            def _claim(cid=commis_id):
+                token = set_test_commis_id(cid) if cid else None
+                try:
+                    with db_session() as db:
+                        return claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
+                finally:
+                    if token is not None:
+                        reset_test_commis_id(token)
+
+            job_ids = await asyncio.to_thread(_claim)
 
             if not job_ids:
                 continue
