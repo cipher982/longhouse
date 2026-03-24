@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 15
 MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS = 45
+INTERACTIVE_AUTH_TIMEOUT_SECONDS = 30
+INGEST_TIMEOUT_SECONDS = 30
 
 # Paths that are excluded from the timeout enforcement.
 _SKIP_PATHS = ("/readyz", "/health")
@@ -33,6 +35,9 @@ _STREAMING_FRAGMENTS = ("/stream", "/chat", "/ws")
 
 # Route-specific timeout overrides for legitimate long-running requests.
 _TIMEOUT_OVERRIDES = {
+    "/auth/accept-token": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
+    "/devices/tokens": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
+    "/agents/ingest": INGEST_TIMEOUT_SECONDS,
     "/sessions/managed-local": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,
 }
 

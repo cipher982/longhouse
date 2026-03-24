@@ -18,7 +18,8 @@ Usage:
     await write_serializer.execute(fn, label="presence-flush")
 
 Architecture:
-    - asyncio.Lock ensures one write at a time (FIFO)
+    - A priority queue ensures one write at a time while letting
+      interactive auth/ingest writes cut ahead of maintenance work
     - Each write runs in asyncio.to_thread() to avoid blocking the event loop
     - The write function receives a fresh Session, does its work, and returns
     - Session lifecycle (commit on success, rollback on error, close) is managed
@@ -30,6 +31,7 @@ Architecture:
 from __future__ import annotations
 
 import asyncio
+import heapq
 import logging
 import time
 from dataclasses import dataclass
@@ -44,6 +46,50 @@ from sqlalchemy.orm import sessionmaker
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
+
+_DEFAULT_PRIORITY = 50
+_LABEL_PRIORITIES: dict[str, int] = {
+    # Interactive auth / token lifecycle should cut ahead of background churn.
+    "refresh-session": 0,
+    "device-token-create": 0,
+    "device-token-revoke": 0,
+    # Live managed-local shipping should beat maintenance work.
+    "ingest": 10,
+    "runner-online": 10,
+    "presence-flush": 10,
+    "runner-output": 20,
+    "runner-job-complete": 20,
+    "runner-job-error": 20,
+    "loop-thread": 25,
+    "loop-thread-message": 25,
+    "turn-review-create": 30,
+    "turn-review-complete": 30,
+    "summary": 60,
+    "summary-backfill": 60,
+    "summary-title": 60,
+    "embeddings": 60,
+    # Background queue maintenance is lowest priority.
+    "task-claim": 80,
+    "task-done": 80,
+    "task-retry": 80,
+    "task-timeout": 80,
+    "task-fail": 80,
+    "commis-claim": 85,
+    "commis-reclaim": 85,
+    "job-run": 90,
+}
+
+
+def _priority_for_label(label: str) -> int:
+    normalized = (label or "").strip().lower()
+    return _LABEL_PRIORITIES.get(normalized, _DEFAULT_PRIORITY)
+
+
+@dataclass(order=True)
+class _QueuedWrite:
+    priority: int
+    seq: int
+    label: str = field(compare=False, default="")
 
 
 @dataclass
@@ -67,10 +113,13 @@ class WriteSerializer:
     """
 
     def __init__(self) -> None:
-        self._lock = asyncio.Lock()
+        self._wait_cond = asyncio.Condition()
         self._session_factory: sessionmaker | None = None
         self._stats = WriteStats()
         self._configured = False
+        self._queue: list[_QueuedWrite] = []
+        self._next_seq = 0
+        self._writer_active = False
 
     def configure(self, session_factory: sessionmaker) -> None:
         """Set the write session factory. Call once at startup."""
@@ -91,13 +140,15 @@ class WriteSerializer:
         fn: Callable[[Session], T],
         *,
         label: str = "",
+        priority: int | None = None,
         auto_commit: bool = True,
     ) -> T:
-        """Submit a write operation. Serialized via asyncio.Lock.
+        """Submit a write operation. Serialized via a single-writer priority queue.
 
         Args:
             fn: Function receiving a Session. Do reads + writes here.
             label: Optional label for logging/metrics.
+            priority: Lower runs sooner once the current writer finishes.
             auto_commit: If True, commit after fn returns. Set False if fn
                          manages its own commits (e.g. chunked ingest).
 
@@ -111,37 +162,63 @@ class WriteSerializer:
             raise RuntimeError("WriteSerializer not configured — call configure() first")
 
         t0 = time.monotonic()
+        queued = _QueuedWrite(
+            priority=_priority_for_label(label) if priority is None else priority,
+            seq=self._next_seq,
+            label=label,
+        )
+        self._next_seq += 1
 
-        async with self._lock:
-            t1 = time.monotonic()
-            queue_wait_ms = (t1 - t0) * 1000
-
+        async with self._wait_cond:
+            heapq.heappush(self._queue, queued)
             try:
-                result = await asyncio.to_thread(self._run, fn, auto_commit, label)
-            except Exception:
-                self._stats.errors += 1
+                while True:
+                    head = self._queue[0]
+                    if not self._writer_active and head.seq == queued.seq:
+                        heapq.heappop(self._queue)
+                        self._writer_active = True
+                        break
+                    await self._wait_cond.wait()
+            except BaseException:
+                if any(item.seq == queued.seq for item in self._queue):
+                    self._queue = [item for item in self._queue if item.seq != queued.seq]
+                    heapq.heapify(self._queue)
+                    self._wait_cond.notify_all()
                 raise
-            finally:
-                t2 = time.monotonic()
-                exec_ms = (t2 - t1) * 1000
 
-                self._stats.total_writes += 1
-                self._stats.total_queue_wait_ms += queue_wait_ms
-                self._stats.total_exec_ms += exec_ms
-                self._stats.max_queue_wait_ms = max(self._stats.max_queue_wait_ms, queue_wait_ms)
-                self._stats.max_exec_ms = max(self._stats.max_exec_ms, exec_ms)
-                if label:
-                    self._stats._label_counts[label] = self._stats._label_counts.get(label, 0) + 1
+        t1 = time.monotonic()
+        queue_wait_ms = (t1 - t0) * 1000
 
-                if queue_wait_ms > 500:
-                    logger.warning(
-                        "WriteSerializer: %s waited %.0fms in queue, exec %.0fms",
-                        label or "unlabeled",
-                        queue_wait_ms,
-                        exec_ms,
-                    )
+        try:
+            result = await asyncio.to_thread(self._run, fn, auto_commit, label)
+        except Exception:
+            self._stats.errors += 1
+            raise
+        finally:
+            t2 = time.monotonic()
+            exec_ms = (t2 - t1) * 1000
 
-            return result
+            self._stats.total_writes += 1
+            self._stats.total_queue_wait_ms += queue_wait_ms
+            self._stats.total_exec_ms += exec_ms
+            self._stats.max_queue_wait_ms = max(self._stats.max_queue_wait_ms, queue_wait_ms)
+            self._stats.max_exec_ms = max(self._stats.max_exec_ms, exec_ms)
+            if label:
+                self._stats._label_counts[label] = self._stats._label_counts.get(label, 0) + 1
+
+            if queue_wait_ms > 500 or exec_ms > 1000:
+                logger.warning(
+                    "WriteSerializer: %s waited %.0fms in queue, exec %.0fms",
+                    label or "unlabeled",
+                    queue_wait_ms,
+                    exec_ms,
+                )
+
+            async with self._wait_cond:
+                self._writer_active = False
+                self._wait_cond.notify_all()
+
+        return result
 
     async def execute_or_direct(
         self,
@@ -149,6 +226,7 @@ class WriteSerializer:
         fallback_db: Session | None = None,
         *,
         label: str = "",
+        priority: int | None = None,
         auto_commit: bool = True,
     ) -> T:
         """Execute via serializer if configured, otherwise run directly on fallback_db.
@@ -156,7 +234,7 @@ class WriteSerializer:
         This eliminates the need for if/else blocks at every callsite.
         """
         if self._configured:
-            return await self.execute(fn, label=label, auto_commit=auto_commit)
+            return await self.execute(fn, label=label, priority=priority, auto_commit=auto_commit)
         if fallback_db is None:
             raise RuntimeError("WriteSerializer not configured and no fallback_db provided")
         result = fn(fallback_db)
