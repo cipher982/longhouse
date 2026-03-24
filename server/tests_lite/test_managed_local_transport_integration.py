@@ -390,6 +390,10 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport_with_shell_i
             assert session.execution_home == "managed_local"
             assert session.source_runner_name == "cinder"
             assert session.managed_tmux_tmpdir == launcher_env["TMUX_TMPDIR"]
+            baseline_runtime_state = (
+                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one_or_none()
+            )
+            baseline_phase = baseline_runtime_state.phase if baseline_runtime_state is not None else None
 
             startup_output = asyncio.run(
                 _wait_for_tmux_text(
@@ -429,9 +433,9 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport_with_shell_i
             assert "USER:Enter" in turn_output
             assert "ASSISTANT: received Enter" in turn_output
 
-            runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
-            assert runtime_state.phase == "thinking"
-            assert runtime_state.phase_source == "semantic"
+            runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one_or_none()
+            assert (runtime_state.phase if runtime_state is not None else None) == baseline_phase
+            assert (runtime_state.phase if runtime_state is not None else None) != "thinking"
 
             log_text = log_path.read_text(encoding="utf-8")
             assert "START session=" in log_text
@@ -513,6 +517,10 @@ def test_managed_local_send_text_repeated_turns_do_not_drop_or_duplicate_inputs(
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.managed_tmux_tmpdir == launcher_env["TMUX_TMPDIR"]
+            baseline_runtime_state = (
+                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one_or_none()
+            )
+            baseline_phase = baseline_runtime_state.phase if baseline_runtime_state is not None else None
 
             asyncio.run(
                 _wait_for_tmux_text(
@@ -555,9 +563,9 @@ def test_managed_local_send_text_repeated_turns_do_not_drop_or_duplicate_inputs(
             for prompt in prompts:
                 assert f"USER:{prompt}" in latest_pane
 
-            runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
-            assert runtime_state.phase == "thinking"
-            assert runtime_state.phase_source == "semantic"
+            runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one_or_none()
+            assert (runtime_state.phase if runtime_state is not None else None) == baseline_phase
+            assert (runtime_state.phase if runtime_state is not None else None) != "thinking"
         finally:
             if managed_session_name:
                 asyncio.run(
@@ -628,6 +636,10 @@ def test_managed_local_repeated_send_text_uses_single_live_tmux_session(monkeypa
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.execution_home == "managed_local"
+            baseline_runtime_state = (
+                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one_or_none()
+            )
+            baseline_phase = baseline_runtime_state.phase if baseline_runtime_state is not None else None
 
             asyncio.run(
                 _wait_for_tmux_text(
@@ -684,9 +696,9 @@ def test_managed_local_repeated_send_text_uses_single_live_tmux_session(monkeypa
             for message in messages:
                 assert log_text.count(f"USER:{message}\n") == 1
 
-            runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
-            assert runtime_state.phase == "thinking"
-            assert runtime_state.phase_source == "semantic"
+            runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one_or_none()
+            assert (runtime_state.phase if runtime_state is not None else None) == baseline_phase
+            assert (runtime_state.phase if runtime_state is not None else None) != "thinking"
         finally:
             if managed_session_name:
                 asyncio.run(

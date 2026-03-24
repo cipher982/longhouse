@@ -175,11 +175,8 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
             assert '"created_continuation": false' in body
             assert f'"session_id": "{source_session.id}"' in body
             assert f'"shipped_session_id": "{source_session.id}"' in body
-            runtime_state = (
-                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).one()
-            )
-            assert runtime_state.phase == "idle"
-            assert runtime_state.phase_source == "semantic"
+            runtime_state_rows = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
+            assert runtime_state_rows == []
             assert len(calls) == 1
             assert calls[0]["runner_id"] == runner.id
             assert calls[0]["owner_id"] == user.id
@@ -306,11 +303,8 @@ def test_chat_with_session_returns_sync_pending_after_terminal_control_success(m
             assert '"sync_status": "pending"' in body
             assert '"control_status": "needs_user"' in body
             assert f'"shipped_session_id": "{source_session.id}"' in body
-            runtime_state = (
-                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).one()
-            )
-            assert runtime_state.phase == "needs_user"
-            assert runtime_state.phase_source == "semantic"
+            runtime_state_rows = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
+            assert runtime_state_rows == []
             assert wait_calls["count"] >= 1
         finally:
             api_app_ref.dependency_overrides = {}
@@ -380,11 +374,8 @@ def test_chat_with_session_routes_codex_managed_local_without_cloud_continuation
             assert '"created_continuation": false' in body
             assert f'"session_id": "{source_session.id}"' in body
             assert f'"shipped_session_id": "{source_session.id}"' in body
-            runtime_state = (
-                db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).one()
-            )
-            assert runtime_state.phase == "idle"
-            assert runtime_state.phase_source == "semantic"
+            runtime_state_rows = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
+            assert runtime_state_rows == []
             assert len(calls) == 1
             assert calls[0]["runner_id"] == runner.id
             assert calls[0]["owner_id"] == user.id
