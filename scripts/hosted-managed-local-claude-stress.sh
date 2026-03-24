@@ -20,7 +20,7 @@ PROMPT_PREFIX="lh-hosted-claude-stress"
 PROJECT_NAME="hosted-managed-local-claude-stress"
 DISPLAY_NAME="Hosted Managed Local Claude Stress"
 LOOP_MODE="assist"
-CHAT_TIMEOUT_SECS="180"
+CHAT_TIMEOUT_SECS="30"
 VERIFY_TIMEOUT_SECS="30"
 MACHINE_NAME="${MACHINE_NAME:-}"
 if [[ -z "$MACHINE_NAME" && -f "$HOME/.claude/longhouse-machine-name" ]]; then
@@ -50,7 +50,7 @@ Options:
   --project <name>          Project label for launch
   --display-name <name>     Display name for launch
   --loop-mode <mode>        manual|assist|autopilot (default: assist)
-  --chat-timeout-secs <n>   Per-turn SSE read timeout (default: 180)
+  --chat-timeout-secs <n>   Max wait for `/chat` SSE before falling back to tmux truth (default: 30)
   --verify-timeout-secs <n> Poll timeout for tmux-pane verification (default: 30)
   --machine-name <name>     Optional explicit Longhouse machine label override
   -h, --help                Show help
@@ -181,7 +181,9 @@ import re
 import shlex
 import shutil
 import subprocess
+import tempfile
 import time
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Iterable
 from typing import Iterator
@@ -197,6 +199,16 @@ from zerg.services.managed_local_tmux import build_tmux_has_session_command
 class SSEEvent:
     event: str
     data: str
+
+
+@dataclass(frozen=True)
+class ChatRouteResult:
+    status_code: int
+    saw_assistant_delta: bool = False
+    saw_done: bool = False
+    stream_timed_out: bool = False
+    done_payload: dict[str, object] | None = None
+    error: str | None = None
 
 
 def parse_sse_lines(lines: Iterable[str]) -> Iterator[SSEEvent]:
@@ -316,7 +328,14 @@ def _pane_is_ready(pane: str) -> bool:
 
 
 def _pane_contains_exact_token_line(pane: str, token: str) -> bool:
-    return any(line.strip() == token for line in pane.splitlines())
+    for line in pane.splitlines():
+        stripped = line.strip()
+        if stripped == token:
+            return True
+        normalized = re.sub(r"^[^\w-]+\s*", "", stripped)
+        if normalized == token:
+            return True
+    return False
 
 
 def _wait_for_ready_prompt(*, session_name: str, tmux_tmpdir: str | None, timeout_secs: float) -> tuple[str, list[str]]:
@@ -362,6 +381,125 @@ def _wait_for_turn_in_tmux(
     raise RuntimeError(
         f"Timed out waiting for Claude tmux confirmation for token {token}.\n"
         f"Last pane:\n{last_pane[-4000:]}"
+    )
+
+
+def _send_chat_via_api(
+    *,
+    api_url: str,
+    access_token: str,
+    session_id: str,
+    prompt: str,
+    timeout_secs: float,
+) -> ChatRouteResult:
+    if shutil.which("curl") is None:
+        return ChatRouteResult(status_code=0, error="curl is required for hosted managed-local SSE verification")
+    status_code = 0
+    saw_assistant_delta = False
+    saw_done = False
+    done_payload: dict[str, object] | None = None
+    prompt_body = json.dumps({"message": prompt})
+    curl_timeout = max(5.0, timeout_secs)
+    curl_deadline = int(curl_timeout + 5)
+    try:
+        with tempfile.NamedTemporaryFile() as body_file:
+            curl = subprocess.run(
+                [
+                    "curl",
+                    "-sS",
+                    "-N",
+                    "--connect-timeout",
+                    "20",
+                    "--max-time",
+                    str(int(curl_timeout)),
+                    "-X",
+                    "POST",
+                    "-H",
+                    "Accept: text/event-stream",
+                    "-H",
+                    "Content-Type: application/json",
+                    "-o",
+                    body_file.name,
+                    "-w",
+                    "\\n%{http_code}\\n",
+                    f"{api_url.rstrip('/')}/api/sessions/{session_id}/chat?token={access_token}",
+                    "--data-binary",
+                    prompt_body,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=curl_deadline,
+            )
+            status_line = (curl.stdout or "").strip().splitlines()
+            if status_line:
+                candidate = status_line[-1].strip()
+                if candidate.isdigit():
+                    status_code = int(candidate)
+            body_text = Path(body_file.name).read_text(encoding="utf-8", errors="replace")
+
+        for event in parse_sse_lines(body_text.replace("\r\n", "\n").splitlines(keepends=True)):
+            if event.event == "assistant_delta":
+                saw_assistant_delta = True
+            if event.event == "error":
+                try:
+                    parsed = json.loads(event.data)
+                    error = str(parsed.get("error") or event.data)
+                except json.JSONDecodeError:
+                    error = event.data
+                return ChatRouteResult(
+                    status_code=status_code,
+                    saw_assistant_delta=saw_assistant_delta,
+                    saw_done=saw_done,
+                    stream_timed_out=curl.returncode == 28,
+                    error=error,
+                )
+            if event.event == "done":
+                saw_done = True
+                try:
+                    done_payload = json.loads(event.data)
+                except json.JSONDecodeError:
+                    return ChatRouteResult(
+                        status_code=status_code,
+                        saw_assistant_delta=saw_assistant_delta,
+                        saw_done=True,
+                        error=f"Malformed done payload: {event.data[:200]}",
+                    )
+                break
+
+        if status_code != 200:
+            preview = body_text[:400]
+            return ChatRouteResult(
+                status_code=status_code,
+                saw_assistant_delta=saw_assistant_delta,
+                saw_done=saw_done,
+                stream_timed_out=curl.returncode == 28,
+                error=f"chat status={status_code} body={preview}",
+            )
+        if curl.returncode not in (0, 28):
+            detail = (curl.stderr or "").strip() or f"curl exit code {curl.returncode}"
+            return ChatRouteResult(
+                status_code=status_code,
+                saw_assistant_delta=saw_assistant_delta,
+                saw_done=saw_done,
+                error=detail,
+            )
+        if not saw_done:
+            return ChatRouteResult(
+                status_code=status_code,
+                saw_assistant_delta=saw_assistant_delta,
+                saw_done=False,
+                stream_timed_out=curl.returncode == 28,
+                error="Managed-local chat stream never produced a done event",
+            )
+    except Exception as exc:
+        return ChatRouteResult(status_code=status_code, error=f"{type(exc).__name__}: {exc}")
+
+    return ChatRouteResult(
+        status_code=status_code,
+        saw_assistant_delta=saw_assistant_delta,
+        saw_done=saw_done,
+        done_payload=done_payload,
     )
 
 
@@ -439,34 +577,18 @@ def main() -> int:
         prompts = build_prompts(count=turn_count, prefix=prompt_prefix)
 
         for idx, (prompt, token) in enumerate(prompts, start=1):
-            sse_error = None
-            status_code = 0
-            try:
-                with client.stream(
-                    "POST",
-                    f"{api_url.rstrip('/')}/api/sessions/{session_id}/chat",
-                    params={"token": access_token},
-                    json={"message": prompt},
-                    headers={"Accept": "text/event-stream"},
-                ) as response:
-                    status_code = response.status_code
-                    if status_code != 200:
-                        preview = response.read().decode("utf-8", errors="replace")[:400]
-                        raise RuntimeError(f"chat status={status_code} body={preview}")
-                    for event in parse_sse_lines(response.iter_lines()):
-                        if event.event == "error":
-                            try:
-                                parsed = json.loads(event.data)
-                                sse_error = str(parsed.get("error") or event.data)
-                            except json.JSONDecodeError:
-                                sse_error = event.data
-            except Exception as exc:
-                sse_error = f"{type(exc).__name__}: {exc}"
+            chat_result = _send_chat_via_api(
+                api_url=api_url,
+                access_token=access_token,
+                session_id=session_id,
+                prompt=prompt,
+                timeout_secs=chat_timeout_secs,
+            )
             tmux_error = None
             prompt_seen = False
             token_seen = False
             pane_tail = ""
-            if status_code == 200 and sse_error is None:
+            if chat_result.status_code == 200:
                 try:
                     pane, prompt_seen, token_seen = _wait_for_turn_in_tmux(
                         session_name=session_name,
@@ -480,14 +602,43 @@ def main() -> int:
                     tmux_error = f"{type(exc).__name__}: {exc}"
                     pane_tail = _capture_tmux_pane(session_name=session_name, tmux_tmpdir=tmux_tmpdir)[-1200:]
 
-            ok = status_code == 200 and sse_error is None and tmux_error is None and prompt_seen and token_seen
+            done_payload_error = None
+            if chat_result.done_payload is not None:
+                done_payload = chat_result.done_payload
+                if done_payload.get("created_continuation") is not False:
+                    done_payload_error = f"expected created_continuation=false, got {done_payload.get('created_continuation')!r}"
+                elif str(done_payload.get("shipped_session_id") or "") != session_id:
+                    done_payload_error = (
+                        f"expected shipped_session_id={session_id}, got {done_payload.get('shipped_session_id')!r}"
+                    )
+                elif int(done_payload.get("persisted_events") or 0) <= 0:
+                    done_payload_error = f"expected persisted_events>0, got {done_payload.get('persisted_events')!r}"
+                elif done_payload.get("persistence_error") is not None:
+                    done_payload_error = f"unexpected persistence_error={done_payload.get('persistence_error')!r}"
+                elif int(done_payload.get("exit_code") or 1) != 0:
+                    done_payload_error = f"expected exit_code=0, got {done_payload.get('exit_code')!r}"
+
+            ok = (
+                chat_result.status_code == 200
+                and chat_result.error is None
+                and done_payload_error is None
+                and tmux_error is None
+                and prompt_seen
+                and token_seen
+            )
             label = "ok" if ok else "fail"
             print(
-                f"[{idx}/{len(prompts)}] {label} status={status_code} prompt={prompt!r} "
-                f"token={token} tmux_prompt_seen={int(prompt_seen)} tmux_token_seen={int(token_seen)}"
+                f"[{idx}/{len(prompts)}] {label} status={chat_result.status_code} prompt={prompt!r} "
+                f"token={token} tmux_prompt_seen={int(prompt_seen)} tmux_token_seen={int(token_seen)} "
+                f"api_done={int(chat_result.saw_done)} api_delta={int(chat_result.saw_assistant_delta)} "
+                f"api_timed_out={int(chat_result.stream_timed_out)}"
             )
-            if sse_error:
-                print(f"  sse_error: {sse_error}")
+            if chat_result.error:
+                print(f"  api_error: {chat_result.error}")
+            if chat_result.done_payload is not None:
+                print(f"  done_payload: {json.dumps(chat_result.done_payload, sort_keys=True)}")
+            if done_payload_error:
+                print(f"  done_payload_error: {done_payload_error}")
             if tmux_error:
                 print(f"  tmux_error: {tmux_error}")
             if pane_tail:
