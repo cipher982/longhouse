@@ -56,15 +56,21 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "device-token-revoke": 0,
     # Live managed-local shipping should beat maintenance work.
     "ingest": 10,
+    "presence": 10,
     "runner-online": 10,
     "presence-flush": 10,
+    "runtime-events": 10,
     "runner-output": 20,
     "runner-job-complete": 20,
     "runner-job-error": 20,
+    "runner-offline": 20,
     "loop-thread": 25,
     "loop-thread-message": 25,
     "turn-review-create": 30,
     "turn-review-complete": 30,
+    "turn-review-existing": 30,
+    "wakeup-ledger": 35,
+    "heartbeat": 40,
     "summary": 60,
     "summary-backfill": 60,
     "summary-title": 60,
@@ -77,6 +83,8 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "task-fail": 80,
     "commis-claim": 85,
     "commis-reclaim": 85,
+    "commis-reclaim-async": 85,
+    "commis-heartbeat": 85,
     "job-run": 90,
 }
 
@@ -121,6 +129,7 @@ class WriteSerializer:
         self._queue: list[_QueuedWrite] = []
         self._next_seq = 0
         self._writer_active = False
+        self._background_tasks: set[asyncio.Task[None]] = set()
 
     def configure(self, session_factory: sessionmaker) -> None:
         """Set the write session factory. Call once at startup."""
@@ -190,32 +199,22 @@ class WriteSerializer:
         t1 = time.monotonic()
         queue_wait_ms = (t1 - t0) * 1000
 
-        worker_task = asyncio.create_task(asyncio.to_thread(self._run, fn, auto_commit, label))
-        current_task = asyncio.current_task()
-        uncancel = getattr(current_task, "uncancel", None) if current_task is not None else None
-        cancel_exc: asyncio.CancelledError | None = None
-        worker_exc: BaseException | None = None
-        result: T | object = _MISSING
+        worker_task: asyncio.Task[T] = asyncio.create_task(asyncio.to_thread(self._run, fn, auto_commit, label))
+        finalized = False
 
-        try:
-            try:
-                result = await asyncio.shield(worker_task)
-            except asyncio.CancelledError as exc:
-                # A request timeout cancels the caller task, but the thread-backed
-                # write keeps running. Hold the writer slot until that work
-                # finishes so we never run overlapping SQLite writes.
-                cancel_exc = exc
-                if callable(uncancel):
-                    uncancel()
+        async def _finalize(*, was_cancelled: bool) -> None:
+            nonlocal finalized
+            if finalized:
+                return
+            finalized = True
+
+            exec_ms = (time.monotonic() - t1) * 1000
+            worker_exc: BaseException | None = None
+            if worker_task.done():
                 try:
-                    result = await asyncio.shield(worker_task)
-                except BaseException as exc_after_cancel:
-                    worker_exc = exc_after_cancel
-            except BaseException as exc:
-                worker_exc = exc
-        finally:
-            t2 = time.monotonic()
-            exec_ms = (t2 - t1) * 1000
+                    worker_exc = worker_task.exception()
+                except asyncio.CancelledError as exc:  # pragma: no cover - defensive
+                    worker_exc = exc
 
             self._stats.total_writes += 1
             self._stats.total_queue_wait_ms += queue_wait_ms
@@ -224,6 +223,8 @@ class WriteSerializer:
             self._stats.max_exec_ms = max(self._stats.max_exec_ms, exec_ms)
             if label:
                 self._stats._label_counts[label] = self._stats._label_counts.get(label, 0) + 1
+            if isinstance(worker_exc, Exception):
+                self._stats.errors += 1
 
             if queue_wait_ms > 500 or exec_ms > 1000:
                 logger.warning(
@@ -233,27 +234,39 @@ class WriteSerializer:
                     exec_ms,
                 )
 
-            async with self._wait_cond:
-                self._writer_active = False
-                self._wait_cond.notify_all()
-
-        if worker_exc is not None:
-            if isinstance(worker_exc, Exception):
-                self._stats.errors += 1
-            if cancel_exc is not None:
+            if was_cancelled and worker_exc is not None:
                 logger.warning(
                     "WriteSerializer: %s finished with %s after cancellation",
                     label or "unlabeled",
                     type(worker_exc).__name__,
                 )
-                raise cancel_exc
-            raise worker_exc
 
-        if cancel_exc is not None:
-            raise cancel_exc
+            async with self._wait_cond:
+                self._writer_active = False
+                self._wait_cond.notify_all()
 
-        if result is _MISSING:
-            raise RuntimeError("WriteSerializer worker finished without returning a result")
+        def _schedule_background_finalize(done_task: asyncio.Task[T]) -> None:
+            async def _runner() -> None:
+                try:
+                    await asyncio.shield(done_task)
+                except BaseException:
+                    pass
+                await _finalize(was_cancelled=True)
+
+            task = asyncio.create_task(_runner())
+            self._background_tasks.add(task)
+            task.add_done_callback(self._background_tasks.discard)
+
+        try:
+            result = await asyncio.shield(worker_task)
+        except asyncio.CancelledError:
+            worker_task.add_done_callback(_schedule_background_finalize)
+            raise
+        except BaseException:
+            await _finalize(was_cancelled=False)
+            raise
+
+        await _finalize(was_cancelled=False)
         return result
 
     async def execute_or_direct(
