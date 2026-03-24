@@ -98,6 +98,7 @@ make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
 - **Tool contracts**: Edit `schemas/tools.yml`, then run `scripts/generate_tool_types.py` — never edit generated files directly
 - **Oikos tools**: Registration is centralized in `oikos_tools.py`; `OIKOS_TOOL_NAMES` + `OIKOS_UTILITY_TOOLS` define the tool subset; `get_oikos_allowed_tools()` is the single source of truth
 - **Git policy**: Work only on `main`, no worktrees; confirm `git status -sb` before changes; no stashing unless explicitly requested
+- **DB writes in endpoints**: High-frequency endpoints (presence, heartbeat, ingest, runtime, runner WebSocket) MUST route writes through `WriteSerializer` (`services/write_serializer.py`). Low-frequency interactive endpoints (admin, settings, auth) may use direct `db.commit()`. When in doubt, use the serializer — the pre-commit hook will warn on new `db.commit()` calls in routers.
 - **Concurrent edits**: Dirty trees are normal; work around existing diffs and avoid overlapping lines. Only pause to coordinate if you must edit an already-modified file.
 
 ## UI Components

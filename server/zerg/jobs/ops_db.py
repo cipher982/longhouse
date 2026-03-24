@@ -58,8 +58,8 @@ async def emit_job_run(
     Non-fatal: logs on failure rather than raising.
     """
     try:
-        from zerg.database import db_session
         from zerg.models.models import JobRun
+        from zerg.services.write_serializer import get_write_serializer
 
         # Build metadata JSON combining all extra fields
         meta: dict[str, Any] = {}
@@ -74,20 +74,27 @@ async def emit_job_run(
 
         metadata_json = json.dumps(meta) if meta else None
 
-        with db_session() as db:
-            run = JobRun(
-                id=str(uuid4()),
-                job_id=job_id,
-                status=status,
-                started_at=started_at,
-                finished_at=ended_at,
-                duration_ms=duration_ms,
-                error_message=error_message,
-                error_type=error_type,
-                metadata_json=metadata_json,
-            )
-            db.add(run)
-            # db_session context manager auto-commits
+        run = JobRun(
+            id=str(uuid4()),
+            job_id=job_id,
+            status=status,
+            started_at=started_at,
+            finished_at=ended_at,
+            duration_ms=duration_ms,
+            error_message=error_message,
+            error_type=error_type,
+            metadata_json=metadata_json,
+        )
+
+        ws = get_write_serializer()
+        if ws.is_configured:
+            await ws.execute(lambda db: db.add(run), label="job-run")
+        else:
+            from zerg.database import db_session
+
+            with db_session() as db:
+                db.add(run)
+                # db_session context manager auto-commits
 
         logger.debug("emit_job_run persisted: job_id=%s status=%s", job_id, status)
 

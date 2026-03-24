@@ -107,6 +107,17 @@ repos:
         pass_filenames: false
 
       # -----------------------------------------------------------------------
+      # Warn on new db.commit() in routers (prefer WriteSerializer)
+      # -----------------------------------------------------------------------
+      - id: check-db-commits
+        name: Check db.commit() in routers
+        entry: scripts/check-db-commits.sh
+        language: system
+        files: ^server/zerg/routers/.*\.py$
+        pass_filenames: false
+        verbose: true
+
+      # -----------------------------------------------------------------------
       # Vulture dead code detection (unused functions/classes/variables)
       # -----------------------------------------------------------------------
       - id: python-vulture

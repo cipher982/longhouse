@@ -107,6 +107,24 @@ def _mock_db_session(session_factory):
     return _session
 
 
+class _FakeWriteSerializer:
+    def __init__(self, session_factory, *, configured=True):
+        self._session_factory = session_factory
+        self.is_configured = configured
+        self.calls: list[dict[str, object]] = []
+
+    async def execute(self, fn, *, label="", auto_commit=True):
+        self.calls.append({"label": label, "auto_commit": auto_commit})
+        session = self._session_factory()
+        try:
+            result = fn(session)
+            if auto_commit:
+                session.commit()
+            return result
+        finally:
+            session.close()
+
+
 # ---------------------------------------------------------------------------
 # emit_job_run tests
 # ---------------------------------------------------------------------------
@@ -218,6 +236,32 @@ def test_emit_job_run_metadata_combined(tmp_path):
         assert meta["project"] == "my-proj"
         assert meta["scheduler"] == "sched-abc"
         assert meta["custom_key"] == "custom_val"
+
+
+def test_emit_job_run_uses_write_serializer_when_configured(tmp_path):
+    """emit_job_run() should use the serializer on live SQLite instances."""
+    SessionLocal = _make_db(tmp_path)
+    fake_serializer = _FakeWriteSerializer(SessionLocal)
+
+    with patch("zerg.services.write_serializer.get_write_serializer", return_value=fake_serializer):
+        from zerg.jobs.ops_db import emit_job_run
+
+        asyncio.run(
+            emit_job_run(
+                job_id="serialized-job",
+                status="success",
+                started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+                ended_at=datetime(2026, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+                duration_ms=1000,
+            )
+        )
+
+    assert fake_serializer.calls == [{"label": "job-run", "auto_commit": True}]
+
+    with SessionLocal() as db:
+        runs = db.query(JobRun).all()
+        assert len(runs) == 1
+        assert runs[0].job_id == "serialized-job"
 
 
 # ---------------------------------------------------------------------------
