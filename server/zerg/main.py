@@ -1049,6 +1049,15 @@ from zerg.middleware.no_cache_static import NoCacheStaticMiddleware
 app.add_middleware(NoCacheStaticMiddleware)
 
 # ---------------------------------------------------------------------------
+# RequestTimeoutMiddleware - enforce a max response time on /api/ requests.
+# Added before SafeErrorResponseMiddleware so it sits inside the error layer
+# (safe-error wraps timeout, not the other way around).
+# ---------------------------------------------------------------------------
+from zerg.middleware.request_timeout import RequestTimeoutMiddleware
+
+app.add_middleware(RequestTimeoutMiddleware)
+
+# ---------------------------------------------------------------------------
 # SafeErrorResponseMiddleware - MUST be added LAST to be the outermost wrapper.
 # In Starlette, add_middleware() inserts at the START of the list, so the last
 # middleware added becomes the outermost layer that sees requests first and
