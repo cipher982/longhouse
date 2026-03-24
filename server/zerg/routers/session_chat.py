@@ -43,6 +43,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_control import send_text_to_managed_local_session
+from zerg.services.managed_local_control import ship_managed_local_claude_transcript
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
@@ -84,6 +85,7 @@ SUPPORTED_SESSION_CHAT_BACKENDS = {
 MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 1.0
 MANAGED_LOCAL_STABLE_POLLS = 1
+MANAGED_LOCAL_DIRECT_SHIP_TIMEOUT_SECS = 20
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
     [
         "Message was sent to the managed local session, but Longhouse ",
@@ -440,6 +442,22 @@ async def _stream_managed_local_output(
             ),
         ).encode()
         return
+
+    if str(getattr(source_session, "provider", "") or "").strip().lower() == "claude":
+        ship_result = await ship_managed_local_claude_transcript(
+            db=db,
+            owner_id=owner_id,
+            session=source_session,
+            commis_id=f"{request_id}:ship",
+            timeout_secs=MANAGED_LOCAL_DIRECT_SHIP_TIMEOUT_SECS,
+        )
+        if not ship_result.ok:
+            logger.warning(
+                "[%s] Managed-local Claude direct ship fallback failed for %s: %s",
+                request_id,
+                source_session.id,
+                ship_result.error,
+            )
 
     new_events = await _await_managed_local_turn_events(
         db_bind=db.get_bind(),

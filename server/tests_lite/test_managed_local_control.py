@@ -24,7 +24,9 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.managed_local_control import await_managed_local_presence_update
 from zerg.services.managed_local_control import await_managed_local_turn_events
+from zerg.services.managed_local_control import build_managed_local_claude_ship_command
 from zerg.services.managed_local_control import send_text_to_managed_local_session
+from zerg.services.managed_local_control import ship_managed_local_claude_transcript
 
 
 def _make_db(tmp_path):
@@ -262,6 +264,51 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
         assert runtime_state.phase_source == "semantic"
         assert runtime_state.last_runtime_signal_at is not None
         assert runtime_state.device_id == runner.name
+
+
+def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        session.provider_session_id = "b0c72633-c8b1-46a4-a42a-53a388b69147"
+        db.commit()
+
+        command = build_managed_local_claude_ship_command(session=session)
+
+        assert "command -v longhouse-engine" in command
+        assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
+        assert f'--session-id {session.id}' in command
+        assert "for delay in 0 1 2 4" in command
+
+
+def test_ship_managed_local_claude_transcript_dispatches_runner_job(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    with SessionLocal() as db:
+        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        session.provider_session_id = "b0c72633-c8b1-46a4-a42a-53a388b69147"
+        db.commit()
+
+        result = asyncio.run(
+            ship_managed_local_claude_transcript(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                commis_id="managed-local-claude-ship",
+            )
+        )
+
+        assert result.ok is True
+        assert len(dispatcher.calls) == 1
+        assert dispatcher.calls[0]["runner_id"] == runner.id
+        assert dispatcher.calls[0]["commis_id"] == "managed-local-claude-ship"
+        command = str(dispatcher.calls[0]["command"])
+        assert "command -v longhouse-engine" in command
+        assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
+        assert f'--session-id {session.id}' in command
 
 
 def test_send_text_to_managed_local_session_can_require_persisted_events(monkeypatch, tmp_path):
