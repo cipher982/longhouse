@@ -168,9 +168,7 @@ def require_internal_call(request: Request):
 
     if not expected_token:
         # INTERNAL_API_SECRET not configured - fail secure
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal API secret not configured"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal API secret not configured")
 
     if internal_token and hmac.compare_digest(internal_token, expected_token):
         return True
@@ -189,9 +187,6 @@ def validate_ws_jwt(token: str | None, db: Session):
     return _get_strategy().validate_ws_token(token, db)
 
 
-from zerg.dependencies.browser_auth import get_current_browser_user  # noqa: E402
-from zerg.dependencies.browser_auth import get_optional_browser_user  # noqa: E402
-
 # ---------------------------------------------------------------------------
 # Re-export strategy so tests can monkey-patch
 # ---------------------------------------------------------------------------
@@ -203,8 +198,6 @@ _strategy = _get_strategy
 __all__ = [
     "get_current_user",
     "get_optional_user",
-    "get_current_browser_user",
-    "get_optional_browser_user",
     "require_admin",
     "require_super_admin",
     "require_internal_call",
