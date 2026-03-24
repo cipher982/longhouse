@@ -94,7 +94,8 @@ SUPPORTED_SESSION_CHAT_BACKENDS = {
 MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 1.0
 MANAGED_LOCAL_STABLE_POLLS = 1
-MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 5.0
+MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS = 0.5
+MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 10.0
 MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS = 1.0
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
     [
@@ -561,23 +562,44 @@ async def _stream_managed_local_output(
                 terminal_result = await terminal_task
 
         if not new_events and terminal_result is not None:
+            provider_is_claude = str(getattr(source_session, "provider", "") or "").strip().lower() == "claude"
+            if provider_is_claude:
+                initial_grace_secs = MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS
+            else:
+                initial_grace_secs = MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS
             new_events = await _await_managed_local_events_task(
                 events_task,
-                timeout_secs=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
+                timeout_secs=initial_grace_secs,
             )
 
             ship_result = None
-            if not new_events and str(getattr(source_session, "provider", "") or "").strip().lower() == "claude":
-                ship_result = await _force_managed_local_claude_sync(
-                    db_bind=db.get_bind(),
-                    owner_id=owner_id,
-                    source_session=source_session,
-                    request_id=request_id,
+            if not new_events and provider_is_claude:
+                ship_task = asyncio.create_task(
+                    _force_managed_local_claude_sync(
+                        db_bind=db.get_bind(),
+                        owner_id=owner_id,
+                        source_session=source_session,
+                        request_id=request_id,
+                    )
                 )
-                new_events = await _await_managed_local_events_task(
-                    events_task,
-                    timeout_secs=MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS,
-                )
+                try:
+                    done, _ = await asyncio.wait(
+                        {events_task, ship_task},
+                        timeout=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if events_task in done:
+                        new_events = events_task.result() or []
+                    elif ship_task in done:
+                        ship_result = ship_task.result()
+                        new_events = await _await_managed_local_events_task(
+                            events_task,
+                            timeout_secs=MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS,
+                        )
+                finally:
+                    if not ship_task.done():
+                        ship_task.cancel()
+                        await asyncio.gather(ship_task, return_exceptions=True)
 
             if ship_result is not None and not ship_result.ok:
                 log_message = ship_result.error or f"exit_code={ship_result.exit_code}"
