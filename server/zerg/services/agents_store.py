@@ -1429,6 +1429,12 @@ class AgentsStore:
         # This avoids per-row FTS index updates that extend write lock hold time.
         fts_triggers_dropped = len(data.events) > 10 and self._disable_fts_triggers()
 
+        # Chunk commits every N events to release the SQLite write lock
+        # periodically. A single 1000+ event transaction can hold the lock for
+        # seconds, causing health-check timeouts and cascading failures.
+        _INGEST_CHUNK = 200
+        _since_commit = 0
+
         for event_data in data.events:
             event_hash = self._compute_event_hash(event_data)
             event_uuid, parent_event_uuid = self._extract_event_lineage(event_data.raw_json)
@@ -1466,8 +1472,15 @@ class AgentsStore:
                     latest_inserted_timestamp is None or normalized_timestamp > latest_inserted_timestamp
                 ):
                     latest_inserted_timestamp = normalized_timestamp
+                _since_commit += 1
             else:
                 events_skipped += 1
+
+            # Release write lock between chunks so health checks and other
+            # readers aren't starved during large ingests.
+            if _since_commit >= _INGEST_CHUNK:
+                self.db.commit()
+                _since_commit = 0
 
         # Re-enable FTS triggers and batch-backfill new events into the FTS index.
         if fts_triggers_dropped:
@@ -1482,6 +1495,7 @@ class AgentsStore:
         }
 
         source_lines_inserted = 0
+        _since_commit = 0
         for line_data in source_lines:
             line_hash = self._compute_line_hash(line_data.raw_json)
             source_offset = int(line_data.source_offset)
@@ -1508,6 +1522,11 @@ class AgentsStore:
             if result.rowcount and result.rowcount > 0:
                 latest_state[key] = (revision, line_hash)
                 source_lines_inserted += 1
+                _since_commit += 1
+
+            if _since_commit >= _INGEST_CHUNK:
+                self.db.commit()
+                _since_commit = 0
 
         head_branch_for_counts = self._align_head_branch_from_leaf_uuid(session_id, ingest_branch.id, leaf_uuid_hint)
         self._sync_session_counts_to_head(session_id, head_branch_for_counts)

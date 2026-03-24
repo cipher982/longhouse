@@ -1248,8 +1248,11 @@ async def readyz_check():
     Unlike /health (which always returns 200 for observability), this endpoint
     returns a non-2xx status code so load balancers and provisioners can gate
     on it. Used by the Docker HEALTHCHECK and the control-plane wait_for_health.
+
+    Uses a raw SQLite connection with a short timeout so it never blocks behind
+    a long write transaction (the main cause of health-check flapping).
     """
-    from sqlalchemy import text
+    import sqlite3
 
     from zerg.database import default_engine
 
@@ -1260,35 +1263,48 @@ async def readyz_check():
             content={"status": "unhealthy", "reason": single_tenant_violation},
         )
 
-    try:
-        with default_engine.connect() as conn:
-            row = conn.execute(text("SELECT 1")).fetchone()
-            if not row:
-                return JSONResponse(
-                    status_code=503,
-                    content={"status": "unhealthy", "reason": "database query returned no rows"},
-                )
-    except Exception as exc:
+    if default_engine is None:
         return JSONResponse(
             status_code=503,
-            content={"status": "unhealthy", "reason": f"database: {exc}"},
+            content={"status": "unhealthy", "reason": "database engine not initialized"},
         )
 
-    try:
-        if default_engine is not None and default_engine.dialect.name == "sqlite":
-            with default_engine.connect() as conn:
-                fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
-                if not fts_row:
+    # Extract the file path from the engine URL and open a dedicated read-only
+    # connection with a 2s timeout — never blocks behind the WAL writer.
+    db_url = str(default_engine.url)
+    if db_url.startswith("sqlite"):
+        db_path = db_url.replace("sqlite:///", "").replace("sqlite://", "")
+        if not db_path or db_path == ":memory:":
+            return {"status": "ok"}
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
+            try:
+                conn.execute("SELECT 1")
+                row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1").fetchone()
+                if not row:
                     return JSONResponse(
                         status_code=503,
                         content={"status": "unhealthy", "reason": "events_fts table missing (FTS5 required)"},
                     )
-                conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
-    except Exception as exc:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unhealthy", "reason": f"fts5: {exc}"},
-        )
+            finally:
+                conn.close()
+        except Exception as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unhealthy", "reason": f"database: {exc}"},
+            )
+    else:
+        # Postgres path — use engine as before
+        from sqlalchemy import text
+
+        try:
+            with default_engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        except Exception as exc:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "unhealthy", "reason": f"database: {exc}"},
+            )
 
     return {"status": "ok"}
 
