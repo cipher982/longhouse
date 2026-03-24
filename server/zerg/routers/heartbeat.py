@@ -27,6 +27,7 @@ from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentHeartbeat
 from zerg.models.device_token import DeviceToken
+from zerg.services.write_serializer import get_write_serializer
 
 logger = logging.getLogger(__name__)
 
@@ -74,27 +75,43 @@ async def ingest_heartbeat(
         except ValueError:
             pass
 
-    hb = AgentHeartbeat(
-        device_id=device_id,
-        received_at=datetime.now(timezone.utc),
-        version=payload.version,
-        last_ship_at=last_ship_at,
-        spool_pending=payload.spool_pending_count,
-        parse_errors_1h=payload.parse_error_count_1h,
-        consecutive_failures=payload.consecutive_ship_failures,
-        disk_free_bytes=payload.disk_free_bytes,
-        is_offline=1 if payload.is_offline else 0,
-        raw_json=json.dumps(payload.model_dump()),
-    )
-    db.add(hb)
-    db.commit()
+    _device_id = device_id
+    _payload_json = json.dumps(payload.model_dump())
+    _now = datetime.now(timezone.utc)
+    _version = payload.version
+    _last_ship = last_ship_at
+    _spool = payload.spool_pending_count
+    _parse_err = payload.parse_error_count_1h
+    _consec = payload.consecutive_ship_failures
+    _disk = payload.disk_free_bytes
+    _offline = 1 if payload.is_offline else 0
 
-    # Prune history >30 days for this device
-    cutoff = datetime.now(timezone.utc) - timedelta(days=30)
-    db.query(AgentHeartbeat).filter(
-        AgentHeartbeat.device_id == device_id,
-        AgentHeartbeat.received_at < cutoff,
-    ).delete()
-    db.commit()
+    def _do_heartbeat(write_db: Session) -> None:
+        hb = AgentHeartbeat(
+            device_id=_device_id,
+            received_at=_now,
+            version=_version,
+            last_ship_at=_last_ship,
+            spool_pending=_spool,
+            parse_errors_1h=_parse_err,
+            consecutive_failures=_consec,
+            disk_free_bytes=_disk,
+            is_offline=_offline,
+            raw_json=_payload_json,
+        )
+        write_db.add(hb)
+        # Prune history >30 days for this device
+        cutoff = _now - timedelta(days=30)
+        write_db.query(AgentHeartbeat).filter(
+            AgentHeartbeat.device_id == _device_id,
+            AgentHeartbeat.received_at < cutoff,
+        ).delete()
+
+    ws = get_write_serializer()
+    if ws.is_configured:
+        await ws.execute(_do_heartbeat, label="heartbeat")
+    else:
+        _do_heartbeat(db)
+        db.commit()
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
