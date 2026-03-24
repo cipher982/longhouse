@@ -22,6 +22,7 @@ DISPLAY_NAME="Hosted Managed Local Claude Stress"
 LOOP_MODE="assist"
 CHAT_TIMEOUT_SECS="180"
 VERIFY_TIMEOUT_SECS="30"
+SSH_TARGET="zerg"
 MACHINE_NAME="${MACHINE_NAME:-}"
 if [[ -z "$MACHINE_NAME" && -f "$HOME/.claude/longhouse-machine-name" ]]; then
   MACHINE_NAME="$(tr -d '\r\n' < "$HOME/.claude/longhouse-machine-name")"
@@ -52,6 +53,7 @@ Options:
   --loop-mode <mode>        manual|assist|autopilot (default: assist)
   --chat-timeout-secs <n>   Per-turn SSE read timeout (default: 180)
   --verify-timeout-secs <n> Poll timeout for hosted events verification (default: 30)
+  --ssh-target <host>       SSH target for hosted SQLite fallback (default: zerg)
   --machine-name <name>     Optional explicit Longhouse machine label override
   -h, --help                Show help
 EOF
@@ -107,6 +109,11 @@ while (($# > 0)); do
     --verify-timeout-secs)
       [[ -n "${2:-}" ]] || { echo "--verify-timeout-secs requires a value" >&2; exit 1; }
       VERIFY_TIMEOUT_SECS="$2"
+      shift 2
+      ;;
+    --ssh-target)
+      [[ -n "${2:-}" ]] || { echo "--ssh-target requires a value" >&2; exit 1; }
+      SSH_TARGET="$2"
       shift 2
       ;;
     --machine-name)
@@ -168,6 +175,7 @@ export LH_STRESS_DISPLAY_NAME="$DISPLAY_NAME"
 export LH_STRESS_LOOP_MODE="$LOOP_MODE"
 export LH_STRESS_CHAT_TIMEOUT_SECS="$CHAT_TIMEOUT_SECS"
 export LH_STRESS_VERIFY_TIMEOUT_SECS="$VERIFY_TIMEOUT_SECS"
+export LH_STRESS_SSH_TARGET="$SSH_TARGET"
 export LH_STRESS_MACHINE_NAME="$MACHINE_NAME"
 
 cd "$ROOT_DIR"
@@ -177,6 +185,9 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import shlex
+import shutil
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -214,12 +225,16 @@ def parse_sse_lines(lines: Iterable[str]) -> Iterator[SSEEvent]:
         yield SSEEvent(event=event_name, data="\n".join(data_lines))
 
 
-def build_prompts(*, count: int, prefix: str) -> list[str]:
+def build_prompts(*, count: int, prefix: str) -> list[tuple[str, str]]:
     nonce = secrets.token_hex(4)
-    return [f"{prefix}-{idx:02d}-{nonce}" for idx in range(1, count + 1)]
+    prompts: list[tuple[str, str]] = []
+    for idx in range(1, count + 1):
+        token = f"{prefix}-{idx:02d}-{nonce}"
+        prompts.append((f"Reply with exactly {token} and nothing else.", token))
+    return prompts
 
 
-def fetch_events(*, client: httpx.Client, api_url: str, device_token: str, session_id: str) -> list[dict]:
+def fetch_events_via_api(*, client: httpx.Client, api_url: str, device_token: str, session_id: str) -> list[dict]:
     response = client.get(
         f"{api_url.rstrip('/')}/api/agents/sessions/{session_id}/events",
         headers={"X-Agents-Token": device_token},
@@ -233,11 +248,90 @@ def fetch_events(*, client: httpx.Client, api_url: str, device_token: str, sessi
     return events
 
 
+def fetch_events_via_ssh(*, ssh_target: str, subdomain: str, session_id: str, prompt: str, token: str) -> list[dict]:
+    if shutil.which("ssh") is None:
+        raise RuntimeError("ssh is not available for hosted fallback verification")
+
+    remote_script = f"""
+python3 - <<'__LH_REMOTE_PY__'
+import json
+import sqlite3
+
+session_id = {session_id!r}
+prompt = {prompt!r}
+token = {token!r}
+conn = sqlite3.connect('/data/longhouse.db')
+conn.row_factory = sqlite3.Row
+rows = conn.execute(
+    \"\"\"
+    SELECT id, role, content_text
+    FROM events
+    WHERE session_id = ?
+      AND (
+        (role = 'user' AND content_text = ?)
+        OR
+        (role = 'assistant' AND instr(content_text, ?) > 0)
+      )
+    ORDER BY id DESC
+    LIMIT 100
+    \"\"\",
+    [session_id, prompt, token],
+).fetchall()
+print(json.dumps([dict(row) for row in rows]))
+__LH_REMOTE_PY__
+"""
+    container_name = f"longhouse-{subdomain}"
+    completed = subprocess.run(
+        [
+            "ssh",
+            ssh_target,
+            f"docker exec -i {shlex.quote(container_name)} bash -lc {shlex.quote(remote_script)}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "hosted ssh fallback failed")
+    payload = json.loads(completed.stdout)
+    if not isinstance(payload, list):
+        raise RuntimeError("hosted ssh fallback returned invalid payload")
+    return payload
+
+
+def fetch_events(
+    *,
+    client: httpx.Client,
+    api_url: str,
+    device_token: str,
+    session_id: str,
+    ssh_target: str,
+    subdomain: str,
+    prompt: str,
+    token: str,
+) -> list[dict]:
+    try:
+        return fetch_events_via_api(
+            client=client,
+            api_url=api_url,
+            device_token=device_token,
+            session_id=session_id,
+        )
+    except Exception:
+        return fetch_events_via_ssh(
+            ssh_target=ssh_target,
+            subdomain=subdomain,
+            session_id=session_id,
+            prompt=prompt,
+            token=token,
+        )
+
+
 def count_exact_user_events(events: list[dict], prompt: str) -> int:
     return sum(1 for event in events if event.get("role") == "user" and event.get("content_text") == prompt)
 
 
-def summarize_new_batch(events: list[dict], *, after_event_id: int, prompt: str) -> tuple[int, list[str], int]:
+def summarize_new_batch(events: list[dict], *, after_event_id: int, prompt: str, token: str) -> tuple[int, list[str], int]:
     exact_user = 0
     assistant_messages: list[str] = []
     max_event_id = after_event_id
@@ -248,7 +342,7 @@ def summarize_new_batch(events: list[dict], *, after_event_id: int, prompt: str)
         max_event_id = max(max_event_id, event_id)
         if event.get("role") == "user" and event.get("content_text") == prompt:
             exact_user += 1
-        if event.get("role") == "assistant" and event.get("content_text"):
+        if event.get("role") == "assistant" and event.get("content_text") and token in str(event["content_text"]):
             assistant_messages.append(str(event["content_text"]))
     return exact_user, assistant_messages, max_event_id
 
@@ -268,6 +362,7 @@ def main() -> int:
     chat_timeout_secs = float(os.environ["LH_STRESS_CHAT_TIMEOUT_SECS"])
     verify_timeout_secs = float(os.environ["LH_STRESS_VERIFY_TIMEOUT_SECS"])
     machine_name = os.environ.get("LH_STRESS_MACHINE_NAME", "").strip()
+    ssh_target = os.environ.get("LH_STRESS_SSH_TARGET", "zerg").strip() or "zerg"
 
     timeout = httpx.Timeout(connect=20.0, read=chat_timeout_secs, write=20.0, pool=20.0)
     with httpx.Client(timeout=timeout) as client:
@@ -300,8 +395,17 @@ def main() -> int:
 
         prompts = build_prompts(count=turn_count, prefix=prompt_prefix)
 
-        for idx, prompt in enumerate(prompts, start=1):
-            before_events = fetch_events(client=client, api_url=api_url, device_token=device_token, session_id=session_id)
+        for idx, (prompt, token) in enumerate(prompts, start=1):
+            before_events = fetch_events(
+                client=client,
+                api_url=api_url,
+                device_token=device_token,
+                session_id=session_id,
+                ssh_target=ssh_target,
+                subdomain=subdomain,
+                prompt=prompt,
+                token=token,
+            )
             before_exact = count_exact_user_events(before_events, prompt)
             before_event_id = max((int(event.get("id") or 0) for event in before_events), default=0)
 
@@ -342,17 +446,39 @@ def main() -> int:
             assistant_messages: list[str] = []
             after_event_id = before_event_id
             while time.monotonic() < deadline:
-                after_events = fetch_events(client=client, api_url=api_url, device_token=device_token, session_id=session_id)
+                after_events = fetch_events(
+                    client=client,
+                    api_url=api_url,
+                    device_token=device_token,
+                    session_id=session_id,
+                    ssh_target=ssh_target,
+                    subdomain=subdomain,
+                    prompt=prompt,
+                    token=token,
+                )
                 exact_in_new_batch, assistant_messages, after_event_id = summarize_new_batch(
                     after_events,
                     after_event_id=before_event_id,
                     prompt=prompt,
+                    token=token,
                 )
                 if exact_in_new_batch == 1 and (assistant_messages or (done_payload and int(done_payload.get("persisted_events", 0)) > 0)):
                     break
                 time.sleep(1.0)
 
-            total_exact = count_exact_user_events(fetch_events(client=client, api_url=api_url, device_token=device_token, session_id=session_id), prompt)
+            total_exact = count_exact_user_events(
+                fetch_events(
+                    client=client,
+                    api_url=api_url,
+                    device_token=device_token,
+                    session_id=session_id,
+                    ssh_target=ssh_target,
+                    subdomain=subdomain,
+                    prompt=prompt,
+                    token=token,
+                ),
+                prompt,
+            )
             persisted_events = int(done_payload.get("persisted_events", 0)) if isinstance(done_payload, dict) else 0
             ok = (
                 status_code == 200
@@ -364,7 +490,7 @@ def main() -> int:
             label = "ok" if ok else "fail"
             print(
                 f"[{idx}/{len(prompts)}] {label} status={status_code} prompt={prompt!r} "
-                f"new_exact={exact_in_new_batch} total_exact={total_exact} persisted={persisted_events} "
+                f"token={token} new_exact={exact_in_new_batch} total_exact={total_exact} persisted={persisted_events} "
                 f"assistant_events={len(assistant_messages)}"
             )
             if assistant_messages:
