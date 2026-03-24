@@ -32,6 +32,7 @@ class ManagedLocalSendResult:
     exit_code: int | None = None
     error: str | None = None
     baseline_event_id: int | None = None
+    verified_turn_started: bool = False
 
 
 def get_managed_local_latest_event_id(*, db: Session, session_id: UUID) -> int:
@@ -94,6 +95,8 @@ async def send_text_to_managed_local_session(
     text: str,
     commis_id: str | None = None,
     timeout_secs: int = 15,
+    verify_turn_started: bool = False,
+    verification_timeout_secs: float | None = None,
 ) -> ManagedLocalSendResult:
     """Send text into a tmux-backed managed-local session.
 
@@ -149,9 +152,30 @@ async def send_text_to_managed_local_session(
             error=detail or "Managed local send-text command failed",
         )
 
+    if verify_turn_started:
+        persisted_events = await await_managed_local_turn_events(
+            db_bind=db.get_bind(),
+            session_id=session.id,
+            after_event_id=baseline_event_id,
+            timeout_secs=float(verification_timeout_secs if verification_timeout_secs is not None else MANAGED_LOCAL_EVENT_TIMEOUT_SECS),
+        )
+        if not persisted_events:
+            return ManagedLocalSendResult(
+                ok=False,
+                exit_code=0,
+                baseline_event_id=baseline_event_id,
+                error="Managed local session did not produce new timeline events after send",
+                verified_turn_started=False,
+            )
+
     mark_managed_local_input_sent(
         db,
         session=session,
         dedupe_suffix=str(commis_id or ""),
     )
-    return ManagedLocalSendResult(ok=True, exit_code=0, baseline_event_id=baseline_event_id)
+    return ManagedLocalSendResult(
+        ok=True,
+        exit_code=0,
+        baseline_event_id=baseline_event_id,
+        verified_turn_started=verify_turn_started,
+    )
