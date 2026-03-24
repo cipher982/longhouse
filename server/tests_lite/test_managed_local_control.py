@@ -253,3 +253,80 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
         assert runtime_state.phase_source == "semantic"
         assert runtime_state.last_runtime_signal_at is not None
         assert runtime_state.device_id == runner.name
+
+
+def test_send_text_to_managed_local_session_can_require_persisted_events(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    async def _fake_wait_for_events(*, db_bind, session_id, after_event_id, timeout_secs, poll_interval_secs=1.0):
+        assert db_bind is not None
+        assert timeout_secs == 2.5
+        assert after_event_id >= 0
+        return [
+            AgentEvent(
+                id=after_event_id + 1,
+                session_id=session_id,
+                role="assistant",
+                content_text="verified",
+                timestamp=datetime.now(timezone.utc),
+            )
+        ]
+
+    monkeypatch.setattr("zerg.services.managed_local_control.await_managed_local_turn_events", _fake_wait_for_events)
+
+    with SessionLocal() as db:
+        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="continue",
+                commis_id="managed-local-control-verified",
+                verify_turn_started=True,
+                verification_timeout_secs=2.5,
+            )
+        )
+
+        assert result.ok is True
+        assert result.verified_turn_started is True
+        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
+        assert runtime_state.phase == "thinking"
+        assert runtime_state.device_id == runner.name
+
+
+def test_send_text_to_managed_local_session_reports_verification_failure_without_runtime_signal(
+    monkeypatch, tmp_path
+):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    async def _fake_wait_for_events(**_kwargs):
+        return []
+
+    monkeypatch.setattr("zerg.services.managed_local_control.await_managed_local_turn_events", _fake_wait_for_events)
+
+    with SessionLocal() as db:
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="continue",
+                commis_id="managed-local-control-verify-fail",
+                verify_turn_started=True,
+                verification_timeout_secs=1.0,
+            )
+        )
+
+        assert result.ok is False
+        assert result.verified_turn_started is False
+        assert result.error == "Managed local session did not produce new timeline events after send"
+        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).all()
+        assert runtime_state == []

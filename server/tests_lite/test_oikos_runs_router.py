@@ -725,7 +725,17 @@ def test_loop_inbox_approve_action_routes_claude_managed_local_continue_without_
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
 
-    async def _fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+    async def _fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
         calls.append(
             {
                 "owner_id": owner_id,
@@ -734,6 +744,8 @@ def test_loop_inbox_approve_action_routes_claude_managed_local_continue_without_
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
                 "transport": "tmux",
+                "verify_turn_started": verify_turn_started,
+                "verification_timeout_secs": verification_timeout_secs,
             }
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
@@ -817,6 +829,8 @@ def test_loop_inbox_approve_action_routes_claude_managed_local_continue_without_
             assert calls[0]["commis_id"] == f"turn-review-{review.id}"
             assert calls[0]["transport"] == "tmux"
             assert calls[0]["timeout_secs"] == 15
+            assert calls[0]["verify_turn_started"] is True
+            assert calls[0]["verification_timeout_secs"] == 15.0
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -990,7 +1004,17 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
 
-    async def _fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+    async def _fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
         calls.append(
             {
                 "owner_id": owner_id,
@@ -999,6 +1023,8 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
                 "transport": "tmux",
+                "verify_turn_started": verify_turn_started,
+                "verification_timeout_secs": verification_timeout_secs,
             }
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
@@ -1097,6 +1123,8 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
             assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
             assert calls[0]["transport"] == "tmux"
             assert calls[0]["timeout_secs"] == 15
+            assert calls[0]["verify_turn_started"] is True
+            assert calls[0]["verification_timeout_secs"] == 15.0
         finally:
             api_app_ref.dependency_overrides = {}
 

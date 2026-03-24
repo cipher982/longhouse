@@ -205,7 +205,17 @@ async def test_turn_review_autopilot_routes_claude_managed_local_continue_withou
             loop_thread_id=51,
         )
 
-    async def _fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+    async def _fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
         calls.append(
             {
                 "owner_id": owner_id,
@@ -214,6 +224,8 @@ async def test_turn_review_autopilot_routes_claude_managed_local_continue_withou
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
                 "transport": "tmux",
+                "verify_turn_started": verify_turn_started,
+                "verification_timeout_secs": verification_timeout_secs,
             }
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
@@ -265,6 +277,8 @@ async def test_turn_review_autopilot_routes_claude_managed_local_continue_withou
         assert calls[0]["commis_id"] == f"turn-review-{review.id}"
         assert calls[0]["transport"] == "tmux"
         assert calls[0]["timeout_secs"] == 15
+        assert calls[0]["verify_turn_started"] is True
+        assert calls[0]["verification_timeout_secs"] == 15.0
 
 
 @pytest.mark.asyncio
@@ -355,7 +369,17 @@ async def test_reply_to_pending_turn_review_routes_claude_managed_local_reply_wi
     SessionLocal = _make_db(tmp_path, "turn_review_reply_managed_local.db")
     calls: list[dict[str, object]] = []
 
-    async def _fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+    async def _fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
         calls.append(
             {
                 "owner_id": owner_id,
@@ -364,6 +388,8 @@ async def test_reply_to_pending_turn_review_routes_claude_managed_local_reply_wi
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
                 "transport": "tmux",
+                "verify_turn_started": verify_turn_started,
+                "verification_timeout_secs": verification_timeout_secs,
             }
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
@@ -434,6 +460,8 @@ async def test_reply_to_pending_turn_review_routes_claude_managed_local_reply_wi
         assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
         assert calls[0]["transport"] == "tmux"
         assert calls[0]["timeout_secs"] == 15
+        assert calls[0]["verify_turn_started"] is True
+        assert calls[0]["verification_timeout_secs"] == 15.0
 
 
 @pytest.mark.asyncio

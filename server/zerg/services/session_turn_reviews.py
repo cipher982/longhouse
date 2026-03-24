@@ -1197,6 +1197,8 @@ async def _send_follow_up_to_managed_local_session(
         text=text,
         commis_id=commis_id,
         timeout_secs=timeout_secs,
+        verify_turn_started=True,
+        verification_timeout_secs=float(timeout_secs),
     )
 
 
@@ -1309,6 +1311,8 @@ async def reply_to_pending_turn_review(
         text=clean_reply,
         commis_id=f"turn-review-reply-{review.id}",
         timeout_secs=15,
+        verify_turn_started=True,
+        verification_timeout_secs=15.0,
     )
     if not send_result.ok:
         _mark_review_outcome(
