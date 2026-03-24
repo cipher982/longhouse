@@ -149,6 +149,8 @@ describe("SessionChat", () => {
             shipped_session_id: "sess-2",
             created_continuation: true,
             persisted_events: 4,
+            sync_status: "complete",
+            control_status: "completed",
             exit_code: 0,
             total_text_length: 10,
             timestamp: "2026-03-19T16:46:17Z",
@@ -164,6 +166,39 @@ describe("SessionChat", () => {
 
     await waitFor(() => expect(onSessionChanged).toHaveBeenCalledWith("sess-2", true));
     expect(screen.queryByText(/could not save the continuation transcript/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps a non-error placeholder while managed-local transcript sync is pending", async () => {
+    const user = userEvent.setup();
+    const onSessionChanged = vi.fn();
+
+    mockSessionChatFetches(
+      sseResponse([
+        {
+          event: "done",
+          data: {
+            session_id: "sess-2",
+            shipped_session_id: "sess-2",
+            created_continuation: true,
+            persisted_events: 0,
+            sync_status: "pending",
+            control_status: "completed",
+            exit_code: 0,
+            total_text_length: 0,
+            timestamp: "2026-03-24T12:00:00Z",
+          },
+        },
+      ]),
+    );
+
+    renderSessionChat({ onSessionChanged });
+
+    await user.type(screen.getByRole("textbox"), "Continue in cloud");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(await screen.findByText("Completed locally. Transcript syncing...")).toBeInTheDocument();
+    expect(screen.queryByText(/could not save the continuation transcript/i)).not.toBeInTheDocument();
+    expect(onSessionChanged).not.toHaveBeenCalled();
   });
 
   it("keeps the inline response visible when persistence fails", async () => {
@@ -183,6 +218,8 @@ describe("SessionChat", () => {
             shipped_session_id: null,
             created_continuation: true,
             persisted_events: 0,
+            sync_status: "failed",
+            control_status: "completed",
             persistence_error:
               "Response completed, but Longhouse could not save the continuation transcript to the timeline.",
             exit_code: 0,
@@ -200,6 +237,48 @@ describe("SessionChat", () => {
 
     expect(await screen.findByText("Saved nowhere")).toBeInTheDocument();
     expect(await screen.findByText(/could not save the continuation transcript/i)).toBeInTheDocument();
+    expect(onSessionChanged).not.toHaveBeenCalled();
+  });
+
+  it("does not clear the dock scratchpad until same-session persistence completes", async () => {
+    const user = userEvent.setup();
+    const onSessionChanged = vi.fn();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    mockSessionChatFetches(
+      sseResponse([
+        {
+          event: "done",
+          data: {
+            session_id: "sess-1",
+            shipped_session_id: "sess-1",
+            created_continuation: false,
+            persisted_events: 0,
+            sync_status: "pending",
+            control_status: "completed",
+            exit_code: 0,
+            total_text_length: 0,
+            timestamp: "2026-03-24T12:05:00Z",
+          },
+        },
+      ]),
+    );
+
+    renderSessionChat({ onSessionChanged }, { queryClient });
+
+    await user.type(screen.getByRole("textbox"), "tesT: whats 2+2");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    expect(
+      await screen.findByText("Completed locally. Transcript syncing..."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("tesT: whats 2+2")).toBeInTheDocument();
+    expect(invalidateSpy).not.toHaveBeenCalled();
     expect(onSessionChanged).not.toHaveBeenCalled();
   });
 
@@ -226,6 +305,8 @@ describe("SessionChat", () => {
             shipped_session_id: "sess-1",
             created_continuation: false,
             persisted_events: 4,
+            sync_status: "complete",
+            control_status: "completed",
             exit_code: 0,
             total_text_length: 1,
             timestamp: "2026-03-19T16:46:17Z",
@@ -273,6 +354,8 @@ describe("SessionChat", () => {
             shipped_session_id: "sess-2",
             created_continuation: true,
             persisted_events: 4,
+            sync_status: "complete",
+            control_status: "completed",
             exit_code: 0,
             total_text_length: 10,
             timestamp: "2026-03-19T16:46:17Z",

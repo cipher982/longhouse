@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
+from zerg.models.agents import SessionRuntimeEvent
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_runtime import mark_managed_local_input_sent
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
@@ -33,6 +34,20 @@ from zerg.session_execution_home import SessionExecutionHome
 MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 1.0
 MANAGED_LOCAL_STABLE_POLLS = 1
+MANAGED_LOCAL_SYNC_STATUS_PENDING = "pending"
+MANAGED_LOCAL_SYNC_STATUS_COMPLETE = "complete"
+MANAGED_LOCAL_SYNC_STATUS_FAILED = "failed"
+MANAGED_LOCAL_CONTROL_STATUS_COMPLETED = "completed"
+MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER = "needs_user"
+MANAGED_LOCAL_CONTROL_STATUS_BLOCKED = "blocked"
+MANAGED_LOCAL_CONTROL_STATUS_FAILED = "failed"
+_MANAGED_LOCAL_HOOK_RUNTIME_SOURCE = "claude_hook"
+_MANAGED_LOCAL_ACTIVE_HOOK_PHASES = frozenset({"thinking", "running"})
+_MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS = {
+    "idle": MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
+    "needs_user": MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER,
+    "blocked": MANAGED_LOCAL_CONTROL_STATUS_BLOCKED,
+}
 
 
 @dataclass(frozen=True)
@@ -51,6 +66,14 @@ class ManagedLocalShipResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class ManagedLocalTerminalResult:
+    phase: str
+    control_status: str
+    runtime_event_id: int
+    occurred_at: datetime | None = None
+
+
 def validate_managed_local_chat_done_payload(
     *,
     session_id: str,
@@ -64,10 +87,17 @@ def validate_managed_local_chat_done_payload(
         return f"expected created_continuation=false, got {done_payload.get('created_continuation')!r}"
     if str(done_payload.get("shipped_session_id") or "") != session_id:
         return f"expected shipped_session_id={session_id}, got {done_payload.get('shipped_session_id')!r}"
-    if int(done_payload.get("persisted_events") or 0) <= 0:
-        return f"expected persisted_events>0, got {done_payload.get('persisted_events')!r}"
+    sync_status = str(done_payload.get("sync_status") or "").strip().lower()
+    if sync_status not in {
+        MANAGED_LOCAL_SYNC_STATUS_PENDING,
+        MANAGED_LOCAL_SYNC_STATUS_COMPLETE,
+    }:
+        return f"expected sync_status in {{'pending','complete'}}, got {done_payload.get('sync_status')!r}"
     if done_payload.get("persistence_error") is not None:
         return f"unexpected persistence_error={done_payload.get('persistence_error')!r}"
+    if sync_status == MANAGED_LOCAL_SYNC_STATUS_COMPLETE:
+        if int(done_payload.get("persisted_events") or 0) <= 0:
+            return f"expected persisted_events>0, got {done_payload.get('persisted_events')!r}"
 
     exit_code_raw = done_payload.get("exit_code")
     try:
@@ -136,6 +166,20 @@ def get_managed_local_latest_event_id(*, db: Session, session_id: UUID) -> int:
     return int(AgentsStore(db).get_latest_event_id(session_id) or 0)
 
 
+def get_managed_local_latest_hook_runtime_event_id(*, db: Session, session_id: UUID) -> int:
+    """Return the latest hook-driven runtime event id for a managed-local session."""
+    row = (
+        db.query(SessionRuntimeEvent.id)
+        .filter(
+            SessionRuntimeEvent.session_id == session_id,
+            SessionRuntimeEvent.source == _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
+        )
+        .order_by(SessionRuntimeEvent.id.desc())
+        .first()
+    )
+    return int(row[0]) if row else 0
+
+
 def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_id: int) -> list[AgentEvent]:
     with Session(bind=db_bind) as poll_db:
         return (
@@ -143,6 +187,25 @@ def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_
             .filter(AgentEvent.session_id == session_id)
             .filter(AgentEvent.id > after_event_id)
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+            .all()
+        )
+
+
+def _fetch_managed_local_hook_runtime_events_since(
+    *,
+    db_bind,
+    session_id: UUID,
+    after_runtime_event_id: int,
+) -> list[SessionRuntimeEvent]:
+    with Session(bind=db_bind) as poll_db:
+        return (
+            poll_db.query(SessionRuntimeEvent)
+            .filter(
+                SessionRuntimeEvent.session_id == session_id,
+                SessionRuntimeEvent.source == _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE,
+                SessionRuntimeEvent.id > after_runtime_event_id,
+            )
+            .order_by(SessionRuntimeEvent.id.asc())
             .all()
         )
 
@@ -181,6 +244,82 @@ async def await_managed_local_presence_update(
                 row_ts = _to_utc_timestamp(row.updated_at)
                 if baseline_ts is None or (row_ts is not None and row_ts > baseline_ts):
                     return row
+        await asyncio.sleep(poll_interval_secs)
+
+    return None
+
+
+async def await_managed_local_hook_phase_update(
+    *,
+    db_bind,
+    session_id: UUID,
+    after_runtime_event_id: int,
+    phases: set[str] | frozenset[str] | None = None,
+    timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
+    poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
+) -> SessionRuntimeEvent | None:
+    """Wait for a new hook-driven runtime phase after the provided cursor."""
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    cursor = after_runtime_event_id
+
+    while loop.time() < deadline:
+        events = _fetch_managed_local_hook_runtime_events_since(
+            db_bind=db_bind,
+            session_id=session_id,
+            after_runtime_event_id=cursor,
+        )
+        for event in events:
+            cursor = max(cursor, int(getattr(event, "id", 0) or 0))
+            phase = str(getattr(event, "phase", "") or "").strip()
+            if phases is None or phase in phases:
+                return event
+        await asyncio.sleep(poll_interval_secs)
+
+    return None
+
+
+async def await_managed_local_turn_terminal(
+    *,
+    db_bind,
+    session_id: UUID,
+    after_runtime_event_id: int,
+    timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
+    poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
+) -> ManagedLocalTerminalResult | None:
+    """Wait for a new hook-driven terminal phase for a managed-local turn."""
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    cursor = after_runtime_event_id
+    saw_active_hook_phase = False
+
+    while loop.time() < deadline:
+        events = _fetch_managed_local_hook_runtime_events_since(
+            db_bind=db_bind,
+            session_id=session_id,
+            after_runtime_event_id=cursor,
+        )
+        for event in events:
+            cursor = max(cursor, int(getattr(event, "id", 0) or 0))
+            phase = str(getattr(event, "phase", "") or "").strip()
+            if phase in _MANAGED_LOCAL_ACTIVE_HOOK_PHASES:
+                saw_active_hook_phase = True
+                continue
+            if not saw_active_hook_phase:
+                continue
+            if phase not in _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS:
+                continue
+            return ManagedLocalTerminalResult(
+                phase=phase,
+                control_status=_MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS.get(
+                    phase,
+                    MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
+                ),
+                runtime_event_id=int(getattr(event, "id", 0) or 0),
+                occurred_at=getattr(event, "occurred_at", None),
+            )
         await asyncio.sleep(poll_interval_secs)
 
     return None
@@ -250,7 +389,9 @@ async def send_text_to_managed_local_session(
 
     provider = str(getattr(session, "provider", "") or "").strip().lower()
     baseline_event_id = get_managed_local_latest_event_id(db=db, session_id=session.id)
-    baseline_presence_updated_at = _get_managed_local_presence_updated_at(db_bind=db.get_bind(), session_id=session.id)
+    baseline_hook_runtime_event_id = (
+        get_managed_local_latest_hook_runtime_event_id(db=db, session_id=session.id) if verify_turn_started else 0
+    )
     if provider == "codex":
         command = build_tmux_paste_text_command(
             session_name=str(session.managed_session_name),
@@ -296,36 +437,21 @@ async def send_text_to_managed_local_session(
         verification_timeout = float(
             verification_timeout_secs if verification_timeout_secs is not None else MANAGED_LOCAL_EVENT_TIMEOUT_SECS
         )
-        if provider == "codex":
-            presence = await await_managed_local_presence_update(
-                db_bind=db.get_bind(),
-                session_id=session.id,
-                after_updated_at=baseline_presence_updated_at,
-                timeout_secs=verification_timeout,
+        hook_event = await await_managed_local_hook_phase_update(
+            db_bind=db.get_bind(),
+            session_id=session.id,
+            after_runtime_event_id=baseline_hook_runtime_event_id,
+            phases=set(_MANAGED_LOCAL_ACTIVE_HOOK_PHASES),
+            timeout_secs=verification_timeout,
+        )
+        if hook_event is None:
+            return ManagedLocalSendResult(
+                ok=False,
+                exit_code=0,
+                baseline_event_id=baseline_event_id,
+                error="Managed local session did not acknowledge the prompt after send",
+                verified_turn_started=False,
             )
-            if presence is None:
-                return ManagedLocalSendResult(
-                    ok=False,
-                    exit_code=0,
-                    baseline_event_id=baseline_event_id,
-                    error="Managed local Codex session did not acknowledge the prompt after send",
-                    verified_turn_started=False,
-                )
-        else:
-            persisted_events = await await_managed_local_turn_events(
-                db_bind=db.get_bind(),
-                session_id=session.id,
-                after_event_id=baseline_event_id,
-                timeout_secs=verification_timeout,
-            )
-            if not persisted_events:
-                return ManagedLocalSendResult(
-                    ok=False,
-                    exit_code=0,
-                    baseline_event_id=baseline_event_id,
-                    error="Managed local session did not produce new timeline events after send",
-                    verified_turn_started=False,
-                )
 
     mark_managed_local_input_sent(
         db,

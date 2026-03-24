@@ -18,11 +18,13 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
+from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.managed_local_control import await_managed_local_presence_update
+from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import await_managed_local_turn_events
 from zerg.services.managed_local_control import build_managed_local_claude_ship_command
 from zerg.services.managed_local_control import send_text_to_managed_local_session
@@ -295,6 +297,25 @@ def test_validate_managed_local_chat_done_payload_accepts_successful_zero_exit_c
             "created_continuation": False,
             "shipped_session_id": session_id,
             "persisted_events": 2,
+            "sync_status": "complete",
+            "persistence_error": None,
+            "exit_code": 0,
+        },
+    )
+
+    assert error is None
+
+
+def test_validate_managed_local_chat_done_payload_accepts_sync_pending_without_persisted_events():
+    session_id = "9aa6380c-ec1d-4a3b-a221-fa7feb96fcb6"
+
+    error = validate_managed_local_chat_done_payload(
+        session_id=session_id,
+        done_payload={
+            "created_continuation": False,
+            "shipped_session_id": session_id,
+            "persisted_events": 0,
+            "sync_status": "pending",
             "persistence_error": None,
             "exit_code": 0,
         },
@@ -312,6 +333,7 @@ def test_validate_managed_local_chat_done_payload_rejects_nonzero_exit_code():
             "created_continuation": False,
             "shipped_session_id": session_id,
             "persisted_events": 2,
+            "sync_status": "complete",
             "persistence_error": None,
             "exit_code": 3,
         },
@@ -350,26 +372,44 @@ def test_ship_managed_local_claude_transcript_dispatches_runner_job(monkeypatch,
         assert "--json" in command
 
 
-def test_send_text_to_managed_local_session_can_require_persisted_events(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_can_require_active_hook_phase(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
 
-    async def _fake_wait_for_events(*, db_bind, session_id, after_event_id, timeout_secs, poll_interval_secs=1.0):
+    async def _fake_wait_for_hook_phase(
+        *,
+        db_bind,
+        session_id,
+        after_runtime_event_id,
+        phases,
+        timeout_secs,
+        poll_interval_secs=1.0,
+    ):
         assert db_bind is not None
         assert timeout_secs == 2.5
-        assert after_event_id >= 0
-        return [
-            AgentEvent(
-                id=after_event_id + 1,
-                session_id=session_id,
-                role="assistant",
-                content_text="verified",
-                timestamp=datetime.now(timezone.utc),
-            )
-        ]
+        assert after_runtime_event_id >= 0
+        assert phases == {"thinking", "running"}
+        return SessionRuntimeEvent(
+            id=after_runtime_event_id + 1,
+            runtime_key=f"claude:{session_id}",
+            session_id=session_id,
+            provider="claude",
+            device_id="cinder",
+            source="claude_hook",
+            kind="phase_signal",
+            phase="thinking",
+            tool_name=None,
+            occurred_at=datetime.now(timezone.utc),
+            freshness_ms=90_000,
+            dedupe_key=f"hook:{session_id}:thinking",
+            payload_json="{}",
+        )
 
-    monkeypatch.setattr("zerg.services.managed_local_control.await_managed_local_turn_events", _fake_wait_for_events)
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.await_managed_local_hook_phase_update",
+        _fake_wait_for_hook_phase,
+    )
 
     with SessionLocal() as db:
         user, runner, session = _seed_user_runner_and_session(db, provider="claude")
@@ -400,10 +440,13 @@ def test_send_text_to_managed_local_session_reports_verification_failure_without
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
 
-    async def _fake_wait_for_events(**_kwargs):
-        return []
+    async def _fake_wait_for_hook_phase(**_kwargs):
+        return None
 
-    monkeypatch.setattr("zerg.services.managed_local_control.await_managed_local_turn_events", _fake_wait_for_events)
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.await_managed_local_hook_phase_update",
+        _fake_wait_for_hook_phase,
+    )
 
     with SessionLocal() as db:
         user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
@@ -422,7 +465,7 @@ def test_send_text_to_managed_local_session_reports_verification_failure_without
 
         assert result.ok is False
         assert result.verified_turn_started is False
-        assert result.error == "Managed local session did not produce new timeline events after send"
+        assert result.error == "Managed local session did not acknowledge the prompt after send"
         runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).all()
         assert runtime_state == []
 
@@ -471,25 +514,43 @@ def test_await_managed_local_presence_update_returns_newer_row(tmp_path):
         assert row.state == "thinking"
 
 
-def test_send_text_to_managed_local_session_verifies_codex_via_presence(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
 
-    async def _fake_wait_for_presence(*, db_bind, session_id, after_updated_at, timeout_secs, poll_interval_secs=1.0):
+    async def _fake_wait_for_hook_phase(
+        *,
+        db_bind,
+        session_id,
+        after_runtime_event_id,
+        phases,
+        timeout_secs,
+        poll_interval_secs=1.0,
+    ):
         assert db_bind is not None
         assert timeout_secs == 2.5
-        assert after_updated_at is not None
-        return SessionPresence(
-            session_id=str(session_id),
-            state="thinking",
+        assert after_runtime_event_id >= 0
+        assert phases == {"thinking", "running"}
+        return SessionRuntimeEvent(
+            id=after_runtime_event_id + 1,
+            runtime_key=f"codex:{session_id}",
+            session_id=session_id,
             provider="codex",
-            updated_at=datetime.now(timezone.utc),
+            device_id="cinder",
+            source="claude_hook",
+            kind="phase_signal",
+            phase="thinking",
+            tool_name=None,
+            occurred_at=datetime.now(timezone.utc),
+            freshness_ms=90_000,
+            dedupe_key=f"hook:{session_id}:thinking",
+            payload_json="{}",
         )
 
     monkeypatch.setattr(
-        "zerg.services.managed_local_control.await_managed_local_presence_update",
-        _fake_wait_for_presence,
+        "zerg.services.managed_local_control.await_managed_local_hook_phase_update",
+        _fake_wait_for_hook_phase,
     )
 
     with SessionLocal() as db:
@@ -525,17 +586,17 @@ def test_send_text_to_managed_local_session_verifies_codex_via_presence(monkeypa
         assert runtime_state.device_id == runner.name
 
 
-def test_send_text_to_managed_local_session_reports_codex_presence_verification_failure(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_reports_codex_hook_verification_failure(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
 
-    async def _fake_wait_for_presence(**_kwargs):
+    async def _fake_wait_for_hook_phase(**_kwargs):
         return None
 
     monkeypatch.setattr(
-        "zerg.services.managed_local_control.await_managed_local_presence_update",
-        _fake_wait_for_presence,
+        "zerg.services.managed_local_control.await_managed_local_hook_phase_update",
+        _fake_wait_for_hook_phase,
     )
 
     with SessionLocal() as db:
@@ -566,4 +627,102 @@ def test_send_text_to_managed_local_session_reports_codex_presence_verification_
 
         assert result.ok is False
         assert result.verified_turn_started is False
-        assert result.error == "Managed local Codex session did not acknowledge the prompt after send"
+        assert result.error == "Managed local session did not acknowledge the prompt after send"
+
+
+def test_await_managed_local_turn_terminal_returns_blocked_after_active_hook_phase(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+
+        async def _insert_later():
+            await asyncio.sleep(0.05)
+            with SessionLocal() as event_db:
+                event_db.add_all(
+                    [
+                        SessionRuntimeEvent(
+                            runtime_key=f"claude:{session.id}",
+                            session_id=session.id,
+                            provider="claude",
+                            device_id="cinder",
+                            source="claude_hook",
+                            kind="phase_signal",
+                            phase="thinking",
+                            tool_name=None,
+                            occurred_at=datetime.now(timezone.utc),
+                            freshness_ms=90_000,
+                            dedupe_key=f"hook:{session.id}:thinking",
+                            payload_json="{}",
+                        ),
+                        SessionRuntimeEvent(
+                            runtime_key=f"claude:{session.id}",
+                            session_id=session.id,
+                            provider="claude",
+                            device_id="cinder",
+                            source="claude_hook",
+                            kind="phase_signal",
+                            phase="blocked",
+                            tool_name="Bash",
+                            occurred_at=datetime.now(timezone.utc),
+                            freshness_ms=86_400_000,
+                            dedupe_key=f"hook:{session.id}:blocked",
+                            payload_json="{}",
+                        ),
+                    ]
+                )
+                event_db.commit()
+
+        async def _run_wait():
+            writer = asyncio.create_task(_insert_later())
+            try:
+                return await await_managed_local_turn_terminal(
+                    db_bind=db.get_bind(),
+                    session_id=session.id,
+                    after_runtime_event_id=0,
+                    timeout_secs=1.0,
+                    poll_interval_secs=0.02,
+                )
+            finally:
+                await writer
+
+        result = asyncio.run(_run_wait())
+        assert result is not None
+        assert result.phase == "blocked"
+        assert result.control_status == "blocked"
+
+
+def test_await_managed_local_turn_terminal_ignores_terminal_without_active_hook_phase(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        db.add(
+            SessionRuntimeEvent(
+                runtime_key=f"claude:{session.id}",
+                session_id=session.id,
+                provider="claude",
+                device_id="cinder",
+                source="claude_hook",
+                kind="phase_signal",
+                phase="idle",
+                tool_name=None,
+                occurred_at=datetime.now(timezone.utc),
+                freshness_ms=600_000,
+                dedupe_key=f"hook:{session.id}:idle",
+                payload_json="{}",
+            )
+        )
+        db.commit()
+
+        result = asyncio.run(
+            await_managed_local_turn_terminal(
+                db_bind=db.get_bind(),
+                session_id=session.id,
+                after_runtime_event_id=0,
+                timeout_secs=0.1,
+                poll_interval_secs=0.02,
+            )
+        )
+
+        assert result is None
