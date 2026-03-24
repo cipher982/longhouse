@@ -190,6 +190,57 @@ def test_create_enroll_token_uses_request_base_url_when_public_url_missing(tmp_p
 
 
 
+def test_create_enroll_token_prefers_forwarded_https_when_public_url_missing(tmp_path):
+    db_path = tmp_path / "runner-enroll-forwarded.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    Base.metadata.create_all(bind=engine)
+    SessionLocal = make_sessionmaker(engine)
+
+    env = {
+        "DATABASE_URL": f"sqlite:///{db_path}",
+        "FERNET_SECRET": "test-fernet-secret",
+        "AUTH_DISABLED": "1",
+        "JWT_SECRET": "test-jwt-secret-1234",
+        "INTERNAL_API_SECRET": "test-internal-secret-1234",
+    }
+
+    with patch.dict(os.environ, env, clear=False):
+        from zerg.main import api_app, app
+
+        with SessionLocal() as db:
+            user = User(email="dev@local", role="ADMIN")
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+            def override_get_db():
+                try:
+                    yield db
+                finally:
+                    pass
+
+            def override_current_user():
+                return user
+
+            api_app.dependency_overrides[get_db] = override_get_db
+            api_app.dependency_overrides[get_current_user] = override_current_user
+            try:
+                with patch("zerg.config.get_settings", return_value=_settings(app_public_url=None)):
+                    client = TestClient(app, backend="asyncio", base_url="http://127.0.0.1:43955")
+                    response = client.post(
+                        "/api/runners/enroll-token",
+                        headers={"host": "david010.longhouse.ai", "x-forwarded-proto": "https"},
+                    )
+            finally:
+                api_app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["longhouse_url"] == "https://david010.longhouse.ai"
+    assert "https://david010.longhouse.ai/api/runners/install.sh" in payload["one_liner_install_command"]
+    assert "https://david010.longhouse.ai/api/runners/register" in payload["docker_command"]
+
+
 def test_register_runner_reenroll_returns_existing_capabilities(tmp_path):
     db_path = tmp_path / "runner-register.db"
     engine = make_engine(f"sqlite:///{db_path}")
