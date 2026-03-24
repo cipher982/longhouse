@@ -52,3 +52,50 @@ async def test_high_priority_write_jumps_ahead_of_queued_background_work(tmp_pat
         persisted = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
 
     assert persisted == ["first", "interactive", "background"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_write_keeps_writer_slot_until_worker_thread_finishes(tmp_path):
+    db_path = tmp_path / "write-serializer-cancel.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    session_factory = make_sessionmaker(engine)
+
+    with engine.begin() as conn:
+        conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(session_factory)
+
+    first_started = threading.Event()
+    timings: dict[str, float] = {}
+
+    def _first_write(db):
+        timings["first_start"] = time.monotonic()
+        first_started.set()
+        time.sleep(0.15)
+        db.execute(sa_text("INSERT INTO writes(label) VALUES ('first')"))
+        timings["first_end"] = time.monotonic()
+
+    def _second_write(db):
+        timings["second_start"] = time.monotonic()
+        db.execute(sa_text("INSERT INTO writes(label) VALUES ('second')"))
+        timings["second_end"] = time.monotonic()
+
+    first = asyncio.create_task(serializer.execute(_first_write, label="summary"))
+    await asyncio.to_thread(first_started.wait, 1.0)
+
+    first.cancel()
+    second = asyncio.create_task(serializer.execute(_second_write, label="refresh-session"))
+
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await second
+
+    assert timings["second_start"] >= timings["first_end"]
+    assert serializer.stats.total_writes == 2
+    assert serializer.stats.errors == 0
+
+    with session_factory() as db:
+        persisted = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+
+    assert persisted == ["first", "second"]
