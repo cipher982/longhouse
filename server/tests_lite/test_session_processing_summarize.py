@@ -212,48 +212,48 @@ class TestQuickSummary:
 
 class TestFormatAge:
     def test_just_now(self):
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         now = datetime.now(timezone.utc)
         assert _format_age(now) == "just now"
 
     def test_minutes_ago(self):
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         t = datetime.now(timezone.utc) - timedelta(minutes=15)
         result = _format_age(t)
         assert result == "15m ago"
 
     def test_hours_ago(self):
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         t = datetime.now(timezone.utc) - timedelta(hours=3)
         result = _format_age(t)
         assert result == "3h ago"
 
     def test_yesterday(self):
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         t = datetime.now(timezone.utc) - timedelta(days=1, hours=2)
         result = _format_age(t)
         assert result == "yesterday"
 
     def test_days_ago(self):
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         t = datetime.now(timezone.utc) - timedelta(days=4)
         result = _format_age(t)
         assert result == "4d ago"
 
     def test_week_ago(self):
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         t = datetime.now(timezone.utc) - timedelta(days=7)
         result = _format_age(t)
         assert result == "1w ago"
 
     def test_weeks_ago(self):
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         t = datetime.now(timezone.utc) - timedelta(days=21)
         result = _format_age(t)
@@ -261,7 +261,7 @@ class TestFormatAge:
 
     def test_naive_datetime(self):
         """_format_age should handle naive datetimes by assuming UTC."""
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         t = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=2)
         result = _format_age(t)
@@ -348,7 +348,7 @@ class TestBriefingEndpoint:
 
         assert len(sessions) == 2
 
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         briefing_lines = []
         for s in sessions:

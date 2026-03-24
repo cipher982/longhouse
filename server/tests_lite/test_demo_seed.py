@@ -143,7 +143,7 @@ def test_demo_seed_replace_blocked_when_auth_enabled(tmp_path):
     factory = _make_db(tmp_path, "demo_replace_auth.db")
     client = _client(factory)
     try:
-        with patch("zerg.routers.agents.get_settings") as mock_settings:
+        with patch("zerg.routers.agents_demo.get_settings") as mock_settings:
             mock_settings.return_value.auth_disabled = False
             mock_settings.return_value.testing = True
             resp = client.post("/agents/demo?replace=true", headers={"X-Agents-Token": "dev"})

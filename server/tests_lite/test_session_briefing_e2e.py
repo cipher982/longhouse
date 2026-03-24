@@ -115,7 +115,7 @@ class TestFullPipeline:
     @pytest.mark.asyncio
     async def test_seed_summarize_and_briefing(self, tmp_path):
         """Full pipeline: seed session with events, summarize, verify in DB, format briefing."""
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
         from zerg.services.session_processing import build_transcript
         from zerg.services.session_processing import quick_summary
 
@@ -356,11 +356,11 @@ class TestIngestSummaryFlow:
 
 
 class TestGenerateSummaryBackground:
-    """Tests for _generate_summary_impl.
+    """Tests for generate_summary_impl.
 
     Patching strategy:
-    - ``get_settings`` is imported at module level in ``agents.py`` →
-      patch ``zerg.routers.agents.get_settings``
+    - ``get_settings`` is imported at module level in ``session_summaries.py`` →
+      patch ``zerg.services.session_summaries.get_settings``
     - ``get_session_factory`` is imported inside the function →
       patch ``zerg.database.get_session_factory``
     - ``AsyncOpenAI`` is imported inside the function →
@@ -388,7 +388,7 @@ class TestGenerateSummaryBackground:
         session.last_summarized_event_id = last_event.id
         db.commit()
 
-        from zerg.routers.agents import _generate_summary_impl
+        from zerg.services.session_summaries import generate_summary_impl as _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -400,7 +400,7 @@ class TestGenerateSummaryBackground:
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
-            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
+            patch("zerg.services.session_summaries.get_settings", return_value=mock_settings),
             patch(
                 "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
@@ -421,7 +421,7 @@ class TestGenerateSummaryBackground:
         db = _setup_db(tmp_path)
         session = _seed_session(db, num_events=5)
 
-        from zerg.routers.agents import _generate_summary_impl
+        from zerg.services.session_summaries import generate_summary_impl as _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -432,7 +432,7 @@ class TestGenerateSummaryBackground:
         # get_llm_client_for_use_case raises ValueError when no key is configured
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
-            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
+            patch("zerg.services.session_summaries.get_settings", return_value=mock_settings),
             patch(
                 "zerg.models_config.get_llm_client_with_db_fallback",
                 side_effect=ValueError("OPENAI_API_KEY required"),
@@ -464,7 +464,7 @@ class TestGenerateSummaryBackground:
         db.add(session)
         db.commit()
 
-        from zerg.routers.agents import _generate_summary_impl
+        from zerg.services.session_summaries import generate_summary_impl as _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -476,7 +476,7 @@ class TestGenerateSummaryBackground:
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
-            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
+            patch("zerg.services.session_summaries.get_settings", return_value=mock_settings),
             patch(
                 "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
@@ -498,7 +498,7 @@ class TestGenerateSummaryBackground:
         session = _seed_session(db, num_events=6)
         assert session.summary is None
 
-        from zerg.routers.agents import _generate_summary_impl
+        from zerg.services.session_summaries import generate_summary_impl as _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -513,7 +513,7 @@ class TestGenerateSummaryBackground:
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
-            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
+            patch("zerg.services.session_summaries.get_settings", return_value=mock_settings),
             patch(
                 "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
@@ -534,7 +534,7 @@ class TestGenerateSummaryBackground:
         db = _setup_db(tmp_path)
         session = _seed_session(db, num_events=6)
 
-        from zerg.routers.agents import _generate_summary_impl
+        from zerg.services.session_summaries import generate_summary_impl as _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
         mock_client = _mock_llm_client(
@@ -555,7 +555,7 @@ class TestGenerateSummaryBackground:
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
-            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
+            patch("zerg.services.session_summaries.get_settings", return_value=mock_settings),
             patch(
                 "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
@@ -576,7 +576,7 @@ class TestGenerateSummaryBackground:
         db = _setup_db(tmp_path)
         session = _seed_session(db, num_events=6)
 
-        from zerg.routers.agents import _generate_summary_impl
+        from zerg.services.session_summaries import generate_summary_impl as _generate_summary_impl
 
         factory = sessionmaker(bind=db.get_bind())
 
@@ -590,7 +590,7 @@ class TestGenerateSummaryBackground:
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
-            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
+            patch("zerg.services.session_summaries.get_settings", return_value=mock_settings),
             patch(
                 "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
@@ -609,7 +609,7 @@ class TestGenerateSummaryBackground:
     @pytest.mark.asyncio
     async def test_skips_nonexistent_session(self, tmp_path):
         """Background task should handle missing session gracefully."""
-        from zerg.routers.agents import _generate_summary_impl
+        from zerg.services.session_summaries import generate_summary_impl as _generate_summary_impl
 
         db = _setup_db(tmp_path)
         factory = sessionmaker(bind=db.get_bind())
@@ -622,7 +622,7 @@ class TestGenerateSummaryBackground:
 
         with (
             patch("zerg.database.get_session_factory", return_value=factory),
-            patch("zerg.routers.agents.get_settings", return_value=mock_settings),
+            patch("zerg.services.session_summaries.get_settings", return_value=mock_settings),
             patch(
                 "zerg.models_config.get_llm_client_with_db_fallback",
                 return_value=(mock_client, "test-model", "openai"),
@@ -643,8 +643,8 @@ class TestBackfillSummaries:
     @pytest.mark.asyncio
     async def test_run_backfill_summarizes_sessions(self, tmp_path):
         """_run_backfill should summarize unsummarized sessions and update state."""
-        from zerg.routers.agents import _backfill_state
-        from zerg.routers.agents import _run_backfill
+        from zerg.routers.agents_backfill import _backfill_state
+        from zerg.routers.agents_backfill import _run_backfill
 
         db = _setup_db(tmp_path)
         SessionFactory = db.__class__  # get the Session class to use as factory
@@ -682,8 +682,8 @@ class TestBackfillSummaries:
     @pytest.mark.asyncio
     async def test_backfill_endpoint_returns_nothing_to_do(self, tmp_path):
         """Backfill endpoint should return nothing_to_do when all summarized."""
-        from zerg.routers.agents import _backfill_state
-        from zerg.routers.agents import backfill_summaries
+        from zerg.routers.agents_backfill import _backfill_state
+        from zerg.routers.agents_backfill import backfill_summaries
 
         _backfill_state["running"] = False
         db = _setup_db(tmp_path)
@@ -706,8 +706,8 @@ class TestBackfillSummaries:
     @pytest.mark.asyncio
     async def test_run_backfill_tolerates_llm_errors(self, tmp_path):
         """_run_backfill should count errors without crashing."""
-        from zerg.routers.agents import _backfill_state
-        from zerg.routers.agents import _run_backfill
+        from zerg.routers.agents_backfill import _backfill_state
+        from zerg.routers.agents_backfill import _run_backfill
 
         db = _setup_db(tmp_path)
 
@@ -741,7 +741,7 @@ class TestBackfillSummaries:
 class TestBriefingResponseModel:
     def test_briefing_response_with_data(self):
         """BriefingResponse serializes correctly with summary data."""
-        from zerg.routers.agents import BriefingResponse
+        from zerg.services.session_views import BriefingResponse
 
         resp = BriefingResponse(
             project="zerg",
@@ -756,7 +756,7 @@ class TestBriefingResponseModel:
 
     def test_briefing_response_empty(self):
         """BriefingResponse serializes correctly with no briefing."""
-        from zerg.routers.agents import BriefingResponse
+        from zerg.services.session_views import BriefingResponse
 
         resp = BriefingResponse(
             project="empty-project",
@@ -778,14 +778,14 @@ class TestBriefingResponseModel:
 class TestFormatAgeEdgeCases:
     def test_future_timestamp(self):
         """_format_age handles future timestamps gracefully."""
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         future = datetime.now(timezone.utc) + timedelta(hours=1)
         assert _format_age(future) == "just now"
 
     def test_exact_boundary_hours(self):
         """_format_age at exact hour boundary."""
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         t = datetime.now(timezone.utc) - timedelta(hours=23, minutes=59)
         result = _format_age(t)
@@ -793,7 +793,7 @@ class TestFormatAgeEdgeCases:
 
     def test_exact_day_boundary(self):
         """_format_age at exact day boundary."""
-        from zerg.routers.agents import _format_age
+        from zerg.services.session_views import format_age as _format_age
 
         t = datetime.now(timezone.utc) - timedelta(days=1)
         result = _format_age(t)

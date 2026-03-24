@@ -77,7 +77,7 @@ def _seed_event(factory, session_id, *, role="user", content="hello"):
 @pytest.mark.asyncio
 async def test_structured_title_set_from_project_and_branch(tmp_path):
     """Sets summary_title from project · branch when no title exists."""
-    from zerg.routers.agents import _set_structured_title_if_empty
+    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
 
     factory = _make_db(tmp_path, "proj_branch.db")
     session = _seed_session(factory, project="myproject", git_branch="main")
@@ -94,7 +94,7 @@ async def test_structured_title_set_from_project_and_branch(tmp_path):
 @pytest.mark.asyncio
 async def test_structured_title_project_only(tmp_path):
     """Sets summary_title from project alone when no branch."""
-    from zerg.routers.agents import _set_structured_title_if_empty
+    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
 
     factory = _make_db(tmp_path, "proj_only.db")
     session = _seed_session(factory, project="myproject", git_branch=None)
@@ -111,7 +111,7 @@ async def test_structured_title_project_only(tmp_path):
 @pytest.mark.asyncio
 async def test_structured_title_does_not_overwrite_existing(tmp_path):
     """WHERE summary_title IS NULL: existing title must not be overwritten."""
-    from zerg.routers.agents import _set_structured_title_if_empty
+    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
 
     factory = _make_db(tmp_path, "existing_title.db")
     session = _seed_session(
@@ -133,7 +133,7 @@ async def test_structured_title_does_not_overwrite_existing(tmp_path):
 @pytest.mark.asyncio
 async def test_structured_title_date_fallback_when_no_project_or_branch(tmp_path):
     """Falls back to 'Session · {date}' when session has neither project nor branch."""
-    from zerg.routers.agents import _set_structured_title_if_empty
+    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
 
     factory = _make_db(tmp_path, "no_meta.db")
     session = _seed_session(factory, project=None, git_branch=None)
@@ -151,7 +151,7 @@ async def test_structured_title_date_fallback_when_no_project_or_branch(tmp_path
 @pytest.mark.asyncio
 async def test_structured_title_routes_write_through_serializer(tmp_path):
     """Structured title fallback should use the write serializer when configured."""
-    from zerg.routers.agents import _set_structured_title_if_empty
+    from zerg.services.session_summaries import set_structured_title_if_empty as _set_structured_title_if_empty
 
     factory = _make_db(tmp_path, "serializer.db")
     session = _seed_session(factory, project="myproject", git_branch="main")

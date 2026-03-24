@@ -61,7 +61,12 @@ from zerg.openapi_schema import export_openapi_schema
 from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
-from zerg.routers.agents import router as agents_router
+from zerg.routers.agents_backfill import router as agents_backfill_router
+from zerg.routers.agents_briefings import router as agents_briefings_router
+from zerg.routers.agents_demo import router as agents_demo_router
+from zerg.routers.agents_ingest import router as agents_ingest_router
+from zerg.routers.agents_search import router as agents_search_router
+from zerg.routers.agents_sessions import router as agents_sessions_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.auth_internal import router as auth_internal_router
 from zerg.routers.automation_connectors import legacy_router as fiche_connectors_router
@@ -1118,7 +1123,12 @@ api_app.include_router(reliability_router)  # Reliability Dashboard (admin only)
 api_app.include_router(skills_router)  # Skills Platform for workspace-scoped tools
 api_app.include_router(session_chat_router)  # Timeline session drop-in chat
 api_app.include_router(timeline_router)  # Browser-owned timeline/session archive API
-api_app.include_router(agents_router)  # Agents schema for cross-provider session tracking
+api_app.include_router(agents_ingest_router)
+api_app.include_router(agents_search_router)  # Before sessions — literal /sessions/semantic must match before /sessions/{id}
+api_app.include_router(agents_sessions_router)
+api_app.include_router(agents_backfill_router)
+api_app.include_router(agents_briefings_router)
+api_app.include_router(agents_demo_router)
 api_app.include_router(heartbeat_router)  # Engine daemon heartbeat ingest
 api_app.include_router(presence_router)  # Claude Code hook presence signals
 api_app.include_router(runtime_router)  # Normalized runtime event ingest
