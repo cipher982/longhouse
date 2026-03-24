@@ -11,6 +11,7 @@ import shlex
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
+from typing import Mapping
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -48,6 +49,34 @@ class ManagedLocalShipResult:
     ok: bool
     exit_code: int | None = None
     error: str | None = None
+
+
+def validate_managed_local_chat_done_payload(
+    *,
+    session_id: str,
+    done_payload: Mapping[str, object] | None,
+) -> str | None:
+    """Validate the `/api/sessions/{id}/chat` done payload for managed-local sends."""
+
+    if done_payload is None:
+        return "missing done payload"
+    if done_payload.get("created_continuation") is not False:
+        return f"expected created_continuation=false, got {done_payload.get('created_continuation')!r}"
+    if str(done_payload.get("shipped_session_id") or "") != session_id:
+        return f"expected shipped_session_id={session_id}, got {done_payload.get('shipped_session_id')!r}"
+    if int(done_payload.get("persisted_events") or 0) <= 0:
+        return f"expected persisted_events>0, got {done_payload.get('persisted_events')!r}"
+    if done_payload.get("persistence_error") is not None:
+        return f"unexpected persistence_error={done_payload.get('persistence_error')!r}"
+
+    exit_code_raw = done_payload.get("exit_code")
+    try:
+        exit_code = int(exit_code_raw)
+    except (TypeError, ValueError):
+        return f"expected exit_code=0, got {exit_code_raw!r}"
+    if exit_code != 0:
+        return f"expected exit_code=0, got {done_payload.get('exit_code')!r}"
+    return None
 
 
 def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
