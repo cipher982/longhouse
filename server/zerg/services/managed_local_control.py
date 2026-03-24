@@ -55,8 +55,9 @@ def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
 
     Interactive managed-local chat cannot rely on the background shipper queue for
     low-latency UX. This command targets the known Claude transcript directly and
-    retries briefly so the final assistant turn is included even if the Stop hook
-    fires before the transcript tail is flushed.
+    retries briefly until the current turn produces real shipped events, so we do
+    not exit early on a successful zero-event ship before Claude has flushed the
+    prompt/assistant lines into the transcript.
     """
 
     cwd = str(getattr(session, "cwd", "") or "").strip()
@@ -81,15 +82,21 @@ def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
         'engine="$(command -v longhouse-engine || true)"',
         '[ -n "$engine" ] || { echo "longhouse-engine is not available" >&2; exit 12; }',
         f'transcript="{transcript_path}"',
+        'tmp_json="$(mktemp)"',
         (
-            "for delay in 0 1 2 4; do "
+            "for delay in 0 1 2 4 8; do "
             'if [ "$delay" -gt 0 ]; then sleep "$delay"; fi; '
             '[ -f "$transcript" ] || continue; '
-            f'"$engine" ship --file "$transcript" --session-id {shlex.quote(longhouse_session_id)} --quiet '
-            ">/dev/null 2>&1 && exit 0; "
+            f'"$engine" ship --file "$transcript" --session-id {shlex.quote(longhouse_session_id)} --json '
+            '>"$tmp_json" 2>/dev/null || true; '
+            'if grep -Eq \'"events_shipped"[[:space:]]*:[[:space:]]*[1-9][0-9]*\' "$tmp_json"; then '
+            'rm -f "$tmp_json"; '
+            "exit 0; "
+            "fi; "
             "done"
         ),
-        'echo "Managed local Claude transcript did not ship" >&2',
+        'rm -f "$tmp_json"',
+        'echo "Managed local Claude transcript did not ship new events" >&2',
         "exit 13",
     ]
     return f"zsh -lc {shlex.quote('; '.join(inner))}"
