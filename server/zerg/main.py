@@ -834,6 +834,31 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Startup: failed to reset runner statuses (non-fatal): %s", e)
 
+        # Warm the in-memory presence cache from DB and start periodic flush.
+        try:
+            from zerg.database import db_session
+            from zerg.models.agents import SessionPresence
+            from zerg.services.presence_cache import get_presence_cache
+
+            with db_session() as db:
+                rows = db.query(SessionPresence).all()
+                cache = get_presence_cache()
+                cache.warm_from_db(rows)
+                cache.start_flush_loop()
+                logger.info("Presence cache warmed (%d entries), flush loop started", len(rows))
+        except Exception as e:
+            logger.warning("Startup: presence cache warm failed (non-fatal): %s", e)
+
+        # Start periodic PASSIVE WAL checkpoints (replaces auto-checkpoint).
+        if not _settings.testing:
+            try:
+                from zerg.database import start_wal_checkpoint_loop
+
+                await start_wal_checkpoint_loop()
+                logger.info("WAL checkpoint loop started")
+            except Exception as e:
+                logger.warning("Startup: WAL checkpoint loop failed (non-fatal): %s", e)
+
         logger.info("Application startup complete")
     except Exception as e:
         logger.error(f"Error during startup: {e}")
@@ -877,6 +902,20 @@ async def lifespan(app: FastAPI):
                 await commis_job_processor.stop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop commis_job_processor")
+
+            try:
+                from zerg.services.presence_cache import get_presence_cache
+
+                get_presence_cache().stop_flush_loop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop presence cache flush loop")
+
+            try:
+                from zerg.database import stop_wal_checkpoint_loop
+
+                await stop_wal_checkpoint_loop()
+            except Exception:  # noqa: BLE001
+                logger.exception("Failed to stop WAL checkpoint loop")
 
             # Close DB pool (job queue)
             if _settings.job_queue_enabled:

@@ -152,11 +152,13 @@ except ImportError:
 
 def _configure_sqlite_engine(engine: Engine) -> None:
     """Configure SQLite pragmas for concurrency and durability."""
-    busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
+    busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "30000"))
     synchronous = os.getenv("SQLITE_SYNCHRONOUS", "NORMAL").strip().upper() or "NORMAL"
     journal_mode = os.getenv("SQLITE_JOURNAL_MODE", "WAL").strip().upper() or "WAL"
     foreign_keys = os.getenv("SQLITE_FOREIGN_KEYS", "ON").strip().upper() or "ON"
-    wal_autocheckpoint = os.getenv("SQLITE_WAL_AUTOCHECKPOINT")
+    # Default to 0 (disabled) — we run PASSIVE checkpoints on a timer instead,
+    # which never blocks readers/writers. Auto-checkpoint can stall on large DBs.
+    wal_autocheckpoint = os.getenv("SQLITE_WAL_AUTOCHECKPOINT", "0")
 
     @event.listens_for(engine, "connect")
     def set_sqlite_pragmas(dbapi_conn, _connection_record):
@@ -166,8 +168,7 @@ def _configure_sqlite_engine(engine: Engine) -> None:
             cursor.execute(f"PRAGMA synchronous={synchronous}")
             cursor.execute(f"PRAGMA foreign_keys={foreign_keys}")
             cursor.execute(f"PRAGMA busy_timeout={busy_timeout_ms}")
-            if wal_autocheckpoint:
-                cursor.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
+            cursor.execute(f"PRAGMA wal_autocheckpoint={wal_autocheckpoint}")
         finally:
             cursor.close()
 
@@ -212,7 +213,7 @@ def make_engine(db_url: str, **kwargs) -> Engine:
         kwargs.setdefault("poolclass", StaticPool)
     else:
         if "timeout" not in connect_args:
-            busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "5000"))
+            busy_timeout_ms = int(os.getenv("SQLITE_BUSY_TIMEOUT_MS", "30000"))
             connect_args["timeout"] = busy_timeout_ms / 1000.0
 
     engine = create_engine(db_url, **kwargs)
@@ -954,3 +955,53 @@ def _ensure_agents_fts(engine: Engine) -> None:
                 conn.exec_driver_sql("INSERT INTO events_fts(events_fts) VALUES('rebuild')")
     except Exception as exc:  # pragma: no cover - surface missing FTS5 support
         raise RuntimeError(f"Failed to initialize FTS5 index (events_fts): {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# WAL checkpoint background task
+# ---------------------------------------------------------------------------
+
+_wal_checkpoint_task = None
+
+WAL_CHECKPOINT_INTERVAL = int(os.getenv("SQLITE_WAL_CHECKPOINT_INTERVAL", "60"))
+
+
+async def start_wal_checkpoint_loop() -> None:
+    """Start periodic PASSIVE WAL checkpoints.
+
+    PASSIVE never blocks readers or writers — it checkpoints whatever pages
+    it can without waiting. This prevents WAL growth on busy instances
+    without causing the stalls that auto-checkpoint can trigger.
+    """
+    import asyncio
+
+    global _wal_checkpoint_task
+
+    async def _loop():
+        while True:
+            try:
+                await asyncio.sleep(WAL_CHECKPOINT_INTERVAL)
+                if default_engine is not None:
+                    with default_engine.connect() as conn:
+                        result = conn.exec_driver_sql("PRAGMA wal_checkpoint(PASSIVE)")
+                        row = result.fetchone()
+                        if row and row[1] > 0:
+                            logger.debug("WAL checkpoint: %d pages written, %d remaining", row[1], row[2])
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.warning("WAL checkpoint failed (non-fatal)", exc_info=True)
+
+    _wal_checkpoint_task = asyncio.create_task(_loop())
+
+
+async def stop_wal_checkpoint_loop() -> None:
+    """Stop the WAL checkpoint background task."""
+    global _wal_checkpoint_task
+    if _wal_checkpoint_task and not _wal_checkpoint_task.done():
+        _wal_checkpoint_task.cancel()
+        try:
+            await _wal_checkpoint_task
+        except Exception:
+            pass
+        _wal_checkpoint_task = None

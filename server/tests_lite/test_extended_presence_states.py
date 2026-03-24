@@ -51,6 +51,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.user import User
 from zerg.models.work import OikosWakeup
+from zerg.services.presence_cache import get_presence_cache
 from zerg.session_loop_mode import SessionLoopMode
 
 # ---------------------------------------------------------------------------
@@ -202,11 +203,10 @@ def test_blocked_stores_tool_name(client, tmp_path):
             },
             headers=_auth_headers(),
         )
-        db = SessionLocal()
-        row = db.query(SessionPresence).filter(SessionPresence.session_id == sid).first()
-        assert row is not None
-        assert row.tool_name == "Bash", f"expected tool_name='Bash', got {row.tool_name!r}"
-        db.close()
+        # Presence is now in-memory; read from cache (source of truth).
+        entry = get_presence_cache().get(sid)
+        assert entry is not None
+        assert entry.tool_name == "Bash", f"expected tool_name='Bash', got {entry.tool_name!r}"
     api_app.dependency_overrides.clear()
     engine.dispose()
 
@@ -237,11 +237,9 @@ def test_needs_user_clears_tool_name(client, tmp_path):
             json={"session_id": sid, "state": "needs_user", "cwd": "/tmp"},
             headers=_auth_headers(),
         )
-        db = SessionLocal()
-        row = db.query(SessionPresence).filter(SessionPresence.session_id == sid).first()
-        assert row is not None
-        assert row.tool_name is None, f"expected tool_name=None on needs_user, got {row.tool_name!r}"
-        db.close()
+        entry = get_presence_cache().get(sid)
+        assert entry is not None
+        assert entry.tool_name is None, f"expected tool_name=None on needs_user, got {entry.tool_name!r}"
     api_app.dependency_overrides.clear()
     engine.dispose()
 
@@ -404,13 +402,11 @@ def test_blocked_permission_request_then_notification_preserves_tool_name(client
             json={"session_id": sid, "state": "blocked", "cwd": "/tmp"},
             headers=_auth_headers(),
         )
-        db = SessionLocal()
-        row = db.query(SessionPresence).filter(SessionPresence.session_id == sid).first()
-        assert row is not None
-        assert row.tool_name == "Bash", (
-            f"tool_name should be preserved after Notification/permission_prompt, got {row.tool_name!r}"
+        entry = get_presence_cache().get(sid)
+        assert entry is not None
+        assert entry.tool_name == "Bash", (
+            f"tool_name should be preserved after Notification/permission_prompt, got {entry.tool_name!r}"
         )
-        db.close()
     api_app.dependency_overrides.clear()
     engine.dispose()
 
@@ -441,11 +437,9 @@ def test_blocked_notification_then_permission_request_sets_tool_name(client, tmp
             json={"session_id": sid, "state": "blocked", "tool_name": "Bash", "cwd": "/tmp"},
             headers=_auth_headers(),
         )
-        db = SessionLocal()
-        row = db.query(SessionPresence).filter(SessionPresence.session_id == sid).first()
-        assert row is not None
-        assert row.tool_name == "Bash", f"tool_name should be set by PermissionRequest, got {row.tool_name!r}"
-        db.close()
+        entry = get_presence_cache().get(sid)
+        assert entry is not None
+        assert entry.tool_name == "Bash", f"tool_name should be set by PermissionRequest, got {entry.tool_name!r}"
     api_app.dependency_overrides.clear()
     engine.dispose()
 

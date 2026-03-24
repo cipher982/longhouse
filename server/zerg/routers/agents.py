@@ -254,6 +254,16 @@ def _load_presence_map(db: Session, session_ids: list[UUID]) -> dict[str, Sessio
     if not session_ids:
         return {}
     str_session_ids = [str(session_id) for session_id in session_ids]
+
+    # Read from in-memory cache first (avoids DB read on hot path).
+    # Falls back to DB only when cache is cold (startup race).
+    from zerg.services.presence_cache import get_presence_cache
+
+    cache = get_presence_cache()
+    if not cache.is_cold:
+        cached = cache.get_many(str_session_ids)
+        return {sid: cache.to_presence_obj(entry) for sid, entry in cached.items()}
+
     rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()
     return {row.session_id: row for row in rows}
 

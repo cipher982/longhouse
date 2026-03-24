@@ -285,9 +285,10 @@ class CommisJobProcessor:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._stale_reclaim_task: Optional[asyncio.Task] = None
-        # Interactive latency matters: commis are typically spawned from chat flows.
-        # Keep polling reasonably tight so a queued job starts quickly.
-        self._check_interval = 1  # seconds
+        # Event-driven: signaled when a job is enqueued. Falls back to periodic
+        # check every 10s as a safety net (instead of old 1s poll).
+        self._job_available = asyncio.Event()
+        self._check_interval = 10  # seconds (fallback only, event-driven is primary)
         self._max_concurrent_jobs = 5  # Process up to 5 jobs concurrently
         self._worker_id = get_worker_id()
         # Track running jobs for heartbeat updates (commis_id, job_id)
@@ -321,15 +322,28 @@ class CommisJobProcessor:
                 pass
         logger.info("Commis job processor stopped")
 
+    def notify_job_available(self) -> None:
+        """Signal the processor that a new job is queued. Call after enqueue."""
+        self._job_available.set()
+
     async def _process_jobs_loop(self) -> None:
-        """Main processing loop for commis jobs."""
+        """Main processing loop for commis jobs.
+
+        Event-driven: wakes immediately when notify_job_available() is called.
+        Falls back to periodic check every _check_interval seconds as safety net.
+        """
         while self._running:
             try:
                 await self._process_pending_jobs()
             except Exception as e:
                 logger.exception(f"Error in commis job processing loop: {e}")
 
-            await asyncio.sleep(self._check_interval)
+            # Wait for signal or timeout — whichever comes first.
+            self._job_available.clear()
+            try:
+                await asyncio.wait_for(self._job_available.wait(), timeout=self._check_interval)
+            except asyncio.TimeoutError:
+                pass  # Safety-net poll
 
     async def _stale_reclaim_loop(self) -> None:
         """Periodically reclaim jobs from dead workers.
@@ -353,7 +367,9 @@ class CommisJobProcessor:
             except Exception as e:
                 logger.exception(f"Error in stale job reclaim loop: {e}")
 
-            await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+            # Stale reclaim runs less frequently than heartbeats — 60s is plenty
+            # since the stale threshold is 120s.
+            await asyncio.sleep(max(HEARTBEAT_INTERVAL_SECONDS, 60))
 
     async def _heartbeat_loop(self, commis_id: str | None, job_id: int) -> None:
         """Send periodic heartbeats for a running job.

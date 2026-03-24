@@ -34,13 +34,11 @@ from fastapi import Depends
 from fastapi import Request
 from fastapi import Response
 from fastapi import status
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPresence
 from zerg.models.user import User
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.oikos_operator_policy import operator_master_switch_enabled
@@ -50,6 +48,7 @@ from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ENQUEUED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_SUPPRESSED
 from zerg.services.oikos_wakeup_ledger import append_wakeup
+from zerg.services.presence_cache import get_presence_cache
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import coerce_session_uuid
 from zerg.services.session_runtime import ingest_runtime_events
@@ -89,27 +88,29 @@ class PresenceIn(UTCBaseModel):
     dedupe_key: Optional[str] = None
 
 
-def _effective_tool_name(payload: PresenceIn, previous: SessionPresence | None) -> str | None:
+def _effective_tool_name(payload: PresenceIn, previous: object | None) -> str | None:
+    """Resolve effective tool name. `previous` can be SessionPresence or PresenceEntry."""
     if payload.state not in _STATES_WITH_TOOL:
         return None
     if payload.state == "blocked" and payload.tool_name is None:
-        return previous.tool_name if previous is not None else None
+        return getattr(previous, "tool_name", None) if previous is not None else None
     return payload.tool_name
 
 
 def _should_wake_operator(
     *,
-    previous: SessionPresence | None,
+    previous: object | None,
     state: str,
     tool_name: str | None,
 ) -> bool:
+    """Check if operator should be woken. `previous` can be SessionPresence or PresenceEntry."""
     if state not in _OPERATOR_WAKE_STATES:
         return False
     if previous is None:
         return True
-    if previous.state != state:
+    if getattr(previous, "state", None) != state:
         return True
-    return (previous.tool_name or None) != (tool_name or None)
+    return (getattr(previous, "tool_name", None) or None) != (tool_name or None)
 
 
 def _resolve_owner_id(db: Session, token: object | None) -> int | None:
@@ -302,53 +303,36 @@ async def upsert_presence(
     if payload.cwd:
         project = os.path.basename(payload.cwd.rstrip("/"))
 
-    previous = db.query(SessionPresence).filter(SessionPresence.session_id == payload.session_id).first()
-
     now = payload.occurred_at.astimezone(timezone.utc) if payload.occurred_at is not None else datetime.now(timezone.utc)
 
-    insert_tool_name = payload.tool_name if payload.state in _STATES_WITH_TOOL else None
-
-    # On conflict: blocked state preserves existing tool_name when the incoming
-    # payload has none (Notification/permission_prompt doesn't carry tool context,
-    # but a prior PermissionRequest already set the correct tool).
-    # running always uses the new value; all other states clear it.
+    # Resolve tool_name with blocked-state preservation logic
     if payload.state == "blocked" and payload.tool_name is None:
-        update_tool_name = SessionPresence.tool_name  # keep existing
+        cache = get_presence_cache()
+        prev_entry = cache.get(payload.session_id)
+        insert_tool_name = getattr(prev_entry, "tool_name", None)
     elif payload.state in _STATES_WITH_TOOL:
-        update_tool_name = payload.tool_name
+        insert_tool_name = payload.tool_name
     else:
-        update_tool_name = None
+        insert_tool_name = None
 
-    effective_tool_name = _effective_tool_name(payload, previous)
+    # In-memory upsert — no DB write. Flushed to SQLite every 5s.
+    cache = get_presence_cache()
+    _entry, prev_snapshot = cache.upsert(
+        payload.session_id,
+        payload.state,
+        tool_name=insert_tool_name,
+        cwd=payload.cwd,
+        project=project,
+        provider=payload.provider or "claude",
+        updated_at=now,
+    )
+
+    effective_tool_name = _effective_tool_name(payload, prev_snapshot)
     should_wake_operator = _should_wake_operator(
-        previous=previous,
+        previous=prev_snapshot,
         state=payload.state,
         tool_name=effective_tool_name,
     )
-
-    stmt = (
-        sqlite_insert(SessionPresence)
-        .values(
-            session_id=payload.session_id,
-            state=payload.state,
-            tool_name=insert_tool_name,
-            cwd=payload.cwd,
-            project=project,
-            provider=payload.provider or "claude",
-            updated_at=now,
-        )
-        .on_conflict_do_update(
-            index_elements=["session_id"],
-            set_={
-                "state": payload.state,
-                "tool_name": update_tool_name,
-                "cwd": payload.cwd,
-                "project": project,
-                "updated_at": now,
-            },
-        )
-    )
-    db.execute(stmt)
 
     runtime_provider = payload.provider or "claude"
     runtime_key = runtime_key_for_session(runtime_provider, payload.session_id)

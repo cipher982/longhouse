@@ -267,8 +267,11 @@ def validate_device_token(token: str, db: Session) -> DeviceToken | None:
     if device_token.is_revoked:
         return None
 
-    # Update last_used_at
-    device_token.last_used_at = datetime.now(timezone.utc)
-    db.commit()
+    # Debounce last_used_at writes — at most once per hour per token.
+    # Every-request writes cause SQLite write-lock contention under load.
+    now = datetime.now(timezone.utc)
+    if device_token.last_used_at is None or (now - device_token.last_used_at).total_seconds() > 3600:
+        device_token.last_used_at = now
+        db.commit()
 
     return device_token
