@@ -24,8 +24,8 @@ from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTurnReview
 from zerg.models.user import User
 from zerg.services.managed_local_control import send_text_to_managed_local_session
-from zerg.services.managed_local_runtime import mark_managed_local_turn_idle
-from zerg.services.managed_local_runtime import mark_managed_local_turn_needs_user
+from zerg.services.managed_local_runtime import persist_managed_local_turn_idle
+from zerg.services.managed_local_runtime import persist_managed_local_turn_needs_user
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.session_loop_controller import build_loop_controller_payload
@@ -1450,11 +1450,6 @@ async def maybe_process_session_turn_loop(
     session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
     execution_home = str(getattr(session, "execution_home", "") or "").strip() if session is not None else ""
     is_managed_local_session = execution_home == SessionExecutionHome.MANAGED_LOCAL.value
-    if is_managed_local_session:
-        if review.execution_state in _ATTENTION_EXECUTION_STATES:
-            mark_managed_local_turn_needs_user(db, session=session, dedupe_suffix=f"review-{review.id}")
-        elif review.actual_outcome != _EXPECTED_CONTINUE_OUTCOME:
-            mark_managed_local_turn_idle(db, session=session, dedupe_suffix=f"review-{review.id}")
     if created:
         if session is not None:
             try:
@@ -1476,6 +1471,19 @@ async def maybe_process_session_turn_loop(
     if updated:
         db.expire_all()
         review = db.query(SessionTurnReview).filter(SessionTurnReview.id == review_id).first()
+    if is_managed_local_session and session is not None:
+        if review.execution_state in _ATTENTION_EXECUTION_STATES:
+            await persist_managed_local_turn_needs_user(
+                db,
+                session=session,
+                dedupe_suffix=f"review-{review.id}",
+            )
+        elif review.actual_outcome != _EXPECTED_CONTINUE_OUTCOME:
+            await persist_managed_local_turn_idle(
+                db,
+                session=session,
+                dedupe_suffix=f"review-{review.id}",
+            )
     return review
 
 
