@@ -109,6 +109,7 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
 def test_chat_with_session_routes_claude_managed_local_without_cloud_continuation(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
+    ship_calls: list[str] = []
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
@@ -142,7 +143,12 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
             )
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
+        async def fake_ship_transcript(*, db, owner_id, session, commis_id=None, timeout_secs=20):
+            ship_calls.append(str(session.id))
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat.ship_managed_local_claude_transcript", fake_ship_transcript)
         monkeypatch.setattr(
             "zerg.routers.session_chat._await_managed_local_turn_events",
             fake_wait_for_events,
@@ -174,6 +180,7 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
             assert calls[0]["owner_id"] == user.id
             assert calls[0]["session_id"] == str(source_session.id)
             assert calls[0]["text"] == "continue"
+            assert ship_calls == [str(source_session.id)]
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -242,6 +249,10 @@ def test_chat_with_session_routes_codex_managed_local_without_cloud_continuation
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat.ship_managed_local_claude_transcript",
+            lambda **_kwargs: (_ for _ in ()).throw(AssertionError("codex managed-local should not direct-ship Claude transcripts")),
+        )
         monkeypatch.setattr(
             "zerg.routers.session_chat._await_managed_local_turn_events",
             fake_wait_for_events,

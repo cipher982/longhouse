@@ -7,6 +7,7 @@ session-chat route and Loop actions use the same transport semantics.
 from __future__ import annotations
 
 import asyncio
+import shlex
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -19,9 +20,12 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_runtime import mark_managed_local_input_sent
+from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_paste_text_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
+from zerg.services.session_continuity import encode_cwd_for_claude
+from zerg.services.session_continuity import validate_session_id
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 
@@ -37,6 +41,58 @@ class ManagedLocalSendResult:
     error: str | None = None
     baseline_event_id: int | None = None
     verified_turn_started: bool = False
+
+
+@dataclass(frozen=True)
+class ManagedLocalShipResult:
+    ok: bool
+    exit_code: int | None = None
+    error: str | None = None
+
+
+def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
+    """Build a runner-side command that ships the exact managed-local Claude transcript.
+
+    Interactive managed-local chat cannot rely on the background shipper queue for
+    low-latency UX. This command targets the known Claude transcript directly and
+    retries briefly so the final assistant turn is included even if the Stop hook
+    fires before the transcript tail is flushed.
+    """
+
+    cwd = str(getattr(session, "cwd", "") or "").strip()
+    if not cwd:
+        raise ValueError("Managed local Claude session is missing cwd")
+
+    provider_session_id = str(getattr(session, "provider_session_id", "") or "").strip()
+    if not provider_session_id:
+        raise ValueError("Managed local Claude session is missing provider_session_id")
+    validate_session_id(provider_session_id)
+
+    longhouse_session_id = str(getattr(session, "id", "") or "").strip()
+    validate_session_id(longhouse_session_id)
+
+    encoded_cwd = encode_cwd_for_claude(cwd)
+    transcript_path = f"$HOME/.claude/projects/{encoded_cwd}/{provider_session_id}.jsonl"
+    inner = [
+        build_managed_local_shell_prelude(
+            tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
+            require_tmux=False,
+        ),
+        'engine="$(command -v longhouse-engine || true)"',
+        '[ -n "$engine" ] || { echo "longhouse-engine is not available" >&2; exit 12; }',
+        f'transcript="{transcript_path}"',
+        (
+            "for delay in 0 1 2 4; do "
+            'if [ "$delay" -gt 0 ]; then sleep "$delay"; fi; '
+            '[ -f "$transcript" ] || continue; '
+            f'"$engine" ship --file "$transcript" --session-id {shlex.quote(longhouse_session_id)} --quiet '
+            ">/dev/null 2>&1 && exit 0; "
+            "done"
+        ),
+        'echo "Managed local Claude transcript did not ship" >&2',
+        "exit 13",
+    ]
+    return f"zsh -lc {shlex.quote('; '.join(inner))}"
 
 
 def get_managed_local_latest_event_id(*, db: Session, session_id: UUID) -> int:
@@ -246,3 +302,57 @@ async def send_text_to_managed_local_session(
         baseline_event_id=baseline_event_id,
         verified_turn_started=verify_turn_started,
     )
+
+
+async def ship_managed_local_claude_transcript(
+    *,
+    db: Session,
+    owner_id: int,
+    session: AgentSession,
+    commis_id: str | None = None,
+    timeout_secs: int = 20,
+) -> ManagedLocalShipResult:
+    """Force-ship the exact managed-local Claude transcript via the runner.
+
+    This bypasses background shipper lag for interactive managed-local chat.
+    """
+
+    if str(getattr(session, "provider", "") or "").strip().lower() != "claude":
+        return ManagedLocalShipResult(ok=False, error="Managed local direct ship only supports Claude")
+    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
+        return ManagedLocalShipResult(ok=False, error="Session is not managed_local")
+    if not getattr(session, "source_runner_id", None):
+        return ManagedLocalShipResult(ok=False, error="Managed local session is missing source runner metadata")
+
+    try:
+        command = build_managed_local_claude_ship_command(session=session)
+    except Exception as exc:
+        return ManagedLocalShipResult(ok=False, error=str(exc))
+
+    dispatcher = get_runner_job_dispatcher()
+    result = await dispatcher.dispatch_job(
+        db=db,
+        owner_id=owner_id,
+        runner_id=int(session.source_runner_id),
+        command=command,
+        timeout_secs=timeout_secs,
+        commis_id=commis_id,
+        run_id=None,
+    )
+    if not result.get("ok"):
+        return ManagedLocalShipResult(
+            ok=False,
+            error=str(result.get("error", {}).get("message", "Failed to ship managed local Claude transcript")),
+        )
+
+    data = result.get("data", {})
+    exit_code = int(data.get("exit_code", 1))
+    if exit_code != 0:
+        detail = (data.get("stderr") or "").strip() or (data.get("stdout") or "").strip()
+        return ManagedLocalShipResult(
+            ok=False,
+            exit_code=exit_code,
+            error=detail or "Managed local Claude transcript ship command failed",
+        )
+
+    return ManagedLocalShipResult(ok=True, exit_code=0)
