@@ -87,10 +87,13 @@ async def test_cancelled_write_keeps_writer_slot_until_worker_thread_finishes(tm
     first.cancel()
     second = asyncio.create_task(serializer.execute(_second_write, label="refresh-session"))
 
+    cancel_started = time.monotonic()
     with pytest.raises(asyncio.CancelledError):
         await first
+    cancel_elapsed = time.monotonic() - cancel_started
     await second
 
+    assert cancel_elapsed < 0.05
     assert timings["second_start"] >= timings["first_end"]
     assert serializer.stats.total_writes == 2
     assert serializer.stats.errors == 0
