@@ -44,22 +44,18 @@ from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.request_urls import get_request_public_base_url
 from zerg.services.agents_store import AgentsStore
-from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_BLOCKED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAILED
-from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_COMPLETE
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_FAILED
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_PENDING
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
+from zerg.services.managed_local_control import get_managed_local_presence_updated_at
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
-from zerg.services.managed_local_runtime import mark_managed_local_turn_blocked
-from zerg.services.managed_local_runtime import mark_managed_local_turn_idle
-from zerg.services.managed_local_runtime import mark_managed_local_turn_needs_user
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
@@ -432,6 +428,7 @@ async def _stream_managed_local_output(
         db=db,
         session_id=source_session.id,
     )
+    baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
     send_result = await send_text_to_managed_local_session(
         db=db,
         owner_id=owner_id,
@@ -473,6 +470,7 @@ async def _stream_managed_local_output(
             db_bind=db.get_bind(),
             session_id=source_session.id,
             after_runtime_event_id=baseline_hook_runtime_event_id,
+            after_presence_updated_at=baseline_presence_updated_at,
             timeout_secs=MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
             poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
         )
@@ -554,26 +552,7 @@ async def _stream_managed_local_output(
         ).encode()
         return
 
-    latest_event_id = max((int(getattr(event, "id", 0) or 0) for event in new_events), default=0)
     control_status = terminal_result.control_status if terminal_result is not None else MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
-    if control_status == MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER:
-        mark_managed_local_turn_needs_user(
-            db,
-            session=source_session,
-            dedupe_suffix=str(latest_event_id or request_id),
-        )
-    elif control_status == MANAGED_LOCAL_CONTROL_STATUS_BLOCKED:
-        mark_managed_local_turn_blocked(
-            db,
-            session=source_session,
-            dedupe_suffix=str(latest_event_id or request_id),
-        )
-    else:
-        mark_managed_local_turn_idle(
-            db,
-            session=source_session,
-            dedupe_suffix=str(latest_event_id or request_id),
-        )
 
     if not new_events and terminal_result is not None:
         yield SSEEvent(

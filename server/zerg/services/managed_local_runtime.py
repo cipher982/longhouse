@@ -18,6 +18,7 @@ from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
+from zerg.services.write_serializer import get_write_serializer
 from zerg.session_execution_home import SessionExecutionHome
 
 MANAGED_LOCAL_RUNTIME_SOURCE = "managed_local_transport"
@@ -106,20 +107,6 @@ def mark_managed_local_session_launched(db: Session, *, session: AgentSession) -
     )
 
 
-def mark_managed_local_input_sent(
-    db: Session,
-    *,
-    session: AgentSession,
-    dedupe_suffix: str | None = None,
-) -> None:
-    _emit_managed_local_phase_signal(
-        db,
-        session=session,
-        phase="thinking",
-        dedupe_key=f"managed-local-send:{session.id}:{dedupe_suffix or uuid4().hex}",
-    )
-
-
 def mark_managed_local_turn_idle(
     db: Session,
     *,
@@ -155,6 +142,73 @@ def mark_managed_local_turn_blocked(
     dedupe_suffix: str | None = None,
 ) -> None:
     _emit_managed_local_phase_signal(
+        db,
+        session=session,
+        phase="blocked",
+        dedupe_key=f"managed-local-blocked:{session.id}:{dedupe_suffix or uuid4().hex}",
+    )
+
+
+async def persist_managed_local_phase_signal(
+    db: Session,
+    *,
+    session: AgentSession,
+    phase: str,
+    dedupe_key: str,
+    occurred_at: datetime | None = None,
+) -> None:
+    if not _is_managed_local_session(session):
+        return
+
+    ws = get_write_serializer()
+
+    def _do(wdb: Session) -> None:
+        _emit_managed_local_phase_signal(
+            wdb,
+            session=session,
+            phase=phase,
+            dedupe_key=dedupe_key,
+            occurred_at=occurred_at,
+        )
+
+    await ws.execute_or_direct(_do, db, label="runtime-events")
+
+
+async def persist_managed_local_turn_idle(
+    db: Session,
+    *,
+    session: AgentSession,
+    dedupe_suffix: str | None = None,
+) -> None:
+    await persist_managed_local_phase_signal(
+        db,
+        session=session,
+        phase="idle",
+        dedupe_key=f"managed-local-idle:{session.id}:{dedupe_suffix or uuid4().hex}",
+    )
+
+
+async def persist_managed_local_turn_needs_user(
+    db: Session,
+    *,
+    session: AgentSession,
+    dedupe_suffix: str | None = None,
+) -> None:
+    await persist_managed_local_phase_signal(
+        db,
+        session=session,
+        phase="needs_user",
+        dedupe_key=f"managed-local-needs-user:{session.id}:{dedupe_suffix or uuid4().hex}",
+    )
+
+
+async def persist_managed_local_turn_blocked(
+    db: Session,
+    *,
+    session: AgentSession,
+    dedupe_suffix: str | None = None,
+) -> None:
+    await persist_managed_local_phase_signal(
         db,
         session=session,
         phase="blocked",

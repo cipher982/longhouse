@@ -21,10 +21,10 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.services.agents_store import AgentsStore
-from zerg.services.managed_local_runtime import mark_managed_local_input_sent
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_paste_text_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
+from zerg.services.presence_cache import get_presence_cache
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.services.session_continuity import encode_cwd_for_claude
 from zerg.services.session_continuity import validate_session_id
@@ -48,6 +48,7 @@ _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS = {
     "needs_user": MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER,
     "blocked": MANAGED_LOCAL_CONTROL_STATUS_BLOCKED,
 }
+_MANAGED_LOCAL_PRESENCE_CURSOR_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,14 @@ class ManagedLocalShipResult:
     ok: bool
     exit_code: int | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class ManagedLocalPhaseUpdate:
+    phase: str
+    runtime_event_id: int = 0
+    occurred_at: datetime | None = None
+    source: str = _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE
 
 
 @dataclass(frozen=True)
@@ -161,6 +170,47 @@ def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
     return f"zsh -lc {shlex.quote('; '.join(inner))}"
 
 
+def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _to_utc_timestamp(value: datetime | None) -> float | None:
+    normalized = _normalize_utc_datetime(value)
+    return normalized.timestamp() if normalized is not None else None
+
+
+def get_managed_local_presence_updated_at(*, session_id: UUID) -> datetime | None:
+    """Return the latest in-memory presence timestamp for a managed-local session."""
+
+    entry = get_presence_cache().get(str(session_id))
+    return _normalize_utc_datetime(getattr(entry, "updated_at", None))
+
+
+def _get_newer_cached_presence_entry(
+    *,
+    session_id: UUID,
+    after_updated_at: datetime | None | object = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET,
+):
+    if after_updated_at is _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET:
+        return None
+
+    cache = get_presence_cache()
+    entry = cache.get(str(session_id))
+    if entry is None:
+        return None
+
+    entry_updated_at = _normalize_utc_datetime(getattr(entry, "updated_at", None))
+    baseline_ts = _to_utc_timestamp(after_updated_at if isinstance(after_updated_at, datetime) else None)
+    entry_ts = _to_utc_timestamp(entry_updated_at)
+    if baseline_ts is not None and (entry_ts is None or entry_ts <= baseline_ts):
+        return None
+    return entry
+
+
 def get_managed_local_latest_event_id(*, db: Session, session_id: UUID) -> int:
     """Return the latest stored event id for a managed-local session."""
     return int(AgentsStore(db).get_latest_event_id(session_id) or 0)
@@ -226,22 +276,23 @@ async def await_managed_local_presence_update(
 ) -> SessionPresence | None:
     """Wait until a managed-local session gets a newer presence update."""
 
-    def _to_utc_timestamp(value: datetime | None) -> float | None:
-        if value is None:
-            return None
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc).timestamp()
-        return value.timestamp()
-
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_secs
-    baseline_ts = _to_utc_timestamp(after_updated_at)
+    cache = get_presence_cache()
 
     while loop.time() < deadline:
+        cached = _get_newer_cached_presence_entry(
+            session_id=session_id,
+            after_updated_at=after_updated_at,
+        )
+        if cached is not None:
+            return cache.to_presence_obj(cached)
+
         with Session(bind=db_bind) as poll_db:
             row = poll_db.query(SessionPresence).filter(SessionPresence.session_id == str(session_id)).one_or_none()
             if row is not None and row.updated_at is not None:
                 row_ts = _to_utc_timestamp(row.updated_at)
+                baseline_ts = _to_utc_timestamp(after_updated_at)
                 if baseline_ts is None or (row_ts is not None and row_ts > baseline_ts):
                     return row
         await asyncio.sleep(poll_interval_secs)
@@ -254,10 +305,11 @@ async def await_managed_local_hook_phase_update(
     db_bind,
     session_id: UUID,
     after_runtime_event_id: int,
+    after_presence_updated_at: datetime | None | object = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET,
     phases: set[str] | frozenset[str] | None = None,
     timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
     poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
-) -> SessionRuntimeEvent | None:
+) -> ManagedLocalPhaseUpdate | None:
     """Wait for a new hook-driven runtime phase after the provided cursor."""
 
     loop = asyncio.get_running_loop()
@@ -265,6 +317,19 @@ async def await_managed_local_hook_phase_update(
     cursor = after_runtime_event_id
 
     while loop.time() < deadline:
+        cached = _get_newer_cached_presence_entry(
+            session_id=session_id,
+            after_updated_at=after_presence_updated_at,
+        )
+        if cached is not None:
+            phase = str(getattr(cached, "state", "") or "").strip()
+            if phases is None or phase in phases:
+                return ManagedLocalPhaseUpdate(
+                    phase=phase,
+                    occurred_at=_normalize_utc_datetime(getattr(cached, "updated_at", None)),
+                    source="presence_cache",
+                )
+
         events = _fetch_managed_local_hook_runtime_events_since(
             db_bind=db_bind,
             session_id=session_id,
@@ -274,7 +339,12 @@ async def await_managed_local_hook_phase_update(
             cursor = max(cursor, int(getattr(event, "id", 0) or 0))
             phase = str(getattr(event, "phase", "") or "").strip()
             if phases is None or phase in phases:
-                return event
+                return ManagedLocalPhaseUpdate(
+                    phase=phase,
+                    runtime_event_id=int(getattr(event, "id", 0) or 0),
+                    occurred_at=_normalize_utc_datetime(getattr(event, "occurred_at", None)),
+                    source=str(getattr(event, "source", "") or _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE),
+                )
         await asyncio.sleep(poll_interval_secs)
 
     return None
@@ -285,10 +355,16 @@ async def await_managed_local_turn_terminal(
     db_bind,
     session_id: UUID,
     after_runtime_event_id: int,
+    after_presence_updated_at: datetime | None | object = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET,
     timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
     poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
 ) -> ManagedLocalTerminalResult | None:
-    """Wait for a new hook-driven terminal phase for a managed-local turn."""
+    """Wait for a new terminal phase for a managed-local turn.
+
+    For live managed-local chat, trust the in-memory presence cache first so the
+    route does not block on SQLite runtime-event persistence. Hook runtime rows
+    remain a fallback for cold-cache or non-hot-path callers.
+    """
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_secs
@@ -296,6 +372,25 @@ async def await_managed_local_turn_terminal(
     saw_active_hook_phase = False
 
     while loop.time() < deadline:
+        cached = _get_newer_cached_presence_entry(
+            session_id=session_id,
+            after_updated_at=after_presence_updated_at,
+        )
+        if cached is not None:
+            phase = str(getattr(cached, "state", "") or "").strip()
+            if phase in _MANAGED_LOCAL_ACTIVE_HOOK_PHASES:
+                saw_active_hook_phase = True
+            elif phase in _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS:
+                return ManagedLocalTerminalResult(
+                    phase=phase,
+                    control_status=_MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS.get(
+                        phase,
+                        MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
+                    ),
+                    runtime_event_id=0,
+                    occurred_at=_normalize_utc_datetime(getattr(cached, "updated_at", None)),
+                )
+
         events = _fetch_managed_local_hook_runtime_events_since(
             db_bind=db_bind,
             session_id=session_id,
@@ -392,6 +487,9 @@ async def send_text_to_managed_local_session(
     baseline_hook_runtime_event_id = (
         get_managed_local_latest_hook_runtime_event_id(db=db, session_id=session.id) if verify_turn_started else 0
     )
+    baseline_presence_updated_at = (
+        get_managed_local_presence_updated_at(session_id=session.id) if verify_turn_started else _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET
+    )
     if provider == "codex":
         command = build_tmux_paste_text_command(
             session_name=str(session.managed_session_name),
@@ -441,6 +539,7 @@ async def send_text_to_managed_local_session(
             db_bind=db.get_bind(),
             session_id=session.id,
             after_runtime_event_id=baseline_hook_runtime_event_id,
+            after_presence_updated_at=baseline_presence_updated_at,
             phases=set(_MANAGED_LOCAL_ACTIVE_HOOK_PHASES),
             timeout_secs=verification_timeout,
         )
@@ -453,11 +552,6 @@ async def send_text_to_managed_local_session(
                 verified_turn_started=False,
             )
 
-    mark_managed_local_input_sent(
-        db,
-        session=session,
-        dedupe_suffix=str(commis_id or ""),
-    )
     return ManagedLocalSendResult(
         ok=True,
         exit_code=0,
