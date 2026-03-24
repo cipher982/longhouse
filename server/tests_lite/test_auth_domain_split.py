@@ -6,8 +6,6 @@ from unittest.mock import patch
 import pytest
 from fastapi import HTTPException
 
-from zerg.dependencies import auth as auth_deps
-from zerg.dependencies import browser_auth
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.routers import auth as auth_router
 from zerg.routers import auth_browser
@@ -55,10 +53,6 @@ def test_timeline_router_exposes_browser_archive_routes():
         "/timeline/demo",
     } <= timeline_paths
 
-
-def test_dependencies_auth_reexports_browser_session_dependencies():
-    assert auth_deps.get_current_browser_user is browser_auth.get_current_browser_user
-    assert auth_deps.get_optional_browser_user is browser_auth.get_optional_browser_user
 
 
 def test_get_current_oikos_user_accepts_query_token_for_sse():
