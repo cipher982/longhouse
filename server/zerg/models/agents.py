@@ -416,6 +416,9 @@ class SessionTurnReview(AgentsBase):
     run_id = Column(Integer, nullable=True, index=True)
     actual_outcome = Column(String(32), nullable=True)
     shadow_alignment = Column(String(32), nullable=True)
+    assistant_turn_finished_at = Column(DateTime(timezone=True), nullable=True)
+    turn_loop_enqueued_at = Column(DateTime(timezone=True), nullable=True)
+    turn_loop_completed_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
 
     __table_args__ = (

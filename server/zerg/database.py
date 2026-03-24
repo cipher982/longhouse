@@ -562,8 +562,15 @@ def _migrate_agents_columns(engine: Engine) -> None:
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turn_reviews)"))}
-            if columns and "follow_up_prompt" not in columns:
-                conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN follow_up_prompt TEXT"))
+            if columns:
+                if "follow_up_prompt" not in columns:
+                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN follow_up_prompt TEXT"))
+                if "assistant_turn_finished_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN assistant_turn_finished_at DATETIME"))
+                if "turn_loop_enqueued_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN turn_loop_enqueued_at DATETIME"))
+                if "turn_loop_completed_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN turn_loop_completed_at DATETIME"))
             conn.commit()
     except Exception:
         logger.debug("session_turn_reviews table migration skipped (table may not exist yet)", exc_info=True)

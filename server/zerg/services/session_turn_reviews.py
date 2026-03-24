@@ -82,6 +82,30 @@ def _normalize_utc(value: datetime | None) -> datetime | None:
     return value.astimezone(timezone.utc)
 
 
+def _stamp_review_timing_fields(
+    review: SessionTurnReview,
+    *,
+    assistant_turn_finished_at: datetime | None = None,
+    turn_loop_enqueued_at: datetime | None = None,
+    turn_loop_completed_at: datetime | None = None,
+) -> bool:
+    changed = False
+    normalized_finished_at = _normalize_utc(assistant_turn_finished_at)
+    normalized_enqueued_at = _normalize_utc(turn_loop_enqueued_at)
+    normalized_completed_at = _normalize_utc(turn_loop_completed_at)
+
+    if normalized_finished_at is not None and review.assistant_turn_finished_at is None:
+        review.assistant_turn_finished_at = normalized_finished_at
+        changed = True
+    if normalized_enqueued_at is not None and review.turn_loop_enqueued_at is None:
+        review.turn_loop_enqueued_at = normalized_enqueued_at
+        changed = True
+    if normalized_completed_at is not None and review.turn_loop_completed_at is None:
+        review.turn_loop_completed_at = normalized_completed_at
+        changed = True
+    return changed
+
+
 def _has_turn_review_table(db: Session) -> bool:
     try:
         bind = db.get_bind()
@@ -737,6 +761,13 @@ async def _record_session_turn_review(
         .first()
     )
     if existing is not None:
+        if _stamp_review_timing_fields(
+            existing,
+            assistant_turn_finished_at=turn.assistant_timestamp,
+            turn_loop_enqueued_at=freshness_reference_at,
+        ):
+            db.commit()
+            db.refresh(existing)
         return existing, False
 
     owner_id = _resolve_owner_id(db)
@@ -825,6 +856,8 @@ async def _record_session_turn_review(
         blocked_reasons=list(outcome.blocked_reasons),
         status=review_status,
         reason=review_reason,
+        assistant_turn_finished_at=turn.assistant_timestamp,
+        turn_loop_enqueued_at=_normalize_utc(freshness_reference_at),
     )
     db.add(review)
     db.commit()
@@ -833,8 +866,17 @@ async def _record_session_turn_review(
     return review, True
 
 
-async def maybe_record_session_turn_review(*, db: Session, session_id: str) -> SessionTurnReview | None:
-    review, _created = await _record_session_turn_review(db=db, session_id=session_id)
+async def maybe_record_session_turn_review(
+    *,
+    db: Session,
+    session_id: str,
+    freshness_reference_at: datetime | None = None,
+) -> SessionTurnReview | None:
+    review, _created = await _record_session_turn_review(
+        db=db,
+        session_id=session_id,
+        freshness_reference_at=freshness_reference_at,
+    )
     return review
 
 
@@ -1363,6 +1405,9 @@ async def maybe_process_session_turn_loop(
                     review.id,
                     review.session_id,
                 )
+    if _stamp_review_timing_fields(review, turn_loop_completed_at=datetime.now(timezone.utc)):
+        db.commit()
+        db.refresh(review)
     return review
 
 

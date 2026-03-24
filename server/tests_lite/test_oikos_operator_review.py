@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from uuid import UUID
 
@@ -379,6 +380,106 @@ def test_oikos_turn_reviews_returns_owner_scoped_rows_and_supports_filters(tmp_p
             "run_id": 101,
             "actual_outcome": "notify_user",
             "shadow_alignment": "matched",
+            "assistant_turn_finished_at": None,
+            "turn_loop_enqueued_at": None,
+            "turn_loop_completed_at": None,
+            "queue_latency_ms": None,
+            "review_latency_ms": None,
+            "processing_latency_ms": None,
             "created_at": "2026-03-17T12:00:00Z",
+        }
+    ]
+
+
+def test_turn_review_list_exposes_latency_breakdown_when_review_trail_exists(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "oikos_turn_review_latency.db")
+    assistant_finished_at = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
+    turn_loop_enqueued_at = assistant_finished_at + timedelta(seconds=2)
+    turn_loop_completed_at = assistant_finished_at + timedelta(seconds=9)
+    review_created_at = assistant_finished_at + timedelta(seconds=6)
+
+    with SessionLocal() as db:
+        owner = User(email="owner@local", role=UserRole.USER.value, context={})
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        session = AgentSession(
+            id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            provider="claude",
+            environment="development",
+            project="zerg",
+            cwd="/tmp/zerg",
+            started_at=assistant_finished_at,
+            ended_at=assistant_finished_at,
+        )
+        db.add(session)
+        db.flush()
+        db.add(
+            SessionTurnReview(
+                owner_id=owner.id,
+                session_id=session.id,
+                assistant_event_id=77,
+                turn_index=6,
+                trigger_type="turn.completed",
+                loop_mode="assist",
+                decision="continue",
+                summary="One bounded follow-up is ready.",
+                rationale="Run the pending targeted tests next.",
+                mode_capability="notify_only",
+                mode_summary="Suggest or escalate from completed turns, but wait for approval before continuing.",
+                execution_state="awaiting_user_approval",
+                recommended_action="continue_session",
+                follow_up_prompt="Run the pending targeted tests.",
+                blocked_reasons=["Waiting for approval."],
+                status="recorded",
+                assistant_turn_finished_at=assistant_finished_at,
+                turn_loop_enqueued_at=turn_loop_enqueued_at,
+                turn_loop_completed_at=turn_loop_completed_at,
+                created_at=review_created_at,
+            )
+        )
+        db.commit()
+
+        client, api_app_ref = _make_client(db, owner.id)
+        try:
+            response = client.get("/api/oikos/turn-reviews?status=recorded")
+            assert response.status_code == 200
+            payload = response.json()
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+    engine.dispose()
+
+    assert payload == [
+        {
+            "id": payload[0]["id"],
+            "session_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "assistant_event_id": 77,
+            "turn_index": 6,
+            "trigger_type": "turn.completed",
+            "loop_mode": "assist",
+            "decision": "continue",
+            "summary": "One bounded follow-up is ready.",
+            "rationale": "Run the pending targeted tests next.",
+            "turn_excerpt": None,
+            "mode_capability": "notify_only",
+            "mode_summary": "Suggest or escalate from completed turns, but wait for approval before continuing.",
+            "execution_state": "awaiting_user_approval",
+            "recommended_action": "continue_session",
+            "follow_up_prompt": "Run the pending targeted tests.",
+            "blocked_reasons": ["Waiting for approval."],
+            "status": "recorded",
+            "reason": None,
+            "run_id": None,
+            "actual_outcome": None,
+            "shadow_alignment": None,
+            "assistant_turn_finished_at": "2026-03-17T12:00:00Z",
+            "turn_loop_enqueued_at": "2026-03-17T12:00:02Z",
+            "turn_loop_completed_at": "2026-03-17T12:00:09Z",
+            "queue_latency_ms": 2000,
+            "review_latency_ms": 6000,
+            "processing_latency_ms": 7000,
+            "created_at": "2026-03-17T12:00:06Z",
         }
     ]

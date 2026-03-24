@@ -46,6 +46,14 @@ def _now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def _normalize_test_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _create_user(db, *, allow_continue: bool = False, telegram_chat_id: str | None = None) -> User:
     context = {
         "preferences": {
@@ -1024,6 +1032,7 @@ async def test_turn_review_uses_latest_assistant_turn_timestamp_when_session_end
         assert review is not None
         assert latest_assistant_event is not None
         assert review.assistant_event_id == latest_assistant_event.id
+        assert _normalize_test_utc(review.assistant_turn_finished_at) == _normalize_test_utc(latest_assistant_event.timestamp)
         assert review.execution_state == "awaiting_user_approval"
         assert review.status == "recorded"
 

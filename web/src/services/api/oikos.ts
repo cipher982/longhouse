@@ -70,6 +70,12 @@ interface SessionTurnReviewSummary {
   run_id: number | null;
   actual_outcome: string | null;
   shadow_alignment: string | null;
+  assistant_turn_finished_at: string | null;
+  turn_loop_enqueued_at: string | null;
+  turn_loop_completed_at: string | null;
+  queue_latency_ms: number | null;
+  review_latency_ms: number | null;
+  processing_latency_ms: number | null;
   created_at: string;
 }
 
@@ -95,6 +101,12 @@ export interface SessionTurnReview {
   runId: number | null;
   actualOutcome: SessionTurnOutcome | null;
   alignment: SessionTurnAlignment | null;
+  assistantTurnFinishedAt: string | null;
+  turnLoopEnqueuedAt: string | null;
+  turnLoopCompletedAt: string | null;
+  queueLatencyMs: number | null;
+  reviewLatencyMs: number | null;
+  processingLatencyMs: number | null;
   createdAt: string;
 }
 
@@ -251,6 +263,12 @@ function parseTurnReview(row: SessionTurnReviewSummary): SessionTurnReview {
     runId: asNumber(row.run_id),
     actualOutcome: (asString(row.actual_outcome) ?? null) as SessionTurnOutcome | null,
     alignment: (asString(row.shadow_alignment) ?? null) as SessionTurnAlignment | null,
+    assistantTurnFinishedAt: asString(row.assistant_turn_finished_at),
+    turnLoopEnqueuedAt: asString(row.turn_loop_enqueued_at),
+    turnLoopCompletedAt: asString(row.turn_loop_completed_at),
+    queueLatencyMs: asNumber(row.queue_latency_ms),
+    reviewLatencyMs: asNumber(row.review_latency_ms),
+    processingLatencyMs: asNumber(row.processing_latency_ms),
     createdAt: row.created_at,
   };
 }

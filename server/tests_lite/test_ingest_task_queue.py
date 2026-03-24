@@ -632,6 +632,11 @@ async def test_turn_loop_task_processes_stale_completed_turn_from_durable_queue(
     assert len(reviews) == 1
     assert reviews[0].status == "enqueued"
     assert reviews[0].run_id == 888
+    assert reviews[0].assistant_turn_finished_at is not None
+    assert reviews[0].turn_loop_enqueued_at is not None
+    assert reviews[0].turn_loop_completed_at is not None
+    assert reviews[0].turn_loop_enqueued_at == tasks[0].created_at
+    assert reviews[0].turn_loop_completed_at >= reviews[0].turn_loop_enqueued_at
     invoke_oikos.assert_awaited_once()
 
 
