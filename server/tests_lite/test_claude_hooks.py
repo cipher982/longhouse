@@ -9,6 +9,7 @@ def test_claude_hook_script_detaches_stop_shipping_and_retries_until_file_exists
     assert '[[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]' in HOOK_SCRIPT
     assert "nohup /bin/bash -c" in HOOK_SCRIPT
     assert "for delay in 0 0.25 0.5 1 2 4" in HOOK_SCRIPT
+    assert 'if [[ "$delay" != "0" ]]; then' in HOOK_SCRIPT
     assert 'if [[ -f "$transcript" ]]' in HOOK_SCRIPT
     assert 'ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true' in HOOK_SCRIPT
     assert '[[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]' not in HOOK_SCRIPT
