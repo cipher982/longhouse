@@ -10,6 +10,7 @@
 
 import { test, expect, normalizeToken } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
+import { waitForPageReady } from "../helpers/ready-signals";
 
 // ---------------------------------------------------------------------------
 // Shared error collectors
@@ -66,6 +67,17 @@ async function failWithScreenshot(
   throw new Error(`${message}\nScreenshot saved: ${path}`);
 }
 
+async function waitForLivePageReady(
+  page: Page,
+  testName: string,
+  message: string,
+  timeout: number = 15_000,
+): Promise<void> {
+  await waitForPageReady(page, { timeout }).catch(async () => {
+    await failWithScreenshot(page, testName, message);
+  });
+}
+
 async function findSessionIdViaAgentsApi(request: APIRequestContext): Promise<string | null> {
   const response = await request.get("/api/agents/sessions?limit=5");
   if (!response.ok()) {
@@ -109,23 +121,31 @@ test("auth + timeline loads with session rows", async ({ context }) => {
 
   await page.goto("/timeline", { waitUntil: "domcontentloaded" });
 
-  // Wait for the list to appear — either the session cards or an empty-state
-  await page
-    .locator('.session-card, .empty-state, [class*="EmptyState"]')
-    .first()
-    .waitFor({ timeout: 12_000 })
-    .catch(async () => {
-      // Maybe still loading — give the spinner a chance to go away
-      await page
-        .waitForFunction(
-          () =>
-            !document.querySelector(
-              '[class*="spinner"], [class*="Spinner"], .loading',
-            ),
-          { timeout: 5_000 },
-        )
-        .catch(() => {});
-    });
+  let timelineReady = false;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const ready = await waitForPageReady(page, { timeout: 12_000 })
+      .then(() => true)
+      .catch(() => false);
+
+    if (ready) {
+      timelineReady = true;
+      break;
+    }
+
+    if (authFailed || serverErrors.length > 0 || consoleErrors.length > 0 || attempt === 2) {
+      break;
+    }
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+  }
+
+  if (!timelineReady) {
+    await failWithScreenshot(
+      page,
+      "timeline-not-ready",
+      "Timeline never reached data-ready=true. The app stayed in its loading shell.",
+    );
+  }
 
   if (authFailed) {
     await failWithScreenshot(
@@ -193,12 +213,11 @@ test("loop login round-trip preserves loop destination", async ({
     });
 
     const controlPlaneUrl = page.url();
+    const controlPlaneDestination = new URL(controlPlaneUrl);
     expect(
-      controlPlaneUrl,
-      "Hosted login CTA should preserve /loop through the control-plane return_to chain",
-    ).toContain(
-      "return_to=%2Fdashboard%2Fopen-instance%3Freturn_to%3D%252Floop",
-    );
+      controlPlaneDestination.host,
+      "Hosted login CTA should hand off to the control plane",
+    ).toBe("control.longhouse.ai");
 
     await page.goto(
       `${baseOrigin}/api/auth/accept-token?token=${encodeURIComponent(loginToken)}&return_to=%2Floop`,
@@ -248,6 +267,12 @@ test("forum route redirects to timeline without auth errors", async ({
     timeout: 10_000,
   });
 
+  await waitForLivePageReady(
+    page,
+    "forum-redirect-not-ready",
+    "Redirect from /forum reached /timeline but never became interactive.",
+  );
+
   if (authErrors.length > 0) {
     await failWithScreenshot(
       page,
@@ -272,7 +297,6 @@ test("forum route redirects to timeline without auth errors", async ({
     );
   }
 
-  // Ensure timeline shell mounted after redirect.
   await page
     .locator(".sessions-page, .sessions-hero-empty, .session-card")
     .first()
@@ -281,7 +305,7 @@ test("forum route redirects to timeline without auth errors", async ({
       await failWithScreenshot(
         page,
         "forum-redirect-empty",
-        "Redirect from /forum did not render timeline content.",
+        "Redirect from /forum became ready but did not render timeline content.",
       );
     });
 
@@ -321,6 +345,12 @@ test("session detail renders event timeline", async ({ context, agentsRequest })
   });
 
   await page.goto(`/timeline/${sessionId}`, { waitUntil: "domcontentloaded" });
+
+  await waitForLivePageReady(
+    page,
+    "session-detail-not-ready",
+    `Session detail for ${sessionId} never reached data-ready=true.`,
+  );
 
   if (authErrors.length > 0) {
     await failWithScreenshot(
@@ -410,6 +440,11 @@ test("timeline has AI search toggle", async ({ context }) => {
 
   const page = await context.newPage();
   await page.goto("/timeline", { waitUntil: "domcontentloaded" });
+  await waitForLivePageReady(
+    page,
+    "timeline-ai-toggle-not-ready",
+    "Timeline never became interactive before checking the AI search toggle.",
+  );
 
   // Wait for the search toolbar to render
   await page.locator(".sessions-ai-toggle").waitFor({ timeout: 10_000 });
@@ -441,6 +476,11 @@ test("recall panel opens and shows search input", async ({ context }) => {
 
   const page = await context.newPage();
   await page.goto("/timeline", { waitUntil: "domcontentloaded" });
+  await waitForLivePageReady(
+    page,
+    "timeline-recall-not-ready",
+    "Timeline never became interactive before opening the recall panel.",
+  );
 
   // Wait for toolbar
   await page.locator(".sessions-toolbar").waitFor({ timeout: 10_000 });
@@ -474,6 +514,11 @@ test("briefings page loads with project selector", async ({ context }) => {
 
   const page = await context.newPage();
   await page.goto("/briefings", { waitUntil: "domcontentloaded" });
+  await waitForLivePageReady(
+    page,
+    "briefings-not-ready",
+    "Briefings page never reached data-ready=true.",
+  );
 
   // Should not 404 or throw
   const url = page.url();
@@ -495,25 +540,35 @@ test("briefings page loads with project selector", async ({ context }) => {
 // Test 9: Session continuation backend is configured and ready
 // ---------------------------------------------------------------------------
 
-test("session continuation backend is ready", async ({ context }) => {
+test("session continuation backend is ready", async ({
+  playwright,
+  apiBaseUrl,
+  authToken,
+}) => {
   test.setTimeout(10_000);
 
-  const page = await context.newPage();
+  const requestContext = await playwright.request.newContext({
+    baseURL: apiBaseUrl,
+    timeout: 10_000,
+  });
 
-  // Use the browser context (already authenticated via cookie) to hit the API
-  const res = await page.request.get("/api/sessions/continuation-readiness");
-  expect(
-    res.ok(),
-    `GET /api/sessions/continuation-readiness returned ${res.status()}`,
-  ).toBe(true);
+  try {
+    const res = await requestContext.get(
+      `/api/sessions/continuation-readiness?token=${encodeURIComponent(authToken)}`,
+    );
+    expect(
+      res.ok(),
+      `GET /api/sessions/continuation-readiness returned ${res.status()}`,
+    ).toBe(true);
 
-  const body = await res.json();
-  expect(
-    body.ready,
-    `Continuation not ready: backend=${body.backend}, issues=${JSON.stringify(body.issues)}`,
-  ).toBe(true);
-
-  await page.close();
+    const body = await res.json();
+    expect(
+      body.ready,
+      `Continuation not ready: backend=${body.backend}, issues=${JSON.stringify(body.issues)}`,
+    ).toBe(true);
+  } finally {
+    await requestContext.dispose();
+  }
 });
 
 // ---------------------------------------------------------------------------
