@@ -151,7 +151,7 @@ if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
       ship_args+=(--session-id "$managed_session_id")
     fi
     for delay in 0 0.25 0.5 1 2 4; do
-      if [[ "$delay" -gt 0 ]]; then
+      if [[ "$delay" != "0" ]]; then
         sleep "$delay"
       fi
       if [[ -f "$transcript" ]]; then

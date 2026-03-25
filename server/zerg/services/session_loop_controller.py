@@ -20,6 +20,8 @@ from zerg.crud import get_fiches
 from zerg.crud import get_recent_thread_messages
 from zerg.models import Thread
 from zerg.models.agents import AgentSession
+from zerg.models_config import MODELS_BY_ID
+from zerg.models_config import ModelProvider
 from zerg.models_config import get_llm_client_with_db_fallback
 from zerg.models_config import get_model_for_use_case
 from zerg.services.session_processing import safe_parse_json
@@ -283,6 +285,26 @@ def build_loop_controller_payload(
     }
 
 
+def _build_loop_controller_completion_kwargs(*, model_id: str) -> dict[str, Any]:
+    model_config = MODELS_BY_ID.get(model_id)
+    if model_config is None:
+        return {}
+
+    capabilities = model_config.capabilities or {}
+    if not capabilities.get("reasoning", False):
+        return {}
+
+    effort = "none"
+    if effort == "none" and not capabilities.get("reasoningNone", False):
+        effort = "low"
+
+    if model_config.provider == ModelProvider.OPENROUTER:
+        return {"extra_body": {"reasoning": {"effort": effort}}}
+    if model_config.provider == ModelProvider.OPENAI:
+        return {"reasoning_effort": effort}
+    return {}
+
+
 async def evaluate_session_turn_with_llm(
     *,
     db: Session,
@@ -341,12 +363,14 @@ async def evaluate_session_turn_with_llm(
         raise RuntimeError("Anthropic-native loop controller path is not implemented yet")
 
     try:
-        response = await client.chat.completions.create(
-            model=model_id,
-            messages=messages,
-            temperature=0.2,
-            response_format={"type": "json_object"},
-        )
+        request_kwargs: dict[str, Any] = {
+            "model": model_id,
+            "messages": messages,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+        request_kwargs.update(_build_loop_controller_completion_kwargs(model_id=model_id))
+        response = await client.chat.completions.create(**request_kwargs)
         raw = (response.choices[0].message.content or "").strip()
         decision = _parse_decision(raw, model_id=model_id, loop_thread_id=loop_thread_id)
     finally:

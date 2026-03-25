@@ -275,3 +275,27 @@ async def test_loop_controller_sends_compact_json_payload_to_model(monkeypatch, 
     assert isinstance(messages, list)
     model_payload = messages[-1]["content"]
     assert "\n" not in model_payload
+
+
+@pytest.mark.asyncio
+async def test_loop_controller_disables_reasoning_for_openrouter_models(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "loop_controller_reasoning_none.db")
+    fake_response = (
+        '{"decision":"done","summary":"Done.","rationale":"No follow-up is needed.",'
+        '"recommended_action":"done","blocked_reasons":[]}'
+    )
+    fake_client = _FakeClient(fake_response)
+    monkeypatch.setattr(
+        "zerg.services.session_loop_controller.get_llm_client_with_db_fallback",
+        lambda *_args, **_kwargs: (fake_client, "x-ai/grok-4.1-fast", "openai"),
+    )
+
+    with SessionLocal() as db:
+        user = _create_user(db)
+        session = _create_session(db)
+
+        decision = await _run_controller(db, owner_id=user.id, session=session)
+        assert decision.decision == "done"
+
+    assert len(fake_client.chat.completions.calls) == 1
+    assert fake_client.chat.completions.calls[0]["extra_body"] == {"reasoning": {"effort": "none"}}
