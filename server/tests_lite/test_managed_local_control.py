@@ -271,7 +271,8 @@ def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_pa
         assert "command -v longhouse-engine" in command
         assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
         assert f"--session-id {session.id}" in command
-        assert "for delay in 0 1 2 4 8" in command
+        assert 'delays=(0 0.25 0.5 1 2 4)' in command
+        assert 'for delay in "${delays[@]}"' in command
         assert "--json" in command
         assert "events_shipped" in command
         assert "Managed local Claude transcript did not ship new events" in command

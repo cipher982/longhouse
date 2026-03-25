@@ -152,9 +152,10 @@ def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
         f'transcript="{transcript_path}"',
         'tmp_json="$(mktemp)"',
         "total_shipped=0",
+        "delays=(0 0.25 0.5 1 2 4)",
         (
-            "for delay in 0 1 2 4 8; do "
-            'if [ "$delay" -gt 0 ]; then sleep "$delay"; fi; '
+            'for delay in "${delays[@]}"; do '
+            'if [ "$delay" != "0" ]; then sleep "$delay"; fi; '
             '[ -f "$transcript" ] || continue; '
             f'"$engine" ship --file "$transcript" --session-id {shlex.quote(longhouse_session_id)} --json '
             '>"$tmp_json" 2>/dev/null || true; '
