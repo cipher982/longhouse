@@ -372,7 +372,6 @@ async def await_managed_local_turn_terminal(
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_secs
     cursor = after_runtime_event_id
-    saw_active_hook_phase = False
 
     while loop.time() < deadline:
         cached = _get_newer_cached_presence_entry(
@@ -381,9 +380,7 @@ async def await_managed_local_turn_terminal(
         )
         if cached is not None:
             phase = str(getattr(cached, "state", "") or "").strip()
-            if phase in _MANAGED_LOCAL_ACTIVE_HOOK_PHASES:
-                saw_active_hook_phase = True
-            elif phase in _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS:
+            if phase in _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS:
                 return ManagedLocalTerminalResult(
                     phase=phase,
                     control_status=_MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS.get(
@@ -403,12 +400,14 @@ async def await_managed_local_turn_terminal(
             cursor = max(cursor, int(getattr(event, "id", 0) or 0))
             phase = str(getattr(event, "phase", "") or "").strip()
             if phase in _MANAGED_LOCAL_ACTIVE_HOOK_PHASES:
-                saw_active_hook_phase = True
-                continue
-            if not saw_active_hook_phase:
                 continue
             if phase not in _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS:
                 continue
+            # Treat a newer terminal hook event as authoritative for the current
+            # turn even if the matching active phase never made it to this
+            # worker's cache or SQLite. The session-chat route passes a
+            # pre-send runtime-event cursor, so any later idle/needs_user/blocked
+            # event still belongs to the in-flight managed-local turn.
             return ManagedLocalTerminalResult(
                 phase=phase,
                 control_status=_MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS.get(
