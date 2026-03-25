@@ -94,6 +94,7 @@ def _seed_completion_task(
     loop_mode: SessionLoopMode = SessionLoopMode.MANUAL,
     assistant_text: str = "Only targeted verification remains. Run the pending targeted tests.",
     task_type: str = "turn_loop",
+    execution_home: str | None = None,
 ):
     db = factory()
     user = User(email="owner@example.com", context=user_context or {})
@@ -113,6 +114,7 @@ def _seed_completion_task(
         summary=summary,
         user_state="active",
         loop_mode=loop_mode.value,
+        execution_home=execution_home,
     )
     db.add(session)
     user_event = AgentEvent(
@@ -869,12 +871,12 @@ async def test_turn_loop_task_processes_stale_completed_turn_from_durable_queue(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("presence_state", ["thinking", "running"])
 async def test_turn_loop_task_skips_operator_when_session_is_still_active(tmp_path, monkeypatch, presence_state):
-    """Fresh active presence should re-queue turn_loop instead of silently finishing."""
+    """Very fresh active presence should still re-queue turn_loop briefly."""
     from zerg.services.ingest_task_queue import _execute_task
 
     monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
     factory = _make_db(tmp_path, f"worker_operator_skip_{presence_state}.db")
-    ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    ended_at = datetime.now(timezone.utc) - timedelta(seconds=1)
     session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
         factory,
         ended_at=ended_at,
@@ -895,6 +897,51 @@ async def test_turn_loop_task_skips_operator_when_session_is_still_active(tmp_pa
     assert len(tasks) == 1
     assert len(reviews) == 0
     assert "waiting for active session presence to settle" in (tasks[0].error or "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("presence_state", ["thinking", "running"])
+async def test_turn_loop_task_records_review_after_active_presence_settle_window(tmp_path, monkeypatch, presence_state):
+    """Sticky active presence should not strand a completed turn review forever."""
+    from zerg.services.ingest_task_queue import _execute_task
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    factory = _make_db(tmp_path, f"worker_operator_settled_{presence_state}.db")
+    ended_at = datetime.now(timezone.utc) - timedelta(seconds=6)
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
+        factory,
+        ended_at=ended_at,
+        presence_state=presence_state,
+        presence_updated_at=datetime.now(timezone.utc),
+        loop_mode=SessionLoopMode.ASSIST,
+        execution_home="managed_local",
+        user_context={
+            "preferences": {
+                "operator_mode": {
+                    "enabled": True,
+                    "shadow_mode": True,
+                    "allow_continue": False,
+                    "allow_notify": True,
+                }
+            }
+        },
+    )
+
+    ws = _make_write_serializer(factory)
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                await _execute_task(task_id, session_id, "turn_loop")
+
+    tasks = _get_tasks(factory, status="done")
+    reviews = _get_turn_reviews(factory)
+    assert len(tasks) == 1
+    assert len(reviews) == 1
+    assert reviews[0].execution_state == "awaiting_user_approval"
+    assert reviews[0].turn_loop_completed_at is not None
 
 
 @pytest.mark.asyncio
