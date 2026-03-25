@@ -356,6 +356,49 @@ def test_claim_pending_deprioritizes_recently_requeued_turn_loop_tasks(tmp_path)
     assert claimed == [("task-newer", "session-newer", "turn_loop")]
 
 
+def test_claim_pending_can_filter_hot_turn_loop_lane(tmp_path):
+    """Hot lane should claim only turn-loop work."""
+    factory = _make_db(tmp_path, "claim_hot_lane.db")
+    db = factory()
+    enqueue_ingest_tasks(db, "session-1")
+    db.commit()
+    db.close()
+
+    db = factory()
+    claimed = _claim_pending(db, limit=10, include_task_types=("turn_loop",))
+    db.commit()
+    db.close()
+
+    assert claimed == [claimed[0]]
+    assert claimed[0][2] == "turn_loop"
+
+    running = _get_tasks(factory, status="running")
+    pending = _get_tasks(factory, status="pending")
+    assert [task.task_type for task in running] == ["turn_loop"]
+    assert {task.task_type for task in pending} == {"summary", "embedding"}
+
+
+def test_claim_pending_can_filter_cold_lane(tmp_path):
+    """Cold lane should skip turn-loop work and process the remaining task types."""
+    factory = _make_db(tmp_path, "claim_cold_lane.db")
+    db = factory()
+    enqueue_ingest_tasks(db, "session-1")
+    db.commit()
+    db.close()
+
+    db = factory()
+    claimed = _claim_pending(db, limit=10, exclude_task_types=("turn_loop",))
+    db.commit()
+    db.close()
+
+    assert [task_type for _, _, task_type in claimed] == ["summary", "embedding"]
+
+    running = _get_tasks(factory, status="running")
+    pending = _get_tasks(factory, status="pending")
+    assert [task.task_type for task in running] == ["summary", "embedding"]
+    assert [task.task_type for task in pending] == ["turn_loop"]
+
+
 def test_claim_pending_empty_returns_empty(tmp_path):
     """_claim_pending returns empty list when no pending tasks."""
     factory = _make_db(tmp_path, "claim_empty.db")
@@ -467,6 +510,126 @@ async def test_process_batch_reprioritizes_new_turn_loop_work_between_tasks(tmp_
             await _process_batch()
 
     assert executed == ["summary", "turn_loop", "embedding"]
+
+
+@pytest.mark.asyncio
+async def test_process_batch_hot_lane_only_runs_turn_loop(tmp_path):
+    """Hot lane should leave summary/embedding work pending for the cold lane."""
+    from zerg.services.ingest_task_queue import _process_batch
+
+    factory = _make_db(tmp_path, "worker_hot_lane.db")
+    db = factory()
+    enqueue_ingest_tasks(db, "session-1")
+    db.commit()
+    db.close()
+
+    executed: list[str] = []
+
+    async def _fake_execute(task_id: str, session_id: str, task_type: str) -> bool:
+        executed.append(task_type)
+        db = factory()
+        try:
+            task = db.query(SessionTask).filter(SessionTask.id == task_id).one()
+            task.status = "done"
+            task.error = None
+            db.commit()
+        finally:
+            db.close()
+        return False
+
+    ws = _make_write_serializer(factory)
+    with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+        with patch("zerg.services.ingest_task_queue._execute_task", new=AsyncMock(side_effect=_fake_execute)):
+            await _process_batch(worker_name="hot", include_task_types=("turn_loop",))
+
+    assert executed == ["turn_loop"]
+    pending = _get_tasks(factory, status="pending")
+    assert {task.task_type for task in pending} == {"summary", "embedding"}
+
+
+@pytest.mark.asyncio
+async def test_process_batch_cold_lane_only_runs_non_turn_loop_tasks(tmp_path):
+    """Cold lane should not consume turn-loop work."""
+    from zerg.services.ingest_task_queue import _process_batch
+
+    factory = _make_db(tmp_path, "worker_cold_lane.db")
+    db = factory()
+    enqueue_ingest_tasks(db, "session-1")
+    db.commit()
+    db.close()
+
+    executed: list[str] = []
+
+    async def _fake_execute(task_id: str, session_id: str, task_type: str) -> bool:
+        executed.append(task_type)
+        db = factory()
+        try:
+            task = db.query(SessionTask).filter(SessionTask.id == task_id).one()
+            task.status = "done"
+            task.error = None
+            db.commit()
+        finally:
+            db.close()
+        return False
+
+    ws = _make_write_serializer(factory)
+    with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+        with patch("zerg.services.ingest_task_queue._execute_task", new=AsyncMock(side_effect=_fake_execute)):
+            await _process_batch(worker_name="cold", exclude_task_types=("turn_loop",))
+
+    assert executed == ["summary", "embedding"]
+    pending = _get_tasks(factory, status="pending")
+    assert [task.task_type for task in pending] == ["turn_loop"]
+
+
+@pytest.mark.asyncio
+async def test_hot_worker_can_process_turn_loop_while_cold_worker_is_busy(tmp_path):
+    """Hot turn-loop work should not wait for a busy cold worker."""
+    from zerg.services.ingest_task_queue import _process_batch
+
+    factory = _make_db(tmp_path, "worker_hot_cold_parallel.db")
+    db = factory()
+    db.add(SessionTask(id="task-summary", session_id="session-summary", task_type="summary", status="pending"))
+    db.add(SessionTask(id="task-turn-loop", session_id="session-turn-loop", task_type="turn_loop", status="pending"))
+    db.commit()
+    db.close()
+
+    summary_started = asyncio.Event()
+    release_summary = asyncio.Event()
+    executed: list[str] = []
+
+    async def _fake_execute(task_id: str, session_id: str, task_type: str) -> bool:
+        executed.append(task_type)
+        if task_type == "summary":
+            summary_started.set()
+            await release_summary.wait()
+        db = factory()
+        try:
+            task = db.query(SessionTask).filter(SessionTask.id == task_id).one()
+            task.status = "done"
+            task.error = None
+            db.commit()
+        finally:
+            db.close()
+        return False
+
+    ws = _make_write_serializer(factory)
+    with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+        with patch("zerg.services.ingest_task_queue._execute_task", new=AsyncMock(side_effect=_fake_execute)):
+            cold_batch = asyncio.create_task(_process_batch(worker_name="cold", exclude_task_types=("turn_loop",)))
+            await summary_started.wait()
+
+            await _process_batch(worker_name="hot", include_task_types=("turn_loop",))
+
+            done = _get_tasks(factory, status="done")
+            assert {task.task_type for task in done} == {"turn_loop"}
+
+            release_summary.set()
+            await cold_batch
+
+    assert executed[:2] == ["summary", "turn_loop"]
+    done = _get_tasks(factory, status="done")
+    assert {task.task_type for task in done} == {"summary", "turn_loop"}
 
 
 @pytest.mark.asyncio

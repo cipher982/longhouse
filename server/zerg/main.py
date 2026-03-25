@@ -402,9 +402,7 @@ async def lifespan(app: FastAPI):
 
             if default_engine is not None and default_engine.dialect.name == "sqlite":
                 with default_engine.connect() as conn:
-                    fts_row = conn.execute(
-                        text("SELECT 1 FROM sqlite_master " "WHERE type='table' AND name='events_fts' LIMIT 1")
-                    ).fetchone()
+                    fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
                     if not fts_row:
                         raise RuntimeError("events_fts table is missing (FTS5 required).")
                     # Validate FTS module by executing a no-op MATCH query.
@@ -455,7 +453,7 @@ async def lifespan(app: FastAPI):
                         logger.info("Demo mode: seeded %d demo sessions", seeded_count)
                     elif failed_count > 0:
                         logger.warning(
-                            "Demo mode: demo seed had %d failures " "(see per-session errors above)",
+                            "Demo mode: demo seed had %d failures (see per-session errors above)",
                             failed_count,
                         )
                     else:
@@ -592,6 +590,7 @@ async def lifespan(app: FastAPI):
             # Ingest task worker (durable summary + embedding after session ingest)
             try:
                 from zerg.database import get_session_factory
+                from zerg.services.ingest_task_queue import HOT_INGEST_TASK_TYPES
                 from zerg.services.ingest_task_queue import reset_stale_running_tasks
                 from zerg.services.ingest_task_queue import run_ingest_task_worker
 
@@ -600,8 +599,19 @@ async def lifespan(app: FastAPI):
                     reset_stale_running_tasks(_itq_db)
                 finally:
                     _itq_db.close()
-                asyncio.create_task(run_ingest_task_worker())
-                started.append("ingest_task_worker")
+                asyncio.create_task(
+                    run_ingest_task_worker(
+                        worker_name="hot",
+                        include_task_types=HOT_INGEST_TASK_TYPES,
+                    )
+                )
+                asyncio.create_task(
+                    run_ingest_task_worker(
+                        worker_name="cold",
+                        exclude_task_types=HOT_INGEST_TASK_TYPES,
+                    )
+                )
+                started.extend(["ingest_task_worker_hot", "ingest_task_worker_cold"])
             except Exception as e:  # noqa: BLE001
                 failed.append(f"ingest_task_worker ({e})")
                 logger.exception("Failed to start ingest_task_worker")
@@ -1412,7 +1422,7 @@ async def health_check():
 
         if default_engine is not None and default_engine.dialect.name == "sqlite":
             with default_engine.connect() as conn:
-                fts_row = conn.execute(text("SELECT 1 FROM sqlite_master " "WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
+                fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
                 if not fts_row:
                     raise RuntimeError("events_fts table is missing (FTS5 required).")
                 conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
