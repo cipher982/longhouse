@@ -43,6 +43,7 @@ _TURN_OPERATOR_CONVERSATION_ID = "operator:main"
 _RECENT_EVENT_LIMIT = 160
 _TURN_EXCERPT_MAX_CHARS = 4000
 _TURN_REVIEW_FRESH_WINDOW_MINUTES = 10
+_TURN_REVIEW_ACTIVE_SETTLE_SECONDS = 3.0
 _TURN_CONTROLLER_TIMEOUT_SECONDS = 15.0
 _EXPECTED_IGNORE_OUTCOME = "ignore"
 _EXPECTED_NOTIFY_OUTCOME = "notify_user"
@@ -139,6 +140,13 @@ def _is_managed_local_codex_session(session: AgentSession) -> bool:
     return (session.provider or "").strip().lower() == "codex" and (
         str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value
     )
+
+
+def _is_managed_local_session(session: AgentSession | None) -> bool:
+    if session is None:
+        return False
+    execution_home = str(getattr(session, "execution_home", "") or "").strip()
+    return execution_home == SessionExecutionHome.MANAGED_LOCAL.value
 
 
 def _supports_same_session_continue(session: AgentSession) -> bool:
@@ -734,13 +742,24 @@ def _should_wait_for_active_presence(
     session_id: str,
     assistant_timestamp: datetime,
     now: datetime,
+    session: AgentSession | None = None,
 ) -> bool:
     presence_state, updated_at = _latest_presence_snapshot(db, session_id)
     if updated_at is None or presence_state not in _ACTIVE_PRESENCE_STATES:
         return False
+    normalized_assistant_at = _normalize_utc(assistant_timestamp)
+    if normalized_assistant_at is None:
+        return False
     if (now - updated_at).total_seconds() > (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60):
         return False
-    return updated_at > _normalize_utc(assistant_timestamp)
+    if updated_at <= normalized_assistant_at:
+        return False
+    if not _is_managed_local_session(session):
+        return True
+    # Presence is only a short settle signal for hot managed-local turns.
+    # Once the assistant turn has been stable for a few seconds, do not let
+    # a sticky thinking/running state strand review creation indefinitely.
+    return (now - normalized_assistant_at).total_seconds() <= _TURN_REVIEW_ACTIVE_SETTLE_SECONDS
 
 
 def turn_loop_retry_needed(
@@ -751,6 +770,7 @@ def turn_loop_retry_needed(
 ) -> bool:
     if not _has_turn_review_table(db):
         return False
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     turn = load_latest_completed_assistant_turn(db, session_id)
     if turn is None:
         return False
@@ -777,6 +797,7 @@ def turn_loop_retry_needed(
         session_id=session_id,
         assistant_timestamp=turn.assistant_timestamp,
         now=now,
+        session=session,
     )
 
 
@@ -808,6 +829,7 @@ async def _record_session_turn_review(
         session_id=session_id,
         assistant_timestamp=turn.assistant_timestamp,
         now=now,
+        session=session,
     ):
         return None, False
 
