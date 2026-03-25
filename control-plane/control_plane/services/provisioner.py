@@ -271,19 +271,38 @@ class Provisioner:
     def __init__(self):
         self.client = docker.DockerClient(base_url=settings.docker_host)
 
+    def ensure_image_available(self, image: str) -> None:
+        try:
+            self.client.images.pull(image)
+        except docker.errors.ImageNotFound:
+            # Allow local-only tags (CI/dev) when the image exists locally.
+            try:
+                self.client.images.get(image)
+                logger.warning("Image %s not found in registry; using local image", image)
+            except docker.errors.ImageNotFound:
+                raise
+
     def ensure_network(self, container):
         if not settings.proxy_network:
             return
         network = self.client.networks.get(settings.proxy_network)
         network.connect(container)
 
-    def run_migration_preflight(self, subdomain: str, *, data_path: str | None = None) -> str:
+    def run_migration_preflight(
+        self,
+        subdomain: str,
+        *,
+        data_path: str | None = None,
+        image: str | None = None,
+        skip_pull: bool = False,
+    ) -> str:
         """Apply heavy DB migrations against instance data before reprovision.
 
         Runs a one-shot container on the target data volume:
         `python -m zerg.cli.main migrate --database-url sqlite:////data/longhouse.db --apply --json`
         """
         target_data_path, volumes = _volume_for(subdomain, data_path=data_path)
+        use_image = image or settings.image
 
         command = [
             "python",
@@ -296,9 +315,12 @@ class Provisioner:
             "--json",
         ]
 
+        if not skip_pull:
+            self.ensure_image_available(use_image)
+
         try:
             output = self.client.containers.run(
-                image=settings.image,
+                image=use_image,
                 command=command,
                 remove=True,
                 volumes=volumes,
@@ -365,15 +387,7 @@ class Provisioner:
 
         # Pull image before provisioning (skip if batch deploy already pre-pulled)
         if not skip_pull:
-            try:
-                self.client.images.pull(use_image)
-            except docker.errors.ImageNotFound:
-                # Allow local-only tags (CI/dev) when the image exists locally.
-                try:
-                    self.client.images.get(use_image)
-                    logger.warning("Image %s not found in registry; using local image", use_image)
-                except docker.errors.ImageNotFound:
-                    raise
+            self.ensure_image_available(use_image)
 
         container = self.client.containers.run(
             image=use_image,

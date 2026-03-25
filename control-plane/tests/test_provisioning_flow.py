@@ -1061,6 +1061,31 @@ class TestInstancesAPI:
         prov.provision_instance.assert_not_called()
 
     @patch("control_plane.routers.instances.Provisioner")
+    def test_reprovision_retries_preflight_after_stopping_locked_instance(self, MockProv, client, db_session):
+        prov = _mock_provisioner()
+        prov.run_migration_preflight.side_effect = [
+            RuntimeError("Migration preflight failed for inst1: database is locked"),
+            '{"pending_before":[],"pending_after":[]}',
+        ]
+        MockProv.return_value = prov
+
+        user = _make_user(db_session)
+        inst = _make_instance(
+            db_session,
+            user,
+            status="active",
+            container_name="longhouse-inst1",
+        )
+
+        resp = client.post(f"/api/instances/{inst.id}/reprovision", headers=ADMIN_HEADERS)
+        assert resp.status_code == 200
+        assert prov.run_migration_preflight.call_count == 2
+        prov.run_migration_preflight.assert_any_call("inst1", data_path="/tmp/test-data/inst1")
+        assert prov.deprovision_instance.call_count == 2
+        prov.deprovision_instance.assert_any_call("longhouse-inst1")
+        prov.provision_instance.assert_called_once()
+
+    @patch("control_plane.routers.instances.Provisioner")
     def test_reprovision_blocked_during_deploy(self, MockProv, client, db_session):
         user = _make_user(db_session)
         inst = _make_instance(
@@ -1674,6 +1699,7 @@ class TestProvisionerClass:
         output = provisioner.run_migration_preflight("testuser", data_path=str(tmp_path / "testuser"))
 
         assert '"pending_after":[]' in output
+        mock_client.images.pull.assert_called_once_with(settings.image)
         mock_client.containers.run.assert_called_once()
 
     @patch("control_plane.services.provisioner.docker.DockerClient")
@@ -1693,6 +1719,8 @@ class TestProvisionerClass:
         provisioner = Provisioner()
         with pytest.raises(RuntimeError, match="Migration preflight failed"):
             provisioner.run_migration_preflight("testuser", data_path=str(tmp_path / "testuser"))
+
+        mock_client.images.pull.assert_called_once_with(settings.image)
 
 
 class TestMigrationStatusProbe:

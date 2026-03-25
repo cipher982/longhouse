@@ -207,6 +207,11 @@ def _instance_out(inst: Instance, email: str, *, password: str | None = None) ->
     )
 
 
+def _is_retryable_preflight_lock_error(detail: str) -> bool:
+    normalized = detail.lower()
+    return "migration preflight failed" in normalized and "database is locked" in normalized
+
+
 def _recreate_instance(
     inst: Instance,
     user: User,
@@ -484,13 +489,21 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
         )
 
     provisioner = Provisioner()
+    data_path = resolve_instance_data_path(inst.subdomain, data_path=inst.data_path)
     try:
         provisioner.run_migration_preflight(
             inst.subdomain,
-            data_path=resolve_instance_data_path(inst.subdomain, data_path=inst.data_path),
+            data_path=data_path,
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        if _is_retryable_preflight_lock_error(str(exc)):
+            provisioner.deprovision_instance(inst.container_name)
+            try:
+                provisioner.run_migration_preflight(inst.subdomain, data_path=data_path)
+            except RuntimeError as retry_exc:
+                raise HTTPException(status_code=500, detail=str(retry_exc)) from retry_exc
+        else:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     prior_image = inst.last_healthy_image
     result = _recreate_instance(inst, user, provisioner)
