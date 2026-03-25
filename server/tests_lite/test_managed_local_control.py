@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import deque
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
@@ -90,7 +91,7 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude"):
 class _FakeDispatcher:
     def __init__(self):
         self.calls: list[dict[str, object]] = []
-        self.results: list[dict[str, object]] | None = None
+        self.results: deque[dict[str, object]] | None = None
 
     async def dispatch_job(self, *, db, owner_id, runner_id, command, timeout_secs, commis_id, run_id):
         self.calls.append(
@@ -103,7 +104,7 @@ class _FakeDispatcher:
             }
         )
         if self.results:
-            return self.results.pop(0)
+            return self.results.popleft()
         return {
             "ok": True,
             "data": {
@@ -390,7 +391,7 @@ def test_ship_managed_local_claude_transcript_retries_after_transient_runner_dis
 
         for transient_error in ("Runner is offline", "Failed to send command to runner"):
             dispatcher = _FakeDispatcher()
-            dispatcher.results = [
+            dispatcher.results = deque([
                 {
                     "ok": False,
                     "error": {
@@ -405,7 +406,7 @@ def test_ship_managed_local_claude_transcript_retries_after_transient_runner_dis
                         "stderr": "",
                     },
                 },
-            ]
+            ])
             monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
 
             result = asyncio.run(
