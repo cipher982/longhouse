@@ -9,6 +9,9 @@ TARGET_DB_URL="${TARGET_DB_URL:-sqlite:////data/control-plane.db}"
 TARGET_DB_DIR="${TARGET_DB_DIR:-/var/app-data/longhouse-control-plane}"
 BACKUP_DB_GLOB="${BACKUP_DB_GLOB:-/var/app-data/longhouse-backups/control-plane/control-plane-*.db}"
 TARGET_INSTANCE_DATA_ROOT="${TARGET_INSTANCE_DATA_ROOT:-/var/app-data/longhouse}"
+TARGET_BUILD_PACK="${TARGET_BUILD_PACK:-dockerfile}"
+TARGET_BASE_DIRECTORY="${TARGET_BASE_DIRECTORY:-/control-plane}"
+TARGET_DOCKERFILE_LOCATION="${TARGET_DOCKERFILE_LOCATION:-/Dockerfile}"
 DATA_MOUNT_PATH="/data"
 INSTANCE_MOUNT_PATH="/var/app-data/longhouse"
 
@@ -21,6 +24,9 @@ Usage:
   ./scripts/control-plane-coolify-contract.sh apply
 
 Checks/fixes:
+  - build_pack = dockerfile
+  - base_directory = /control-plane
+  - dockerfile_location = /Dockerfile
   - CONTROL_PLANE_DATABASE_URL regular env = sqlite:////data/control-plane.db
   - CONTROL_PLANE_INSTANCE_DATA_ROOT regular env = /var/app-data/longhouse
   - Preview env rows for those keys are absent or match the prod values
@@ -49,11 +55,11 @@ load_coolify_token() {
 }
 
 resolve_app_uuid() {
-  coolify app list --format json | jq -r --arg name "$APP_NAME" '.[] | select(.name == $name) | .uuid' | head -1
+  sql_scalar "SELECT uuid FROM applications WHERE name='${APP_NAME}' LIMIT 1;"
 }
 
 load_envs_json() {
-  coolify app env list "$APP_UUID" --all --format json -s
+  ssh "$COOLIFY_API_HOST" "curl -fsS -H 'Authorization: Bearer ${COOLIFY_TOKEN}' 'http://localhost:8000/api/v1/applications/${APP_UUID}/envs'"
 }
 
 regular_env_value() {
@@ -79,10 +85,21 @@ storage_host_path() {
   sql_scalar "SELECT host_path FROM local_persistent_volumes WHERE resource_type='App\\Models\\Application' AND resource_id=(SELECT id FROM applications WHERE uuid='${APP_UUID}') AND mount_path='${mount_path}' LIMIT 1;"
 }
 
+application_field() {
+  local field="$1"
+  sql_scalar "SELECT ${field} FROM applications WHERE uuid='${APP_UUID}' LIMIT 1;"
+}
+
 set_storage_host_path() {
   local mount_path="$1"
   local host_path="$2"
   sql_scalar "UPDATE local_persistent_volumes SET host_path='${host_path}', updated_at=NOW() WHERE resource_type='App\\Models\\Application' AND resource_id=(SELECT id FROM applications WHERE uuid='${APP_UUID}') AND mount_path='${mount_path}'; SELECT host_path FROM local_persistent_volumes WHERE resource_type='App\\Models\\Application' AND resource_id=(SELECT id FROM applications WHERE uuid='${APP_UUID}') AND mount_path='${mount_path}' LIMIT 1;" >/dev/null
+}
+
+set_application_field() {
+  local field="$1"
+  local value="$2"
+  sql_scalar "UPDATE applications SET ${field}='${value}', updated_at=NOW() WHERE uuid='${APP_UUID}'; SELECT ${field} FROM applications WHERE uuid='${APP_UUID}' LIMIT 1;" >/dev/null
 }
 
 print_check() {
@@ -120,6 +137,18 @@ check_preview_env() {
 check_contract() {
   ENVS_JSON="$(load_envs_json)"
   local issues=0
+
+  local build_pack
+  build_pack="$(application_field build_pack)"
+  print_check "app build_pack" "$build_pack" "$TARGET_BUILD_PACK" || issues=$((issues + 1))
+
+  local base_directory
+  base_directory="$(application_field base_directory)"
+  print_check "app base_directory" "$base_directory" "$TARGET_BASE_DIRECTORY" || issues=$((issues + 1))
+
+  local dockerfile_location
+  dockerfile_location="$(application_field dockerfile_location)"
+  print_check "app dockerfile_location" "$dockerfile_location" "$TARGET_DOCKERFILE_LOCATION" || issues=$((issues + 1))
 
   local db_url
   db_url="$(regular_env_value CONTROL_PLANE_DATABASE_URL)"
@@ -209,6 +238,11 @@ apply_contract() {
   say "Removing preview env overrides for contract keys..."
   remove_envs CONTROL_PLANE_DATABASE_URL true
   remove_envs CONTROL_PLANE_INSTANCE_DATA_ROOT true
+
+  say "Repairing source/build contract..."
+  set_application_field build_pack "$TARGET_BUILD_PACK"
+  set_application_field base_directory "$TARGET_BASE_DIRECTORY"
+  set_application_field dockerfile_location "$TARGET_DOCKERFILE_LOCATION"
 
   ENVS_JSON="$(load_envs_json)"
   say "Recreating regular env rows for contract keys..."
