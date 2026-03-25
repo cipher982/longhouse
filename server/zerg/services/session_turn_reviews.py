@@ -28,6 +28,7 @@ from zerg.services.managed_local_runtime import persist_managed_local_turn_idle
 from zerg.services.managed_local_runtime import persist_managed_local_turn_needs_user
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
+from zerg.services.presence_cache import get_presence_cache
 from zerg.services.session_loop_controller import build_loop_controller_payload
 from zerg.services.session_loop_controller import evaluate_session_turn_with_llm
 from zerg.services.write_serializer import get_write_serializer
@@ -714,6 +715,34 @@ def _review_requires_mobile_attention(review: SessionTurnReview) -> bool:
     return True
 
 
+def _latest_presence_snapshot(db: Session, session_id: str) -> tuple[str | None, datetime | None]:
+    db_presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
+    best_state = str(getattr(db_presence, "state", "") or "").strip() or None
+    best_updated_at = _normalize_utc(getattr(db_presence, "updated_at", None))
+
+    cache_entry = get_presence_cache().get(session_id)
+    cache_state = str(getattr(cache_entry, "state", "") or "").strip() or None
+    cache_updated_at = _normalize_utc(getattr(cache_entry, "updated_at", None))
+    if cache_state and cache_updated_at is not None and (best_updated_at is None or cache_updated_at >= best_updated_at):
+        return cache_state, cache_updated_at
+    return best_state, best_updated_at
+
+
+def _should_wait_for_active_presence(
+    *,
+    db: Session,
+    session_id: str,
+    assistant_timestamp: datetime,
+    now: datetime,
+) -> bool:
+    presence_state, updated_at = _latest_presence_snapshot(db, session_id)
+    if updated_at is None or presence_state not in _ACTIVE_PRESENCE_STATES:
+        return False
+    if (now - updated_at).total_seconds() > (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60):
+        return False
+    return updated_at > _normalize_utc(assistant_timestamp)
+
+
 def turn_loop_retry_needed(
     *,
     db: Session,
@@ -743,15 +772,12 @@ def turn_loop_retry_needed(
     if existing is not None:
         return False
 
-    presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
-    if presence is None:
-        return False
-    updated_at = _normalize_utc(presence.updated_at)
-    if updated_at is None:
-        return False
-    if (now - updated_at).total_seconds() > (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60):
-        return False
-    return presence.state in _ACTIVE_PRESENCE_STATES
+    return _should_wait_for_active_presence(
+        db=db,
+        session_id=session_id,
+        assistant_timestamp=turn.assistant_timestamp,
+        now=now,
+    )
 
 
 async def _record_session_turn_review(
@@ -777,15 +803,13 @@ async def _record_session_turn_review(
         if reference_time is None or (reference_time - turn.assistant_timestamp).total_seconds() > fresh_window_seconds:
             return None, False
 
-    presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
-    if presence is not None:
-        updated_at = _normalize_utc(presence.updated_at)
-        if (
-            updated_at is not None
-            and (now - updated_at).total_seconds() <= (_TURN_REVIEW_FRESH_WINDOW_MINUTES * 60)
-            and presence.state in _ACTIVE_PRESENCE_STATES
-        ):
-            return None, False
+    if _should_wait_for_active_presence(
+        db=db,
+        session_id=session_id,
+        assistant_timestamp=turn.assistant_timestamp,
+        now=now,
+    ):
+        return None, False
 
     existing = (
         db.query(SessionTurnReview)
