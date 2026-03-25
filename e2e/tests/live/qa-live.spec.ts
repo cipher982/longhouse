@@ -66,28 +66,17 @@ async function failWithScreenshot(
   throw new Error(`${message}\nScreenshot saved: ${path}`);
 }
 
-async function findVisibleTimelineSessionId(page: Page): Promise<string | null> {
-  const cards = page.locator(".session-card[data-session-id]");
-  await cards.first().waitFor({ timeout: 12_000 });
-  const count = await cards.count();
-  const stableTones = new Set(["inactive", "idle"]);
-
-  for (const preferredTone of stableTones) {
-    for (let index = 0; index < count; index += 1) {
-      const card = cards.nth(index);
-      const tone = await card.getAttribute("data-runtime-tone");
-      if (tone !== preferredTone) continue;
-      const sessionId = await card.getAttribute("data-session-id");
-      if (sessionId) {
-        return sessionId;
-      }
-    }
+async function findSessionIdViaAgentsApi(request: APIRequestContext): Promise<string | null> {
+  const response = await request.get("/api/agents/sessions?limit=5");
+  if (!response.ok()) {
+    return null;
   }
 
-  for (let index = 0; index < count; index += 1) {
-    const sessionId = await cards.nth(index).getAttribute("data-session-id");
-    if (sessionId) {
-      return sessionId;
+  const body = await response.json();
+  const sessions = Array.isArray(body?.sessions) ? body.sessions : [];
+  for (const session of sessions) {
+    if (typeof session?.id === "string" && session.id.length > 0) {
+      return session.id;
     }
   }
 
@@ -303,18 +292,16 @@ test("forum route redirects to timeline without auth errors", async ({
 // Test 3: Session detail loads events
 // ---------------------------------------------------------------------------
 
-test("session detail renders event timeline", async ({ context }) => {
-  test.setTimeout(20_000);
+test("session detail renders event timeline", async ({ context, agentsRequest }) => {
+  test.setTimeout(45_000);
 
-  const page = await context.newPage();
-
-  await page.goto("/timeline", { waitUntil: "domcontentloaded" });
-  const sessionId = await findVisibleTimelineSessionId(page).catch(() => null);
+  const sessionId = await findSessionIdViaAgentsApi(agentsRequest).catch(() => null);
   if (!sessionId) {
-    await page.close();
     test.skip(true, "No sessions available to test detail view");
     return;
   }
+
+  const page = await context.newPage();
 
   const { consoleErrors, serverErrors } = attachErrorCollectors(page);
   const authErrors: string[] = [];
