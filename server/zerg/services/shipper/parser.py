@@ -378,6 +378,8 @@ def parse_session_file(path: Path, offset: int = 0) -> Iterator[ParsedEvent]:
                     yield metadata_event
                     continue
 
+                # Progress events are high-volume hook/tool noise (hundreds per session).
+                # Intentionally dropped as parsed events — source archive keeps the bytes.
                 if event_type == "progress":
                     continue
 
@@ -515,6 +517,8 @@ def _parse_with_offset_tracking(
                     events.append(metadata_event)
                     continue
 
+                # Progress events are high-volume hook/tool noise (hundreds per session).
+                # Intentionally dropped as parsed events — source archive keeps the bytes.
                 if event_type == "progress":
                     continue
 

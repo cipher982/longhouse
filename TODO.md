@@ -11,7 +11,6 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 
 ## Close Out (done or ~15 min to finish)
 
-- [Compaction fidelity](docs/tasks/open/compaction-fidelity.md) — one decision left: formalize `progress` event handling, add a test, done.
 - [Memory system consolidation](docs/tasks/open/memory-system-consolidation.md) — code complete; Phase 4 deploy steps remain (push, CI, reprovision, verify).
 - [Runner onboarding hardening](docs/tasks/open/runner-onboarding-hardening.md) — 95% done; workflow dispatch run, persistence sufficiency decision, mobile spot checks.
 - [Mobile loop inbox](docs/tasks/open/mobile-loop-inbox.md) — code complete; needs live dogfood of push notification flow with VAPID keys on instance.
