@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { test as base, expect, type APIRequestContext, type BrowserContext } from '@playwright/test';
+import { test as base, expect, type APIRequestContext, type BrowserContext, type StorageState } from '@playwright/test';
 
 type RequestFactory = { newContext: (options?: { baseURL?: string; timeout?: number }) => Promise<APIRequestContext> };
 const RETRYABLE_AUTH_STATUSES = new Set([408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526]);
@@ -174,6 +174,7 @@ export async function exchangeLoginToken(
 type LiveFixtures = {
   apiBaseUrl: string;
   frontendBaseUrl: string;
+  browserStorageState: StorageState;
   authToken: string;
   deviceToken: string;
   request: APIRequestContext;
@@ -190,6 +191,24 @@ export const test = base.extend<LiveFixtures>({
   frontendBaseUrl: [async ({ apiBaseUrl }, use) => {
     const frontendBaseUrl = process.env.FRONTEND_URL || process.env.PLAYWRIGHT_BASE_URL || process.env.E2E_FRONTEND_URL || apiBaseUrl;
     await use(frontendBaseUrl);
+  }, { scope: 'worker' }],
+
+  browserStorageState: [async ({ browser, frontendBaseUrl }, use) => {
+    const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
+    if (!loginToken) {
+      test.skip(true, 'SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
+    }
+
+    const authContext = await browser.newContext({
+      baseURL: frontendBaseUrl,
+    });
+
+    try {
+      await authenticateBrowserContext(authContext, frontendBaseUrl, loginToken);
+      await use(await authContext.storageState());
+    } finally {
+      await authContext.close();
+    }
   }, { scope: 'worker' }],
 
   authToken: [async ({ apiBaseUrl, playwright }, use) => {
@@ -247,18 +266,13 @@ export const test = base.extend<LiveFixtures>({
     await request.dispose();
   },
 
-  context: async ({ browser, frontendBaseUrl }, use) => {
-    const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
-    if (!loginToken) {
-      test.skip(true, 'SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
-    }
-
+  context: async ({ browser, frontendBaseUrl, browserStorageState }, use) => {
     const context = await browser.newContext({
       baseURL: frontendBaseUrl,
+      storageState: browserStorageState,
     });
 
     try {
-      await authenticateBrowserContext(context, frontendBaseUrl, loginToken);
       await use(context);
     } finally {
       await context.close();
