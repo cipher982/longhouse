@@ -55,6 +55,8 @@ TASK_TIMEOUT_SECONDS: dict[str, float] = {
 RETRY_LATER_BASE_SECONDS = 2.0
 RETRY_LATER_MAX_SECONDS = 16.0
 HOT_INGEST_TASK_TYPES: tuple[str, ...] = ("turn_loop",)
+_hot_worker_event: asyncio.Event | None = None
+_hot_worker_loop: asyncio.AbstractEventLoop | None = None
 
 
 class RetryTaskLater(Exception):
@@ -94,6 +96,54 @@ def _enqueue_if_not_active(db, session_id: str, task_type: str) -> None:
             updated_at=now,
         )
     )
+    _notify_hot_worker(task_type)
+
+
+def _is_hot_worker_lane(
+    *,
+    include_task_types: tuple[str, ...] | None = None,
+    exclude_task_types: tuple[str, ...] | None = None,
+) -> bool:
+    if exclude_task_types:
+        return False
+    if not include_task_types:
+        return False
+    return tuple(include_task_types) == HOT_INGEST_TASK_TYPES
+
+
+def _ensure_hot_worker_event() -> asyncio.Event:
+    global _hot_worker_event
+    global _hot_worker_loop
+
+    loop = asyncio.get_running_loop()
+    if _hot_worker_event is None or _hot_worker_loop is not loop:
+        _hot_worker_event = asyncio.Event()
+        _hot_worker_loop = loop
+    return _hot_worker_event
+
+
+def _notify_hot_worker(task_type: str) -> None:
+    if task_type not in HOT_INGEST_TASK_TYPES:
+        return
+    if _hot_worker_event is None or _hot_worker_loop is None or _hot_worker_loop.is_closed():
+        return
+    try:
+        _hot_worker_loop.call_soon_threadsafe(_hot_worker_event.set)
+    except RuntimeError:
+        logger.debug("Hot ingest worker notifier unavailable; falling back to polling", exc_info=True)
+
+
+async def _wait_for_hot_worker_signal(*, timeout_secs: float) -> None:
+    event = _ensure_hot_worker_event()
+    if event.is_set():
+        event.clear()
+        return
+    try:
+        await asyncio.wait_for(event.wait(), timeout=max(timeout_secs, 0.0))
+    except asyncio.TimeoutError:
+        return
+    finally:
+        event.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -142,6 +192,12 @@ async def run_ingest_task_worker(
         include_task_types or (),
         exclude_task_types or (),
     )
+    hot_lane = _is_hot_worker_lane(
+        include_task_types=include_task_types,
+        exclude_task_types=exclude_task_types,
+    )
+    if hot_lane:
+        _ensure_hot_worker_event()
     while True:
         try:
             await _process_batch(
@@ -151,7 +207,10 @@ async def run_ingest_task_worker(
             )
         except Exception:
             logger.exception("Ingest task worker %s: unexpected error in batch", worker_name)
-        await asyncio.sleep(poll_seconds)
+        if hot_lane:
+            await _wait_for_hot_worker_signal(timeout_secs=poll_seconds)
+        else:
+            await asyncio.sleep(poll_seconds)
 
 
 async def _process_batch(
