@@ -1,11 +1,13 @@
 # Longhouse Backend
 
-FastAPI backend for Longhouse — never lose an AI coding conversation.
+FastAPI backend and CLI package for Longhouse.
 
 ## Install
 
 ```bash
-pip install longhouse
+uv tool install longhouse
+longhouse onboard
+longhouse serve
 ```
 
-See main repository README for full documentation: https://github.com/cipher982/longhouse
+Full docs and the recommended hosted/self-host flows live in the main repository README: https://github.com/cipher982/longhouse

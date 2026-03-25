@@ -1,8 +1,8 @@
 # Longhouse
 
-Never lose an AI coding conversation.
+Keep Claude Code, Codex CLI, and Gemini CLI sessions in one searchable timeline.
 
-Search and browse every Claude Code, Codex CLI, and Gemini CLI session. Self-host or hosted.
+Self-host locally or use Longhouse hosted. Claude continues directly in the browser today; Codex and Gemini sync into the timeline today and can start cloud sessions.
 
 ## Demo
 
@@ -14,54 +14,79 @@ Video walkthrough coming soon. In the meantime, try it yourself:
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve --demo
+# Open http://localhost:8080
 ```
 
 ## Get Started
 
 ### Hosted (beta)
 
-Sign up at https://longhouse.ai. Hosted unlocks always-on sync and resume from any device (Claude sessions today).
+Sign up at https://longhouse.ai. Hosted gives you the fastest path to always-on sessions, browser access, and cloud-managed continuation.
 
 ### Self-host (local)
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve
-# Open http://localhost:8080
+```
+
+Open `http://localhost:8080`.
+
+The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. If you skipped onboarding or want to re-run the shipper setup, use:
+
+```bash
+longhouse connect --install
+```
+
+Want a quick preview before importing real sessions?
+
+```bash
+longhouse serve --demo
 ```
 
 ## Features
 
-- **Timeline**: Searchable archive of all your AI coding sessions
-- **Search**: FTS5-powered instant discovery across all sessions (launch requirement)
-- **Resume**: Continue Claude Code sessions (hosted or self-hosted)
+- **One timeline**: Claude Code, Codex CLI, and Gemini CLI sessions in one place
+- **Search + recall**: Find messages, tool calls, file edits, and session metadata fast
+- **Claude continuation**: Continue Claude Code sessions from the web today
+- **Hosted or self-hosted**: Start local with SQLite, or use hosted for always-on access
 
 ## Install Options
 
 ### 0. Hosted (beta)
 Get started at https://longhouse.ai (Google OAuth + Stripe checkout).
 
-### 1. One-liner install (Recommended)
+### 1. Self-host with the installer (recommended)
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
-longhouse serve --demo  # Try with sample data
+longhouse serve
 ```
 
 The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
 
-### 2. Manual install
+Preview with sample data:
+
+```bash
+longhouse serve --demo
+```
+
+### 2. Self-host with `uv`
 ```bash
 uv tool install longhouse
 longhouse onboard
-longhouse serve --demo  # Try with sample data
+longhouse serve
 ```
 
-### 3. Docker
+### 3. Advanced / contributor paths
+
+Docker is mainly for CI and contributor workflows, not the primary end-user install path.
+
 ```bash
 docker compose -f docker/docker-compose.dev.yml up
 ```
 
-### 4. From source
+From source:
+
 ```bash
 git clone https://github.com/cipher982/longhouse
 cd longhouse && make dev
@@ -99,7 +124,15 @@ cd longhouse && make dev
 
 ## Configuration
 
-Set `LONGHOUSE_PASSWORD` (plaintext) or `LONGHOUSE_PASSWORD_HASH` (recommended) for remote access authentication.
+### Local defaults
+
+- Local UI: `http://localhost:8080`
+- Local database: `~/.longhouse/longhouse.db`
+- Local quickstart auth: disabled by default on localhost
+
+### Remote or shared access
+
+Set `LONGHOUSE_PASSWORD` (plaintext) or `LONGHOUSE_PASSWORD_HASH` (recommended) before binding beyond localhost.
 
 ### Gmail Inbox Setup (Self-hosted)
 
@@ -128,13 +161,14 @@ PY
 
 ```bash
 longhouse serve      # Start the server
-longhouse serve --demo   # Start with sample data
-longhouse serve --demo-fresh # Rebuild demo data on start
-longhouse connect    # Sync Claude Code sessions (continuous)
-longhouse connect --install  # Install hooks + background engine service for shipping
-longhouse ship       # One-time sync
-longhouse status     # Show configuration
-longhouse onboard    # Re-run setup wizard
+longhouse serve --demo        # Start with sample data
+longhouse serve --demo-fresh  # Rebuild demo data on start
+longhouse connect             # Run the shipper/watch process in foreground
+longhouse connect --install   # Install hooks + background engine service
+longhouse ship                # One-time import pass
+longhouse status              # Show effective configuration
+longhouse doctor              # Self-diagnosis
+longhouse onboard             # Re-run setup wizard
 ```
 
 ## Troubleshooting
@@ -153,9 +187,9 @@ export PATH="$HOME/.local/bin:$PATH"
 
 Run `longhouse doctor` to verify everything is working.
 
-### `claude: command not found` when using hooks
+### Claude Code not found when installing hooks
 
-Claude Code must be installed separately. The `longhouse connect --install` command will warn you if `claude` is not on PATH in a fresh shell.
+Claude Code must be installed separately. `longhouse connect --install` will set up shipping hooks for Claude Code and Codex when those CLIs are present.
 
 ```bash
 # Check if claude is reachable
@@ -199,7 +233,9 @@ longhouse doctor   # verify
 
 ## Documentation
 
-This README is the canonical user guide. Product direction lives in `VISION.md`, and the execution roadmap lives in `TODO.md`.
+- User docs: https://longhouse.ai/docs
+- Product direction: `VISION.md`
+- Issues and bugs: https://github.com/cipher982/longhouse/issues
 
 ---
 
@@ -243,7 +279,7 @@ Each session is a log in your timeline.
 
 ## Status
 
-**Alpha** - Actively developed, expect changes. Claude Code, Codex CLI, and Gemini CLI sessions ship today; hosted beta in progress.
+**Alpha**. Actively developed. Claude Code, Codex CLI, and Gemini CLI sessions sync today. Claude browser continuation is the most complete path today; hosted beta is live.
 
 ## Author
 

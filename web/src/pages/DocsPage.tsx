@@ -12,7 +12,7 @@ export default function DocsPage() {
   usePageMeta({
     title: "Documentation - Longhouse",
     description:
-      "Learn how to use Longhouse. Quick start guides, timeline search tips, and integration setup instructions.",
+      "Learn how to use Longhouse. Quick start guides, timeline search tips, and setup instructions for Claude Code, Codex CLI, and Gemini CLI.",
   });
 
   return (
@@ -35,7 +35,7 @@ export default function DocsPage() {
       <main className="info-page-content">
         <h1 className="info-page-title">Documentation</h1>
         <p className="info-page-subtitle">
-          Get started with Longhouse.
+          Get started with Longhouse fast, then connect your real sessions.
         </p>
 
         <nav className="docs-nav">
@@ -65,35 +65,45 @@ export default function DocsPage() {
           </p>
           <pre><code>curl -fsSL https://get.longhouse.ai/install.sh | bash</code></pre>
           <p>
-            Requires Python 3.12+. No sudo needed.
+            The installer sets up the CLI and runs onboarding. Requires Python 3.12+. No sudo needed.
           </p>
 
-          <h3>2. Start the server</h3>
+          <h3>2. Start Longhouse</h3>
           <pre><code>longhouse serve</code></pre>
           <p>
-            Opens a local web UI at <code>http://localhost:47300</code>.
+            Opens a local web UI at <code>http://localhost:8080</code>.
             Data is stored in a SQLite database on your machine.
           </p>
 
-          <h3>3. Use your AI coding tools</h3>
+          <h3>3. Connect your local CLIs</h3>
           <p>
-            Keep using Claude Code, Codex CLI, or Gemini CLI as normal.
-            Longhouse automatically discovers and imports your sessions
-            from their default storage locations.
+            If you skipped onboarding or want to reinstall the background shipper and hooks, run:
+          </p>
+          <pre><code>longhouse connect --install</code></pre>
+          <p>
+            Claude Code has the deepest support today. Codex CLI sync is also set up here when Codex is installed. Gemini sessions import from local session files.
           </p>
 
-          <h3>4. Browse and search</h3>
+          <h3>4. Use your AI coding tools as normal</h3>
           <p>
-            Open the timeline to see all your sessions. Use full-text search
-            to find any conversation, tool call, or file edit across all your sessions.
+            Keep using Claude Code, Codex CLI, or Gemini CLI. Longhouse imports their sessions into the timeline so you can browse, search, and resume from one place.
+          </p>
+
+          <h3>5. Want a safe preview first?</h3>
+          <p>
+            Start with demo data instead of your real sessions:
+          </p>
+          <pre><code>longhouse serve --demo</code></pre>
+          <p>
+            This is the fastest way to see the product before importing anything.
           </p>
         </section>
 
         <section id="search" className="docs-section">
           <h2>Search</h2>
           <p>
-            Longhouse provides full-text search across all your AI coding sessions.
-            Search by keyword, file name, tool name, or any text from your conversations.
+            Longhouse provides full-text search across your AI coding sessions.
+            Search by keyword, file name, tool name, project, or any text from your conversations.
           </p>
 
           <h3>What&apos;s indexed</h3>
@@ -114,25 +124,25 @@ export default function DocsPage() {
         <section id="agents" className="docs-section">
           <h2>Supported Agents</h2>
           <p>
-            Longhouse reads the session files that AI coding tools already produce.
-            No plugins or configuration changes needed.
+            Longhouse reads the session files these tools already produce. The installer and onboarding flow handle the normal shipping setup for supported local CLIs.
           </p>
 
-          <h3>Fully Supported</h3>
+          <h3>Current Support</h3>
           <ul>
-            <li><strong>Claude Code</strong> — Reads from <code>~/.claude/projects/</code></li>
-            <li><strong>Codex CLI</strong> — Reads from <code>~/.codex/</code></li>
-            <li><strong>Gemini CLI</strong> — Reads from <code>~/.gemini/</code></li>
+            <li><strong>Claude Code</strong> — strongest support today: timeline sync, hooks, and browser continuation</li>
+            <li><strong>Codex CLI</strong> — timeline sync today; cloud starts supported; browser continuation still Claude-first</li>
+            <li><strong>Gemini CLI</strong> — timeline sync today; cloud starts supported; browser continuation still Claude-first</li>
           </ul>
 
           <h3>Coming Soon</h3>
           <ul>
+            <li><strong>OpenCode</strong> — timeline import and hosted workflows</li>
             <li><strong>Cursor</strong> — IDE-integrated AI sessions</li>
           </ul>
 
           <h3>How it works</h3>
           <p>
-            A background shipper watches for new session files and imports them
+            Longhouse watches for new session files and imports them
             into the local SQLite database. Sessions are deduplicated by ID, so
             re-importing is safe and idempotent.
           </p>
@@ -143,15 +153,18 @@ export default function DocsPage() {
 
           <h3>Authentication</h3>
           <p>
-            By default, auth is disabled for local use. To add password protection:
+            For local-only quickstarts, auth is disabled by default. To add password protection:
           </p>
           <pre><code>LONGHOUSE_PASSWORD=your-password longhouse serve</code></pre>
+          <p>
+            Before binding beyond localhost, set <code>LONGHOUSE_PASSWORD</code> or <code>LONGHOUSE_PASSWORD_HASH</code>.
+          </p>
 
           <h3>Port</h3>
           <p>
-            Default port is 47300. Override with:
+            Default port is 8080. Override with:
           </p>
-          <pre><code>longhouse serve --port 8080</code></pre>
+          <pre><code>longhouse serve --port 8081</code></pre>
 
           <h3>Data location</h3>
           <p>
