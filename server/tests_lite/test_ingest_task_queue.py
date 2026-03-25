@@ -1070,6 +1070,82 @@ async def test_turn_loop_task_skips_operator_when_user_policy_disables_it(tmp_pa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("presence_state", ["thinking", "running"])
+async def test_turn_loop_task_reviews_when_active_presence_predates_completed_turn(
+    tmp_path,
+    monkeypatch,
+    presence_state,
+):
+    """Active presence older than the completed assistant turn should not force a retry."""
+    from zerg.services.ingest_task_queue import _execute_task
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    factory = _make_db(tmp_path, f"worker_operator_old_active_{presence_state}.db")
+    ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
+        factory,
+        ended_at=ended_at,
+        presence_state=presence_state,
+        presence_updated_at=ended_at - timedelta(seconds=5),
+    )
+
+    ws = _make_write_serializer(factory)
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                await _execute_task(task_id, session_id, "turn_loop")
+
+    done_tasks = _get_tasks(factory, status="done")
+    pending_tasks = _get_tasks(factory, status="pending")
+    reviews = _get_turn_reviews(factory)
+    assert len(done_tasks) == 1
+    assert pending_tasks == []
+    assert len(reviews) == 1
+
+
+@pytest.mark.asyncio
+async def test_turn_loop_task_prefers_fresher_cached_idle_presence_over_db_running(tmp_path, monkeypatch):
+    """Fresh cached idle state should override a stale DB-only running row."""
+    from zerg.services.ingest_task_queue import _execute_task
+
+    monkeypatch.setenv("OIKOS_OPERATOR_MODE_ENABLED", "1")
+    factory = _make_db(tmp_path, "worker_operator_cached_idle.db")
+    ended_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    session_id, task_id, _owner_id, _assistant_event_id = _seed_completion_task(
+        factory,
+        ended_at=ended_at,
+        presence_state="running",
+        presence_updated_at=datetime.now(timezone.utc),
+    )
+
+    cached_idle = SimpleNamespace(
+        state="idle",
+        updated_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+    )
+    fake_cache = SimpleNamespace(get=lambda sid: cached_idle if sid == session_id else None)
+
+    ws = _make_write_serializer(factory)
+    with patch("zerg.services.ingest_task_queue.get_session_factory", return_value=factory):
+        with patch("zerg.services.ingest_task_queue.get_write_serializer", return_value=ws):
+            with patch(
+                "zerg.services.session_turn_reviews.evaluate_session_turn_with_llm",
+                new=AsyncMock(return_value=_continue_decision()),
+            ):
+                with patch("zerg.services.session_turn_reviews.get_presence_cache", return_value=fake_cache):
+                    await _execute_task(task_id, session_id, "turn_loop")
+
+    done_tasks = _get_tasks(factory, status="done")
+    pending_tasks = _get_tasks(factory, status="pending")
+    reviews = _get_turn_reviews(factory)
+    assert len(done_tasks) == 1
+    assert pending_tasks == []
+    assert len(reviews) == 1
+
+
+@pytest.mark.asyncio
 async def test_worker_requeues_on_failure_within_max_attempts(tmp_path):
     """Worker re-queues task as pending when failure < max_attempts."""
     from zerg.services.ingest_task_queue import _execute_task
