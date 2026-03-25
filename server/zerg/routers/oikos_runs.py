@@ -116,8 +116,17 @@ class SessionTurnReviewSummary(UTCBaseModel):
     shadow_alignment: Optional[str] = None
     assistant_turn_finished_at: Optional[datetime] = None
     turn_loop_enqueued_at: Optional[datetime] = None
+    turn_loop_claimed_at: Optional[datetime] = None
+    controller_started_at: Optional[datetime] = None
+    controller_completed_at: Optional[datetime] = None
     turn_loop_completed_at: Optional[datetime] = None
+    pre_enqueue_latency_ms: Optional[int] = None
     queue_latency_ms: Optional[int] = None
+    claim_latency_ms: Optional[int] = None
+    controller_latency_ms: Optional[int] = None
+    review_write_latency_ms: Optional[int] = None
+    post_review_latency_ms: Optional[int] = None
+    worker_latency_ms: Optional[int] = None
     review_latency_ms: Optional[int] = None
     processing_latency_ms: Optional[int] = None
     created_at: datetime
@@ -232,8 +241,12 @@ def _duration_ms(start: datetime | None, end: datetime | None) -> int | None:
 def _build_turn_review_summary(row: SessionTurnReview) -> SessionTurnReviewSummary:
     assistant_turn_finished_at = _normalize_utc(getattr(row, "assistant_turn_finished_at", None))
     turn_loop_enqueued_at = _normalize_utc(getattr(row, "turn_loop_enqueued_at", None))
+    turn_loop_claimed_at = _normalize_utc(getattr(row, "turn_loop_claimed_at", None))
+    controller_started_at = _normalize_utc(getattr(row, "controller_started_at", None))
+    controller_completed_at = _normalize_utc(getattr(row, "controller_completed_at", None))
     turn_loop_completed_at = _normalize_utc(getattr(row, "turn_loop_completed_at", None))
     created_at = _normalize_utc(row.created_at)
+    pre_enqueue_latency_ms = _duration_ms(assistant_turn_finished_at, turn_loop_enqueued_at)
     return SessionTurnReviewSummary(
         id=row.id,
         session_id=str(row.session_id),
@@ -258,8 +271,17 @@ def _build_turn_review_summary(row: SessionTurnReview) -> SessionTurnReviewSumma
         shadow_alignment=row.shadow_alignment,
         assistant_turn_finished_at=assistant_turn_finished_at,
         turn_loop_enqueued_at=turn_loop_enqueued_at,
+        turn_loop_claimed_at=turn_loop_claimed_at,
+        controller_started_at=controller_started_at,
+        controller_completed_at=controller_completed_at,
         turn_loop_completed_at=turn_loop_completed_at,
-        queue_latency_ms=_duration_ms(assistant_turn_finished_at, turn_loop_enqueued_at),
+        pre_enqueue_latency_ms=pre_enqueue_latency_ms,
+        queue_latency_ms=pre_enqueue_latency_ms,
+        claim_latency_ms=_duration_ms(turn_loop_enqueued_at, turn_loop_claimed_at),
+        controller_latency_ms=_duration_ms(controller_started_at, controller_completed_at),
+        review_write_latency_ms=_duration_ms(controller_completed_at, created_at),
+        post_review_latency_ms=_duration_ms(created_at, turn_loop_completed_at),
+        worker_latency_ms=_duration_ms(turn_loop_claimed_at, turn_loop_completed_at),
         review_latency_ms=_duration_ms(assistant_turn_finished_at, created_at),
         processing_latency_ms=_duration_ms(turn_loop_enqueued_at, turn_loop_completed_at),
         created_at=created_at or row.created_at,

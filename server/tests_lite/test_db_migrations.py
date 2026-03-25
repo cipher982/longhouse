@@ -309,7 +309,7 @@ def test_startup_migration_adds_session_loop_mode_and_backfills_manual(tmp_path)
     assert rows == [("00000000-0000-0000-0000-000000000123", "manual", None)]
 
 
-def test_startup_migration_adds_turn_review_follow_up_prompt(tmp_path):
+def test_startup_migration_adds_turn_review_follow_up_prompt_and_timing_columns(tmp_path):
     db_path = tmp_path / "legacy_session_turn_reviews_follow_up.db"
     engine = make_engine(f"sqlite:///{db_path}")
 
@@ -349,6 +349,9 @@ def test_startup_migration_adds_turn_review_follow_up_prompt(tmp_path):
         columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turn_reviews)"))}
 
     assert "follow_up_prompt" in columns
+    assert "turn_loop_claimed_at" in columns
+    assert "controller_started_at" in columns
+    assert "controller_completed_at" in columns
 
 
 def test_heavy_migration_plan_detects_legacy_pending(tmp_path):

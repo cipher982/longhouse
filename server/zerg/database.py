@@ -605,6 +605,12 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN assistant_turn_finished_at DATETIME"))
                 if "turn_loop_enqueued_at" not in columns:
                     conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN turn_loop_enqueued_at DATETIME"))
+                if "turn_loop_claimed_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN turn_loop_claimed_at DATETIME"))
+                if "controller_started_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN controller_started_at DATETIME"))
+                if "controller_completed_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN controller_completed_at DATETIME"))
                 if "turn_loop_completed_at" not in columns:
                     conn.execute(text("ALTER TABLE session_turn_reviews ADD COLUMN turn_loop_completed_at DATETIME"))
             conn.commit()

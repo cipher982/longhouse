@@ -760,10 +760,12 @@ async def test_turn_review_serializer_wraps_create_and_complete_hot_path(monkeyp
         )
 
         enqueued_at = _now()
+        claimed_at = enqueued_at + timedelta(milliseconds=250)
         review = await maybe_process_session_turn_loop(
             db=db,
             session_id=str(session_id),
             freshness_reference_at=enqueued_at,
+            turn_loop_claimed_at=claimed_at,
         )
         assert review is not None
         db.refresh(review)
@@ -771,6 +773,9 @@ async def test_turn_review_serializer_wraps_create_and_complete_hot_path(monkeyp
         assert labels == ["turn-review-create", "turn-review-complete"]
         assert _normalize_test_utc(review.assistant_turn_finished_at) is not None
         assert _normalize_test_utc(review.turn_loop_enqueued_at) == _normalize_test_utc(enqueued_at)
+        assert _normalize_test_utc(review.turn_loop_claimed_at) == _normalize_test_utc(claimed_at)
+        assert _normalize_test_utc(review.controller_started_at) is not None
+        assert _normalize_test_utc(review.controller_completed_at) is not None
         assert _normalize_test_utc(review.turn_loop_completed_at) is not None
 
 
@@ -825,10 +830,12 @@ async def test_turn_review_serializer_wraps_existing_review_timing_updates(monke
         review_id = int(review.id)
 
         enqueued_at = _now()
+        claimed_at = enqueued_at + timedelta(milliseconds=250)
         result = await maybe_record_session_turn_review(
             db=db,
             session_id=str(session_id),
             freshness_reference_at=enqueued_at,
+            turn_loop_claimed_at=claimed_at,
         )
         assert result is not None
         assert int(result.id) == review_id
@@ -837,6 +844,7 @@ async def test_turn_review_serializer_wraps_existing_review_timing_updates(monke
         assert labels == ["turn-review-existing"]
         assert _normalize_test_utc(result.assistant_turn_finished_at) is not None
         assert _normalize_test_utc(result.turn_loop_enqueued_at) == _normalize_test_utc(enqueued_at)
+        assert _normalize_test_utc(result.turn_loop_claimed_at) == _normalize_test_utc(claimed_at)
 
 
 def test_classify_turn_review_outcome_keeps_notify_reviews_actionable_without_jobs(tmp_path):
