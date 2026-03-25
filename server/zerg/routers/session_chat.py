@@ -33,6 +33,7 @@ from fastapi import status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pydantic import Field
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
 from zerg.database import get_db
@@ -391,29 +392,38 @@ async def _await_managed_local_turn_events(
     deadline = time.monotonic() + timeout_secs
     latest_seen = after_event_id
     stable_polls = 0
+    saw_pool_timeout = False
 
     while time.monotonic() < deadline:
-        latest_event_id = _get_managed_local_latest_event_id(db_bind=db_bind, session_id=session_id)
-        if latest_event_id > after_event_id:
-            if latest_event_id == latest_seen:
-                stable_polls += 1
-            else:
-                latest_seen = latest_event_id
-                stable_polls = 0
+        try:
+            latest_event_id = _get_managed_local_latest_event_id(db_bind=db_bind, session_id=session_id)
+            if latest_event_id > after_event_id:
+                if latest_event_id == latest_seen:
+                    stable_polls += 1
+                else:
+                    latest_seen = latest_event_id
+                    stable_polls = 0
 
-            if stable_polls >= MANAGED_LOCAL_STABLE_POLLS:
-                events = _fetch_managed_local_events_since(
-                    db_bind=db_bind,
-                    session_id=session_id,
-                    after_event_id=after_event_id,
+                if stable_polls >= MANAGED_LOCAL_STABLE_POLLS:
+                    events = _fetch_managed_local_events_since(
+                        db_bind=db_bind,
+                        session_id=session_id,
+                        after_event_id=after_event_id,
+                    )
+                    if expected_user_message and not _managed_local_events_include_expected_turn(
+                        events=events,
+                        expected_user_message=expected_user_message,
+                    ):
+                        await asyncio.sleep(poll_interval_secs)
+                        continue
+                    return events
+        except SQLAlchemyTimeoutError:
+            if not saw_pool_timeout:
+                logger.warning(
+                    "Managed-local event poll for %s timed out waiting for a DB connection; retrying",
+                    session_id,
                 )
-                if expected_user_message and not _managed_local_events_include_expected_turn(
-                    events=events,
-                    expected_user_message=expected_user_message,
-                ):
-                    await asyncio.sleep(poll_interval_secs)
-                    continue
-                return events
+                saw_pool_timeout = True
 
         await asyncio.sleep(poll_interval_secs)
 

@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -143,6 +144,54 @@ def test_managed_local_events_include_expected_turn_requires_current_prompt_and_
         ],
         expected_user_message=prompt,
     )
+
+
+def test_await_managed_local_turn_events_retries_on_pool_timeout(monkeypatch):
+    session_id = uuid4()
+    calls = {"latest": 0}
+    expected_events = [
+        SimpleNamespace(
+            id=11,
+            role="user",
+            content_text="continue",
+            tool_name=None,
+        ),
+        SimpleNamespace(
+            id=12,
+            role="assistant",
+            content_text="done",
+            tool_name=None,
+        ),
+    ]
+
+    def fake_latest_event_id(**_kwargs):
+        calls["latest"] += 1
+        if calls["latest"] == 1:
+            raise SQLAlchemyTimeoutError("QueuePool busy")
+        return 12
+
+    monkeypatch.setattr(
+        "zerg.routers.session_chat._get_managed_local_latest_event_id",
+        fake_latest_event_id,
+    )
+    monkeypatch.setattr(
+        "zerg.routers.session_chat._fetch_managed_local_events_since",
+        lambda **_kwargs: expected_events,
+    )
+
+    events = asyncio.run(
+        session_chat._await_managed_local_turn_events(
+            db_bind=object(),
+            session_id=session_id,
+            after_event_id=10,
+            expected_user_message="continue",
+            timeout_secs=0.5,
+            poll_interval_secs=0.0,
+        )
+    )
+
+    assert events == expected_events
+    assert calls["latest"] >= 3
 
 
 def test_chat_with_session_routes_claude_managed_local_without_cloud_continuation(monkeypatch, tmp_path):
