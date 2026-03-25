@@ -9,23 +9,26 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 - When a task finishes, move its file to `docs/tasks/done/YYYY-MM/` if the notes are worth keeping; otherwise delete it and let git history carry it.
 - Deferred or speculative work belongs in `docs/tasks/backlog/`, not the active list.
 
+## Close Out (done or ~15 min to finish)
+
+- [Compaction fidelity](docs/tasks/open/compaction-fidelity.md) — one decision left: formalize `progress` event handling, add a test, done.
+- [Memory system consolidation](docs/tasks/open/memory-system-consolidation.md) — code complete; Phase 4 deploy steps remain (push, CI, reprovision, verify).
+- [Managed-local loop profiling](docs/tasks/open/managed-local-loop-profiling.md) — code complete; needs one real smoke run to record post-fix latency numbers.
+- [Runner onboarding hardening](docs/tasks/open/runner-onboarding-hardening.md) — 95% done; workflow dispatch run, persistence sufficiency decision, mobile spot checks.
+- [Mobile loop inbox](docs/tasks/open/mobile-loop-inbox.md) — code complete; needs live dogfood of push notification flow with VAPID keys on instance.
+
 ## Active
 
-- [Realtime Timeline desktop control view](docs/tasks/open/timeline-realtime-action-center.md) — make unmanaged local honest, add execution-home visibility, strengthen managed-local runtime truth, then finish the remaining Timeline cleanup and SSE hot-path work.
-- [Managed-local Loop profiling](docs/tasks/open/managed-local-loop-profiling.md) — `IN PROGRESS (Codex)`; persist the turn-review latency trail, surface it in Session Detail, and prove the post-fix hot-path timing with a real smoke run.
-- [Frontend effect-boundary cleanup](docs/tasks/open/frontend-effect-boundary-cleanup.md) — rewrite the worst effect-driven state choreography so pages are easier to reason about and safer to change.
-- [Mobile Loop Inbox](docs/tasks/open/mobile-loop-inbox.md) — ship the tiny phone-first approve/continue surface instead of forcing the desktop session UI onto mobile.
-- [Memory system consolidation](docs/tasks/open/memory-system-consolidation.md) — ship the Memory Files cleanup, reprovision, and verify hosted behavior.
-- [Runtime story simplification](docs/tasks/open/launch-runtime-simplification.md) — finish the deletion path for the current Oikos harness so the product story matches the code.
-- [Oikos conversations + Gmail launch](docs/tasks/open/oikos-conversations-email.md) — finish the remaining Gmail canaries and retire the last compatibility-only conversation/history path.
-- [Proactive Oikos operator mode](docs/tasks/open/oikos-proactive-operator.md) — ship one bounded autonomy slice without building a giant automation engine.
-- [Engine shipper byte batching](docs/tasks/open/shipper-byte-batching.md) — make oversized session deltas progress via exact byte-range batching.
-- [Compaction fidelity + active context semantics](docs/tasks/open/compaction-fidelity.md) — close the remaining compaction/noise semantics work.
-- [Codex/Gemini continuation parity](docs/tasks/open/codex-gemini-continuation-parity.md) — make cloud continuation true beyond Claude.
-- [Runner onboarding hardening](docs/tasks/open/runner-onboarding-hardening.md) — finish the real-machine proof ring and final launch checks.
+- [Managed-local session control](docs/tasks/open/managed-local-session-control.md) — dedicated tmux server isolation, failed pane inspection, readiness hook bridge, end-to-end dogfood.
+- [Runtime story simplification](docs/tasks/open/launch-runtime-simplification.md) — copy/narrative done; remaining work is the OikosService/react_engine deletion path (3k LOC, 36+ call sites).
+- [Proactive Oikos operator mode](docs/tasks/open/oikos-proactive-operator.md) — Phase 1 complete (wakeups, policy, ledger, shadow journeys); Phase 2 in progress (broader actions, browser/hosted smokes).
+- [Oikos conversations + Gmail launch](docs/tasks/open/oikos-conversations-email.md) — Phases 1-9 done; Phase 10 stalled: real Gmail canaries (OSS, hosted, cross-browser) need mailbox infra.
+- [Realtime Timeline desktop control view](docs/tasks/open/timeline-realtime-action-center.md) — Phases 1-2 done (honest labels, execution-home); Phases 3-4 remain (managed runtime class, SSE poll cleanup).
+- [Codex/Gemini continuation parity](docs/tasks/open/codex-gemini-continuation-parity.md) — architecture ready; needs provider-specific resume builders, output parsers, session state reconstruction.
 
-## Deferred / Backlog
+## Backlog
 
+- [Shipper byte batching](docs/tasks/open/shipper-byte-batching.md) — functionally complete and shipping; only remaining work is large-session fixture tests for CI confidence.
 - [Oikos dispatch contract research](docs/tasks/backlog/oikos-dispatch-contract.md) — useful, but not current launch-path work.
 
 ## Archive
