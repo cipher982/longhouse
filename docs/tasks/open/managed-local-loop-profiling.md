@@ -1,8 +1,9 @@
 # Managed-Local Loop Profiling
 
 Status: In progress
+Owner: Codex
 Spec: `docs/specs/managed-local-loop-profiling.md`
-Last updated: 2026-03-23
+Last updated: 2026-03-25
 
 ## Goal
 
@@ -21,6 +22,7 @@ Make the managed-local Loop hot path measurable enough to answer one question wi
 ## Checklist
 
 - [x] Write the focused profiling spec/task slice
+- [x] Re-stabilize hosted managed-local continuation and live QA so the latency pass has a trustworthy prod baseline
 - [ ] Persist review-local latency timestamps on the backend
 - [ ] Expose derived latency metrics via `/api/oikos/turn-reviews`
 - [ ] Surface the latest latency breakdown in Session Detail
@@ -32,3 +34,4 @@ Make the managed-local Loop hot path measurable enough to answer one question wi
 - Keep this narrow. The current question is latency visibility, not architecture.
 - `session_turn_reviews.created_at` already serves as review/card creation time; do not duplicate it unless the data model forces it.
 - Defer notification/UI-observed timing until the persisted review trail proves the backend hot path is no longer the bottleneck.
+- Managed-local continuation correctness and hosted live QA are green again. The current Codex lane is latency decomposition and visibility, not more `/sessions/{id}/chat` correctness churn.
