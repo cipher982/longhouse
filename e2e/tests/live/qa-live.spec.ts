@@ -8,7 +8,7 @@
  * Or:      make qa-live
  */
 
-import { test, expect, normalizeToken } from "./fixtures";
+import { test, expect, isIgnorablePlaywrightArtifactError, normalizeToken } from "./fixtures";
 import type { APIRequestContext, Page } from "@playwright/test";
 import { waitForPageReady } from "../helpers/ready-signals";
 
@@ -242,7 +242,11 @@ test("loop login round-trip preserves loop destination", async ({
       error instanceof Error ? error.message : String(error),
     );
   } finally {
-    await context.close();
+    await context.close().catch((error) => {
+      if (!isIgnorablePlaywrightArtifactError(error)) {
+        throw error;
+      }
+    });
   }
 });
 

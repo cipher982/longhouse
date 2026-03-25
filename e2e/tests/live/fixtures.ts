@@ -5,6 +5,14 @@ import { test as base, expect, type APIRequestContext, type BrowserContext, type
 type RequestFactory = { newContext: (options?: { baseURL?: string; timeout?: number }) => Promise<APIRequestContext> };
 const RETRYABLE_AUTH_STATUSES = new Set([408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 525, 526]);
 
+export function isIgnorablePlaywrightArtifactError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes('ENOENT') &&
+    error.message.includes('.playwright-artifacts')
+  );
+}
+
 /**
  * Wait for the API to be healthy before running tests.
  * Polls /api/health until status is "ok" twice consecutively.
@@ -146,7 +154,11 @@ async function buildBrowserStorageState(
       }
       throw new Error(lastError);
     } finally {
-      await authRequest.dispose();
+      await authRequest.dispose().catch((error) => {
+        if (!isIgnorablePlaywrightArtifactError(error)) {
+          throw error;
+        }
+      });
     }
   }
 
@@ -202,7 +214,11 @@ export async function exchangeLoginToken(
     }
     throw new Error(lastError);
   } finally {
-    await authRequest.dispose();
+    await authRequest.dispose().catch((error) => {
+      if (!isIgnorablePlaywrightArtifactError(error)) {
+        throw error;
+      }
+    });
   }
 }
 
@@ -270,7 +286,11 @@ export const test = base.extend<LiveFixtures>({
       timeout: 45_000,
     });
     await use(request);
-    await request.dispose();
+    await request.dispose().catch((error) => {
+      if (!isIgnorablePlaywrightArtifactError(error)) {
+        throw error;
+      }
+    });
   },
 
   agentsRequest: async ({ playwright, apiBaseUrl, deviceToken }, use) => {
@@ -290,7 +310,11 @@ export const test = base.extend<LiveFixtures>({
       timeout: 45_000,
     });
     await use(request);
-    await request.dispose();
+    await request.dispose().catch((error) => {
+      if (!isIgnorablePlaywrightArtifactError(error)) {
+        throw error;
+      }
+    });
   },
 
   context: async ({ browser, frontendBaseUrl, browserStorageState }, use) => {
@@ -302,7 +326,11 @@ export const test = base.extend<LiveFixtures>({
     try {
       await use(context);
     } finally {
-      await context.close();
+      await context.close().catch((error) => {
+        if (!isIgnorablePlaywrightArtifactError(error)) {
+          throw error;
+        }
+      });
     }
   },
 });
