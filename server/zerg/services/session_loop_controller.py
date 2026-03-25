@@ -30,9 +30,13 @@ logger = logging.getLogger(__name__)
 
 _LOOP_CONTROLLER_NAME = "Loop Controller"
 _LOOP_CONTROLLER_USE_CASE = "loop_controller"
-_LOOP_THREAD_HISTORY_LIMIT = 6
-_TRANSCRIPT_TAIL_LIMIT = 10
-_MESSAGE_CONTENT_LIMIT = 3000
+_LOOP_THREAD_HISTORY_LIMIT = 4
+_TRANSCRIPT_TAIL_LIMIT = 6
+_MESSAGE_CONTENT_LIMIT = 1500
+_SUMMARY_TITLE_LIMIT = 200
+_SESSION_SUMMARY_LIMIT = 800
+_ASSISTANT_TURN_LIMIT = 1800
+_LAST_USER_TURN_LIMIT = 900
 
 _LOOP_CONTROLLER_SYSTEM_PROMPT = """You are the loop controller for exactly one AI coding session.
 
@@ -97,6 +101,12 @@ def _truncate_text(value: str | None, *, limit: int = _MESSAGE_CONTENT_LIMIT) ->
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "..."
+
+
+def _encode_payload_json(payload: dict[str, Any], *, pretty: bool = False) -> str:
+    if pretty:
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _parse_decision(raw: str, *, model_id: str, loop_thread_id: int) -> LoopControllerDecision:
@@ -218,7 +228,7 @@ def _build_controller_messages(
         if not content:
             continue
         messages.append({"role": row.role, "content": content})
-    messages.append({"role": "user", "content": json.dumps(payload, indent=2, ensure_ascii=False)})
+    messages.append({"role": "user", "content": _encode_payload_json(payload)})
     return messages
 
 
@@ -251,16 +261,16 @@ def build_loop_controller_payload(
             "provider": session.provider,
             "project": session.project,
             "cwd": session.cwd,
-            "summary_title": _truncate_text(session.summary_title, limit=400),
-            "summary": _truncate_text(session.summary, limit=1200),
+            "summary_title": _truncate_text(session.summary_title, limit=_SUMMARY_TITLE_LIMIT),
+            "summary": _truncate_text(session.summary, limit=_SESSION_SUMMARY_LIMIT),
             "loop_mode": getattr(session, "loop_mode", "manual"),
             "resume_supported": (session.provider or "").strip().lower() == "claude",
         },
         "latest_turn": {
             "assistant_event_id": assistant_event_id,
             "turn_index": turn_index,
-            "assistant_text": _truncate_text(turn_text, limit=3500),
-            "last_user_text": _truncate_text(last_user_text, limit=2000),
+            "assistant_text": _truncate_text(turn_text, limit=_ASSISTANT_TURN_LIMIT),
+            "last_user_text": _truncate_text(last_user_text, limit=_LAST_USER_TURN_LIMIT),
         },
         "recent_dialog_tail": _serialize_dialog_tail(dialog_tail),
         "loop_history": {
@@ -295,7 +305,7 @@ async def evaluate_session_turn_with_llm(
     db.expire_all()
 
     messages = _build_controller_messages(loop_thread_id=loop_thread_id, payload=payload, db=db)
-    prompt_json = json.dumps(payload, indent=2, ensure_ascii=False)
+    prompt_json = _encode_payload_json(payload, pretty=True)
 
     def _persist_controller_message(
         write_db: Session,
