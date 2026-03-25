@@ -499,6 +499,62 @@ def test_chat_with_session_uses_direct_ship_to_upgrade_pending_claude_turn(monke
             api_app_ref.dependency_overrides = {}
 
 
+def test_chat_with_session_keeps_direct_ship_running_after_pending_response(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    detached = {"count": 0}
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        async def fake_wait_for_terminal(**_kwargs):
+            return SimpleNamespace(
+                phase="idle",
+                control_status="completed",
+                runtime_event_id=88,
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+        async def fake_wait_for_events(**_kwargs):
+            return []
+
+        async def fake_ship(*, db, owner_id, session, commis_id=None, timeout_secs=20):
+            await asyncio.sleep(0.05)
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        def fake_detach(task, *, session_id):
+            detached["count"] += 1
+            assert session_id == source_session.id
+            task.cancel()
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat.await_managed_local_turn_terminal", fake_wait_for_terminal)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat._await_managed_local_turn_events",
+            fake_wait_for_events,
+        )
+        monkeypatch.setattr("zerg.routers.session_chat.ship_managed_local_claude_transcript", fake_ship)
+        monkeypatch.setattr("zerg.routers.session_chat._detach_managed_local_ship_task", fake_detach)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS", 0.01)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS", 0.01)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 200, response.text
+            body = response.text
+            assert '"sync_status": "pending"' in body
+            assert detached["count"] == 1
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_chat_with_session_lets_natural_events_win_before_forcing_claude_sync(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     ship_calls = {"count": 0}

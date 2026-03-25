@@ -7,6 +7,7 @@ session-chat route and Loop actions use the same transport semantics.
 from __future__ import annotations
 
 import asyncio
+import logging
 import shlex
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,15 +26,20 @@ from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_paste_text_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
 from zerg.services.presence_cache import get_presence_cache
+from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.services.session_continuity import encode_cwd_for_claude
 from zerg.services.session_continuity import validate_session_id
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 
+logger = logging.getLogger(__name__)
+
 MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 1.0
 MANAGED_LOCAL_STABLE_POLLS = 1
+MANAGED_LOCAL_RUNNER_RECONNECT_GRACE_SECS = 8.0
+MANAGED_LOCAL_RUNNER_RECONNECT_POLL_INTERVAL_SECS = 0.25
 MANAGED_LOCAL_SYNC_STATUS_PENDING = "pending"
 MANAGED_LOCAL_SYNC_STATUS_COMPLETE = "complete"
 MANAGED_LOCAL_SYNC_STATUS_FAILED = "failed"
@@ -43,6 +49,12 @@ MANAGED_LOCAL_CONTROL_STATUS_BLOCKED = "blocked"
 MANAGED_LOCAL_CONTROL_STATUS_FAILED = "failed"
 _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE = "claude_hook"
 _MANAGED_LOCAL_ACTIVE_HOOK_PHASES = frozenset({"thinking", "running"})
+_MANAGED_LOCAL_TRANSIENT_RUNNER_DISPATCH_ERRORS = frozenset(
+    {
+        "Runner is offline",
+        "Failed to send command to runner",
+    }
+)
 _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS = {
     "idle": MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
     "needs_user": MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER,
@@ -184,6 +196,30 @@ def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
 def _to_utc_timestamp(value: datetime | None) -> float | None:
     normalized = _normalize_utc_datetime(value)
     return normalized.timestamp() if normalized is not None else None
+
+
+async def _await_managed_local_runner_reconnect(
+    *,
+    owner_id: int,
+    runner_id: int,
+    timeout_secs: float,
+    poll_interval_secs: float = MANAGED_LOCAL_RUNNER_RECONNECT_POLL_INTERVAL_SECS,
+) -> bool:
+    """Wait briefly for a managed-local runner websocket to reconnect."""
+
+    if timeout_secs <= 0:
+        return False
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    connection_manager = get_runner_connection_manager()
+
+    while loop.time() < deadline:
+        if connection_manager.is_online(owner_id, runner_id):
+            return True
+        await asyncio.sleep(poll_interval_secs)
+
+    return connection_manager.is_online(owner_id, runner_id)
 
 
 def get_managed_local_presence_updated_at(*, session_id: UUID) -> datetime | None:
@@ -588,19 +624,43 @@ async def ship_managed_local_claude_transcript(
         return ManagedLocalShipResult(ok=False, error=str(exc))
 
     dispatcher = get_runner_job_dispatcher()
-    result = await dispatcher.dispatch_job(
-        db=db,
-        owner_id=owner_id,
-        runner_id=int(session.source_runner_id),
-        command=command,
-        timeout_secs=timeout_secs,
-        commis_id=commis_id,
-        run_id=None,
-    )
-    if not result.get("ok"):
-        return ManagedLocalShipResult(
-            ok=False,
-            error=str(result.get("error", {}).get("message", "Failed to ship managed local Claude transcript")),
+    runner_id = int(session.source_runner_id)
+    reconnect_budget_secs = max(0.0, float(MANAGED_LOCAL_RUNNER_RECONNECT_GRACE_SECS))
+    attempt = 0
+
+    while True:
+        attempt += 1
+        result = await dispatcher.dispatch_job(
+            db=db,
+            owner_id=owner_id,
+            runner_id=runner_id,
+            command=command,
+            timeout_secs=timeout_secs,
+            commis_id=commis_id,
+            run_id=None,
+        )
+        if result.get("ok"):
+            break
+
+        error_message = str(result.get("error", {}).get("message", "Failed to ship managed local Claude transcript"))
+        if error_message not in _MANAGED_LOCAL_TRANSIENT_RUNNER_DISPATCH_ERRORS or reconnect_budget_secs <= 0:
+            return ManagedLocalShipResult(ok=False, error=error_message)
+
+        wait_started = asyncio.get_running_loop().time()
+        reconnected = await _await_managed_local_runner_reconnect(
+            owner_id=owner_id,
+            runner_id=runner_id,
+            timeout_secs=reconnect_budget_secs,
+        )
+        reconnect_budget_secs = max(0.0, reconnect_budget_secs - (asyncio.get_running_loop().time() - wait_started))
+        if not reconnected:
+            return ManagedLocalShipResult(ok=False, error=error_message)
+
+        logger.info(
+            "Managed-local Claude direct ship retrying after runner %s reconnected (attempt %s, session=%s)",
+            runner_id,
+            attempt + 1,
+            getattr(session, "id", None),
         )
 
     data = result.get("data", {})

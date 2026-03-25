@@ -90,6 +90,7 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude"):
 class _FakeDispatcher:
     def __init__(self):
         self.calls: list[dict[str, object]] = []
+        self.results: list[dict[str, object]] | None = None
 
     async def dispatch_job(self, *, db, owner_id, runner_id, command, timeout_secs, commis_id, run_id):
         self.calls.append(
@@ -101,6 +102,8 @@ class _FakeDispatcher:
                 "commis_id": commis_id,
             }
         )
+        if self.results:
+            return self.results.pop(0)
         return {
             "ok": True,
             "data": {
@@ -361,6 +364,67 @@ def test_ship_managed_local_claude_transcript_dispatches_runner_job(monkeypatch,
         assert f"--session-id {session.id}" in command
         assert "--json" in command
         assert "total_shipped=0" in command
+
+
+def test_ship_managed_local_claude_transcript_retries_after_transient_runner_disconnect(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    reconnect_calls = {"count": 0}
+
+    async def fake_wait_for_reconnect(*, owner_id, runner_id, timeout_secs, poll_interval_secs=0.25):
+        reconnect_calls["count"] += 1
+        assert owner_id > 0
+        assert runner_id > 0
+        assert timeout_secs > 0
+        return True
+
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control._await_managed_local_runner_reconnect",
+        fake_wait_for_reconnect,
+    )
+
+    with SessionLocal() as db:
+        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        session.provider_session_id = "b0c72633-c8b1-46a4-a42a-53a388b69147"
+        db.commit()
+
+        for transient_error in ("Runner is offline", "Failed to send command to runner"):
+            dispatcher = _FakeDispatcher()
+            dispatcher.results = [
+                {
+                    "ok": False,
+                    "error": {
+                        "message": transient_error,
+                    },
+                },
+                {
+                    "ok": True,
+                    "data": {
+                        "exit_code": 0,
+                        "stdout": "",
+                        "stderr": "",
+                    },
+                },
+            ]
+            monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+            result = asyncio.run(
+                ship_managed_local_claude_transcript(
+                    db=db,
+                    owner_id=user.id,
+                    session=session,
+                    commis_id="managed-local-claude-retry",
+                )
+            )
+
+            assert result.ok is True
+            assert len(dispatcher.calls) == 2
+            assert dispatcher.calls[0]["runner_id"] == runner.id
+            assert dispatcher.calls[1]["runner_id"] == runner.id
+            assert dispatcher.calls[0]["commis_id"] == "managed-local-claude-retry"
+            assert dispatcher.calls[1]["commis_id"] == "managed-local-claude-retry"
+
+        assert reconnect_calls["count"] == 2
 
 
 def test_send_text_to_managed_local_session_can_require_active_hook_phase(monkeypatch, tmp_path):

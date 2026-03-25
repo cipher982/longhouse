@@ -446,6 +446,31 @@ async def _force_managed_local_claude_sync(
         )
 
 
+def _detach_managed_local_ship_task(task: asyncio.Task, *, session_id: UUID) -> None:
+    """Let a direct-ship retry continue in the background after the route returns."""
+
+    def _log_completion(done: asyncio.Task) -> None:
+        try:
+            result = done.result()
+        except asyncio.CancelledError:
+            logger.debug("Managed-local Claude direct ship task cancelled for %s", session_id)
+            return
+        except Exception:
+            logger.exception("Managed-local Claude direct ship task crashed for %s", session_id)
+            return
+
+        if getattr(result, "ok", False):
+            logger.info("Managed-local Claude direct ship completed asynchronously for %s", session_id)
+        else:
+            logger.warning(
+                "Managed-local Claude direct ship finished asynchronously without new events for %s: %s",
+                session_id,
+                getattr(result, "error", None) or f"exit_code={getattr(result, 'exit_code', None)}",
+            )
+
+    task.add_done_callback(_log_completion)
+
+
 async def _await_managed_local_events_task(
     events_task: asyncio.Task[list[AgentEvent]],
     *,
@@ -609,8 +634,7 @@ async def _stream_managed_local_output(
                         )
                 finally:
                     if not ship_task.done():
-                        ship_task.cancel()
-                        await asyncio.gather(ship_task, return_exceptions=True)
+                        _detach_managed_local_ship_task(ship_task, session_id=source_session.id)
 
             if ship_result is not None and not ship_result.ok:
                 log_message = ship_result.error or f"exit_code={ship_result.exit_code}"
