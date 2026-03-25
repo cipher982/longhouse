@@ -61,8 +61,10 @@ def _create_session(db, *, loop_mode: str = "assist") -> AgentSession:
 class _FakeChatCompletions:
     def __init__(self, content: str):
         self._content = content
+        self.calls: list[dict[str, object]] = []
 
-    async def create(self, **_kwargs):
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
         message = type("FakeMessage", (), {"content": self._content})()
         choice = type("FakeChoice", (), {"message": message})()
         return type("FakeResponse", (), {"choices": [choice]})()
@@ -206,3 +208,70 @@ async def test_loop_controller_routes_thread_writes_through_serializer(monkeypat
         decision = await _run_controller(db, owner_id=user.id, session=session)
         assert decision.decision == "continue"
         assert serializer_labels == ["loop-thread", "loop-thread-message", "loop-thread-message"]
+
+
+def test_build_loop_controller_payload_bounds_tail_and_text_lengths(tmp_path):
+    SessionLocal = _make_db(tmp_path, "loop_controller_payload_bounds.db")
+
+    long_summary = "summary " * 300
+    long_turn = "assistant turn " * 400
+    long_user = "user turn " * 250
+    dialog_tail = []
+    for index in range(12):
+        dialog_tail.append(
+            {
+                "role": "tool" if index % 3 == 0 else ("user" if index % 2 == 0 else "assistant"),
+                "text": f"message-{index} " + ("x" * 600),
+            }
+        )
+
+    with SessionLocal() as db:
+        session = _create_session(db)
+        session.summary = long_summary
+        session.summary_title = "Session Detail Page " * 40
+        db.commit()
+
+        payload = build_loop_controller_payload(
+            session=session,
+            turn_text=long_turn,
+            last_user_text=long_user,
+            turn_index=7,
+            assistant_event_id=999,
+            auto_continue_streak=2,
+            dialog_tail=dialog_tail,
+        )
+
+    expected_tail = [item for item in dialog_tail[-6:] if item["role"] in {"user", "assistant"}]
+    assert len(payload["recent_dialog_tail"]) == len(expected_tail)
+    assert all(item["role"] in {"user", "assistant"} for item in payload["recent_dialog_tail"])
+    assert len(payload["session"]["summary_title"]) <= 203
+    assert len(payload["session"]["summary"]) <= 803
+    assert len(payload["latest_turn"]["assistant_text"]) <= 1803
+    assert len(payload["latest_turn"]["last_user_text"]) <= 903
+
+
+@pytest.mark.asyncio
+async def test_loop_controller_sends_compact_json_payload_to_model(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "loop_controller_compact_payload.db")
+    fake_response = (
+        '{"decision":"done","summary":"Done.","rationale":"No follow-up is needed.",'
+        '"recommended_action":"done","blocked_reasons":[]}'
+    )
+    fake_client = _FakeClient(fake_response)
+    monkeypatch.setattr(
+        "zerg.services.session_loop_controller.get_llm_client_with_db_fallback",
+        lambda *_args, **_kwargs: (fake_client, "gpt-test", "openai"),
+    )
+
+    with SessionLocal() as db:
+        user = _create_user(db)
+        session = _create_session(db)
+
+        decision = await _run_controller(db, owner_id=user.id, session=session)
+        assert decision.decision == "done"
+
+    assert len(fake_client.chat.completions.calls) == 1
+    messages = fake_client.chat.completions.calls[0]["messages"]
+    assert isinstance(messages, list)
+    model_payload = messages[-1]["content"]
+    assert "\n" not in model_payload
