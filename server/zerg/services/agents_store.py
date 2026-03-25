@@ -688,6 +688,25 @@ class AgentsStore:
         except Exception:
             logger.warning("FTS backfill for session %s failed (non-fatal)", session_id, exc_info=True)
 
+    def _backfill_fts_for_event_ids(self, event_ids: list[int]) -> None:
+        """Batch-insert FTS entries for newly inserted rows only."""
+        if not self._fts_available() or not event_ids:
+            return
+        try:
+            stmt = text("""
+                INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
+                SELECT e.id, e.content_text, e.tool_output_text, e.tool_name, e.role, e.session_id
+                FROM events e
+                LEFT JOIN events_fts f ON f.rowid = e.id
+                WHERE e.id IN :event_ids
+                  AND f.rowid IS NULL
+            """).bindparams(bindparam("event_ids", expanding=True))
+            for index in range(0, len(event_ids), 200):
+                batch = event_ids[index : index + 200]
+                self.db.execute(stmt, {"event_ids": batch})
+        except Exception:
+            logger.warning("FTS backfill for %s event ids failed (non-fatal)", len(event_ids), exc_info=True)
+
     def _fts_query(self, raw: str) -> str:
         """Normalize raw text into a safe FTS query."""
         cleaned = (raw or "").replace('"', '""').strip()
@@ -1425,15 +1444,17 @@ class AgentsStore:
         leaf_uuid_hint: str | None = None
         latest_inserted_timestamp: datetime | None = None
 
-        # Disable FTS triggers during bulk insert — we backfill afterward.
-        # This avoids per-row FTS index updates that extend write lock hold time.
-        fts_triggers_dropped = len(data.events) > 10 and self._disable_fts_triggers()
-
         # Chunk commits every N events to release the SQLite write lock
         # periodically. A single 1000+ event transaction can hold the lock for
         # seconds, causing health-check timeouts and cascading failures.
         _INGEST_CHUNK = 200
+        _FTS_TRIGGER_DISABLE_THRESHOLD = 100
+        # Disabling triggers only pays off for genuinely large batches.
+        # Small live transcript appends should keep trigger maintenance inline.
+        fts_triggers_dropped = len(data.events) >= _FTS_TRIGGER_DISABLE_THRESHOLD and self._disable_fts_triggers()
         _since_commit = 0
+        inserted_event_ids: list[int] = []
+        needs_session_wide_fts_backfill = False
 
         for event_data in data.events:
             event_hash = self._compute_event_hash(event_data)
@@ -1467,6 +1488,12 @@ class AgentsStore:
             result = self.db.execute(stmt)
             if result.rowcount > 0:
                 events_inserted += 1
+                if fts_triggers_dropped:
+                    lastrowid = getattr(result, "lastrowid", None)
+                    if isinstance(lastrowid, int) and lastrowid > 0:
+                        inserted_event_ids.append(lastrowid)
+                    else:
+                        needs_session_wide_fts_backfill = True
                 normalized_timestamp = _normalize_utc_naive(event_data.timestamp)
                 if normalized_timestamp is not None and (
                     latest_inserted_timestamp is None or normalized_timestamp > latest_inserted_timestamp
@@ -1486,7 +1513,10 @@ class AgentsStore:
         if fts_triggers_dropped:
             self._reenable_fts_triggers()
             if events_inserted > 0:
-                self._backfill_fts_for_session(session_id)
+                if not needs_session_wide_fts_backfill and inserted_event_ids:
+                    self._backfill_fts_for_event_ids(inserted_event_ids)
+                else:
+                    self._backfill_fts_for_session(session_id)
 
         source_paths = {line.source_path for line in source_lines}
         latest_line_by_offset, _ = self._list_branch_source_lines(session_id, ingest_branch.id, source_paths)
@@ -1691,7 +1721,8 @@ class AgentsStore:
         branch_mode: str = "head",
         include_total: bool = False,
     ) -> tuple[
-        int | None, tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...]
+        int | None,
+        tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...],
     ]:
         """Return a lightweight recency window signature for timeline SSE preflight."""
 

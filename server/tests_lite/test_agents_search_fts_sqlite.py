@@ -142,3 +142,156 @@ def test_agents_fts_triggers_update_delete(tmp_path):
             {"query": "needletwo"},
         ).scalar()
         assert count_deleted == 0
+
+
+def test_agents_fts_small_append_keeps_triggers_enabled(tmp_path):
+    db_path = tmp_path / "fts_small_append.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    initialize_database(engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        initial = store.ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="fts",
+                device_id="dev-machine",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                started_at=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="seed event one",
+                        timestamp=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="seed event two",
+                        timestamp=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    ),
+                ],
+            )
+        )
+
+        def fail_disable_triggers():
+            raise AssertionError("small transcript appends should not disable FTS triggers")
+
+        store._disable_fts_triggers = fail_disable_triggers
+        append_events = [
+            EventIngest(
+                role="assistant" if index % 2 else "user",
+                content_text=f"small append event {index}",
+                timestamp=datetime(2026, 2, 5, 0, 0, index + 2, tzinfo=timezone.utc),
+                source_path="/tmp/session.jsonl",
+                source_offset=index + 2,
+            )
+            for index in range(12)
+        ]
+        store.ingest_session(
+            SessionIngest(
+                id=initial.session_id,
+                provider="claude",
+                environment="test",
+                project="fts",
+                device_id="dev-machine",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                started_at=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                events=append_events,
+            )
+        )
+
+        count = db.execute(text("SELECT count(*) FROM events_fts")).scalar()
+        assert count == 14
+
+
+def test_agents_fts_large_append_backfills_inserted_rows_only(tmp_path):
+    db_path = tmp_path / "fts_large_append.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    initialize_database(engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        initial = store.ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="fts",
+                device_id="dev-machine",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                started_at=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="seed event one",
+                        timestamp=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="seed event two",
+                        timestamp=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    ),
+                ],
+            )
+        )
+
+        captured_ids: list[int] = []
+        original_backfill = store._backfill_fts_for_event_ids
+
+        def capture_event_backfill(event_ids):
+            captured_ids.extend(event_ids)
+            return original_backfill(event_ids)
+
+        def fail_session_backfill(_session_id):
+            raise AssertionError("large transcript appends should backfill only the inserted rows")
+
+        store._backfill_fts_for_event_ids = capture_event_backfill
+        store._backfill_fts_for_session = fail_session_backfill
+
+        append_events = [
+            EventIngest(
+                role="assistant" if index % 2 else "user",
+                content_text=f"large append event {index}",
+                timestamp=datetime(2026, 2, 5, 0, 1, index % 60, tzinfo=timezone.utc),
+                source_path="/tmp/session.jsonl",
+                source_offset=index + 2,
+            )
+            for index in range(120)
+        ]
+        result = store.ingest_session(
+            SessionIngest(
+                id=initial.session_id,
+                provider="claude",
+                environment="test",
+                project="fts",
+                device_id="dev-machine",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                started_at=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                events=append_events,
+            )
+        )
+
+        assert result.events_inserted == 120
+        assert len(captured_ids) == 120
+        assert len(set(captured_ids)) == 120
+
+        count = db.execute(text("SELECT count(*) FROM events_fts")).scalar()
+        assert count == 122
