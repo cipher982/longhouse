@@ -627,8 +627,9 @@ async def ship_managed_local_claude_transcript(
     runner_id = int(session.source_runner_id)
     reconnect_budget_secs = max(0.0, float(MANAGED_LOCAL_RUNNER_RECONNECT_GRACE_SECS))
     attempt = 0
+    max_attempts = 3
 
-    while True:
+    while attempt < max_attempts:
         attempt += 1
         result = await dispatcher.dispatch_job(
             db=db,
@@ -642,7 +643,8 @@ async def ship_managed_local_claude_transcript(
         if result.get("ok"):
             break
 
-        error_message = str(result.get("error", {}).get("message", "Failed to ship managed local Claude transcript"))
+        error_detail = result.get("error", {})
+        error_message = str(error_detail.get("message", "Failed to ship managed local Claude transcript"))
         if error_message not in _MANAGED_LOCAL_TRANSIENT_RUNNER_DISPATCH_ERRORS or reconnect_budget_secs <= 0:
             return ManagedLocalShipResult(ok=False, error=error_message)
 
