@@ -952,52 +952,77 @@ def _cleanup_legacy_agents_tables(engine: Engine) -> None:
 def _ensure_agents_fts(engine: Engine) -> None:
     """Ensure FTS5 index and triggers exist for agent events (SQLite only)."""
     try:
-        with engine.begin() as conn:
-            conn.exec_driver_sql(
+        with engine.connect() as conn:
+            object_rows = conn.exec_driver_sql(
                 """
-                CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
-                    content_text,
-                    tool_output_text,
-                    tool_name,
-                    role,
-                    session_id UNINDEXED,
-                    content='events',
-                    content_rowid='id'
-                )
+                SELECT type, name
+                FROM sqlite_master
+                WHERE (type = 'table' AND name = 'events_fts')
+                   OR (type = 'trigger' AND name IN ('events_ai', 'events_ad', 'events_au'))
                 """
-            )
+            ).fetchall()
+            existing_objects = {(str(row[0]), str(row[1])) for row in object_rows}
+            fts_exists = ("table", "events_fts") in existing_objects
+            missing_triggers = {
+                "events_ai",
+                "events_ad",
+                "events_au",
+            } - {name for obj_type, name in existing_objects if obj_type == "trigger"}
 
-            conn.exec_driver_sql(
-                """
-                CREATE TRIGGER IF NOT EXISTS events_ai AFTER INSERT ON events BEGIN
-                  INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
-                  VALUES (new.id, new.content_text, new.tool_output_text, new.tool_name, new.role, new.session_id);
-                END
-                """
-            )
-            conn.exec_driver_sql(
-                """
-                CREATE TRIGGER IF NOT EXISTS events_ad AFTER DELETE ON events BEGIN
-                  INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
-                  VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
-                END
-                """
-            )
-            conn.exec_driver_sql(
-                """
-                CREATE TRIGGER IF NOT EXISTS events_au AFTER UPDATE ON events BEGIN
-                  INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
-                  VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
-                  INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
-                  VALUES (new.id, new.content_text, new.tool_output_text, new.tool_name, new.role, new.session_id);
-                END
-                """
-            )
-
-            # Backfill only when the FTS table is empty and events already exist.
-            fts_has_rows = conn.exec_driver_sql("SELECT 1 FROM events_fts LIMIT 1").fetchone() is not None
+            fts_has_rows = fts_exists and conn.exec_driver_sql("SELECT 1 FROM events_fts LIMIT 1").fetchone() is not None
             events_has_rows = conn.exec_driver_sql("SELECT 1 FROM events LIMIT 1").fetchone() is not None
-            if not fts_has_rows and events_has_rows:
+            needs_rebuild = fts_exists and not fts_has_rows and events_has_rows
+
+        if fts_exists and not missing_triggers and not needs_rebuild:
+            return
+
+        with engine.begin() as conn:
+            if not fts_exists:
+                conn.exec_driver_sql(
+                    """
+                    CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
+                        content_text,
+                        tool_output_text,
+                        tool_name,
+                        role,
+                        session_id UNINDEXED,
+                        content='events',
+                        content_rowid='id'
+                    )
+                    """
+                )
+
+            if "events_ai" in missing_triggers:
+                conn.exec_driver_sql(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS events_ai AFTER INSERT ON events BEGIN
+                      INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
+                      VALUES (new.id, new.content_text, new.tool_output_text, new.tool_name, new.role, new.session_id);
+                    END
+                    """
+                )
+            if "events_ad" in missing_triggers:
+                conn.exec_driver_sql(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS events_ad AFTER DELETE ON events BEGIN
+                      INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
+                      VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                    END
+                    """
+                )
+            if "events_au" in missing_triggers:
+                conn.exec_driver_sql(
+                    """
+                    CREATE TRIGGER IF NOT EXISTS events_au AFTER UPDATE ON events BEGIN
+                      INSERT INTO events_fts(events_fts, rowid, content_text, tool_output_text, tool_name, role, session_id)
+                      VALUES('delete', old.id, old.content_text, old.tool_output_text, old.tool_name, old.role, old.session_id);
+                      INSERT INTO events_fts(rowid, content_text, tool_output_text, tool_name, role, session_id)
+                      VALUES (new.id, new.content_text, new.tool_output_text, new.tool_name, new.role, new.session_id);
+                    END
+                    """
+                )
+
+            if needs_rebuild:
                 conn.exec_driver_sql("INSERT INTO events_fts(events_fts) VALUES('rebuild')")
     except Exception as exc:  # pragma: no cover - surface missing FTS5 support
         raise RuntimeError(f"Failed to initialize FTS5 index (events_fts): {exc}") from exc
