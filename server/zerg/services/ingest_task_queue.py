@@ -5,8 +5,9 @@ turn-loop evaluation so tasks survive process restarts. A single asyncio
 worker polls this table, retrying failures up to max_attempts.
 
 Architecture:
-- Single-worker design: one asyncio task processes tasks sequentially.
-  No row-level locking needed because only one worker runs per process.
+- Dual-lane design: one hot worker handles turn-loop work and one cold worker
+  handles everything else. Claims still run through the single write serializer,
+  so no row-level locking is needed inside the worker.
 - Claim one task at a time so newly arrived turn-loop work can preempt older
   low-priority tasks on the next iteration.
 - Bound task execution time so a hung summary/embedding call cannot stall the
@@ -20,7 +21,8 @@ Usage:
 
     # In lifespan:
     reset_stale_running_tasks(db)
-    asyncio.create_task(run_ingest_task_worker())
+    asyncio.create_task(run_ingest_task_worker(worker_name="hot", include_task_types=("turn_loop",)))
+    asyncio.create_task(run_ingest_task_worker(worker_name="cold", exclude_task_types=("turn_loop",)))
 """
 
 from __future__ import annotations
@@ -51,6 +53,7 @@ TASK_TIMEOUT_SECONDS: dict[str, float] = {
 }
 RETRY_LATER_BASE_SECONDS = 2.0
 RETRY_LATER_MAX_SECONDS = 16.0
+HOT_INGEST_TASK_TYPES: tuple[str, ...] = ("turn_loop",)
 
 
 class RetryTaskLater(Exception):
@@ -111,26 +114,56 @@ def reset_stale_running_tasks(db) -> int:
 # ---------------------------------------------------------------------------
 
 
-async def run_ingest_task_worker(poll_seconds: float = WORKER_POLL_SECONDS) -> None:
+async def run_ingest_task_worker(
+    *,
+    poll_seconds: float = WORKER_POLL_SECONDS,
+    worker_name: str = "default",
+    include_task_types: tuple[str, ...] | None = None,
+    exclude_task_types: tuple[str, ...] | None = None,
+) -> None:
     """Background worker: poll and execute pending ingest tasks.
 
     Runs indefinitely. Launch as asyncio.create_task() from lifespan.
     """
-    logger.info("Ingest task worker started (poll=%.1fs, claim_limit=%d)", poll_seconds, CLAIM_LIMIT)
+    logger.info(
+        "Ingest task worker started (name=%s poll=%.1fs claim_limit=%d include=%s exclude=%s)",
+        worker_name,
+        poll_seconds,
+        CLAIM_LIMIT,
+        include_task_types or (),
+        exclude_task_types or (),
+    )
     while True:
         try:
-            await _process_batch()
+            await _process_batch(
+                worker_name=worker_name,
+                include_task_types=include_task_types,
+                exclude_task_types=exclude_task_types,
+            )
         except Exception:
-            logger.exception("Ingest task worker: unexpected error in batch")
+            logger.exception("Ingest task worker %s: unexpected error in batch", worker_name)
         await asyncio.sleep(poll_seconds)
 
 
-async def _process_batch() -> None:
+async def _process_batch(
+    *,
+    worker_name: str = "default",
+    include_task_types: tuple[str, ...] | None = None,
+    exclude_task_types: tuple[str, ...] | None = None,
+) -> None:
     while True:
         ws = get_write_serializer()
         if not ws.is_configured:
             return
-        tasks = await ws.execute(lambda db: _claim_pending(db, CLAIM_LIMIT), label="task-claim")
+        tasks = await ws.execute(
+            lambda db, _include=include_task_types, _exclude=exclude_task_types: _claim_pending(
+                db,
+                CLAIM_LIMIT,
+                include_task_types=_include,
+                exclude_task_types=_exclude,
+            ),
+            label="task-claim",
+        )
 
         if not tasks:
             return
@@ -143,7 +176,13 @@ async def _process_batch() -> None:
             break
 
 
-def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
+def _claim_pending(
+    db,
+    limit: int,
+    *,
+    include_task_types: tuple[str, ...] | None = None,
+    exclude_task_types: tuple[str, ...] | None = None,
+) -> list[tuple[str, str, str]]:
     """Mark pending tasks as running; return (id, session_id, task_type) tuples."""
     priority = case(
         (SessionTask.task_type == "turn_loop", 0),
@@ -156,6 +195,10 @@ def _claim_pending(db, limit: int) -> list[tuple[str, str, str]]:
         # Skip tasks in exponential backoff (updated_at pushed into the future)
         SessionTask.updated_at <= now,
     )
+    if include_task_types:
+        pending_query = pending_query.filter(SessionTask.task_type.in_(include_task_types))
+    if exclude_task_types:
+        pending_query = pending_query.filter(~SessionTask.task_type.in_(exclude_task_types))
     # RetryLater paths bump updated_at when they yield, so claim by updated_at
     # before created_at to keep a single re-queued task from pinning the queue.
     pending = pending_query.order_by(priority, SessionTask.updated_at, SessionTask.created_at, SessionTask.id).limit(limit).all()
@@ -195,8 +238,9 @@ async def _execute_task(task_id: str, session_id: str, task_type: str) -> bool:
     except asyncio.TimeoutError:
         timeout_label = f"{timeout_seconds:g}s" if timeout_seconds is not None else "unknown"
         logger.warning("Ingest task %s (%s/%s) timed out after %s", task_id, task_type, session_id, timeout_label)
+        timeout_message = f"{task_type} task timed out after {timeout_label}"
         await ws.execute(
-            lambda db, _msg=f"{task_type} task timed out after {timeout_label}": _mark_status(db, task_id, "failed", _msg, True),
+            lambda db, _msg=timeout_message: _mark_status(db, task_id, "failed", _msg, True),
             label="task-timeout",
         )
         return False
