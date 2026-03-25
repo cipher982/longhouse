@@ -24,13 +24,25 @@ Current focus:
 ## Checklist
 
 - [x] Close the stale profiling task and capture a fresh prod baseline
-- [ ] Run a fresh multi-turn smoke and compare first-turn vs steady-state timings
-- [ ] Pick the biggest remaining latency bucket and implement one bounded optimization slice
-- [ ] Add or update targeted tests around the chosen latency path
-- [ ] Re-run hosted smoke and record before/after timings
+- [x] Run a fresh multi-turn smoke and compare first-turn vs steady-state timings
+- [x] Pick the biggest remaining latency bucket and implement one bounded optimization slice
+- [x] Add or update targeted tests around the chosen latency path
+- [x] Re-run hosted smoke and record before/after timings
 
 ## Notes
 
 - Correctness is green; do not reopen `/sessions/{id}/chat` completion semantics unless new timings force it.
 - Current `david010` baseline from session `1e2741e5-dcbb-460e-89c8-449680a65b9d`: `pre_enqueue_latency_ms=870`, `claim_latency_ms=404`, `controller_latency_ms=899`, `worker_latency_ms=917`, `review_latency_ms=2189`, `processing_latency_ms=1321`.
 - Prefer one-variable-at-a-time changes. The point of this slice is to avoid another blind reliability thrash.
+- Commit `a95f8753` wakes the hot `turn_loop` worker immediately on enqueue instead of waiting for the next poll interval.
+- Local verification after the change: `make test` (`1164 passed`).
+- Fresh steady-state hosted run on `david010` after deploy/reprovision: session `1f39af67-74c6-41d3-8a56-eb112900a290`.
+- Warm-tenant review timings after the wakeup change:
+  - turn 1: `pre_enqueue_latency_ms=1125`, `claim_latency_ms=8`, `review_latency_ms=2302`
+  - turn 2: `pre_enqueue_latency_ms=877`, `claim_latency_ms=8`, `review_latency_ms=1880`
+  - turn 3: `pre_enqueue_latency_ms=1031`, `claim_latency_ms=9`, `review_latency_ms=1969`
+  - turn 4: `pre_enqueue_latency_ms=1859`, `claim_latency_ms=7`, `review_latency_ms=2907`
+  - turn 5: `pre_enqueue_latency_ms=2352`, `claim_latency_ms=11`, `review_latency_ms=3359`
+  - turn 6: `pre_enqueue_latency_ms=864`, `claim_latency_ms=14`, `review_latency_ms=1780`
+- Main improvement from this slice: steady-state claim latency dropped from roughly `119-430ms` to `7-14ms`.
+- Remaining tail is now clearly pre-enqueue / first-ship latency, not worker claim latency. The cold first session immediately after reprovision (`8c907c51-274e-4223-a134-421fec381487`) still produced a large first-turn outlier, so the next slice should target warmup / pre-enqueue behavior rather than the queue worker.
