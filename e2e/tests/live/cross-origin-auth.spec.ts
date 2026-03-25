@@ -92,7 +92,9 @@ test.describe('Hosted Session Authentication - Live', () => {
 
     const cookies = await context.cookies();
     const sessionCookie = cookies.find((cookie) => cookie.name === 'longhouse_session');
+    const refreshCookie = cookies.find((cookie) => cookie.name === 'longhouse_refresh');
     expect(sessionCookie).toBeDefined();
+    expect(refreshCookie).toBeDefined();
 
     await page.goto(frontendUrl);
     await page.waitForLoadState('domcontentloaded');
