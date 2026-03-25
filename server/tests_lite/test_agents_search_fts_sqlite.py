@@ -1,6 +1,7 @@
 from datetime import datetime
 from datetime import timezone
 
+import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
@@ -295,3 +296,97 @@ def test_agents_fts_large_append_backfills_inserted_rows_only(tmp_path):
 
         count = db.execute(text("SELECT count(*) FROM events_fts")).scalar()
         assert count == 122
+
+
+def test_agents_fts_large_append_restores_triggers_after_error(tmp_path):
+    db_path = tmp_path / "fts_restore_after_error.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    initialize_database(engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+        initial = store.ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="fts",
+                device_id="dev-machine",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                started_at=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="seed event one",
+                        timestamp=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="seed event two",
+                        timestamp=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    ),
+                ],
+            )
+        )
+
+        original_compute_event_hash = store._compute_event_hash
+        hash_calls = 0
+
+        def fail_after_committed_chunk(event):
+            nonlocal hash_calls
+            hash_calls += 1
+            if hash_calls > 205:
+                raise RuntimeError("boom after committed chunk")
+            return original_compute_event_hash(event)
+
+        store._compute_event_hash = fail_after_committed_chunk
+        append_events = [
+            EventIngest(
+                role="assistant" if index % 2 else "user",
+                content_text=f"large append event {index}",
+                timestamp=datetime(2026, 2, 5, 0, 2, index % 60, tzinfo=timezone.utc),
+                source_path="/tmp/session.jsonl",
+                source_offset=index + 2,
+            )
+            for index in range(220)
+        ]
+
+        with pytest.raises(RuntimeError, match="boom after committed chunk"):
+            store.ingest_session(
+                SessionIngest(
+                    id=initial.session_id,
+                    provider="claude",
+                    environment="test",
+                    project="fts",
+                    device_id="dev-machine",
+                    cwd="/tmp",
+                    git_repo=None,
+                    git_branch=None,
+                    started_at=datetime(2026, 2, 5, tzinfo=timezone.utc),
+                    events=append_events,
+                )
+            )
+
+        db.rollback()
+
+        trigger_names = {
+            row[0]
+            for row in db.execute(
+                text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='trigger' AND name IN ('events_ai', 'events_ad', 'events_au')"
+                )
+            ).fetchall()
+        }
+        assert trigger_names == {"events_ai", "events_ad", "events_au"}
+
+        events_count = db.execute(text("SELECT count(*) FROM events")).scalar()
+        fts_count = db.execute(text("SELECT count(*) FROM events_fts")).scalar()
+        assert events_count == 202
+        assert fts_count == 202
