@@ -12,7 +12,7 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 ## Active
 
 - [Realtime Timeline desktop control view](docs/tasks/open/timeline-realtime-action-center.md) — make unmanaged local honest, add execution-home visibility, strengthen managed-local runtime truth, then finish the remaining Timeline cleanup and SSE hot-path work.
-- [Managed-local Loop profiling](docs/tasks/open/managed-local-loop-profiling.md) — persist the turn-review latency trail, surface it in Session Detail, and prove the post-fix hot-path timing with a real smoke run.
+- [Managed-local Loop profiling](docs/tasks/open/managed-local-loop-profiling.md) — `IN PROGRESS (Codex)`; persist the turn-review latency trail, surface it in Session Detail, and prove the post-fix hot-path timing with a real smoke run.
 - [Frontend effect-boundary cleanup](docs/tasks/open/frontend-effect-boundary-cleanup.md) — rewrite the worst effect-driven state choreography so pages are easier to reason about and safer to change.
 - [Mobile Loop Inbox](docs/tasks/open/mobile-loop-inbox.md) — ship the tiny phone-first approve/continue surface instead of forcing the desktop session UI onto mobile.
 - [Memory system consolidation](docs/tasks/open/memory-system-consolidation.md) — ship the Memory Files cleanup, reprovision, and verify hosted behavior.
