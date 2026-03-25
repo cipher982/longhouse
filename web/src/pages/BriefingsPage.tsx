@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom";
 import "../styles/briefings.css";
 import { useBriefing } from "../hooks/useAgentSessions";
 import { useAgentFilters } from "../hooks/useAgentSessions";
+import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   PageShell,
   SectionHeader,
@@ -31,6 +32,8 @@ export function BriefingsPage() {
     project,
     sessionLimit,
   );
+
+  useReadinessFlag({ ready: !isLoading });
 
   const handleCopy = useCallback(() => {
     if (data?.briefing) {

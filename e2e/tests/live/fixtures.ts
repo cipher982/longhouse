@@ -80,42 +80,77 @@ export function readDeviceToken(): string {
   }
 }
 
-async function authenticateBrowserContext(
-  context: BrowserContext,
-  frontendBaseUrl: string,
+async function buildBrowserStorageState(
+  requestFactory: RequestFactory,
+  apiBaseUrl: string,
   loginToken: string,
-): Promise<void> {
-  const authPage = await context.newPage();
-  const acceptTokenUrl = new URL('/api/auth/accept-token', frontendBaseUrl);
-  acceptTokenUrl.searchParams.set('token', loginToken);
-  acceptTokenUrl.searchParams.set('return_to', '/timeline');
+): Promise<StorageState> {
+  let lastError = 'browser auth bootstrap failed';
 
-  try {
-    await authPage.goto(acceptTokenUrl.toString(), { waitUntil: 'domcontentloaded' });
-    await authPage.waitForURL((url) => url.pathname === '/timeline', { timeout: 20_000 });
-
-    const cookies = await context.cookies();
-    const sessionCookie = cookies.find((cookie) => cookie.name === 'longhouse_session');
-    const refreshCookie = cookies.find((cookie) => cookie.name === 'longhouse_refresh');
-    if (!sessionCookie || !refreshCookie) {
-      throw new Error(
-        `browser auth bootstrap missing required cookies (session=${!!sessionCookie}, refresh=${!!refreshCookie})`,
-      );
-    }
-
-    const verifyStatus = await authPage.evaluate(async () => {
-      const response = await fetch('/api/auth/verify', {
-        credentials: 'include',
-      });
-      return response.status;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    const authRequest = await requestFactory.newContext({
+      baseURL: apiBaseUrl,
+      timeout: 30_000,
     });
 
-    if (verifyStatus !== 204) {
-      throw new Error(`browser auth verification failed with status ${verifyStatus}`);
+    try {
+      const response = await authRequest.post('/api/auth/accept-token', {
+        data: { token: loginToken },
+      });
+
+      if (!response.ok()) {
+        const body = await response.text();
+        lastError = `browser auth bootstrap failed: ${response.status()} ${body}`;
+        if (attempt < 5 && RETRYABLE_AUTH_STATUSES.has(response.status())) {
+          const delayMs = attempt * 1_500;
+          console.warn(
+            `[auth] transient browser accept-token ${response.status()} on attempt ${attempt}/5; retrying in ${delayMs}ms`,
+          );
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw new Error(lastError);
+      }
+
+      const verifyResponse = await authRequest.get('/api/auth/verify');
+      if (verifyResponse.status() !== 204) {
+        lastError = `browser auth verification failed with status ${verifyResponse.status()}`;
+        if (attempt < 5 && RETRYABLE_AUTH_STATUSES.has(verifyResponse.status())) {
+          const delayMs = attempt * 1_500;
+          console.warn(
+            `[auth] transient browser auth verify ${verifyResponse.status()} on attempt ${attempt}/5; retrying in ${delayMs}ms`,
+          );
+          await new Promise((r) => setTimeout(r, delayMs));
+          continue;
+        }
+        throw new Error(lastError);
+      }
+
+      const storageState = await authRequest.storageState();
+      const sessionCookie = storageState.cookies.find((cookie) => cookie.name === 'longhouse_session');
+      const refreshCookie = storageState.cookies.find((cookie) => cookie.name === 'longhouse_refresh');
+      if (!sessionCookie || !refreshCookie) {
+        throw new Error(
+          `browser auth bootstrap missing required cookies (session=${!!sessionCookie}, refresh=${!!refreshCookie})`,
+        );
+      }
+
+      return storageState;
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < 5) {
+        const delayMs = attempt * 1_500;
+        console.warn(`[auth] browser auth bootstrap attempt ${attempt}/5 failed; retrying in ${delayMs}ms: ${lastError}`);
+        await new Promise((r) => setTimeout(r, delayMs));
+        continue;
+      }
+      throw new Error(lastError);
+    } finally {
+      await authRequest.dispose();
     }
-  } finally {
-    await authPage.close().catch(() => {});
   }
+
+  throw new Error(lastError);
 }
 
 export async function exchangeLoginToken(
@@ -193,22 +228,14 @@ export const test = base.extend<LiveFixtures>({
     await use(frontendBaseUrl);
   }, { scope: 'worker' }],
 
-  browserStorageState: [async ({ browser, frontendBaseUrl }, use) => {
+  browserStorageState: [async ({ apiBaseUrl, playwright }, use) => {
     const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
     if (!loginToken) {
       test.skip(true, 'SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
     }
 
-    const authContext = await browser.newContext({
-      baseURL: frontendBaseUrl,
-    });
-
-    try {
-      await authenticateBrowserContext(authContext, frontendBaseUrl, loginToken);
-      await use(await authContext.storageState());
-    } finally {
-      await authContext.close();
-    }
+    const storageState = await buildBrowserStorageState(playwright.request, apiBaseUrl, loginToken);
+    await use(storageState);
   }, { scope: 'worker' }],
 
   authToken: [async ({ apiBaseUrl, playwright }, use) => {
