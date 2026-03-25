@@ -80,6 +80,44 @@ export function readDeviceToken(): string {
   }
 }
 
+async function authenticateBrowserContext(
+  context: BrowserContext,
+  frontendBaseUrl: string,
+  loginToken: string,
+): Promise<void> {
+  const authPage = await context.newPage();
+  const acceptTokenUrl = new URL('/api/auth/accept-token', frontendBaseUrl);
+  acceptTokenUrl.searchParams.set('token', loginToken);
+  acceptTokenUrl.searchParams.set('return_to', '/timeline');
+
+  try {
+    await authPage.goto(acceptTokenUrl.toString(), { waitUntil: 'domcontentloaded' });
+    await authPage.waitForURL((url) => url.pathname === '/timeline', { timeout: 20_000 });
+
+    const cookies = await context.cookies();
+    const sessionCookie = cookies.find((cookie) => cookie.name === 'longhouse_session');
+    const refreshCookie = cookies.find((cookie) => cookie.name === 'longhouse_refresh');
+    if (!sessionCookie || !refreshCookie) {
+      throw new Error(
+        `browser auth bootstrap missing required cookies (session=${!!sessionCookie}, refresh=${!!refreshCookie})`,
+      );
+    }
+
+    const verifyStatus = await authPage.evaluate(async () => {
+      const response = await fetch('/api/auth/verify', {
+        credentials: 'include',
+      });
+      return response.status;
+    });
+
+    if (verifyStatus !== 204) {
+      throw new Error(`browser auth verification failed with status ${verifyStatus}`);
+    }
+  } finally {
+    await authPage.close().catch(() => {});
+  }
+}
+
 export async function exchangeLoginToken(
   requestFactory: RequestFactory,
   apiBaseUrl: string,
@@ -131,13 +169,6 @@ export async function exchangeLoginToken(
   } finally {
     await authRequest.dispose();
   }
-}
-
-function getCookieHosts(apiBaseUrl: string, frontendBaseUrl: string): string[] {
-  const hosts = new Set<string>();
-  hosts.add(new URL(apiBaseUrl).hostname);
-  hosts.add(new URL(frontendBaseUrl).hostname);
-  return Array.from(hosts);
 }
 
 type LiveFixtures = {
@@ -216,27 +247,22 @@ export const test = base.extend<LiveFixtures>({
     await request.dispose();
   },
 
-  context: async ({ browser, apiBaseUrl, frontendBaseUrl, authToken }, use) => {
+  context: async ({ browser, frontendBaseUrl }, use) => {
+    const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
+    if (!loginToken) {
+      test.skip(true, 'SMOKE_LOGIN_TOKEN not set; skipping live prod E2E');
+    }
+
     const context = await browser.newContext({
       baseURL: frontendBaseUrl,
     });
-    const secure = apiBaseUrl.startsWith('https://') || frontendBaseUrl.startsWith('https://');
-    const cookieHosts = getCookieHosts(apiBaseUrl, frontendBaseUrl);
 
-    await context.addCookies(
-      cookieHosts.map((domain) => ({
-        name: 'longhouse_session',
-        value: authToken,
-        domain,
-        path: '/',
-        httpOnly: true,
-        secure,
-        sameSite: 'Lax' as const,
-      })),
-    );
-
-    await use(context);
-    await context.close();
+    try {
+      await authenticateBrowserContext(context, frontendBaseUrl, loginToken);
+      await use(context);
+    } finally {
+      await context.close();
+    }
   },
 });
 
