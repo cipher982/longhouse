@@ -52,6 +52,11 @@ Required storage mounts:
 - `/var/app-data/longhouse` -> `/var/app-data/longhouse`
 - `/var/run/docker.sock` -> `/var/run/docker.sock`
 
+Required source/build contract:
+- `build_pack=dockerfile`
+- `base_directory=/control-plane`
+- `dockerfile_location=/Dockerfile`
+
 Required env contract:
 - `CONTROL_PLANE_DATABASE_URL=sqlite:////data/control-plane.db`
 - `CONTROL_PLANE_INSTANCE_DATA_ROOT=/var/app-data/longhouse`
