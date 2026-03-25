@@ -634,7 +634,11 @@ async def _stream_managed_local_output(
                         )
                 finally:
                     if not ship_task.done():
-                        _detach_managed_local_ship_task(ship_task, session_id=source_session.id)
+                        if new_events:
+                            ship_task.cancel()
+                            await asyncio.gather(ship_task, return_exceptions=True)
+                        else:
+                            _detach_managed_local_ship_task(ship_task, session_id=source_session.id)
 
             if ship_result is not None and not ship_result.ok:
                 log_message = ship_result.error or f"exit_code={ship_result.exit_code}"
