@@ -85,7 +85,15 @@ def _enqueue_if_not_active(db, session_id: str, task_type: str) -> None:
     if existing:
         logger.debug("Skipping duplicate %s task for session %s", task_type, session_id)
         return
-    db.add(SessionTask(session_id=session_id, task_type=task_type))
+    now = datetime.now(timezone.utc)
+    db.add(
+        SessionTask(
+            session_id=session_id,
+            task_type=task_type,
+            created_at=now,
+            updated_at=now,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
