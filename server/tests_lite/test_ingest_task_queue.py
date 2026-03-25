@@ -21,6 +21,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
+import zerg.services.ingest_task_queue as ingest_task_queue
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -40,6 +41,7 @@ from zerg.models.agents import SessionTurnReview
 from zerg.models.user import User
 from zerg.models.work import OikosWakeup
 from zerg.services.ingest_task_queue import _claim_pending
+from zerg.services.ingest_task_queue import _wait_for_hot_worker_signal
 from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 from zerg.services.ingest_task_queue import reset_stale_running_tasks
 from zerg.services.session_loop_controller import LoopControllerDecision
@@ -231,6 +233,48 @@ def test_enqueue_allows_requeue_after_done(tmp_path):
     tasks = _get_tasks(factory, status="pending")
     types = {t.task_type for t in tasks}
     assert "summary" in types
+
+
+def test_enqueue_turn_loop_sets_hot_worker_event(tmp_path, monkeypatch):
+    """Enqueueing turn-loop work should wake the hot lane immediately."""
+    factory = _make_db(tmp_path, "enq_hot_worker_signal.db")
+    db = factory()
+
+    event = asyncio.Event()
+    fake_loop = SimpleNamespace(
+        is_closed=lambda: False,
+        call_soon_threadsafe=lambda fn, *args: fn(*args),
+    )
+    monkeypatch.setattr(ingest_task_queue, "_hot_worker_loop", fake_loop)
+    monkeypatch.setattr(ingest_task_queue, "_hot_worker_event", event)
+    try:
+        enqueue_ingest_tasks(db, "session-1")
+        assert event.is_set() is True
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_hot_worker_signal_returns_early_when_notified(monkeypatch):
+    """Hot-lane wait should return as soon as a turn-loop enqueue notifies it."""
+    event = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    monkeypatch.setattr(ingest_task_queue, "_hot_worker_loop", loop)
+    monkeypatch.setattr(ingest_task_queue, "_hot_worker_event", event)
+
+    async def _notify_later():
+        await asyncio.sleep(0.01)
+        ingest_task_queue._notify_hot_worker("turn_loop")
+
+    started = asyncio.get_running_loop().time()
+    await asyncio.gather(
+        _wait_for_hot_worker_signal(timeout_secs=1.0),
+        _notify_later(),
+    )
+    elapsed = asyncio.get_running_loop().time() - started
+
+    assert elapsed < 0.2
+    assert event.is_set() is False
 
 
 # ---------------------------------------------------------------------------
