@@ -773,37 +773,84 @@ def test_await_managed_local_turn_terminal_returns_blocked_after_active_hook_pha
         assert result.control_status == "blocked"
 
 
-def test_await_managed_local_turn_terminal_ignores_terminal_without_active_hook_phase(tmp_path):
+def test_await_managed_local_turn_terminal_ignores_terminal_before_runtime_cursor(tmp_path):
     SessionLocal = _make_db(tmp_path)
 
     with SessionLocal() as db:
         _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
-        db.add(
-            SessionRuntimeEvent(
-                runtime_key=f"claude:{session.id}",
-                session_id=session.id,
-                provider="claude",
-                device_id="cinder",
-                source="claude_hook",
-                kind="phase_signal",
-                phase="idle",
-                tool_name=None,
-                occurred_at=datetime.now(timezone.utc),
-                freshness_ms=600_000,
-                dedupe_key=f"hook:{session.id}:idle",
-                payload_json="{}",
-            )
+        stale_event = SessionRuntimeEvent(
+            runtime_key=f"claude:{session.id}",
+            session_id=session.id,
+            provider="claude",
+            device_id="cinder",
+            source="claude_hook",
+            kind="phase_signal",
+            phase="idle",
+            tool_name=None,
+            occurred_at=datetime.now(timezone.utc),
+            freshness_ms=600_000,
+            dedupe_key=f"hook:{session.id}:idle",
+            payload_json="{}",
         )
+        db.add(stale_event)
         db.commit()
+        baseline_runtime_event_id = int(stale_event.id)
 
         result = asyncio.run(
             await_managed_local_turn_terminal(
                 db_bind=db.get_bind(),
                 session_id=session.id,
-                after_runtime_event_id=0,
+                after_runtime_event_id=baseline_runtime_event_id,
                 timeout_secs=0.1,
                 poll_interval_secs=0.02,
             )
         )
 
         assert result is None
+
+
+def test_await_managed_local_turn_terminal_accepts_runtime_terminal_without_active_hook_phase_after_cursor(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+
+        async def _insert_later():
+            await asyncio.sleep(0.05)
+            with SessionLocal() as event_db:
+                event_db.add(
+                    SessionRuntimeEvent(
+                        runtime_key=f"claude:{session.id}",
+                        session_id=session.id,
+                        provider="claude",
+                        device_id="cinder",
+                        source="claude_hook",
+                        kind="phase_signal",
+                        phase="idle",
+                        tool_name=None,
+                        occurred_at=datetime.now(timezone.utc),
+                        freshness_ms=600_000,
+                        dedupe_key=f"hook:{session.id}:idle",
+                        payload_json="{}",
+                    )
+                )
+                event_db.commit()
+
+        async def _run_wait():
+            writer = asyncio.create_task(_insert_later())
+            try:
+                return await await_managed_local_turn_terminal(
+                    db_bind=db.get_bind(),
+                    session_id=session.id,
+                    after_runtime_event_id=0,
+                    timeout_secs=1.0,
+                    poll_interval_secs=0.02,
+                )
+            finally:
+                await writer
+
+        result = asyncio.run(_run_wait())
+
+        assert result is not None
+        assert result.phase == "idle"
+        assert result.control_status == "completed"
