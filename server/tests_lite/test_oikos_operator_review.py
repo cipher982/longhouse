@@ -382,8 +382,17 @@ def test_oikos_turn_reviews_returns_owner_scoped_rows_and_supports_filters(tmp_p
             "shadow_alignment": "matched",
             "assistant_turn_finished_at": None,
             "turn_loop_enqueued_at": None,
+            "turn_loop_claimed_at": None,
+            "controller_started_at": None,
+            "controller_completed_at": None,
             "turn_loop_completed_at": None,
+            "pre_enqueue_latency_ms": None,
             "queue_latency_ms": None,
+            "claim_latency_ms": None,
+            "controller_latency_ms": None,
+            "review_write_latency_ms": None,
+            "post_review_latency_ms": None,
+            "worker_latency_ms": None,
             "review_latency_ms": None,
             "processing_latency_ms": None,
             "created_at": "2026-03-17T12:00:00Z",
@@ -395,6 +404,9 @@ def test_turn_review_list_exposes_latency_breakdown_when_review_trail_exists(tmp
     engine, SessionLocal = _make_db(tmp_path, "oikos_turn_review_latency.db")
     assistant_finished_at = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
     turn_loop_enqueued_at = assistant_finished_at + timedelta(seconds=2)
+    turn_loop_claimed_at = assistant_finished_at + timedelta(seconds=3)
+    controller_started_at = assistant_finished_at + timedelta(seconds=3)
+    controller_completed_at = assistant_finished_at + timedelta(seconds=5)
     turn_loop_completed_at = assistant_finished_at + timedelta(seconds=9)
     review_created_at = assistant_finished_at + timedelta(seconds=6)
 
@@ -435,6 +447,9 @@ def test_turn_review_list_exposes_latency_breakdown_when_review_trail_exists(tmp
                 status="recorded",
                 assistant_turn_finished_at=assistant_finished_at,
                 turn_loop_enqueued_at=turn_loop_enqueued_at,
+                turn_loop_claimed_at=turn_loop_claimed_at,
+                controller_started_at=controller_started_at,
+                controller_completed_at=controller_completed_at,
                 turn_loop_completed_at=turn_loop_completed_at,
                 created_at=review_created_at,
             )
@@ -476,8 +491,17 @@ def test_turn_review_list_exposes_latency_breakdown_when_review_trail_exists(tmp
             "shadow_alignment": None,
             "assistant_turn_finished_at": "2026-03-17T12:00:00Z",
             "turn_loop_enqueued_at": "2026-03-17T12:00:02Z",
+            "turn_loop_claimed_at": "2026-03-17T12:00:03Z",
+            "controller_started_at": "2026-03-17T12:00:03Z",
+            "controller_completed_at": "2026-03-17T12:00:05Z",
             "turn_loop_completed_at": "2026-03-17T12:00:09Z",
+            "pre_enqueue_latency_ms": 2000,
             "queue_latency_ms": 2000,
+            "claim_latency_ms": 1000,
+            "controller_latency_ms": 2000,
+            "review_write_latency_ms": 1000,
+            "post_review_latency_ms": 3000,
+            "worker_latency_ms": 6000,
             "review_latency_ms": 6000,
             "processing_latency_ms": 7000,
             "created_at": "2026-03-17T12:00:06Z",

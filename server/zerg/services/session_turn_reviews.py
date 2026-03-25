@@ -92,11 +92,17 @@ def _stamp_review_timing_fields(
     *,
     assistant_turn_finished_at: datetime | None = None,
     turn_loop_enqueued_at: datetime | None = None,
+    turn_loop_claimed_at: datetime | None = None,
+    controller_started_at: datetime | None = None,
+    controller_completed_at: datetime | None = None,
     turn_loop_completed_at: datetime | None = None,
 ) -> bool:
     changed = False
     normalized_finished_at = _normalize_utc(assistant_turn_finished_at)
     normalized_enqueued_at = _normalize_utc(turn_loop_enqueued_at)
+    normalized_claimed_at = _normalize_utc(turn_loop_claimed_at)
+    normalized_controller_started_at = _normalize_utc(controller_started_at)
+    normalized_controller_completed_at = _normalize_utc(controller_completed_at)
     normalized_completed_at = _normalize_utc(turn_loop_completed_at)
 
     if normalized_finished_at is not None and review.assistant_turn_finished_at is None:
@@ -104,6 +110,15 @@ def _stamp_review_timing_fields(
         changed = True
     if normalized_enqueued_at is not None and review.turn_loop_enqueued_at is None:
         review.turn_loop_enqueued_at = normalized_enqueued_at
+        changed = True
+    if normalized_claimed_at is not None and review.turn_loop_claimed_at is None:
+        review.turn_loop_claimed_at = normalized_claimed_at
+        changed = True
+    if normalized_controller_started_at is not None and review.controller_started_at is None:
+        review.controller_started_at = normalized_controller_started_at
+        changed = True
+    if normalized_controller_completed_at is not None and review.controller_completed_at is None:
+        review.controller_completed_at = normalized_controller_completed_at
         changed = True
     if normalized_completed_at is not None and review.turn_loop_completed_at is None:
         review.turn_loop_completed_at = normalized_completed_at
@@ -626,6 +641,9 @@ async def _persist_review_timing_fields(
     label: str,
     assistant_turn_finished_at: datetime | None = None,
     turn_loop_enqueued_at: datetime | None = None,
+    turn_loop_claimed_at: datetime | None = None,
+    controller_started_at: datetime | None = None,
+    controller_completed_at: datetime | None = None,
     turn_loop_completed_at: datetime | None = None,
 ) -> bool:
     ws = get_write_serializer()
@@ -638,6 +656,9 @@ async def _persist_review_timing_fields(
             row,
             assistant_turn_finished_at=assistant_turn_finished_at,
             turn_loop_enqueued_at=turn_loop_enqueued_at,
+            turn_loop_claimed_at=turn_loop_claimed_at,
+            controller_started_at=controller_started_at,
+            controller_completed_at=controller_completed_at,
             turn_loop_completed_at=turn_loop_completed_at,
         )
 
@@ -806,6 +827,7 @@ async def _record_session_turn_review(
     db: Session,
     session_id: str,
     freshness_reference_at: datetime | None = None,
+    turn_loop_claimed_at: datetime | None = None,
 ) -> tuple[SessionTurnReview | None, bool]:
     if not _has_turn_review_table(db):
         return None, False
@@ -849,6 +871,7 @@ async def _record_session_turn_review(
             label="turn-review-existing",
             assistant_turn_finished_at=turn.assistant_timestamp,
             turn_loop_enqueued_at=freshness_reference_at,
+            turn_loop_claimed_at=turn_loop_claimed_at,
         )
         if updated:
             db.expire_all()
@@ -861,6 +884,8 @@ async def _record_session_turn_review(
     dialog_tail = _serialize_dialog_tail(_load_recent_dialog_messages(db, session_id))
     review_status = "recorded"
     review_reason: str | None = None
+    controller_started_at: datetime | None = None
+    controller_completed_at: datetime | None = None
 
     if owner_id is None:
         outcome = _failure_outcome(
@@ -871,6 +896,7 @@ async def _record_session_turn_review(
         review_status = "failed"
         review_reason = "missing_owner"
     else:
+        controller_started_at = datetime.now(timezone.utc)
         try:
             controller_decision = await asyncio.wait_for(
                 evaluate_session_turn_with_llm(
@@ -935,6 +961,8 @@ async def _record_session_turn_review(
             )
             review_status = "failed"
             review_reason = "controller_error"
+        finally:
+            controller_completed_at = datetime.now(timezone.utc)
     mode_application = _build_mode_application(session=session, policy=policy, outcome=outcome)
     recommended_action_value = mode_application["recommended_action"]
 
@@ -962,6 +990,10 @@ async def _record_session_turn_review(
             reason=review_reason,
             assistant_turn_finished_at=turn.assistant_timestamp,
             turn_loop_enqueued_at=_normalize_utc(freshness_reference_at),
+            turn_loop_claimed_at=_normalize_utc(turn_loop_claimed_at),
+            controller_started_at=_normalize_utc(controller_started_at),
+            controller_completed_at=_normalize_utc(controller_completed_at),
+            created_at=datetime.now(timezone.utc),
         )
         wdb.add(review)
         wdb.flush()
@@ -979,11 +1011,13 @@ async def maybe_record_session_turn_review(
     db: Session,
     session_id: str,
     freshness_reference_at: datetime | None = None,
+    turn_loop_claimed_at: datetime | None = None,
 ) -> SessionTurnReview | None:
     review, _created = await _record_session_turn_review(
         db=db,
         session_id=session_id,
         freshness_reference_at=freshness_reference_at,
+        turn_loop_claimed_at=turn_loop_claimed_at,
     )
     return review
 
@@ -1483,11 +1517,13 @@ async def maybe_process_session_turn_loop(
     db: Session,
     session_id: str,
     freshness_reference_at: datetime | None = None,
+    turn_loop_claimed_at: datetime | None = None,
 ) -> SessionTurnReview | None:
     review, created = await _record_session_turn_review(
         db=db,
         session_id=session_id,
         freshness_reference_at=freshness_reference_at,
+        turn_loop_claimed_at=turn_loop_claimed_at,
     )
     if review is None:
         return None

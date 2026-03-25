@@ -264,16 +264,18 @@ async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
         return
     if task_type == "turn_loop":
 
-        def _get_task_created_at():
+        def _get_task_timing_fields():
             factory = get_session_factory()
             db = factory()
             try:
                 task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
-                return getattr(task, "created_at", None)
+                if task is None:
+                    return None, None
+                return getattr(task, "created_at", None), getattr(task, "updated_at", None)
             finally:
                 db.close()
 
-        freshness_ref = await asyncio.to_thread(_get_task_created_at)
+        freshness_ref, claimed_at = await asyncio.to_thread(_get_task_timing_fields)
         factory = get_session_factory()
         db = factory()
         try:
@@ -281,6 +283,7 @@ async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
                 db=db,
                 session_id=session_id,
                 freshness_reference_at=freshness_ref,
+                turn_loop_claimed_at=claimed_at,
             )
             if review is None and turn_loop_retry_needed(
                 db=db,

@@ -168,7 +168,22 @@ limit = int(sys.argv[2])
 
 conn = sqlite3.connect("/data/longhouse.db")
 sql = """
-SELECT id, session_id, decision, execution_state, status, reason, summary, follow_up_prompt
+SELECT
+    id,
+    session_id,
+    decision,
+    execution_state,
+    status,
+    reason,
+    summary,
+    follow_up_prompt,
+    assistant_turn_finished_at,
+    turn_loop_enqueued_at,
+    turn_loop_claimed_at,
+    controller_started_at,
+    controller_completed_at,
+    created_at,
+    turn_loop_completed_at
 FROM session_turn_reviews
 """
 params = []
@@ -188,8 +203,31 @@ payload = [
         "reason": reason,
         "summary": summary,
         "follow_up_prompt": follow_up_prompt,
+        "assistant_turn_finished_at": assistant_turn_finished_at,
+        "turn_loop_enqueued_at": turn_loop_enqueued_at,
+        "turn_loop_claimed_at": turn_loop_claimed_at,
+        "controller_started_at": controller_started_at,
+        "controller_completed_at": controller_completed_at,
+        "created_at": created_at,
+        "turn_loop_completed_at": turn_loop_completed_at,
     }
-    for review_id, sid, decision, execution_state, status, reason, summary, follow_up_prompt in rows
+    for (
+        review_id,
+        sid,
+        decision,
+        execution_state,
+        status,
+        reason,
+        summary,
+        follow_up_prompt,
+        assistant_turn_finished_at,
+        turn_loop_enqueued_at,
+        turn_loop_claimed_at,
+        controller_started_at,
+        controller_completed_at,
+        created_at,
+        turn_loop_completed_at,
+    ) in rows
 ]
 json.dump(payload, sys.stdout)
 PY
