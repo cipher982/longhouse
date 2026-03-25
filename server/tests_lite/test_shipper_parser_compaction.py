@@ -89,3 +89,34 @@ def test_parse_session_file_full_tracks_offsets_with_compaction_events(tmp_path)
     assert last_good_offset == path.stat().st_size
     assert metadata.started_at is not None
     assert metadata.ended_at is not None
+
+
+def test_progress_events_are_intentionally_dropped(tmp_path):
+    """Progress events are high-volume hook/tool noise.
+
+    They are preserved in the source archive but intentionally excluded from
+    parsed events. This is a deliberate design choice, not a bug — do not
+    "fix" by adding them back without updating this test.
+    """
+    path = _write_jsonl(
+        tmp_path,
+        "progress-session.jsonl",
+        [
+            '{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:01Z","message":{"content":"hello"}}',
+            '{"type":"progress","timestamp":"2026-01-01T00:00:02Z","data":{"type":"hook_progress"}}',
+            '{"type":"progress","timestamp":"2026-01-01T00:00:02Z","data":{"type":"tool_progress","tool":"Read"}}',
+            '{"type":"progress","timestamp":"2026-01-01T00:00:02Z","data":{"type":"hook_progress"}}',
+            '{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"text","text":"hi"}]}}',
+        ],
+    )
+
+    events = list(parse_session_file(path))
+    raw_types = [e.raw_type for e in events]
+
+    assert "progress" not in raw_types
+    assert raw_types == ["user", "assistant"]
+
+    # Also verify via parse_session_file_full
+    events_full, _, _ = parse_session_file_full(path)
+    assert "progress" not in [e.raw_type for e in events_full]
+    assert len(events_full) == 2
