@@ -44,6 +44,7 @@ from zerg.services.write_serializer import get_write_serializer
 logger = logging.getLogger(__name__)
 
 WORKER_POLL_SECONDS = 2.0
+HOT_WORKER_POLL_SECONDS = 0.5
 CLAIM_LIMIT = 1
 STALE_RUNNING_MINUTES = 30
 TASK_TIMEOUT_SECONDS: dict[str, float] = {

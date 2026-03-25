@@ -670,6 +670,18 @@ class AgentsStore:
         except Exception:
             logger.exception("Failed to re-create FTS triggers")
 
+    def _restore_fts_after_failed_bulk_ingest(self, session_id: UUID) -> None:
+        bind = self.db.get_bind()
+        engine = getattr(bind, "engine", bind)
+        repair_db = Session(bind=engine)
+        try:
+            repair_store = AgentsStore(repair_db)
+            repair_store._reenable_fts_triggers()
+            repair_store._backfill_fts_for_session(session_id)
+            repair_db.commit()
+        finally:
+            repair_db.close()
+
     def _backfill_fts_for_session(self, session_id) -> None:
         """Batch-insert FTS entries for all events in a session that are missing from FTS."""
         if not self._fts_available():
@@ -1456,60 +1468,68 @@ class AgentsStore:
         inserted_event_ids: list[int] = []
         needs_session_wide_fts_backfill = False
 
-        for event_data in data.events:
-            event_hash = self._compute_event_hash(event_data)
-            event_uuid, parent_event_uuid = self._extract_event_lineage(event_data.raw_json)
-            event_leaf_uuid = self._extract_leaf_uuid(event_data.raw_json)
-            if event_leaf_uuid:
-                leaf_uuid_hint = event_leaf_uuid
+        try:
+            for event_data in data.events:
+                event_hash = self._compute_event_hash(event_data)
+                event_uuid, parent_event_uuid = self._extract_event_lineage(event_data.raw_json)
+                event_leaf_uuid = self._extract_leaf_uuid(event_data.raw_json)
+                if event_leaf_uuid:
+                    leaf_uuid_hint = event_leaf_uuid
 
-            stmt = sqlite_insert(AgentEvent).values(
-                session_id=session_id,
-                branch_id=ingest_branch.id,
-                role=event_data.role,
-                content_text=event_data.content_text,
-                tool_name=event_data.tool_name,
-                tool_input_json=event_data.tool_input_json,
-                tool_output_text=event_data.tool_output_text,
-                tool_call_id=event_data.tool_call_id,
-                timestamp=event_data.timestamp,
-                source_path=event_data.source_path,
-                source_offset=event_data.source_offset,
-                event_hash=event_hash,
-                raw_json=event_data.raw_json,
-                schema_version=1,
-                event_uuid=event_uuid,
-                parent_event_uuid=parent_event_uuid,
-            )
+                stmt = sqlite_insert(AgentEvent).values(
+                    session_id=session_id,
+                    branch_id=ingest_branch.id,
+                    role=event_data.role,
+                    content_text=event_data.content_text,
+                    tool_name=event_data.tool_name,
+                    tool_input_json=event_data.tool_input_json,
+                    tool_output_text=event_data.tool_output_text,
+                    tool_call_id=event_data.tool_call_id,
+                    timestamp=event_data.timestamp,
+                    source_path=event_data.source_path,
+                    source_offset=event_data.source_offset,
+                    event_hash=event_hash,
+                    raw_json=event_data.raw_json,
+                    schema_version=1,
+                    event_uuid=event_uuid,
+                    parent_event_uuid=parent_event_uuid,
+                )
 
-            if event_data.source_path or event_uuid:
-                stmt = stmt.on_conflict_do_nothing()
+                if event_data.source_path or event_uuid:
+                    stmt = stmt.on_conflict_do_nothing()
 
-            result = self.db.execute(stmt)
-            if result.rowcount > 0:
-                events_inserted += 1
-                if fts_triggers_dropped:
-                    lastrowid = getattr(result, "lastrowid", None)
-                    if isinstance(lastrowid, int) and lastrowid > 0:
-                        inserted_event_ids.append(lastrowid)
-                    else:
-                        needs_session_wide_fts_backfill = True
-                normalized_timestamp = _normalize_utc_naive(event_data.timestamp)
-                if normalized_timestamp is not None and (
-                    latest_inserted_timestamp is None or normalized_timestamp > latest_inserted_timestamp
-                ):
-                    latest_inserted_timestamp = normalized_timestamp
-                _since_commit += 1
-            else:
-                events_skipped += 1
+                result = self.db.execute(stmt)
+                if result.rowcount > 0:
+                    events_inserted += 1
+                    if fts_triggers_dropped:
+                        lastrowid = getattr(result, "lastrowid", None)
+                        if isinstance(lastrowid, int) and lastrowid > 0:
+                            inserted_event_ids.append(lastrowid)
+                        else:
+                            needs_session_wide_fts_backfill = True
+                    normalized_timestamp = _normalize_utc_naive(event_data.timestamp)
+                    if normalized_timestamp is not None and (
+                        latest_inserted_timestamp is None or normalized_timestamp > latest_inserted_timestamp
+                    ):
+                        latest_inserted_timestamp = normalized_timestamp
+                    _since_commit += 1
+                else:
+                    events_skipped += 1
 
-            # Release write lock between chunks so health checks and other
-            # readers aren't starved during large ingests.
-            if _since_commit >= _INGEST_CHUNK:
-                self.db.commit()
-                _since_commit = 0
+                # Release write lock between chunks so health checks and other
+                # readers aren't starved during large ingests.
+                if _since_commit >= _INGEST_CHUNK:
+                    self.db.commit()
+                    _since_commit = 0
+        except Exception:
+            if fts_triggers_dropped:
+                self.db.rollback()
+                try:
+                    self._restore_fts_after_failed_bulk_ingest(session_id)
+                except Exception:
+                    logger.exception("Failed to restore FTS triggers after ingest error for session %s", session_id)
+            raise
 
-        # Re-enable FTS triggers and batch-backfill new events into the FTS index.
         if fts_triggers_dropped:
             self._reenable_fts_triggers()
             if events_inserted > 0:
