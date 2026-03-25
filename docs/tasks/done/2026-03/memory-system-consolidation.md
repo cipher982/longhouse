@@ -1,8 +1,8 @@
 # Memory System Consolidation Tasks
 
-Status: In Progress
+Status: Complete
 Spec: `docs/specs/memory-system-consolidation.md`
-Last updated: 2026-03-12
+Last updated: 2026-03-25
 
 ## Phase 0: Spec
 
@@ -44,14 +44,17 @@ Last updated: 2026-03-12
 
 ## Phase 4: Ship and verify
 
-- [ ] Push `main`
-- [ ] Wait for CI/build workflows to finish successfully
-- [ ] Reprovision `david010` user instance
-- [ ] Verify hosted health and live QA
-- [ ] Update this task doc with final status notes
-- [ ] Commit any final status/docs updates
+- [x] Push `main`
+- [x] Wait for CI/build workflows to finish successfully
+- [x] Reprovision `david010` user instance
+- [x] Verify hosted health and live QA
+- [x] Update this task doc with final status notes
+- [x] Commit any final status/docs updates
 
-Notes:
-- Use `recall` as the public intelligence story. Memory Files stay optional and lower-profile until proven useful.
-- Do not replace the deleted note-memory system with a second new abstraction. Keep the surviving memory layer boring.
-- Local verification complete before ship: focused memory/tool tests, `make test`, `make test-e2e`, and `bun run validate:types`.
+## Verification (2026-03-25)
+
+- david010 container created 2026-03-25T22:39 UTC (latest GHCR image)
+- `memories` table: absent (cleanup ran)
+- `threads.memory_strategy` column: absent (cleanup ran)
+- `make qa-live`: 11/11 passed
+- Memory Files remain gated behind feature flags as intended
