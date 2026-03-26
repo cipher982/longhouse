@@ -1,6 +1,6 @@
 # Managed-Local Turn Ledger
 
-Status: phase 1 shipped; later phases planned
+Status: phases 1-3 shipped; phase 4 planned
 Last updated: 2026-03-26
 
 ## Goal
@@ -172,7 +172,7 @@ Phase 1 is done when:
 
 ## Current State
 
-Phases 1 and 2 are now shipped.
+Phases 1-3 are now shipped.
 
 What is implemented:
 
@@ -184,15 +184,11 @@ What is implemented:
 - `/api/sessions/{id}/chat` now prefers the ledger for terminal and durability
   reads, with bounded fallback to direct evidence if a ledger read is missing or
   late
+- `turn_loop` now prefers the oldest durable, unreviewed managed-local ledger
+  row instead of rediscovering the latest completed turn from transcript scans
+- stale or unreconstructable managed-local ledger backlog rows are skipped so
+  they do not wedge newer durable turns behind them
 
 What is intentionally not implemented yet:
 
-- Loop consuming the ledger instead of transcript/presence inference
-
-Phase 3 is currently in progress:
-
-- `turn_loop` now prefers durable ledger rows for managed-local sessions
-- the ledger-backed selector skips stale or unreconstructable backlog rows instead
-  of letting them wedge newer durable turns
-- the remaining work is hosted verification and then deciding whether phase 3 can
-  be closed or needs one more narrowing pass
+- Phase 4 transcript hot-path reduction
