@@ -1,7 +1,7 @@
 # Managed-Local Turn Ledger
 
-Status: proposed
-Last updated: 2026-03-25
+Status: phase 1 shipped; later phases planned
+Last updated: 2026-03-26
 
 ## Goal
 
@@ -34,7 +34,9 @@ Introduce a new agents table:
 
 - `managed_local_turns`
 
-This table is the authoritative per-turn ledger for managed-local continuation.
+This table is the planned per-turn ledger for managed-local continuation.
+Phase 1 ships it in shadow mode; later phases can promote it into the
+authoritative read path.
 
 Phase 1 is shadow-only:
 
@@ -167,3 +169,20 @@ Phase 1 is done when:
 - targeted tests cover row creation, terminal stamping, durability binding, and
   review attachment
 - hosted managed-local Claude continuation still passes end to end on `david010`
+
+## Current State
+
+Phase 1 is now shipped.
+
+What is implemented:
+
+- `managed_local_turns` exists in the agents DB model
+- continuation creates and stamps shadow rows
+- ingest can bind durable prompt + assistant evidence
+- turn review creation can attach the resulting review id
+- shadow writes are best-effort and isolated so ledger failures do not break the live path
+
+What is intentionally not implemented yet:
+
+- route behavior reading the ledger as the primary completion source
+- Loop consuming the ledger instead of transcript/presence inference
