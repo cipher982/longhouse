@@ -123,7 +123,7 @@ Phase 1 durability binding should stay simple and conservative:
 - look at transcript events after `baseline_event_id`
 - require:
   - the expected current user prompt
-  - then a later assistant event with non-empty text or a tool event
+  - then the last assistant event with non-empty text before the next user turn
 
 Use this matching stack:
 
@@ -188,3 +188,11 @@ What is implemented:
 What is intentionally not implemented yet:
 
 - Loop consuming the ledger instead of transcript/presence inference
+
+Phase 3 is currently in progress:
+
+- `turn_loop` now prefers durable ledger rows for managed-local sessions
+- the ledger-backed selector skips stale or unreconstructable backlog rows instead
+  of letting them wedge newer durable turns
+- the remaining work is hosted verification and then deciding whether phase 3 can
+  be closed or needs one more narrowing pass

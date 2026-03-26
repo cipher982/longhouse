@@ -1054,6 +1054,239 @@ async def test_turn_review_uses_oldest_durable_managed_local_ledger_turn_first(m
         ]
 
 
+@pytest.mark.asyncio
+async def test_turn_review_skips_unreconstructable_managed_local_ledger_row(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_managed_local_skip_bad_row.db")
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="wait",
+            summary="Wait for the next user instruction.",
+            rationale="Only the ledger-selected completed turn should be reviewed.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"wait"}',
+            loop_thread_id=19,
+        )
+
+    async def _noop_execute(*, db, review):
+        return None
+
+    async def _noop_wakeup(*, db, review):
+        return None
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_execute_recorded_turn_review", _noop_execute)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_enqueue_turn_review_operator_wakeup", _noop_wakeup)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="first prompt",
+            assistant_text="first reply",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text="second prompt",
+                    timestamp=_now(),
+                ),
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text="second reply",
+                    timestamp=_now(),
+                ),
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text="third prompt",
+                    timestamp=_now(),
+                ),
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text="third reply",
+                    timestamp=_now(),
+                ),
+            ]
+        )
+        db.flush()
+
+        events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .order_by(AgentEvent.id.asc())
+            .all()
+        )
+        db.add_all(
+            [
+                ManagedLocalTurn(
+                    session_id=session_id,
+                    request_id="req-bad",
+                    baseline_event_id=0,
+                    baseline_runtime_event_id=0,
+                    expected_user_text_hash="unused-bad",
+                    send_accepted_at=_now(),
+                    durable_user_event_id=events[0].id,
+                    durable_assistant_event_id=events[0].id,
+                    durable_at=_now(),
+                ),
+                ManagedLocalTurn(
+                    session_id=session_id,
+                    request_id="req-good",
+                    baseline_event_id=events[1].id,
+                    baseline_runtime_event_id=0,
+                    expected_user_text_hash="unused-good",
+                    send_accepted_at=_now(),
+                    durable_user_event_id=events[2].id,
+                    durable_assistant_event_id=events[3].id,
+                    durable_at=_now(),
+                ),
+            ]
+        )
+        db.commit()
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.assistant_event_id == events[3].id
+        assert review.turn_excerpt == "second reply"
+
+
+@pytest.mark.asyncio
+async def test_turn_review_skips_stale_managed_local_ledger_backlog(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_managed_local_skip_stale.db")
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="wait",
+            summary="Wait for the next user instruction.",
+            rationale="Only fresh durable turns should be reviewed.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"wait"}',
+            loop_thread_id=20,
+        )
+
+    async def _noop_execute(*, db, review):
+        return None
+
+    async def _noop_wakeup(*, db, review):
+        return None
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_execute_recorded_turn_review", _noop_execute)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_enqueue_turn_review_operator_wakeup", _noop_wakeup)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="stale prompt",
+            assistant_text="stale reply",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+
+        stale_at = _now() - timedelta(minutes=11)
+        events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .order_by(AgentEvent.id.asc())
+            .all()
+        )
+        for event in events:
+            event.timestamp = stale_at
+
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text="fresh prompt",
+                    timestamp=_now(),
+                ),
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text="fresh reply",
+                    timestamp=_now(),
+                ),
+            ]
+        )
+        db.flush()
+
+        events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .order_by(AgentEvent.id.asc())
+            .all()
+        )
+        db.add_all(
+            [
+                ManagedLocalTurn(
+                    session_id=session_id,
+                    request_id="req-stale",
+                    baseline_event_id=0,
+                    baseline_runtime_event_id=0,
+                    expected_user_text_hash="unused-stale",
+                    send_accepted_at=stale_at,
+                    durable_user_event_id=events[0].id,
+                    durable_assistant_event_id=events[1].id,
+                    durable_at=stale_at,
+                ),
+                ManagedLocalTurn(
+                    session_id=session_id,
+                    request_id="req-fresh",
+                    baseline_event_id=events[1].id,
+                    baseline_runtime_event_id=0,
+                    expected_user_text_hash="unused-fresh",
+                    send_accepted_at=_now(),
+                    durable_user_event_id=events[2].id,
+                    durable_assistant_event_id=events[3].id,
+                    durable_at=_now(),
+                ),
+            ]
+        )
+        db.commit()
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.assistant_event_id == events[3].id
+        assert review.turn_excerpt == "fresh reply"
+
+
 def test_load_completed_assistant_turn_by_event_id_uses_history_up_to_target_event(tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_load_specific_event.db")
 

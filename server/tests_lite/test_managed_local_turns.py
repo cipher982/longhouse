@@ -224,6 +224,76 @@ def test_managed_local_turn_durability_clears_timeout_once_events_arrive(tmp_pat
         assert durable_turn.error_code is None
 
 
+def test_managed_local_turn_durability_tracks_last_assistant_reply_after_tool_use(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_user_runner_and_session(db)
+        create_managed_local_turn(
+            db,
+            session_id=session.id,
+            request_id="req-tool-turn",
+            baseline_event_id=0,
+            baseline_runtime_event_id=0,
+            expected_user_text="continue",
+        )
+        mark_managed_local_turn_send_accepted(db, session_id=session.id, request_id="req-tool-turn")
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="Let me check that.",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text=None,
+                    tool_name="Read",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="tool",
+                    content_text=None,
+                    tool_name="Read",
+                    tool_output_text="file contents",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="Done. Here is the answer.",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        durable_turn = maybe_mark_managed_local_turn_durable(db, session_id=session.id)
+        assert durable_turn is not None
+        assert durable_turn.durable_user_event_id is not None
+        assert durable_turn.durable_assistant_event_id is not None
+
+        final_reply = (
+            db.query(AgentEvent)
+            .filter(
+                AgentEvent.session_id == session.id,
+                AgentEvent.role == "assistant",
+                AgentEvent.content_text == "Done. Here is the answer.",
+            )
+            .one()
+        )
+        assert durable_turn.durable_assistant_event_id == final_reply.id
+
+
 def test_managed_local_turn_snapshot_reads_committed_shadow_state(tmp_path):
     SessionLocal = _make_db(tmp_path)
     db_bind = None
