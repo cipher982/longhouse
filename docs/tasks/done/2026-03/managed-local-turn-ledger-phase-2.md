@@ -1,6 +1,6 @@
 # Managed-Local Turn Ledger Phase 2
 
-Status: In progress
+Status: Complete
 Spec: `docs/specs/managed-local-turn-ledger.md`
 Owner: Codex
 Last updated: 2026-03-26
@@ -41,3 +41,11 @@ runtime polling plus persisted events.
 - Local verification on the current branch state:
   - targeted slice: `45 passed`
   - full backend suite: `make test` → `1174 passed`
+- Hosted verification on `david010`:
+  - GHCR runtime build `23574842600` passed
+  - marketing + control plane redeployed successfully
+  - instance reprovisioned cleanly and `/api/health` stayed `healthy` with `write_serializer.errors = 0`
+  - `make qa-live` → `11 passed`
+  - `./scripts/hosted-managed-local-claude-stress.sh --subdomain david010` → `4/4 passed`
+  - hosted loop debug for session `ab5d99da-d7cb-4e77-b08b-106633d28e3d` showed four recorded reviews, latest `review_latency_ms ≈ 1728`, latest `controller_latency_ms ≈ 787`
+  - tenant `managed_local_turns` rows for that same session were stamped through send accepted, terminal, durable, and review attachment with no `error_code`

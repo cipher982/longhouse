@@ -33,6 +33,7 @@ from zerg.models.work import OikosWakeup
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.session_loop_controller import LoopControllerDecision
 from zerg.services.session_turn_reviews import classify_turn_review_outcome_for_run
+from zerg.services.session_turn_reviews import load_completed_assistant_turn_by_event_id
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 from zerg.services.session_turn_reviews import maybe_record_session_turn_review
 from zerg.services.session_turn_reviews import reply_to_pending_turn_review
@@ -918,6 +919,188 @@ async def test_turn_review_attaches_review_to_matching_managed_local_turn(monkey
         turn = db.query(ManagedLocalTurn).filter(ManagedLocalTurn.session_id == session_id).one()
         assert turn.review_id == review.id
         assert labels == ["turn-review-create", "turn-review-complete"]
+
+
+@pytest.mark.asyncio
+async def test_turn_review_uses_oldest_durable_managed_local_ledger_turn_first(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_managed_local_ledger_order.db")
+    labels: list[str] = []
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="wait",
+            summary="Wait for the next user instruction.",
+            rationale="Each completed turn is self-contained and should not auto-continue.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"wait"}',
+            loop_thread_id=18,
+        )
+
+    async def _noop_execute(*, db, review):
+        return None
+
+    async def _noop_wakeup(*, db, review):
+        return None
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_execute_recorded_turn_review", _noop_execute)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_enqueue_turn_review_operator_wakeup", _noop_wakeup)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="first prompt",
+            assistant_text="first reply",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text="second prompt",
+                    timestamp=_now(),
+                ),
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text="second reply",
+                    timestamp=_now(),
+                ),
+            ]
+        )
+        db.flush()
+
+        events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .order_by(AgentEvent.id.asc())
+            .all()
+        )
+        assert [event.content_text for event in events] == [
+            "first prompt",
+            "first reply",
+            "second prompt",
+            "second reply",
+        ]
+
+        db.add_all(
+            [
+                ManagedLocalTurn(
+                    session_id=session_id,
+                    request_id="req-first",
+                    baseline_event_id=0,
+                    baseline_runtime_event_id=0,
+                    expected_user_text_hash="unused-first",
+                    send_accepted_at=_now(),
+                    durable_user_event_id=events[0].id,
+                    durable_assistant_event_id=events[1].id,
+                    durable_at=_now(),
+                ),
+                ManagedLocalTurn(
+                    session_id=session_id,
+                    request_id="req-second",
+                    baseline_event_id=events[1].id,
+                    baseline_runtime_event_id=0,
+                    expected_user_text_hash="unused-second",
+                    send_accepted_at=_now(),
+                    durable_user_event_id=events[2].id,
+                    durable_assistant_event_id=events[3].id,
+                    durable_at=_now(),
+                ),
+            ]
+        )
+        db.commit()
+
+        first_review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert first_review is not None
+        assert first_review.assistant_event_id == events[1].id
+        assert first_review.turn_excerpt == "first reply"
+
+        first_turn = db.query(ManagedLocalTurn).filter(ManagedLocalTurn.request_id == "req-first").one()
+        second_turn = db.query(ManagedLocalTurn).filter(ManagedLocalTurn.request_id == "req-second").one()
+        assert first_turn.review_id == first_review.id
+        assert second_turn.review_id is None
+
+        second_review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert second_review is not None
+        assert second_review.assistant_event_id == events[3].id
+        assert second_review.turn_excerpt == "second reply"
+
+        db.refresh(second_turn)
+        assert second_turn.review_id == second_review.id
+        assert labels == [
+            "turn-review-create",
+            "turn-review-complete",
+            "turn-review-create",
+            "turn-review-complete",
+        ]
+
+
+def test_load_completed_assistant_turn_by_event_id_uses_history_up_to_target_event(tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_load_specific_event.db")
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="first prompt",
+            assistant_text="first reply",
+        )
+        for index in range(90):
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text=f"later prompt {index}",
+                    timestamp=_now(),
+                )
+            )
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text=f"later reply {index}",
+                    timestamp=_now(),
+                )
+            )
+        db.commit()
+
+        first_assistant = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id, AgentEvent.role == "assistant")
+            .order_by(AgentEvent.id.asc())
+            .first()
+        )
+        assert first_assistant is not None
+
+        turn = load_completed_assistant_turn_by_event_id(
+            db,
+            str(session_id),
+            assistant_event_id=int(first_assistant.id),
+        )
+        assert turn is not None
+        assert turn.assistant_event_id == int(first_assistant.id)
+        assert turn.text == "first reply"
+        assert turn.last_user_text == "first prompt"
 
 
 def test_classify_turn_review_outcome_keeps_notify_reviews_actionable_without_jobs(tmp_path):

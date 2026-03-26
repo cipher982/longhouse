@@ -27,6 +27,7 @@ from zerg.services.managed_local_control import send_text_to_managed_local_sessi
 from zerg.services.managed_local_runtime import persist_managed_local_turn_idle
 from zerg.services.managed_local_runtime import persist_managed_local_turn_needs_user
 from zerg.services.managed_local_turns import attach_review_to_managed_local_turn
+from zerg.services.managed_local_turns import get_next_reviewable_managed_local_turn
 from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
@@ -184,18 +185,16 @@ def _load_recent_dialog_messages(
     session_id: str,
     *,
     limit: int = _RECENT_EVENT_LIMIT,
+    max_event_id: int | None = None,
 ) -> list[_TurnMessage]:
-    rows = (
-        db.query(AgentEvent.id, AgentEvent.role, AgentEvent.content_text, AgentEvent.timestamp)
-        .filter(
-            AgentEvent.session_id == session_id,
-            AgentEvent.role.in_(("user", "assistant")),
-            AgentEvent.content_text.isnot(None),
-        )
-        .order_by(desc(AgentEvent.id))
-        .limit(limit)
-        .all()
+    query = db.query(AgentEvent.id, AgentEvent.role, AgentEvent.content_text, AgentEvent.timestamp).filter(
+        AgentEvent.session_id == session_id,
+        AgentEvent.role.in_(("user", "assistant")),
+        AgentEvent.content_text.isnot(None),
     )
+    if max_event_id is not None:
+        query = query.filter(AgentEvent.id <= int(max_event_id))
+    rows = query.order_by(desc(AgentEvent.id)).limit(limit).all()
     messages = [
         _TurnMessage(
             event_id=int(row.id),
@@ -209,10 +208,15 @@ def _load_recent_dialog_messages(
     return messages
 
 
-def load_latest_completed_assistant_turn(db: Session, session_id: str) -> CompletedAssistantTurn | None:
-    messages = _load_recent_dialog_messages(db, session_id)
+def _load_completed_assistant_turn_from_messages(
+    messages: list[_TurnMessage],
+    *,
+    assistant_event_id: int | None = None,
+) -> CompletedAssistantTurn | None:
     if not messages:
         return None
+
+    target_assistant_event_id = int(assistant_event_id) if assistant_event_id is not None else None
 
     turns: list[dict[str, Any]] = []
     current_role: str | None = None
@@ -260,21 +264,81 @@ def load_latest_completed_assistant_turn(db: Session, session_id: str) -> Comple
 
     if not turns:
         return None
-    latest_turn = turns[-1]
-    if latest_turn["role"] != "assistant":
+
+    target_index: int | None = None
+    if target_assistant_event_id is None:
+        target_index = len(turns) - 1
+    else:
+        for index, turn in enumerate(turns):
+            if turn["role"] != "assistant":
+                continue
+            if int(turn["assistant_event_id"] or 0) == target_assistant_event_id:
+                target_index = index
+                break
+        if target_index is None:
+            return None
+
+    turn_row = turns[target_index]
+    if turn_row["role"] != "assistant":
         return None
-    text = str(latest_turn["text"] or "").strip()
-    assistant_event_id = latest_turn["assistant_event_id"]
-    assistant_timestamp = _normalize_utc(latest_turn.get("assistant_timestamp"))
-    if not text or assistant_event_id is None or assistant_timestamp is None:
+    text = str(turn_row["text"] or "").strip()
+    found_assistant_event_id = turn_row["assistant_event_id"]
+    assistant_timestamp = _normalize_utc(turn_row.get("assistant_timestamp"))
+    if not text or found_assistant_event_id is None or assistant_timestamp is None:
         return None
     return CompletedAssistantTurn(
-        assistant_event_id=int(assistant_event_id),
-        turn_index=len(turns) - 1,
+        assistant_event_id=int(found_assistant_event_id),
+        turn_index=target_index,
         text=text,
-        last_user_text=str(latest_turn.get("last_user_text") or "").strip() or None,
+        last_user_text=str(turn_row.get("last_user_text") or "").strip() or None,
         assistant_timestamp=assistant_timestamp,
     )
+
+
+def load_latest_completed_assistant_turn(db: Session, session_id: str) -> CompletedAssistantTurn | None:
+    messages = _load_recent_dialog_messages(db, session_id)
+    return _load_completed_assistant_turn_from_messages(messages)
+
+
+def load_completed_assistant_turn_by_event_id(
+    db: Session,
+    session_id: str,
+    *,
+    assistant_event_id: int,
+) -> CompletedAssistantTurn | None:
+    messages = _load_recent_dialog_messages(
+        db,
+        session_id,
+        max_event_id=assistant_event_id,
+    )
+    return _load_completed_assistant_turn_from_messages(
+        messages,
+        assistant_event_id=assistant_event_id,
+    )
+
+
+def _load_turn_review_candidate(
+    *,
+    db: Session,
+    session: AgentSession | None,
+    session_id: str,
+) -> CompletedAssistantTurn | None:
+    if _is_managed_local_session(session) and session is not None:
+        ledger_turn = get_next_reviewable_managed_local_turn(db, session_id=session.id)
+        if ledger_turn is not None and ledger_turn.durable_assistant_event_id is not None:
+            turn = load_completed_assistant_turn_by_event_id(
+                db,
+                session_id,
+                assistant_event_id=int(ledger_turn.durable_assistant_event_id),
+            )
+            if turn is not None:
+                return turn
+            logger.warning(
+                "Managed-local ledger turn %s for session %s could not be reconstructed from events; falling back",
+                ledger_turn.id,
+                session_id,
+            )
+    return load_latest_completed_assistant_turn(db, session_id)
 
 
 def _load_auto_continue_streak(db: Session, session_id: str) -> int:
@@ -794,7 +858,7 @@ def turn_loop_retry_needed(
     if not _has_turn_review_table(db):
         return False
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    turn = load_latest_completed_assistant_turn(db, session_id)
+    turn = _load_turn_review_candidate(db=db, session=session, session_id=session_id)
     if turn is None:
         return False
     now = datetime.now(timezone.utc)
@@ -838,7 +902,7 @@ async def _record_session_turn_review(
         return None, False
     if session.user_state in {"archived", "snoozed"}:
         return None, False
-    turn = load_latest_completed_assistant_turn(db, session_id)
+    turn = _load_turn_review_candidate(db=db, session=session, session_id=session_id)
     if turn is None:
         return None, False
     now = datetime.now(timezone.utc)
