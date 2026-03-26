@@ -110,3 +110,16 @@ Current focus:
   - Average `pre_enqueue_latency_ms` is now about `788ms`; warm-turn average is about `758ms`
   - Average `review_latency_ms` is now about `1745ms`; warm-turn average is about `1578ms`
   - `make qa-live` passed on rerun after reprovision; the first run still hit the existing browser reload flake on the opening timeline test, but the backend path stayed healthy throughout
+- Follow-up producer-path experiment on 2026-03-26 tried moving transcript-ready waiting fully into `longhouse-engine ship --file`:
+  - commit `cda227d9` replaced the shell retry ladder with a single engine-side `--wait-ready-ms` loop and taught the engine to wait for file existence plus reply-ready bytes
+  - commit `d83e1a2e` extended that engine-side wait window to preserve the old long-tail coverage
+  - local verification stayed green, but hosted behavior did not improve enough to keep:
+    - session `659038ea-1058-4d83-a78e-6c4a4a67b0ae` showed large regressions on the first multi-turn run, with `pre_enqueue_latency_ms` of `10136`, `13014`, `7585`, `1605`, `2157`, `2597`
+    - single-turn smoke `a79b0e03-eecc-4daa-a2f6-22e3f25bec17` passed, but still recorded `pre_enqueue_latency_ms=1689`, which is worse than the current shipped baseline
+    - repeated hosted multi-turn attempts also became more fragile, including durability-poll timeouts in the stress harness
+  - verdict: the engine-owned wait loop is a good research direction, but this first implementation regressed the managed-local hot path in prod and is not shipped
+- Rollback and current live state:
+  - commits `f026e695` and `c9e950aa` reverted the engine-owned wait experiment
+  - post-rollback `make qa-live` returned to the usual pattern: first run hit the known opening timeline flake, immediate rerun passed `11/11`
+  - post-rollback hosted managed-local continuation is back on the previous baseline path; session `0518e015-c924-4e4f-a9a4-a7697cc3ec8b` recorded `pre_enqueue_latency_ms=526` and `736` on the first two reviewed turns before the harness lost the SSE stream on turn 3 with an HTTP/2 client error even though tmux showed the exact expected reply
+  - current conclusion: keep the shipped baseline at the pre-experiment path and continue this task only with smaller producer-side changes plus better per-turn instrumentation, not another broad hot-path rewrite
