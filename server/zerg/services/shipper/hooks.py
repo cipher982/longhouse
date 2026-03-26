@@ -43,6 +43,8 @@ import stat
 import tomllib
 from pathlib import Path
 
+from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -150,7 +152,7 @@ if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
     if [[ -n "$managed_session_id" ]]; then
       ship_args+=(--session-id "$managed_session_id")
     fi
-    for delay in 0 0.25 0.5 1 2 4; do
+    for delay in __MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__; do
       if [[ "$delay" != "0" ]]; then
         sleep "$delay"
       fi
@@ -164,7 +166,7 @@ fi
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
 # instead?" prompt, which interrupts the session.
 exit 0
-"""
+""".replace("__MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__", MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL)
 
 SESSION_START_HOOK_SCRIPT = """\
 #!/bin/bash
@@ -191,7 +193,10 @@ if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]; then
 fi
 
 # URL-encode the project name so paths with spaces or special chars work.
-PROJECT_ENC=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$PROJECT" 2>/dev/null || printf '%s' "$PROJECT")
+PROJECT_ENC=$(
+  python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$PROJECT" 2>/dev/null \\
+    || printf '%s' "$PROJECT"
+)
 
 RESPONSE=$(curl -sf --max-time 4 \\
   -H "X-Agents-Token: $TOKEN" \\
@@ -201,7 +206,10 @@ if [[ $? -ne 0 ]] || [[ -z "$RESPONSE" ]]; then exit 0; fi
 TOTAL=$(echo "$RESPONSE" | jq -r '.total // 0')
 if [[ "$TOTAL" -eq 0 ]]; then exit 0; fi
 
-LINES=$(echo "$RESPONSE" | jq -r '.sessions[:5][] | "  \\(.started_at | split("T")[0]) \\(.provider // "?") \\(.project // "?") (\\(.tool_calls // 0) tools)"')
+LINES=$(echo "$RESPONSE" | jq -r '
+  .sessions[:5][] |
+  "  \\(.started_at | split("T")[0]) \\(.provider // "?") \\(.project // "?") (\\(.tool_calls // 0) tools)"
+')
 MSG="Longhouse: ${TOTAL} sessions in ${PROJECT} (7d):\\n${LINES}"
 
 jq -nc --arg msg "$MSG" '{"systemMessage": $msg}'
@@ -420,7 +428,9 @@ def _read_settings(settings_path: Path) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Failed to parse {settings_path}: {exc}. Fix or remove the file manually before installing hooks.") from exc
+        message = f"Failed to parse {settings_path}: {exc}. "
+        message += "Fix or remove the file manually before installing hooks."
+        raise RuntimeError(message) from exc
 
 
 def _write_settings(settings_path: Path, data: dict) -> None:
@@ -554,7 +564,8 @@ def install_hooks(
     # ------------------------------------------------------------------
     _write_settings(settings_path, settings)
     actions.append(
-        f"Updated {settings_path} with Stop, UserPromptSubmit, PreToolUse, PostToolUse, PermissionRequest, Notification, and SessionStart hooks"
+        f"Updated {settings_path} with Stop, UserPromptSubmit, PreToolUse, "
+        "PostToolUse, PermissionRequest, Notification, and SessionStart hooks"
     )
 
     logger.info("Installed Longhouse hooks in %s", config_dir)
@@ -740,7 +751,7 @@ def _build_codex_mcp_section(api_url: str | None = None) -> str:
         args_line = f'args = ["mcp-server", "--url", "{safe_url}"]'
     else:
         args_line = 'args = ["mcp-server"]'
-    return f"[mcp_servers.longhouse]\n" f'command = "longhouse"\n' f"{args_line}\n"
+    return f'[mcp_servers.longhouse]\ncommand = "longhouse"\n{args_line}\n'
 
 
 def upsert_codex_mcp_toml(
@@ -770,9 +781,9 @@ def upsert_codex_mcp_toml(
                 tomllib.loads(existing_text)
             except tomllib.TOMLDecodeError as exc:
                 if strict:
-                    raise RuntimeError(
-                        f"Failed to parse {config_path}: {exc}. " "Fix or remove the file manually before registering MCP server."
-                    ) from exc
+                    message = f"Failed to parse {config_path}: {exc}. "
+                    message += "Fix or remove the file manually before registering MCP server."
+                    raise RuntimeError(message) from exc
                 logger.warning("Corrupt TOML in %s, starting fresh: %s", config_path, exc)
                 existing_text = ""
 
