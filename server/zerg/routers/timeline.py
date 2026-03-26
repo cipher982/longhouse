@@ -460,10 +460,11 @@ async def list_timeline_sessions(
 ):
     effective_mode = mode or "lexical"
     if query is not None or effective_mode != "lexical":
-        # Hybrid search remains on the legacy raw-session contract for now.
-        # Query-driven search remains on the legacy raw-session contract for now.
-        # The thread-card contract in this route is only authoritative for the
-        # default no-query timeline path.
+        # COMPATIBILITY: Query-driven and hybrid search return raw SessionResponse[]
+        # because thread-aware search ranking/paging hasn't been built yet.
+        # The frontend reshapes these into TimelineSessionCards client-side via
+        # buildCompatibilityTimelineCards(). This is the only remaining non-thread
+        # path on the timeline read surface.
         raw_response = await _sessions_router.list_sessions(
             project=project,
             provider=provider,

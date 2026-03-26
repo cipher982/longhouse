@@ -33,8 +33,8 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - [x] Phase 1: weaken inferred user-facing labels and keep confidence explicit
 - [x] Phase 2: add execution-home metadata to session APIs and Timeline rows
 - [ ] Phase 3: treat managed-local as a stronger runtime class than transcript-only legacy sessions
-- [ ] Collapse the main Timeline off the secondary `/sessions/active` overlay path
-- [ ] Reduce ad hoc runtime fallback paths on the Timeline read path
+- [x] Collapse the main Timeline off the secondary `/sessions/active` overlay path
+- [x] Reduce ad hoc runtime fallback paths on the Timeline read path
 - [x] Replace the backend 1-second full-list SSE polling loop with a cheaper change detector
 - [ ] Verify the timeline manually with multiple concurrent sessions and long-running silent turns
 
@@ -49,3 +49,7 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - `managed_local` is the golden path for exact/control-capable local sessions.
 - Unmanaged local should remain honest fallback observability, not the long-term exact/actionable path.
 - The shared `execution_home` contract now matches the managed-local branch enum and derives from existing session metadata when the dedicated session columns are not present yet.
+- `/sessions/active` overlay is fully removed from the timeline router (agents router machine API remains).
+- Legacy `web/src/legacy/forum/` (ForumCanvas, ForumPage, 2.3k LOC) deleted — no remaining consumers.
+- The only non-thread path on the timeline read surface is query/hybrid search, which returns raw sessions that the frontend reshapes via `buildCompatibilityTimelineCards()`. This is intentional until thread-aware search ranking is built.
+- `build_fallback_runtime_view()` is the structural fallback for sessions without materialized `SessionRuntimeState` rows — it tags confidence explicitly ("live", "inferred", "ended"), not an ad hoc path.
