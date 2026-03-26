@@ -917,7 +917,7 @@ async def test_turn_review_attaches_review_to_matching_managed_local_turn(monkey
 
         turn = db.query(ManagedLocalTurn).filter(ManagedLocalTurn.session_id == session_id).one()
         assert turn.review_id == review.id
-        assert labels == ["turn-review-create", "turn-review-complete", "managed-local-turn-review-attach"]
+        assert labels == ["turn-review-create", "turn-review-complete"]
 
 
 def test_classify_turn_review_outcome_keeps_notify_reviews_actionable_without_jobs(tmp_path):

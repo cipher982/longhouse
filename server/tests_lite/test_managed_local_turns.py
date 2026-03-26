@@ -182,3 +182,42 @@ def test_managed_local_turn_durability_ignores_old_assistant_before_current_prom
         assert maybe_mark_managed_local_turn_durable(db, session_id=session.id) is None
         row = db.query(ManagedLocalTurn).filter(ManagedLocalTurn.request_id == "req-older-assistant").one()
         assert row.durable_at is None
+
+
+def test_managed_local_turn_durability_clears_timeout_once_events_arrive(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_user_runner_and_session(db)
+        turn = create_managed_local_turn(
+            db,
+            session_id=session.id,
+            request_id="req-timeout-heal",
+            baseline_event_id=0,
+            baseline_runtime_event_id=0,
+            expected_user_text="continue",
+        )
+        mark_managed_local_turn_send_accepted(db, session_id=session.id, request_id="req-timeout-heal")
+        turn.error_code = "turn_timeout"
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="late but valid reply",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        durable_turn = maybe_mark_managed_local_turn_durable(db, session_id=session.id)
+        assert durable_turn is not None
+        assert durable_turn.durable_at is not None
+        assert durable_turn.error_code is None

@@ -1587,9 +1587,7 @@ class AgentsStore:
 
         if events_inserted > 0:
             from zerg.services.ingest_task_queue import enqueue_ingest_tasks
-            from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
 
-            maybe_mark_managed_local_turn_durable(self.db, session_id=session_id)
             enqueue_ingest_tasks(self.db, str(session_id))
 
         from zerg.services.session_runtime import RuntimeEventIngest
@@ -1628,6 +1626,16 @@ class AgentsStore:
         ingest_runtime_events(self.db, runtime_events)
 
         self.db.commit()
+
+        if events_inserted > 0:
+            from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
+            from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
+
+            run_best_effort_managed_local_turn_write(
+                db_bind=self.db.get_bind(),
+                label="ingest_durable",
+                fn=lambda turn_db: maybe_mark_managed_local_turn_durable(turn_db, session_id=session_id),
+            )
 
         logger.info(
             "Ingested session %s branch=%s rewind=%s events inserted=%s skipped=%s source_lines_inserted=%s",

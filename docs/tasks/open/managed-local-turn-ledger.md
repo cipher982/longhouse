@@ -3,7 +3,7 @@
 Status: In progress
 Spec: `docs/specs/managed-local-turn-ledger.md`
 Owner: Codex
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Goal
 
@@ -21,13 +21,13 @@ existing path without changing user-facing behavior, and validate it end to end.
 
 ## Checklist
 
-- [ ] Add formal spec and active task tracking
-- [ ] Add minimal `managed_local_turns` model + service helpers
-- [ ] Shadow ledger creation + send acceptance in session continuation
-- [ ] Shadow terminal update from the existing managed-local route path
-- [ ] Shadow durability binding from ingest
-- [ ] Shadow review attachment from turn review creation
-- [ ] Add targeted tests
+- [x] Add formal spec and active task tracking
+- [x] Add minimal `managed_local_turns` model + service helpers
+- [x] Shadow ledger creation + send acceptance in session continuation
+- [x] Shadow terminal update from the existing managed-local route path
+- [x] Shadow durability binding from ingest
+- [x] Shadow review attachment from turn review creation
+- [x] Add targeted tests
 - [ ] Ship and verify hosted managed-local continuation on `david010`
 
 ## Notes
@@ -36,3 +36,13 @@ existing path without changing user-facing behavior, and validate it end to end.
 - Prefer timestamps + bound ids over extra status enums.
 - Treat one outstanding managed-local continuation per session thread as the
   expected path; do not overbuild concurrent turn matching yet.
+- Phase 1 shadow ledger is implemented in code:
+  - model in `server/zerg/models/agents.py`
+  - service helpers in `server/zerg/services/managed_local_turns.py`
+  - shadow writes from `session_chat.py`, `agents_store.py`, and `session_turn_reviews.py`
+- Reviewer findings addressed before ship:
+  - ledger writes are now best-effort and isolated so shadow failures do not break the live path
+  - late durability can heal a `turn_timeout` row instead of leaving the ledger permanently wrong
+- Local verification on the current branch state:
+  - targeted slice: `41 passed`
+  - full backend suite: `make test` → `1170 passed`
