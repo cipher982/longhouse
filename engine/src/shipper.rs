@@ -146,6 +146,7 @@ impl Default for ShipPreparedOutcome {
 pub(crate) struct ReplaySpoolOutcome {
     pub resolved: usize,
     pub failed: usize,
+    pub events_shipped: usize,
     pub had_connect_error: bool,
 }
 
@@ -154,9 +155,15 @@ impl Default for ReplaySpoolOutcome {
         Self {
             resolved: 0,
             failed: 0,
+            events_shipped: 0,
             had_connect_error: false,
         }
     }
+}
+
+pub(crate) struct GapRecoveryOutcome {
+    pub had_gap: bool,
+    pub replay_ready: bool,
 }
 
 enum AttemptedShip {
@@ -1168,6 +1175,44 @@ pub fn run_startup_recovery(conn: &Connection) -> Result<usize> {
     Ok(pending_after.saturating_sub(pending_before))
 }
 
+pub(crate) fn recover_gap_for_path(
+    conn: &Connection,
+    file_path: &Path,
+) -> Result<GapRecoveryOutcome> {
+    let file_state = FileState::new(conn);
+    let spool = Spool::new(conn);
+    let target_path = file_path.to_string_lossy().to_string();
+
+    let Some(target) = file_state
+        .get_unacked_files()?
+        .into_iter()
+        .find(|tracked| tracked.path == target_path)
+    else {
+        return Ok(GapRecoveryOutcome {
+            had_gap: false,
+            replay_ready: false,
+        });
+    };
+
+    tracing::info!(
+        path = %target.path,
+        acked_offset = target.acked_offset,
+        queued_offset = target.queued_offset,
+        "Recovering queued gap for explicit ship --file request"
+    );
+    let replay_ready = spool.enqueue(
+        &target.provider,
+        &target.path,
+        target.acked_offset,
+        target.queued_offset,
+        target.session_id.as_deref(),
+    )?;
+    Ok(GapRecoveryOutcome {
+        had_gap: true,
+        replay_ready,
+    })
+}
+
 /// Replay pending spool entries. Returns (entries fully resolved, entries failed/backed off).
 #[cfg(test)]
 pub async fn replay_spool_batch(
@@ -1233,6 +1278,20 @@ pub(crate) async fn replay_spool_for_path_with_batch_bytes_and_parse_tracker(
     replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await
 }
 
+pub(crate) async fn replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+    conn: &Connection,
+    client: &ShipperClient,
+    algo: CompressionAlgo,
+    file_path: &Path,
+    limit: usize,
+    max_batch_bytes: u64,
+    parse_tracker: Option<&RecentIssueTracker>,
+) -> Result<ReplaySpoolOutcome> {
+    let spool = Spool::new(conn);
+    let pending = spool.pending_entries_for_path_now(&file_path.to_string_lossy(), limit)?;
+    replay_spool_entries(conn, client, algo, &pending, max_batch_bytes, parse_tracker).await
+}
+
 async fn prepare_spool_entry_for_replay(
     entry: crate::state::spool::SpoolEntry,
     path: PathBuf,
@@ -1249,7 +1308,7 @@ async fn prepare_spool_entry_for_replay(
             Some(entry.end_offset),
             algo,
             max_batch_bytes,
-            None,
+            entry.session_id.as_deref(),
             parse_tracker.as_ref(),
         )
     })
@@ -1342,6 +1401,7 @@ async fn replay_spool_entries(
                 }
                 PreparedAction::Ship(item) => match attempt_ship(item, client, None).await {
                     AttemptedShip::Shipped(item) => {
+                        outcome.events_shipped += item.event_count;
                         file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
                         if item.new_offset >= entry.end_offset {
                             spool.mark_shipped(entry.id)?;
@@ -1668,6 +1728,14 @@ mod tests {
             .iter()
             .map(|line| line["source_offset"].as_u64().unwrap())
             .collect()
+    }
+
+    fn decode_payload_session_id(compressed: &[u8]) -> String {
+        let mut decoder = GzDecoder::new(compressed);
+        let mut json_str = String::new();
+        decoder.read_to_string(&mut json_str).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        payload["id"].as_str().unwrap().to_string()
     }
 
     fn make_line(uuid: &str, text: &str) -> String {
@@ -2329,6 +2397,7 @@ mod tests {
 
         assert_eq!(outcome.resolved, 1);
         assert_eq!(outcome.failed, 0);
+        assert_eq!(outcome.events_shipped, 2);
         assert!(!outcome.had_connect_error);
         assert!(spool
             .pending_entries_for_path(&path_a_str, 10)
@@ -2343,6 +2412,133 @@ mod tests {
         );
         assert_eq!(file_state.get_offset(&path_a_str).unwrap(), path_a_len);
         assert_eq!(file_state.get_offset(&path_b_str).unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_replay_spool_for_path_now_ignores_backoff_for_target_file() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("cccccccc-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path, claude_session_lines()).unwrap();
+
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let path_str = path.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&path).unwrap().len();
+
+        file_state
+            .set_queued_offset(
+                &path_str,
+                file_len,
+                "claude",
+                "cccccccc-1111-2222-3333-444455556666",
+                "cccccccc-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                file_len,
+                Some("cccccccc-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE spool_queue SET next_retry_at = datetime('now', '+5 minutes') WHERE file_path = ?1",
+            [&path_str],
+        )
+        .unwrap();
+
+        let regular = replay_spool_for_path_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &make_test_client("http://127.0.0.1:9"),
+            CompressionAlgo::Gzip,
+            &path,
+            10,
+            10_000,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(regular.resolved, 0);
+        assert_eq!(regular.events_shipped, 0);
+
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        let client = make_test_client(&url);
+        let immediate = replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            &path,
+            10,
+            10_000,
+            None,
+        )
+        .await
+        .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(immediate.resolved, 1);
+        assert_eq!(immediate.failed, 0);
+        assert_eq!(immediate.events_shipped, 2);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), file_len);
+        assert!(spool
+            .pending_entries_for_path_now(&path_str, 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_replay_spool_for_path_now_preserves_spooled_session_id() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("dddddddd-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path, claude_session_lines()).unwrap();
+
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let path_str = path.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        let override_session_id = "019d2869-1111-7222-8333-aaaaaaaaaaaa";
+
+        file_state
+            .set_queued_offset(
+                &path_str,
+                file_len,
+                "claude",
+                override_session_id,
+                "dddddddd-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+        spool
+            .enqueue("claude", &path_str, 0, file_len, Some(override_session_id))
+            .unwrap();
+
+        let (url, captured, handle) = spawn_http_sequence_server(&[("200 OK", "{}")]);
+        let client = make_test_client(&url);
+        let outcome = replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+            &conn,
+            &client,
+            CompressionAlgo::Gzip,
+            &path,
+            10,
+            10_000,
+            None,
+        )
+        .await
+        .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(outcome.resolved, 1);
+        assert_eq!(outcome.events_shipped, 2);
+        let requests = captured.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(decode_payload_session_id(&requests[0]), override_session_id);
     }
 
     #[test]
@@ -2525,6 +2721,81 @@ mod tests {
             )
             .unwrap();
         assert_eq!(pending_count, 1);
+    }
+
+    #[test]
+    fn test_recover_gap_for_path_enqueues_only_target_gap() {
+        let (_tmp, conn) = make_db();
+        let fs = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+
+        fs.set_offset("/tmp/target.jsonl", 100, "target", "target", "claude")
+            .unwrap();
+        fs.set_queued_offset("/tmp/target.jsonl", 500, "claude", "target", "target")
+            .unwrap();
+        fs.set_offset("/tmp/other.jsonl", 20, "other", "other", "claude")
+            .unwrap();
+        fs.set_queued_offset("/tmp/other.jsonl", 90, "claude", "other", "other")
+            .unwrap();
+
+        let recovered =
+            recover_gap_for_path(&conn, std::path::Path::new("/tmp/target.jsonl")).unwrap();
+        assert!(recovered.had_gap);
+        assert!(recovered.replay_ready);
+
+        let target_pending = spool
+            .pending_entries_for_path_now("/tmp/target.jsonl", 10)
+            .unwrap();
+        let other_pending = spool
+            .pending_entries_for_path_now("/tmp/other.jsonl", 10)
+            .unwrap();
+        assert_eq!(target_pending.len(), 1);
+        assert!(other_pending.is_empty());
+        assert_eq!(target_pending[0].start_offset, 100);
+        assert_eq!(target_pending[0].end_offset, 500);
+    }
+
+    #[test]
+    fn test_recover_gap_for_path_reports_spool_backpressure() {
+        let (_tmp, conn) = make_db();
+        let fs = FileState::new(&conn);
+
+        conn.execute_batch(
+            "WITH RECURSIVE cnt(x) AS (
+                SELECT 0
+                UNION ALL
+                SELECT x + 1 FROM cnt WHERE x < 9999
+            )
+            INSERT INTO spool_queue (
+                provider,
+                file_path,
+                start_offset,
+                end_offset,
+                created_at,
+                next_retry_at,
+                status
+            )
+            SELECT
+                'claude',
+                '/tmp/fill-' || x || '.jsonl',
+                x,
+                x + 1,
+                datetime('now'),
+                datetime('now'),
+                'pending'
+            FROM cnt;",
+        )
+        .unwrap();
+
+        fs.set_offset("/tmp/target.jsonl", 100, "target", "target", "claude")
+            .unwrap();
+        fs.set_queued_offset("/tmp/target.jsonl", 500, "claude", "target", "target")
+            .unwrap();
+
+        let recovered =
+            recover_gap_for_path(&conn, std::path::Path::new("/tmp/target.jsonl")).unwrap();
+        assert!(recovered.had_gap);
+        assert!(!recovered.replay_ready);
     }
 
     #[test]

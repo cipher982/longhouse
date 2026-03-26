@@ -28,6 +28,7 @@ pub struct SpoolEntry {
     pub file_path: String,
     pub start_offset: u64,
     pub end_offset: u64,
+    pub session_id: Option<String>,
 }
 
 /// A file path with pending retry work, ordered by oldest pending entry.
@@ -150,7 +151,7 @@ impl<'a> Spool<'a> {
     pub fn dequeue_batch(&self, limit: usize) -> Result<Vec<SpoolEntry>> {
         let now = Utc::now().to_rfc3339();
         let mut stmt = self.conn.prepare(
-            "SELECT id, provider, file_path, start_offset, end_offset
+            "SELECT id, provider, file_path, start_offset, end_offset, session_id
              FROM spool_queue
              WHERE status = 'pending' AND next_retry_at <= ?1
              ORDER BY created_at ASC
@@ -163,6 +164,7 @@ impl<'a> Spool<'a> {
                 file_path: row.get(2)?,
                 start_offset: row.get::<_, i64>(3)? as u64,
                 end_offset: row.get::<_, i64>(4)? as u64,
+                session_id: row.get(5)?,
             })
         })?;
         let mut result = Vec::new();
@@ -204,7 +206,7 @@ impl<'a> Spool<'a> {
     ) -> Result<Vec<SpoolEntry>> {
         let now = Utc::now().to_rfc3339();
         let mut stmt = self.conn.prepare(
-            "SELECT id, provider, file_path, start_offset, end_offset
+            "SELECT id, provider, file_path, start_offset, end_offset, session_id
              FROM spool_queue
              WHERE status = 'pending' AND next_retry_at <= ?1 AND file_path = ?2
              ORDER BY created_at ASC, id ASC
@@ -217,6 +219,37 @@ impl<'a> Spool<'a> {
                 file_path: row.get(2)?,
                 start_offset: row.get::<_, i64>(3)? as u64,
                 end_offset: row.get::<_, i64>(4)? as u64,
+                session_id: row.get(5)?,
+            })
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
+    /// Get pending retry entries for a single file path, ignoring next_retry_at backoff.
+    pub fn pending_entries_for_path_now(
+        &self,
+        file_path: &str,
+        limit: usize,
+    ) -> Result<Vec<SpoolEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, provider, file_path, start_offset, end_offset, session_id
+             FROM spool_queue
+             WHERE status = 'pending' AND file_path = ?1
+             ORDER BY created_at ASC, id ASC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![file_path, limit as i64], |row| {
+            Ok(SpoolEntry {
+                id: row.get(0)?,
+                provider: row.get(1)?,
+                file_path: row.get(2)?,
+                start_offset: row.get::<_, i64>(3)? as u64,
+                end_offset: row.get::<_, i64>(4)? as u64,
+                session_id: row.get(5)?,
             })
         })?;
         let mut result = Vec::new();
