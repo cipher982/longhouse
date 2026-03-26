@@ -65,7 +65,7 @@ router = APIRouter(
     dependencies=[Depends(get_current_browser_user), Depends(require_single_tenant)],
 )
 
-TIMELINE_STREAM_POLL_SECONDS = 1.0
+TIMELINE_STREAM_CHANGE_WAIT_SECONDS = 5.0
 TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
 
 
@@ -300,7 +300,7 @@ async def _timeline_sessions_stream(
                         "data": json.dumps({"timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}),
                     }
                     last_heartbeat = now
-                await asyncio.sleep(TIMELINE_STREAM_POLL_SECONDS)
+                await _wait_for_timeline_change()
                 continue
             previous_window_signature = current_window_signature
 
@@ -368,7 +368,18 @@ async def _timeline_sessions_stream(
             }
             last_heartbeat = now
 
-        await asyncio.sleep(TIMELINE_STREAM_POLL_SECONDS)
+        await _wait_for_timeline_change()
+
+
+async def _wait_for_timeline_change() -> None:
+    """Wait for a DB write or a timeout before the next SSE poll cycle."""
+    from zerg.services.write_serializer import get_write_serializer
+
+    ws = get_write_serializer()
+    if ws.is_configured:
+        await ws.wait_for_change(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
+    else:
+        await asyncio.sleep(TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
 
 
 @router.get("/briefing", response_model=BriefingResponse)

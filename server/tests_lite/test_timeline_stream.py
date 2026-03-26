@@ -20,6 +20,10 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 
 
+async def _noop_coro() -> None:
+    """No-op replacement for _wait_for_timeline_change in tests."""
+
+
 def _make_db(tmp_path, name="timeline_stream.db"):
     db_path = tmp_path / name
     engine = make_engine(f"sqlite:///{db_path}")
@@ -274,8 +278,9 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
     with (
         patch.object(timeline_router, "list_timeline_sessions", new=_counting_list_timeline_sessions),
         patch.object(timeline_router.AgentsStore, "list_timeline_thread_window_signature", new=_capturing_window_signature),
-        patch.object(timeline_router, "TIMELINE_STREAM_POLL_SECONDS", 0),
+        patch.object(timeline_router, "TIMELINE_STREAM_CHANGE_WAIT_SECONDS", 0),
         patch.object(timeline_router, "TIMELINE_STREAM_HEARTBEAT_SECONDS", 0),
+        patch.object(timeline_router, "_wait_for_timeline_change", new=_noop_coro),
     ):
         events = asyncio.run(_collect_events())
 
