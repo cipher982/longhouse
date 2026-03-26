@@ -1,7 +1,7 @@
 """Deterministic dispatch-contract checks for scripted Oikos behavior."""
 
-from zerg.services.oikos_react_engine import _classify_dispatch_lane
-from zerg.services.oikos_react_engine import _infer_requested_backend
+from zerg.services.dispatch_contract import _classify_dispatch_lane
+from zerg.services.dispatch_contract import _infer_requested_backend
 from zerg.testing.scripted_llm import ScriptedChatLLM
 from zerg.types.messages import HumanMessage
 from zerg.types.messages import SystemMessage

@@ -1,7 +1,7 @@
 """Dispatch-contract tests for backend preference normalization."""
 
-from zerg.services.oikos_react_engine import _apply_dispatch_contract
-from zerg.services.oikos_react_engine import _infer_requested_backend
+from zerg.services.dispatch_contract import _apply_dispatch_contract
+from zerg.services.dispatch_contract import _infer_requested_backend
 from zerg.types.messages import HumanMessage
 from zerg.types.messages import SystemMessage
 
