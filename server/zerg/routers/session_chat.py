@@ -51,6 +51,7 @@ from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_COMPLE
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_FAILED
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_PENDING
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
+from zerg.services.managed_local_control import get_managed_local_control_status_for_phase
 from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
 from zerg.services.managed_local_control import get_managed_local_presence_updated_at
 from zerg.services.managed_local_control import send_text_to_managed_local_session
@@ -59,6 +60,7 @@ from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
 from zerg.services.managed_local_turns import create_managed_local_turn
+from zerg.services.managed_local_turns import get_managed_local_turn_snapshot
 from zerg.services.managed_local_turns import mark_managed_local_turn_failed
 from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
 from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
@@ -358,6 +360,34 @@ def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )
+
+
+def _hydrate_managed_local_turn_events_from_ledger(
+    *,
+    db_bind,
+    session_id: UUID,
+    request_id: str,
+    expected_user_message: str,
+) -> tuple[object | None, list[AgentEvent]]:
+    snapshot = get_managed_local_turn_snapshot(
+        db_bind=db_bind,
+        session_id=session_id,
+        request_id=request_id,
+    )
+    if snapshot is None or snapshot.durable_at is None:
+        return snapshot, []
+
+    events = _fetch_managed_local_events_since(
+        db_bind=db_bind,
+        session_id=session_id,
+        after_event_id=int(snapshot.baseline_event_id or 0),
+    )
+    if expected_user_message and not _managed_local_events_include_expected_turn(
+        events=events,
+        expected_user_message=expected_user_message,
+    ):
+        return snapshot, []
+    return snapshot, events
 
 
 def _get_managed_local_latest_event_id(*, db_bind, session_id: UUID) -> int:
@@ -733,8 +763,24 @@ async def _stream_managed_local_output(
                 session_id=source_session.id,
             ),
         )
+    turn_snapshot = get_managed_local_turn_snapshot(
+        db_bind=db.get_bind(),
+        session_id=source_session.id,
+        request_id=request_id,
+    )
+    if not new_events:
+        ledger_snapshot, ledger_events = _hydrate_managed_local_turn_events_from_ledger(
+            db_bind=db.get_bind(),
+            session_id=source_session.id,
+            request_id=request_id,
+            expected_user_message=message,
+        )
+        if ledger_snapshot is not None:
+            turn_snapshot = ledger_snapshot
+        if ledger_events:
+            new_events = ledger_events
 
-    if not new_events and terminal_result is None:
+    if not new_events and terminal_result is None and not (turn_snapshot and turn_snapshot.terminal_at is not None):
         run_best_effort_managed_local_turn_write(
             db_bind=db.get_bind(),
             label="turn_timeout",
@@ -771,12 +817,14 @@ async def _stream_managed_local_output(
         ).encode()
         return
 
-    if terminal_result is None:
+    if turn_snapshot is not None and turn_snapshot.terminal_at is not None:
+        control_status = get_managed_local_control_status_for_phase(turn_snapshot.terminal_phase)
+    elif terminal_result is None:
         control_status = MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
     else:
         control_status = terminal_result.control_status
 
-    if not new_events and terminal_result is not None:
+    if not new_events and ((turn_snapshot is not None and turn_snapshot.terminal_at is not None) or terminal_result is not None):
         yield SSEEvent(
             event="done",
             data=json.dumps(
@@ -785,7 +833,7 @@ async def _stream_managed_local_output(
                     "source_session_id": str(source_session.id),
                     "shipped_session_id": str(source_session.id),
                     "created_continuation": False,
-                    "control_status": terminal_result.control_status,
+                    "control_status": control_status,
                     "sync_status": MANAGED_LOCAL_SYNC_STATUS_PENDING,
                     "exit_code": 0,
                     "total_text_length": 0,

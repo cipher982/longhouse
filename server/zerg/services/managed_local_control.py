@@ -96,6 +96,11 @@ class ManagedLocalTerminalResult:
     occurred_at: datetime | None = None
 
 
+def get_managed_local_control_status_for_phase(phase: str | None) -> str:
+    normalized = str(phase or "").strip().lower()
+    return _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS.get(normalized, MANAGED_LOCAL_CONTROL_STATUS_COMPLETED)
+
+
 def validate_managed_local_chat_done_payload(
     *,
     session_id: str,

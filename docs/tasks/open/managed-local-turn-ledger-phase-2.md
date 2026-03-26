@@ -1,8 +1,8 @@
 # Managed-Local Turn Ledger Phase 2
 
-Status: Backlog
+Status: In progress
 Spec: `docs/specs/managed-local-turn-ledger.md`
-Owner: Unassigned
+Owner: Codex
 Last updated: 2026-03-26
 
 ## Goal
@@ -16,6 +16,7 @@ runtime polling plus persisted events.
 
 - managed-local continuation can read control completion from the turn ledger
 - `sync_status` can read durability from the turn ledger
+- focused route/ledger tests cover ledger-terminal and ledger-durable fallback cases
 - the route still passes hosted managed-local Claude stress end to end on
   `david010`
 
@@ -26,3 +27,14 @@ runtime polling plus persisted events.
 - Do not start this slice by adding more status enums or provider-general
   abstractions.
 - Keep the first implementation narrow: managed-local continuation only.
+- First pass should prefer the ledger for terminal + durability, but keep a
+  bounded fallback to current direct evidence if a shadow write is missing or
+  late. Do not re-open the green hosted path just to make phase 2 more pure.
+- Current branch work:
+  - added a committed-read snapshot helper for `managed_local_turns`
+  - route now re-reads the ledger before final `done` decision and can hydrate
+    durable events from the ledger baseline when the direct event waiter returns empty
+  - route now prefers ledger terminal phase for `control_status` when present
+- Local verification on the current branch state:
+  - targeted slice: `44 passed`
+  - full backend suite: `make test` → `1173 passed`

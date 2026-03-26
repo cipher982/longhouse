@@ -23,6 +23,7 @@ from zerg.models.user import User
 from zerg.services.managed_local_turns import attach_review_to_managed_local_turn
 from zerg.services.managed_local_turns import create_managed_local_turn
 from zerg.services.managed_local_turns import get_managed_local_turn
+from zerg.services.managed_local_turns import get_managed_local_turn_snapshot
 from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
 from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
 from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
@@ -221,3 +222,45 @@ def test_managed_local_turn_durability_clears_timeout_once_events_arrive(tmp_pat
         assert durable_turn is not None
         assert durable_turn.durable_at is not None
         assert durable_turn.error_code is None
+
+
+def test_managed_local_turn_snapshot_reads_committed_shadow_state(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    db_bind = None
+    session_id = None
+
+    with SessionLocal() as db:
+        db_bind = db.get_bind()
+        session = _seed_user_runner_and_session(db)
+        session_id = session.id
+        create_managed_local_turn(
+            db,
+            session_id=session.id,
+            request_id="req-snapshot",
+            baseline_event_id=12,
+            baseline_runtime_event_id=34,
+            expected_user_text="continue",
+        )
+        mark_managed_local_turn_send_accepted(db, session_id=session.id, request_id="req-snapshot")
+        mark_managed_local_turn_terminal(
+            db,
+            session_id=session.id,
+            request_id="req-snapshot",
+            phase="needs_user",
+            terminal_at=datetime.now(timezone.utc),
+            terminal_runtime_event_id=55,
+        )
+        db.commit()
+
+    snapshot = get_managed_local_turn_snapshot(
+        db_bind=db_bind,
+        session_id=session_id,
+        request_id="req-snapshot",
+    )
+    assert snapshot is not None
+    assert snapshot.request_id == "req-snapshot"
+    assert snapshot.baseline_event_id == 12
+    assert snapshot.baseline_runtime_event_id == 34
+    assert snapshot.send_accepted_at is not None
+    assert snapshot.terminal_phase == "needs_user"
+    assert snapshot.terminal_runtime_event_id == 55
