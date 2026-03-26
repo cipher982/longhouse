@@ -27,7 +27,7 @@ from zerg.services.managed_local_control import send_text_to_managed_local_sessi
 from zerg.services.managed_local_runtime import persist_managed_local_turn_idle
 from zerg.services.managed_local_runtime import persist_managed_local_turn_needs_user
 from zerg.services.managed_local_turns import attach_review_to_managed_local_turn
-from zerg.services.managed_local_turns import get_next_reviewable_managed_local_turn
+from zerg.services.managed_local_turns import get_reviewable_managed_local_turns
 from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
@@ -317,27 +317,54 @@ def load_completed_assistant_turn_by_event_id(
     )
 
 
+def _turn_is_within_fresh_window(
+    *,
+    assistant_timestamp: datetime,
+    now: datetime,
+    freshness_reference_at: datetime | None,
+) -> bool:
+    fresh_window_seconds = _TURN_REVIEW_FRESH_WINDOW_MINUTES * 60
+    if (now - assistant_timestamp).total_seconds() <= fresh_window_seconds:
+        return True
+    reference_time = _normalize_utc(freshness_reference_at)
+    if reference_time is None:
+        return False
+    return (reference_time - assistant_timestamp).total_seconds() <= fresh_window_seconds
+
+
 def _load_turn_review_candidate(
     *,
     db: Session,
     session: AgentSession | None,
     session_id: str,
+    freshness_reference_at: datetime | None = None,
 ) -> CompletedAssistantTurn | None:
     if _is_managed_local_session(session) and session is not None:
-        ledger_turn = get_next_reviewable_managed_local_turn(db, session_id=session.id)
-        if ledger_turn is not None and ledger_turn.durable_assistant_event_id is not None:
+        ledger_turns = get_reviewable_managed_local_turns(db, session_id=session.id)
+        now = datetime.now(timezone.utc)
+        for ledger_turn in ledger_turns:
+            if ledger_turn.durable_assistant_event_id is None:
+                continue
             turn = load_completed_assistant_turn_by_event_id(
                 db,
                 session_id,
                 assistant_event_id=int(ledger_turn.durable_assistant_event_id),
             )
             if turn is not None:
+                if not _turn_is_within_fresh_window(
+                    assistant_timestamp=turn.assistant_timestamp,
+                    now=now,
+                    freshness_reference_at=freshness_reference_at,
+                ):
+                    continue
                 return turn
             logger.warning(
-                "Managed-local ledger turn %s for session %s could not be reconstructed from events; falling back",
+                "Managed-local ledger turn %s for session %s could not be reconstructed from events; skipping row",
                 ledger_turn.id,
                 session_id,
             )
+        if ledger_turns:
+            return None
     return load_latest_completed_assistant_turn(db, session_id)
 
 
@@ -858,7 +885,12 @@ def turn_loop_retry_needed(
     if not _has_turn_review_table(db):
         return False
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    turn = _load_turn_review_candidate(db=db, session=session, session_id=session_id)
+    turn = _load_turn_review_candidate(
+        db=db,
+        session=session,
+        session_id=session_id,
+        freshness_reference_at=freshness_reference_at,
+    )
     if turn is None:
         return False
     now = datetime.now(timezone.utc)
@@ -902,7 +934,12 @@ async def _record_session_turn_review(
         return None, False
     if session.user_state in {"archived", "snoozed"}:
         return None, False
-    turn = _load_turn_review_candidate(db=db, session=session, session_id=session_id)
+    turn = _load_turn_review_candidate(
+        db=db,
+        session=session,
+        session_id=session_id,
+        freshness_reference_at=freshness_reference_at,
+    )
     if turn is None:
         return None, False
     now = datetime.now(timezone.utc)

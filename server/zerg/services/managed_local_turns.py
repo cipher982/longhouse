@@ -190,11 +190,12 @@ def attach_review_to_managed_local_turn(
     return True
 
 
-def get_next_reviewable_managed_local_turn(
+def get_reviewable_managed_local_turns(
     db: Session,
     *,
     session_id: UUID,
-) -> ManagedLocalTurn | None:
+    limit: int = 16,
+) -> list[ManagedLocalTurn]:
     return (
         db.query(ManagedLocalTurn)
         .filter(
@@ -203,8 +204,18 @@ def get_next_reviewable_managed_local_turn(
             ManagedLocalTurn.review_id.is_(None),
         )
         .order_by(ManagedLocalTurn.created_at.asc(), ManagedLocalTurn.id.asc())
-        .first()
+        .limit(int(limit))
+        .all()
     )
+
+
+def get_next_reviewable_managed_local_turn(
+    db: Session,
+    *,
+    session_id: UUID,
+) -> ManagedLocalTurn | None:
+    turns = get_reviewable_managed_local_turns(db, session_id=session_id, limit=1)
+    return turns[0] if turns else None
 
 
 def get_managed_local_turn(
@@ -285,19 +296,24 @@ def _match_durable_turn(
         return None
 
     matched_user: AgentEvent | None = None
+    last_assistant: AgentEvent | None = None
     for event in events:
         role = str(getattr(event, "role", "") or "").strip().lower()
         content_text = str(getattr(event, "content_text", "") or "")
-        tool_name = str(getattr(event, "tool_name", "") or "").strip()
 
         if matched_user is None:
             if role == "user" and hash_managed_local_turn_text(content_text) == expected_hash:
                 matched_user = event
             continue
 
-        if tool_name:
-            return matched_user, event
-        if role == "assistant" and content_text.strip():
-            return matched_user, event
+        if role == "user":
+            if last_assistant is not None:
+                return matched_user, last_assistant
+            return None
 
+        if role == "assistant" and content_text.strip():
+            last_assistant = event
+
+    if matched_user is not None and last_assistant is not None:
+        return matched_user, last_assistant
     return None

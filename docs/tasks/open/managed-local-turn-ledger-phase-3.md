@@ -32,6 +32,8 @@ inference.
   - `turn_loop_retry_needed()` and `_record_session_turn_review()` now prefer that ledger-selected assistant event for managed-local sessions
   - added a regression proving review order follows durable ledger order instead of always picking the latest transcript assistant turn
   - older targeted turns now reconstruct dialog from history up to the specific assistant event id, not from the live tail
+  - reviewer follow-up fix: durable ledger binding now tracks the last real assistant reply event for a turn, not a tool placeholder
+  - reviewer follow-up fix: stale or unreconstructable managed-local ledger rows are skipped so they do not wedge newer durable turns behind them
 - Local verification on the current branch state:
-  - targeted slice: `28 passed`
-  - full backend suite: `make test` → `1176 passed`
+  - targeted slice: `35 passed`
+  - full backend suite: `make test` → `1179 passed`
