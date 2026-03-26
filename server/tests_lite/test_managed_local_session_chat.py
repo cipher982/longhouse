@@ -22,6 +22,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentSession
+from zerg.models.agents import ManagedLocalTurn
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
@@ -204,15 +205,23 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
         client, api_app_ref = _make_client(db, user)
 
         async def fake_wait_for_events(**_kwargs):
-            return [
-                SimpleNamespace(
-                    id=101,
-                    role="assistant",
-                    content_text="Local tmux reply",
-                    tool_name=None,
-                    tool_call_id=None,
-                )
-            ]
+            user_event = session_chat.AgentEvent(
+                session_id=source_session.id,
+                role="user",
+                content_text="continue",
+                timestamp=datetime.now(timezone.utc),
+            )
+            assistant_event = session_chat.AgentEvent(
+                session_id=source_session.id,
+                role="assistant",
+                content_text="Local tmux reply",
+                tool_name=None,
+                tool_call_id=None,
+                timestamp=datetime.now(timezone.utc),
+            )
+            db.add_all([user_event, assistant_event])
+            db.commit()
+            return [user_event, assistant_event]
 
         def fail_cloud_target(*_args, **_kwargs):
             raise AssertionError("managed_local chat should not create cloud continuations")
@@ -231,7 +240,12 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
         async def fake_wait_for_terminal(**_kwargs):
-            return None
+            return SimpleNamespace(
+                phase="idle",
+                control_status="completed",
+                runtime_event_id=44,
+                occurred_at=datetime.now(timezone.utc),
+            )
 
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
         monkeypatch.setattr(
@@ -256,7 +270,7 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
             assert "event: assistant_delta" in body
             assert "event: done" in body
             assert "Local tmux reply" in body
-            assert '"persisted_events": 1' in body
+            assert '"persisted_events": 2' in body
             assert '"persistence_error": null' in body
             assert '"sync_status": "complete"' in body
             assert '"control_status": "completed"' in body
@@ -267,6 +281,20 @@ def test_chat_with_session_routes_claude_managed_local_without_cloud_continuatio
                 db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == source_session.id).all()
             )
             assert runtime_state_rows == []
+            turn_rows = (
+                db.query(ManagedLocalTurn)
+                .filter(ManagedLocalTurn.session_id == source_session.id)
+                .order_by(ManagedLocalTurn.id.asc())
+                .all()
+            )
+            assert len(turn_rows) == 1
+            assert turn_rows[0].request_id
+            assert turn_rows[0].send_accepted_at is not None
+            assert turn_rows[0].terminal_phase == "idle"
+            assert turn_rows[0].terminal_runtime_event_id == 44
+            assert turn_rows[0].durable_at is not None
+            assert turn_rows[0].durable_user_event_id is not None
+            assert turn_rows[0].durable_assistant_event_id is not None
             assert len(calls) == 1
             assert calls[0]["runner_id"] == runner.id
             assert calls[0]["owner_id"] == user.id
@@ -301,6 +329,10 @@ def test_chat_with_session_reports_claude_managed_local_send_failure(monkeypatch
             assert "Runner send failed" in body
             assert '"persisted_events": 0' in body
             assert '"created_continuation": false' in body
+            turn_rows = db.query(ManagedLocalTurn).filter(ManagedLocalTurn.session_id == source_session.id).all()
+            assert len(turn_rows) == 1
+            assert turn_rows[0].send_accepted_at is None
+            assert turn_rows[0].error_code == "send_failed"
         finally:
             api_app_ref.dependency_overrides = {}
 

@@ -431,6 +431,41 @@ class SessionTurnReview(AgentsBase):
     )
 
 
+class ManagedLocalTurn(AgentsBase):
+    """Per-turn shadow ledger for managed-local continuation."""
+
+    __tablename__ = "managed_local_turns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _fk_ref = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    session_id = Column(
+        GUID(),
+        ForeignKey(_fk_ref, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    request_id = Column(String(64), nullable=False)
+    baseline_event_id = Column(Integer, nullable=False, server_default=text("0"))
+    baseline_runtime_event_id = Column(Integer, nullable=False, server_default=text("0"))
+    expected_user_text_hash = Column(String(64), nullable=False)
+    send_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    terminal_phase = Column(String(32), nullable=True)
+    terminal_at = Column(DateTime(timezone=True), nullable=True)
+    terminal_runtime_event_id = Column(Integer, nullable=True)
+    durable_user_event_id = Column(Integer, nullable=True)
+    durable_assistant_event_id = Column(Integer, nullable=True)
+    durable_at = Column(DateTime(timezone=True), nullable=True)
+    review_id = Column(Integer, nullable=True, index=True)
+    error_code = Column(String(64), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("session_id", "request_id", name="uq_managed_local_turn_session_request"),
+        Index("ix_managed_local_turns_session_created", "session_id", "created_at"),
+        Index("ix_managed_local_turns_session_durable_review", "session_id", "durable_at", "review_id", "created_at"),
+    )
+
+
 class SessionPresence(AgentsBase):
     """Real-time presence state for an active Claude Code session.
 
