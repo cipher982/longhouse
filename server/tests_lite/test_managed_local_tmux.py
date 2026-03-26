@@ -3,6 +3,7 @@
 import shlex
 
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_HISTORY_LIMIT
 from zerg.services.managed_local_tmux import build_tmux_attach_command
 from zerg.services.managed_local_tmux import build_tmux_capture_command
 from zerg.services.managed_local_tmux import build_tmux_current_command_command
@@ -47,6 +48,10 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
     assert "command -v tmux >/dev/null 2>&1" in inner
     assert (
         f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; "
+        "set-option -s escape-time 0 \\; "
+        "set-option -g status off \\; "
+        "set-option -g mouse on \\; "
+        f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT} \\; "
         "set-option -g remain-on-exit failed \\; "
         "new-session -d -s lh-demo -c '/tmp/path with spaces' /tmp/longhouse-managed-lh-demo.zsh"
     ) in inner
