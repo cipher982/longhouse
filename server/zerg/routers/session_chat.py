@@ -1147,7 +1147,11 @@ async def _stream_fake_claude_output(
             message=message,
             assistant_text=assistant_text,
         )
+        if db is not None:
+            db.commit()
     except Exception as exc:
+        if db is not None:
+            db.rollback()
         logger.warning("Failed to persist fake continuation turn for %s: %s", target_session_id, exc)
         ship_result = None
         persistence_error = _CONTINUATION_PERSISTENCE_ERROR

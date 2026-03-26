@@ -955,26 +955,26 @@ test.describe("Session Detail Page", () => {
           const sessionsPayload = await sessionsResp.json();
           return sessionsPayload.sessions.find(
             (session: {
-              thread_root_session_id?: string;
-              id: string;
-              thread_continuation_count?: number;
-              thread_head_session_id?: string;
+              thread_id: string;
+              continuation_count?: number;
+              head?: { id: string };
+              root?: { id: string };
             }) => {
-              return (session.thread_root_session_id || session.id) === rootId;
+              return session.thread_id === rootId || session.root?.id === rootId;
             },
           ) as
             | {
-                thread_continuation_count?: number;
-                thread_head_session_id?: string;
+                continuation_count?: number;
+                head?: { id: string };
               }
             | undefined;
         },
         { timeout: 10000 },
       )
       .toMatchObject({
-        thread_continuation_count: 2,
+        continuation_count: 2,
       });
-    expect(threadCard?.thread_head_session_id).not.toBe(rootId);
+    expect(threadCard?.head?.id).not.toBe(rootId);
   });
 
   test("Timeline groups continuations into one task card and opens the latest head", async ({
