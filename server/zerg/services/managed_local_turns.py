@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
 from typing import Callable
@@ -15,6 +16,23 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import ManagedLocalTurn
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ManagedLocalTurnSnapshot:
+    session_id: UUID
+    request_id: str
+    baseline_event_id: int
+    baseline_runtime_event_id: int
+    send_accepted_at: datetime | None
+    terminal_phase: str | None
+    terminal_at: datetime | None
+    terminal_runtime_event_id: int | None
+    durable_user_event_id: int | None
+    durable_assistant_event_id: int | None
+    durable_at: datetime | None
+    review_id: int | None
+    error_code: str | None
 
 
 def _normalize_utc(value: datetime | None) -> datetime | None:
@@ -179,6 +197,33 @@ def get_managed_local_turn(
     request_id: str,
 ) -> ManagedLocalTurn | None:
     return _get_turn_by_request(db, session_id=session_id, request_id=request_id)
+
+
+def get_managed_local_turn_snapshot(
+    *,
+    db_bind,
+    session_id: UUID,
+    request_id: str,
+) -> ManagedLocalTurnSnapshot | None:
+    with Session(bind=db_bind) as snapshot_db:
+        turn = _get_turn_by_request(snapshot_db, session_id=session_id, request_id=request_id)
+        if turn is None:
+            return None
+        return ManagedLocalTurnSnapshot(
+            session_id=session_id,
+            request_id=str(turn.request_id or ""),
+            baseline_event_id=int(turn.baseline_event_id or 0),
+            baseline_runtime_event_id=int(turn.baseline_runtime_event_id or 0),
+            send_accepted_at=_normalize_utc(turn.send_accepted_at),
+            terminal_phase=str(turn.terminal_phase or "").strip() or None,
+            terminal_at=_normalize_utc(turn.terminal_at),
+            terminal_runtime_event_id=(int(turn.terminal_runtime_event_id) if turn.terminal_runtime_event_id is not None else None),
+            durable_user_event_id=int(turn.durable_user_event_id) if turn.durable_user_event_id is not None else None,
+            durable_assistant_event_id=(int(turn.durable_assistant_event_id) if turn.durable_assistant_event_id is not None else None),
+            durable_at=_normalize_utc(turn.durable_at),
+            review_id=int(turn.review_id) if turn.review_id is not None else None,
+            error_code=str(turn.error_code or "").strip() or None,
+        )
 
 
 def _get_turn_by_request(

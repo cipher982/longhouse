@@ -11,6 +11,7 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 
 ## Active
 
+- [Managed-local turn ledger phase 2](docs/tasks/open/managed-local-turn-ledger-phase-2.md) — `IN PROGRESS (Codex)`; move `/api/sessions/{id}/chat` onto the ledger read path for terminal + durability, with a bounded fallback while the transition hardens.
 - [Managed-local Loop tail optimization](docs/tasks/open/managed-local-loop-tail-optimization.md) — `IN PROGRESS (Codex)`; use the persisted review timings to shave the remaining pre-enqueue + claim latency now that correctness is green.
 - [Managed-local session control](docs/tasks/open/managed-local-session-control.md) — dedicated tmux server isolation, failed pane inspection, readiness hook bridge, end-to-end dogfood.
 - [Runtime story simplification](docs/tasks/open/launch-runtime-simplification.md) — copy/narrative done; remaining work is the OikosService/react_engine deletion path (3k LOC, 36+ call sites).
@@ -21,7 +22,6 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 
 ## Backlog
 
-- [Managed-local turn ledger phase 2](docs/tasks/backlog/managed-local-turn-ledger-phase-2.md) — route reads terminal + durability from the ledger; phase 1 shipped in [docs/tasks/done/2026-03/managed-local-turn-ledger.md](docs/tasks/done/2026-03/managed-local-turn-ledger.md).
 - [Shipper byte batching](docs/tasks/open/shipper-byte-batching.md) — functionally complete and shipping; only remaining work is large-session fixture tests for CI confidence.
 - [Oikos dispatch contract research](docs/tasks/backlog/oikos-dispatch-contract.md) — useful, but not current launch-path work.
 
