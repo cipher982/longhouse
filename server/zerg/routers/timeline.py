@@ -35,7 +35,6 @@ from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_views import ActiveSessionsResponse
 from zerg.services.session_views import BriefingResponse
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import EventsListResponse
@@ -580,27 +579,6 @@ async def list_timeline_session_summaries(
         limit=limit,
         offset=offset,
         hide_autonomous=hide_autonomous,
-        db=db,
-        _auth=None,
-        _single=None,
-    )
-
-
-@router.get("/sessions/active", response_model=ActiveSessionsResponse)
-async def list_timeline_active_sessions(
-    project: Optional[str] = Query(None, description="Filter by project"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, active, idle, completed)"),
-    attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
-    limit: int = Query(50, ge=1, le=200, description="Max results"),
-    days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
-    db: Session = Depends(get_db),
-):
-    return await _sessions_router.list_active_sessions(
-        project=project,
-        status_filter=status_filter,
-        attention=attention,
-        limit=limit,
-        days_back=days_back,
         db=db,
         _auth=None,
         _single=None,
