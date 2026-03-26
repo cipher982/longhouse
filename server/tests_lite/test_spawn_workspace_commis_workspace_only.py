@@ -82,6 +82,31 @@ async def test_spawn_workspace_commis_keeps_workspace_mode_and_repo_config(tmp_p
 
 
 @pytest.mark.asyncio
+async def test_spawn_workspace_commis_notifies_processor_when_job_is_queued(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    notifications: list[str] = []
+
+    with SessionLocal() as db:
+        user = _create_user(db, email="commis-notify@example.com")
+        resolver = SimpleNamespace(db=db, owner_id=user.id)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_credential_resolver", lambda: resolver)
+        monkeypatch.setattr(oikos_commis_job_tools, "get_oikos_context", lambda: None)
+        monkeypatch.setattr(
+            "zerg.services.commis_job_processor.commis_job_processor",
+            SimpleNamespace(notify_job_available=lambda: notifications.append("queued")),
+        )
+
+        result = await oikos_tools.spawn_workspace_commis_async(
+            task="Run the pending targeted tests",
+            _return_structured=True,
+        )
+
+        assert isinstance(result, dict)
+        assert result["status"] == "queued"
+        assert notifications == ["queued"]
+
+
+@pytest.mark.asyncio
 async def test_spawn_workspace_commis_rejects_operator_resume_when_continue_disabled(tmp_path, monkeypatch):
     """Operator-triggered resume is blocked unless allow_continue is enabled."""
     SessionLocal = _make_db(tmp_path)

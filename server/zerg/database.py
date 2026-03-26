@@ -313,13 +313,32 @@ def configure_write_serializer() -> None:
     Call once at startup (from lifespan) after database_url is set.
     No-op if write engine is not available (tests).
     """
-    if _write_session_factory is None:
-        return
     from zerg.services.write_serializer import get_write_serializer
 
     ws = get_write_serializer()
     if not ws.is_configured:
-        ws.configure(_write_session_factory)
+        ws.configure_resolver(_resolve_write_session_factory)
+
+
+def get_write_session_factory() -> sessionmaker | None:
+    """Return the current write session factory.
+
+    In E2E, request handling can route to per-commis SQLite files via
+    ``X-Test-Commis``. Serialized writes must follow that same routing or they
+    will write to the wrong database and violate foreign keys.
+    """
+    if _settings.testing:
+        commis_id = get_test_commis_id()
+        if commis_id:
+            return _get_or_create_commis_session_factory(commis_id)
+    return _write_session_factory
+
+
+def _resolve_write_session_factory() -> sessionmaker:
+    session_factory = get_write_session_factory()
+    if session_factory is None:
+        raise RuntimeError("Write session factory unavailable")
+    return session_factory
 
 
 def get_write_engine() -> Engine | None:
