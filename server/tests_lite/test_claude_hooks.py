@@ -1,17 +1,20 @@
 """Tests for Claude hook installation and Stop shipping behavior."""
 
 from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
+from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_TRANSCRIPT_READY_CHECK_SHELL
 from zerg.services.shipper.hooks import HOOK_SCRIPT
 from zerg.services.shipper.hooks import SESSION_START_HOOK_SCRIPT
 from zerg.services.shipper.hooks import _make_hook_entries
 
 
-def test_claude_hook_script_detaches_stop_shipping_and_retries_until_file_exists():
+def test_claude_hook_script_detaches_stop_shipping_and_retries_until_transcript_is_parser_ready():
     assert '[[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]' in HOOK_SCRIPT
     assert "nohup /bin/bash -c" in HOOK_SCRIPT
     assert f"for delay in {MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL}" in HOOK_SCRIPT
     assert 'if [[ "$delay" != "0" ]]; then' in HOOK_SCRIPT
-    assert 'if [[ -f "$transcript" ]]' in HOOK_SCRIPT
+    assert MANAGED_LOCAL_CLAUDE_TRANSCRIPT_READY_CHECK_SHELL in HOOK_SCRIPT
+    assert 'transcript_ready "$transcript" || continue' in HOOK_SCRIPT
+    assert "tail -c 1" in HOOK_SCRIPT
     assert 'ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true' in HOOK_SCRIPT
     assert '[[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]' not in HOOK_SCRIPT
 

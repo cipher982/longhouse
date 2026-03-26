@@ -280,27 +280,46 @@ def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_pa
         assert f"--session-id {session.id}" in command
         assert f"delays=({MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL})" in command
         assert 'for delay in "${delays[@]}"' in command
+        assert "transcript_ready() {" in command
+        assert "tail -c 1" in command
+        assert 'transcript_ready "$transcript" || continue' in command
         assert "--json" in command
         assert "events_shipped" in command
         assert "Managed local Claude transcript did not ship new events" in command
 
 
 def test_managed_local_claude_ship_retry_schedule_is_dense_in_first_second():
-    assert MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS[:5] == (0.0, 0.1, 0.25, 0.5, 1.0)
-    assert get_managed_local_claude_ship_retry_sleep_delays() == (
+    assert MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS[:10] == (
         0.0,
+        0.05,
         0.1,
         0.15,
+        0.2,
         0.25,
         0.5,
-        0.5,
+        0.75,
+        1.0,
+        1.25,
+    )
+    assert get_managed_local_claude_ship_retry_sleep_delays() == (
+        0.0,
+        0.05,
+        0.05,
+        0.05,
+        0.05,
+        0.05,
+        0.25,
+        0.25,
+        0.25,
+        0.25,
+        0.25,
         0.5,
         1.0,
         1.0,
         2.0,
         2.0,
     )
-    assert MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL == "0 0.1 0.15 0.25 0.5 0.5 0.5 1 1 2 2"
+    assert MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL == "0 0.05 0.05 0.05 0.05 0.05 0.25 0.25 0.25 0.25 0.25 0.5 1 1 2 2"
     post_one_second_attempts = [
         attempt for attempt in MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS if attempt >= 1.0
     ]
