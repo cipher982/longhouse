@@ -602,6 +602,140 @@ def test_chat_with_session_uses_direct_ship_before_terminal_when_terminal_stalls
             api_app_ref.dependency_overrides = {}
 
 
+def test_chat_with_session_retries_direct_ship_after_terminal_when_early_ship_found_no_reply(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    events_ready = asyncio.Event()
+    ship_calls = {"count": 0}
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        async def fake_wait_for_terminal(**_kwargs):
+            await asyncio.sleep(0.03)
+            return SimpleNamespace(
+                phase="idle",
+                control_status="completed",
+                runtime_event_id=91,
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+        async def fake_wait_for_events(**_kwargs):
+            await events_ready.wait()
+            return [
+                SimpleNamespace(
+                    id=301,
+                    role="user",
+                    content_text="continue",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+                SimpleNamespace(
+                    id=302,
+                    role="assistant",
+                    content_text="Reply flushed after terminal-triggered retry",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+            ]
+
+        async def fake_ship(*, db, owner_id, session, commis_id=None, timeout_secs=20):
+            ship_calls["count"] += 1
+            if ship_calls["count"] == 1:
+                return SimpleNamespace(ok=False, exit_code=13, error="no new transcript events")
+            events_ready.set()
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat.await_managed_local_turn_terminal", fake_wait_for_terminal)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat._await_managed_local_turn_events",
+            fake_wait_for_events,
+        )
+        monkeypatch.setattr("zerg.routers.session_chat.ship_managed_local_claude_transcript", fake_ship)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS", 0.01)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS", 0.05)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS", 0.05)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 200, response.text
+            body = response.text
+            assert "Reply flushed after terminal-triggered retry" in body
+            assert '"sync_status": "complete"' in body
+            assert '"control_status": "completed"' in body
+            assert '"persisted_events": 2' in body
+            assert ship_calls["count"] == 2
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_chat_with_session_does_not_retry_direct_ship_after_terminal_for_hard_failure(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    ship_calls = {"count": 0}
+    events_seen = asyncio.Event()
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        async def fake_wait_for_terminal(**_kwargs):
+            await asyncio.sleep(0.03)
+            return SimpleNamespace(
+                phase="idle",
+                control_status="completed",
+                runtime_event_id=92,
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+        async def fake_wait_for_events(**_kwargs):
+            try:
+                await asyncio.wait_for(events_seen.wait(), timeout=0.2)
+            except asyncio.TimeoutError:
+                pass
+            return []
+
+        async def fake_ship(*, db, owner_id, session, commis_id=None, timeout_secs=20):
+            ship_calls["count"] += 1
+            return SimpleNamespace(ok=False, exit_code=12, error="longhouse-engine is not available")
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat.await_managed_local_turn_terminal", fake_wait_for_terminal)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat._await_managed_local_turn_events",
+            fake_wait_for_events,
+        )
+        monkeypatch.setattr("zerg.routers.session_chat.ship_managed_local_claude_transcript", fake_ship)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS", 0.01)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS", 0.05)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS", 0.05)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 200, response.text
+            body = response.text
+            assert '"sync_status": "pending"' in body
+            assert '"control_status": "completed"' in body
+            assert '"persisted_events": 0' in body
+            assert ship_calls["count"] == 1
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_chat_with_session_keeps_direct_ship_running_after_pending_response(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     detached = {"count": 0}
