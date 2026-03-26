@@ -63,6 +63,7 @@ from zerg.services.managed_local_turns import mark_managed_local_turn_failed
 from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
 from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
 from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
+from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
@@ -529,15 +530,18 @@ async def _stream_managed_local_output(
         session_id=source_session.id,
     )
     baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
-    create_managed_local_turn(
-        db,
-        session_id=source_session.id,
-        request_id=request_id,
-        baseline_event_id=baseline_event_id,
-        baseline_runtime_event_id=baseline_hook_runtime_event_id,
-        expected_user_text=message,
+    run_best_effort_managed_local_turn_write(
+        db_bind=db.get_bind(),
+        label="create",
+        fn=lambda turn_db: create_managed_local_turn(
+            turn_db,
+            session_id=source_session.id,
+            request_id=request_id,
+            baseline_event_id=baseline_event_id,
+            baseline_runtime_event_id=baseline_hook_runtime_event_id,
+            expected_user_text=message,
+        ),
     )
-    db.commit()
     send_result = await send_text_to_managed_local_session(
         db=db,
         owner_id=owner_id,
@@ -548,13 +552,16 @@ async def _stream_managed_local_output(
     )
 
     if not send_result.ok:
-        if mark_managed_local_turn_failed(
-            db,
-            session_id=source_session.id,
-            request_id=request_id,
-            error_code="send_failed",
-        ):
-            db.commit()
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="send_failed",
+            fn=lambda turn_db: mark_managed_local_turn_failed(
+                turn_db,
+                session_id=source_session.id,
+                request_id=request_id,
+                error_code="send_failed",
+            ),
+        )
         error_message = str(send_result.error or "Failed to send text to managed local session")
         yield SSEEvent(
             event="error",
@@ -580,12 +587,15 @@ async def _stream_managed_local_output(
             ),
         ).encode()
         return
-    if mark_managed_local_turn_send_accepted(
-        db,
-        session_id=source_session.id,
-        request_id=request_id,
-    ):
-        db.commit()
+    run_best_effort_managed_local_turn_write(
+        db_bind=db.get_bind(),
+        label="send_accepted",
+        fn=lambda turn_db: mark_managed_local_turn_send_accepted(
+            turn_db,
+            session_id=source_session.id,
+            request_id=request_id,
+        ),
+    )
 
     terminal_task = asyncio.create_task(
         await_managed_local_turn_terminal(
@@ -702,27 +712,39 @@ async def _stream_managed_local_output(
         await asyncio.gather(terminal_task, events_task, return_exceptions=True)
 
     if terminal_result is not None:
-        if mark_managed_local_turn_terminal(
-            db,
-            session_id=source_session.id,
-            request_id=request_id,
-            phase=terminal_result.phase,
-            terminal_at=terminal_result.occurred_at,
-            terminal_runtime_event_id=terminal_result.runtime_event_id,
-        ):
-            db.commit()
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="terminal",
+            fn=lambda turn_db: mark_managed_local_turn_terminal(
+                turn_db,
+                session_id=source_session.id,
+                request_id=request_id,
+                phase=terminal_result.phase,
+                terminal_at=terminal_result.occurred_at,
+                terminal_runtime_event_id=terminal_result.runtime_event_id,
+            ),
+        )
     if new_events:
-        if maybe_mark_managed_local_turn_durable(db, session_id=source_session.id) is not None:
-            db.commit()
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="durable",
+            fn=lambda turn_db: maybe_mark_managed_local_turn_durable(
+                turn_db,
+                session_id=source_session.id,
+            ),
+        )
 
     if not new_events and terminal_result is None:
-        if mark_managed_local_turn_failed(
-            db,
-            session_id=source_session.id,
-            request_id=request_id,
-            error_code="turn_timeout",
-        ):
-            db.commit()
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="turn_timeout",
+            fn=lambda turn_db: mark_managed_local_turn_failed(
+                turn_db,
+                session_id=source_session.id,
+                request_id=request_id,
+                error_code="turn_timeout",
+            ),
+        )
         persistence_error = _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE
         yield SSEEvent(
             event="error",

@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import datetime
 from datetime import timezone
+from typing import Callable
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import ManagedLocalTurn
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_utc(value: datetime | None) -> datetime | None:
@@ -111,7 +115,6 @@ def maybe_mark_managed_local_turn_durable(db: Session, *, session_id: UUID) -> M
             ManagedLocalTurn.session_id == session_id,
             ManagedLocalTurn.send_accepted_at.isnot(None),
             ManagedLocalTurn.durable_at.is_(None),
-            ManagedLocalTurn.error_code.is_(None),
         )
         .order_by(ManagedLocalTurn.created_at.asc(), ManagedLocalTurn.id.asc())
         .all()
@@ -137,6 +140,8 @@ def maybe_mark_managed_local_turn_durable(db: Session, *, session_id: UUID) -> M
         turn.durable_user_event_id = int(user_event.id)
         turn.durable_assistant_event_id = int(assistant_event.id)
         turn.durable_at = datetime.now(timezone.utc)
+        if turn.error_code == "turn_timeout":
+            turn.error_code = None
         db.flush()
         return turn
 
@@ -190,6 +195,22 @@ def _get_turn_by_request(
         )
         .one_or_none()
     )
+
+
+def run_best_effort_managed_local_turn_write(
+    *,
+    db_bind,
+    label: str,
+    fn: Callable[[Session], object],
+):
+    try:
+        with Session(bind=db_bind) as ledger_db:
+            result = fn(ledger_db)
+            ledger_db.commit()
+            return result
+    except Exception:
+        logger.warning("Managed-local turn shadow write failed for %s", label, exc_info=True)
+        return None
 
 
 def _match_durable_turn(
