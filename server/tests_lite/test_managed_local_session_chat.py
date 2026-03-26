@@ -531,6 +531,77 @@ def test_chat_with_session_uses_direct_ship_to_upgrade_pending_claude_turn(monke
             api_app_ref.dependency_overrides = {}
 
 
+def test_chat_with_session_uses_direct_ship_before_terminal_when_terminal_stalls(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    events_ready = asyncio.Event()
+    ship_calls = {"count": 0}
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        async def fake_wait_for_terminal(**_kwargs):
+            await asyncio.sleep(0.5)
+            return None
+
+        async def fake_wait_for_events(**_kwargs):
+            assert _kwargs.get("expected_user_message") == "continue"
+            await events_ready.wait()
+            return [
+                SimpleNamespace(
+                    id=201,
+                    role="user",
+                    content_text="continue",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+                SimpleNamespace(
+                    id=202,
+                    role="assistant",
+                    content_text="Direct ship rescued stalled terminal",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+            ]
+
+        async def fake_ship(*, db, owner_id, session, commis_id=None, timeout_secs=20):
+            ship_calls["count"] += 1
+            events_ready.set()
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat.await_managed_local_turn_terminal", fake_wait_for_terminal)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat._await_managed_local_turn_events",
+            fake_wait_for_events,
+        )
+        monkeypatch.setattr("zerg.routers.session_chat.ship_managed_local_claude_transcript", fake_ship)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS", 0.01)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS", 0.05)
+        monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS", 0.01)
+
+        try:
+            started_at = time.monotonic()
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            elapsed = time.monotonic() - started_at
+            assert response.status_code == 200, response.text
+            body = response.text
+            assert "Direct ship rescued stalled terminal" in body
+            assert '"sync_status": "complete"' in body
+            assert '"persisted_events": 2' in body
+            assert ship_calls["count"] == 1
+            assert elapsed < 0.2
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_chat_with_session_keeps_direct_ship_running_after_pending_response(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     detached = {"count": 0}
