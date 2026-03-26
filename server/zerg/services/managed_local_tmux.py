@@ -12,6 +12,16 @@ _TMUX_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 MANAGED_LOCAL_TMUX_SERVER_LABEL = "longhouse-managed"
 TMUX_NOT_INSTALLED_MESSAGE = "tmux is not installed"
 MANAGED_LOCAL_TMUX_HISTORY_LIMIT = 50000
+MANAGED_LOCAL_STANDARD_PATH_PREFIXES = (
+    "$HOME/.local/bin",
+    "$HOME/bin",
+    "/opt/homebrew/bin",
+    "/opt/homebrew/sbin",
+    "/usr/local/bin",
+    "/usr/local/sbin",
+    "/home/linuxbrew/.linuxbrew/bin",
+    "/home/linuxbrew/.linuxbrew/sbin",
+)
 
 
 def normalize_tmux_session_name(seed: str, *, prefix: str = "lh") -> str:
@@ -50,9 +60,37 @@ def _normalize_tmux_tmpdir(value: str | None) -> str | None:
     return raw or None
 
 
-def build_managed_local_shell_prelude(*, tmux_tmpdir: str | None = None, require_tmux: bool = True) -> str:
+def build_managed_local_path_export() -> str:
+    """Prepend common user-local install locations without loading interactive shell state."""
+    joined = ":".join(MANAGED_LOCAL_STANDARD_PATH_PREFIXES)
+    return f'export PATH="{joined}:$PATH"'
+
+
+def build_managed_local_conditional_zshrc_source(*, required_commands: tuple[str, ...] = ()) -> str | None:
+    """Source ~/.zshrc only when fast-path PATH resolution still misses a required binary."""
+    normalized = tuple(dict.fromkeys(str(command or "").strip() for command in required_commands if str(command or "").strip()))
+    if not normalized:
+        return None
+
+    missing_checks = " || ".join(f"! command -v {_quote(command)} >/dev/null 2>&1" for command in normalized)
+    return f"if {missing_checks}; then source ~/.zshrc >/dev/null 2>&1 || true; fi"
+
+
+def build_managed_local_shell_prelude(
+    *,
+    tmux_tmpdir: str | None = None,
+    require_tmux: bool = True,
+    required_commands: tuple[str, ...] = (),
+) -> str:
     """Shell bootstrap shared by preflight and tmux follow-up commands."""
-    commands = ["source ~/.zshrc >/dev/null 2>&1"]
+    required = list(required_commands)
+    if require_tmux:
+        required.append("tmux")
+
+    commands = [build_managed_local_path_export()]
+    zshrc_fallback = build_managed_local_conditional_zshrc_source(required_commands=tuple(required))
+    if zshrc_fallback:
+        commands.append(zshrc_fallback)
     missing_tmux_message = _quote(TMUX_NOT_INSTALLED_MESSAGE)
     missing_tmux_guard = f"command -v tmux >/dev/null 2>&1 || {{ echo {missing_tmux_message} >&2; exit 11; }}"
     normalized_tmpdir = _normalize_tmux_tmpdir(tmux_tmpdir)

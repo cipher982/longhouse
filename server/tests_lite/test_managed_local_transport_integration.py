@@ -174,7 +174,7 @@ class _LocalExecDispatcher:
 
 def _make_fake_claude_home(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
     home = tmp_path / "fake-home"
-    bin_dir = home / "bin"
+    bin_dir = home / ".managed-local-shell-bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     log_path = tmp_path / "fake-claude.log"
     tmux_tmpdir = Path("/tmp") / f"lh-tmux-{uuid4().hex[:8]}"

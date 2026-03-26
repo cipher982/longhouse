@@ -181,7 +181,10 @@ def _build_entry_command(
     inner = "; ".join(
         [
             *env_exports,
-            "source ~/.zshrc >/dev/null 2>&1",
+            build_managed_local_shell_prelude(
+                require_tmux=False,
+                required_commands=("claude-code",),
+            ),
             "exec " + " ".join(shlex.quote(part) for part in parts),
         ]
     )
@@ -206,7 +209,10 @@ def _build_codex_entry_command(
     inner = "; ".join(
         [
             *exports,
-            "source ~/.zshrc >/dev/null 2>&1 || true",
+            build_managed_local_shell_prelude(
+                require_tmux=False,
+                required_commands=("codex",),
+            ),
             "exec codex --enable codex_hooks --no-alt-screen",
         ]
     )
@@ -217,7 +223,7 @@ def _build_preflight_command(*, provider: str, cwd: str) -> str:
     quoted_cwd = shlex.quote(cwd)
     cli_name = "codex" if provider == "codex" else "claude-code"
     checks = [
-        build_managed_local_shell_prelude(),
+        build_managed_local_shell_prelude(required_commands=(cli_name,)),
         f"command -v {cli_name} >/dev/null 2>&1 || {{ echo '{cli_name} is not available' >&2; exit 12; }}",
         f"test -d {quoted_cwd} || {{ echo 'working directory does not exist' >&2; exit 13; }}",
         f"printf {shlex.quote(_MANAGED_LOCAL_TMUX_TMPDIR_MARKER + '%s\\n')} \"${{TMUX_TMPDIR:-}}\"",
@@ -236,7 +242,10 @@ def _build_hooks_ensure_command(*, provider: str) -> str:
         f'grep -q {quoted_marker} "{shell_config_path}"',
     ]
     install_checks = [
-        build_managed_local_shell_prelude(require_tmux=False),
+        build_managed_local_shell_prelude(
+            require_tmux=False,
+            required_commands=("longhouse",),
+        ),
         "command -v longhouse >/dev/null 2>&1 || { echo 'longhouse is not available' >&2; exit 14; }",
         "longhouse connect --hooks-only >/dev/null 2>&1 || { echo 'failed to install Longhouse hooks' >&2; exit 15; }",
         f"test -x \"{shell_script_path}\" || {{ echo 'Longhouse hook script missing after install' >&2; exit 16; }}",
