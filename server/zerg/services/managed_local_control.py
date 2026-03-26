@@ -23,7 +23,6 @@ from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_TRANSCRIPT_READY_CHECK_SHELL
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_paste_text_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
@@ -169,14 +168,13 @@ def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
         'engine="$(command -v longhouse-engine || true)"',
         '[ -n "$engine" ] || { echo "longhouse-engine is not available" >&2; exit 12; }',
         f'transcript="{transcript_path}"',
-        MANAGED_LOCAL_CLAUDE_TRANSCRIPT_READY_CHECK_SHELL,
         'tmp_json="$(mktemp)"',
         "total_shipped=0",
         f"delays=({MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL})",
         (
             'for delay in "${delays[@]}"; do '
             'if [ "$delay" != "0" ]; then sleep "$delay"; fi; '
-            'transcript_ready "$transcript" || continue; '
+            '[ -f "$transcript" ] || continue; '
             f'"$engine" ship --file "$transcript" --session-id {shlex.quote(longhouse_session_id)} --json '
             '>"$tmp_json" 2>/dev/null || true; '
             'shipped="$(grep -Eo \'"events_shipped"[[:space:]]*:[[:space:]]*[0-9]+\' "$tmp_json" '
