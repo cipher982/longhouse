@@ -230,7 +230,12 @@ def _build_hooks_ensure_command(*, provider: str) -> str:
     shell_script_path = hook_files["script"]
     shell_config_path = hook_files["config"]
     quoted_marker = shlex.quote(hook_files["marker"])
-    checks = [
+    hook_present_checks = [
+        f'test -x "{shell_script_path}"',
+        f'test -f "{shell_config_path}"',
+        f'grep -q {quoted_marker} "{shell_config_path}"',
+    ]
+    install_checks = [
         build_managed_local_shell_prelude(require_tmux=False),
         "command -v longhouse >/dev/null 2>&1 || { echo 'longhouse is not available' >&2; exit 14; }",
         "longhouse connect --hooks-only >/dev/null 2>&1 || { echo 'failed to install Longhouse hooks' >&2; exit 15; }",
@@ -238,7 +243,8 @@ def _build_hooks_ensure_command(*, provider: str) -> str:
         f"test -f \"{shell_config_path}\" || {{ echo 'Longhouse hook config missing after install' >&2; exit 17; }}",
         f"grep -q {quoted_marker} \"{shell_config_path}\" || {{ echo 'Longhouse hook config is missing the expected hook entry' >&2; exit 18; }}",
     ]
-    return f"zsh -lc {shlex.quote('; '.join(checks))}"
+    command = " && ".join(hook_present_checks) + f" || {{ {'; '.join(install_checks)}; }}"
+    return f"zsh -lc {shlex.quote(command)}"
 
 
 def _extract_tmux_tmpdir(preflight_stdout: str | None) -> str | None:
@@ -464,6 +470,24 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         await _cleanup_tmux_session()
         raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
+    def _finish_launch() -> ManagedLocalLaunchResult:
+        mark_managed_local_session_launched(db, session=session)
+        db.commit()
+        db.refresh(session)
+        return ManagedLocalLaunchResult(
+            session=session,
+            attach_command=build_tmux_attach_command(
+                session_name=managed_session_name,
+                tmux_tmpdir=managed_tmux_tmpdir,
+            ),
+        )
+
+    if provider == "codex":
+        # Managed-local Codex is terminal-first. Waiting for the full Codex UI
+        # to finish booting also waits on user MCP startup, which can add
+        # double-digit seconds before the attach command is returned.
+        return _finish_launch()
+
     expected_pane_commands = _PROVIDER_PANE_COMMANDS.get(provider, _PROVIDER_PANE_COMMANDS["claude"])
 
     for attempt in range(_MANAGED_LOCAL_VERIFY_ATTEMPTS):
@@ -535,16 +559,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             )
         await asyncio.sleep(_MANAGED_LOCAL_VERIFY_INTERVAL_SECS)
 
-    mark_managed_local_session_launched(db, session=session)
-    db.commit()
-    db.refresh(session)
-    return ManagedLocalLaunchResult(
-        session=session,
-        attach_command=build_tmux_attach_command(
-            session_name=managed_session_name,
-            tmux_tmpdir=managed_tmux_tmpdir,
-        ),
-    )
+    return _finish_launch()
 
 
 __all__ = [
