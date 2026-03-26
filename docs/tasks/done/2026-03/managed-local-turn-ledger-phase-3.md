@@ -1,6 +1,6 @@
 # Managed-Local Turn Ledger Phase 3
 
-Status: In progress
+Status: Complete
 Spec: `docs/specs/managed-local-turn-ledger.md`
 Owner: Codex
 Last updated: 2026-03-26
@@ -37,3 +37,8 @@ inference.
 - Local verification on the current branch state:
   - targeted slice: `35 passed`
   - full backend suite: `make test` → `1179 passed`
+- Hosted verification on `david010`:
+  - `make qa-live` → `11 passed`
+  - `./scripts/hosted-managed-local-claude-stress.sh --subdomain david010` → `4/4 passed`
+  - `./scripts/hosted-loop-debug.sh --subdomain david010 --session 9cb44e34-fd0b-437c-8d1b-7d685c98b9e6 --json`
+    confirmed 4 recorded reviews with matching `managed_local_turns.review_id` attachments and no `error_code`
