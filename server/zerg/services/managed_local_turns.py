@@ -194,9 +194,9 @@ def get_reviewable_managed_local_turns(
     db: Session,
     *,
     session_id: UUID,
-    limit: int = 16,
+    limit: int | None = None,
 ) -> list[ManagedLocalTurn]:
-    return (
+    query = (
         db.query(ManagedLocalTurn)
         .filter(
             ManagedLocalTurn.session_id == session_id,
@@ -204,9 +204,10 @@ def get_reviewable_managed_local_turns(
             ManagedLocalTurn.review_id.is_(None),
         )
         .order_by(ManagedLocalTurn.created_at.asc(), ManagedLocalTurn.id.asc())
-        .limit(int(limit))
-        .all()
     )
+    if limit is not None:
+        query = query.limit(int(limit))
+    return query.all()
 
 
 def get_next_reviewable_managed_local_turn(

@@ -1287,6 +1287,144 @@ async def test_turn_review_skips_stale_managed_local_ledger_backlog(monkeypatch,
         assert review.turn_excerpt == "fresh reply"
 
 
+@pytest.mark.asyncio
+async def test_turn_review_scans_past_long_stale_managed_local_backlog(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_managed_local_long_stale_backlog.db")
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="wait",
+            summary="Wait for the next user instruction.",
+            rationale="The fresh durable turn should be reviewed even after a long stale backlog.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"wait"}',
+            loop_thread_id=21,
+        )
+
+    async def _noop_execute(*, db, review):
+        return None
+
+    async def _noop_wakeup(*, db, review):
+        return None
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_execute_recorded_turn_review", _noop_execute)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_enqueue_turn_review_operator_wakeup", _noop_wakeup)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="stale prompt 0",
+            assistant_text="stale reply 0",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+
+        stale_at = _now() - timedelta(minutes=11)
+        events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .order_by(AgentEvent.id.asc())
+            .all()
+        )
+        for event in events:
+            event.timestamp = stale_at
+
+        for index in range(1, 17):
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="user",
+                    content_text=f"stale prompt {index}",
+                    timestamp=stale_at,
+                )
+            )
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    role="assistant",
+                    content_text=f"stale reply {index}",
+                    timestamp=stale_at,
+                )
+            )
+
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="user",
+                content_text="fresh prompt",
+                timestamp=_now(),
+            )
+        )
+        db.add(
+            AgentEvent(
+                session_id=session_id,
+                role="assistant",
+                content_text="fresh reply",
+                timestamp=_now(),
+            )
+        )
+        db.flush()
+
+        events = (
+            db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .order_by(AgentEvent.id.asc())
+            .all()
+        )
+
+        turns: list[ManagedLocalTurn] = []
+        for index in range(17):
+            turns.append(
+                ManagedLocalTurn(
+                    session_id=session_id,
+                    request_id=f"req-stale-{index}",
+                    baseline_event_id=0 if index == 0 else events[(index * 2) - 1].id,
+                    baseline_runtime_event_id=0,
+                    expected_user_text_hash=f"unused-stale-{index}",
+                    send_accepted_at=stale_at,
+                    durable_user_event_id=events[index * 2].id,
+                    durable_assistant_event_id=events[(index * 2) + 1].id,
+                    durable_at=stale_at,
+                )
+            )
+        turns.append(
+            ManagedLocalTurn(
+                session_id=session_id,
+                request_id="req-fresh",
+                baseline_event_id=events[33].id,
+                baseline_runtime_event_id=0,
+                expected_user_text_hash="unused-fresh",
+                send_accepted_at=_now(),
+                durable_user_event_id=events[34].id,
+                durable_assistant_event_id=events[35].id,
+                durable_at=_now(),
+            )
+        )
+        db.add_all(turns)
+        db.commit()
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.assistant_event_id == events[35].id
+        assert review.turn_excerpt == "fresh reply"
+
+
 def test_load_completed_assistant_turn_by_event_id_uses_history_up_to_target_event(tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_load_specific_event.db")
 
