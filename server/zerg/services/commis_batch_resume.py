@@ -347,6 +347,10 @@ async def resume_oikos_batch(
         if runner.usage_total_tokens is not None:
             run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
         db.commit()  # Single commit: WAITING + barrier reset
+        if isinstance(interrupt_value, dict) and interrupt_value.get("type") == "commiss_pending" and job_ids:
+            from zerg.services.commis_job_processor import commis_job_processor
+
+            commis_job_processor.notify_job_available()
 
         await emit_oikos_waiting_and_run_updated(
             db=db,

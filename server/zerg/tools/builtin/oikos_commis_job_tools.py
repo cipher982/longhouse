@@ -217,6 +217,9 @@ async def _spawn_workspace_commis_core_async(
                         "trace_id": trace_id,
                     },
                 )
+            from zerg.services.commis_job_processor import commis_job_processor
+
+            commis_job_processor.notify_job_available()
 
         logger.debug("spawn_workspace_commis returning queued response for job %s", commis_job.id)
         if _return_structured:

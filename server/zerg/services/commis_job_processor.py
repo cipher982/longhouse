@@ -360,19 +360,17 @@ class CommisJobProcessor:
                 ws = get_write_serializer()
                 if ws.is_configured:
                     for commis_id in self._iter_commis_ids():
-
-                        def _reclaim(db, cid=commis_id):
-                            token = set_test_commis_id(cid) if cid else None
-                            try:
-                                return reclaim_stale_jobs(db)
-                            finally:
-                                if token is not None:
-                                    reset_test_commis_id(token)
-
-                        reclaimed = await ws.execute(
-                            lambda db, cid=commis_id: _reclaim(db, cid),
-                            label="commis-reclaim",
-                        )
+                        # The serializer resolves its session factory before invoking
+                        # the callback, so commis routing must be set before execute().
+                        token = set_test_commis_id(commis_id) if commis_id else None
+                        try:
+                            reclaimed = await ws.execute(
+                                lambda db: reclaim_stale_jobs(db),
+                                label="commis-reclaim",
+                            )
+                        finally:
+                            if token is not None:
+                                reset_test_commis_id(token)
                         if reclaimed > 0:
                             label = commis_id or "default"
                             logger.info(f"Reclaimed {reclaimed} stale commis jobs (db={label})")
@@ -438,16 +436,17 @@ class CommisJobProcessor:
         total_claimed = 0
 
         for commis_id in self._iter_commis_ids():
-
-            def _claim(db, cid=commis_id):
-                token = set_test_commis_id(cid) if cid else None
-                try:
-                    return claim_jobs(db, self._max_concurrent_jobs, self._worker_id)
-                finally:
-                    if token is not None:
-                        reset_test_commis_id(token)
-
-            job_ids = await ws.execute(lambda db, cid=commis_id: _claim(db, cid), label="commis-claim")
+            # The serializer copies contextvars into its worker thread, so set the
+            # E2E commis DB routing before execute() chooses the session factory.
+            token = set_test_commis_id(commis_id) if commis_id else None
+            try:
+                job_ids = await ws.execute(
+                    lambda db: claim_jobs(db, self._max_concurrent_jobs, self._worker_id),
+                    label="commis-claim",
+                )
+            finally:
+                if token is not None:
+                    reset_test_commis_id(token)
 
             if not job_ids:
                 continue

@@ -124,6 +124,7 @@ class WriteSerializer:
     def __init__(self) -> None:
         self._wait_cond = asyncio.Condition()
         self._session_factory: sessionmaker | None = None
+        self._session_factory_resolver: Callable[[], sessionmaker] | None = None
         self._stats = WriteStats()
         self._configured = False
         self._queue: list[_QueuedWrite] = []
@@ -136,6 +137,18 @@ class WriteSerializer:
     def configure(self, session_factory: sessionmaker) -> None:
         """Set the write session factory. Call once at startup."""
         self._session_factory = session_factory
+        self._session_factory_resolver = None
+        self._configured = True
+        logger.info("WriteSerializer configured")
+
+    def configure_resolver(self, session_factory_resolver: Callable[[], sessionmaker]) -> None:
+        """Set a dynamic session-factory resolver.
+
+        This allows test/E2E routing to choose the correct SQLite file per
+        request while keeping the serializer abstraction intact.
+        """
+        self._session_factory = None
+        self._session_factory_resolver = session_factory_resolver
         self._configured = True
         logger.info("WriteSerializer configured")
 
@@ -336,7 +349,8 @@ class WriteSerializer:
 
     def _run(self, fn: Callable[[Session], T], auto_commit: bool, label: str) -> T:
         """Execute fn with a fresh session. Runs in a worker thread."""
-        db = self._session_factory()
+        session_factory = self._resolve_session_factory()
+        db = session_factory()
         try:
             result = fn(db)
             if auto_commit:
@@ -349,6 +363,13 @@ class WriteSerializer:
             raise
         finally:
             db.close()
+
+    def _resolve_session_factory(self) -> sessionmaker:
+        if self._session_factory_resolver is not None:
+            return self._session_factory_resolver()
+        if self._session_factory is None:
+            raise RuntimeError("WriteSerializer session factory not configured")
+        return self._session_factory
 
     def get_metrics(self) -> dict[str, Any]:
         """Return serializer metrics for health/debug endpoints."""

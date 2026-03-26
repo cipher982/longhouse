@@ -1359,6 +1359,9 @@ def _enqueue_same_session_continue_job(
         db.add(job)
         db.commit()
         db.refresh(job)
+        from zerg.services.commis_job_processor import commis_job_processor
+
+        commis_job_processor.notify_job_available()
     except Exception:
         logger.exception(
             "Failed to enqueue same-session auto-continue for review %s session %s",

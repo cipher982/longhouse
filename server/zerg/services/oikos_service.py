@@ -1095,6 +1095,9 @@ class OikosService:
                             },
                         )
                     logger.info(f"Emitted {len(created_jobs)} commis_spawned events")
+                    from zerg.services.commis_job_processor import commis_job_processor
+
+                    commis_job_processor.notify_job_available()
 
                     # Use first job_id for payload/UI convenience
                     job_id = job_ids[0] if job_ids else None

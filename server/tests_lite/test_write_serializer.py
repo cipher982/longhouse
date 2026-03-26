@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from contextvars import ContextVar
 
 import pytest
 from sqlalchemy import text as sa_text
@@ -102,3 +103,42 @@ async def test_cancelled_write_keeps_writer_slot_until_worker_thread_finishes(tm
         persisted = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
 
     assert persisted == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_dynamic_session_factory_routes_writes_by_context(tmp_path):
+    base_engine = make_engine(f"sqlite:///{tmp_path / 'base.db'}")
+    base_factory = make_sessionmaker(base_engine)
+    commis_engine = make_engine(f"sqlite:///{tmp_path / 'commis.db'}")
+    commis_factory = make_sessionmaker(commis_engine)
+
+    for engine in (base_engine, commis_engine):
+        with engine.begin() as conn:
+            conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    current_target: ContextVar[str] = ContextVar("current_target", default="base")
+
+    serializer = WriteSerializer()
+    serializer.configure_resolver(lambda: commis_factory if current_target.get() == "commis" else base_factory)
+
+    await serializer.execute(
+        lambda db: db.execute(sa_text("INSERT INTO writes(label) VALUES ('base-write')")),
+        label="summary",
+    )
+
+    token = current_target.set("commis")
+    try:
+        await serializer.execute(
+            lambda db: db.execute(sa_text("INSERT INTO writes(label) VALUES ('commis-write')")),
+            label="summary",
+        )
+    finally:
+        current_target.reset(token)
+
+    with base_factory() as db:
+        base_rows = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+    with commis_factory() as db:
+        commis_rows = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+
+    assert base_rows == ["base-write"]
+    assert commis_rows == ["commis-write"]
