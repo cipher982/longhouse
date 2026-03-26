@@ -16,7 +16,7 @@ import { DemoVideoPlaceholder } from "./DemoVideoPlaceholder";
  * If the file hasn't been generated yet, DemoVideoPlaceholder falls back to
  * a "Coming Soon" placeholder state via its onError handler.
  */
-const DEMO_VIDEO_URL: string | undefined = "/videos/timeline-demo.mp4";
+const DEMO_VIDEO_URL: string | undefined = undefined; // TODO: re-enable once video is updated
 const DEMO_VIDEO_THUMBNAIL_URL = "/images/landing/timeline-preview.png";
 
 interface DemoSectionProps {
