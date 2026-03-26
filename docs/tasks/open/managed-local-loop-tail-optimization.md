@@ -123,3 +123,27 @@ Current focus:
   - post-rollback `make qa-live` returned to the usual pattern: first run hit the known opening timeline flake, immediate rerun passed `11/11`
   - post-rollback hosted managed-local continuation is back on the previous baseline path; session `0518e015-c924-4e4f-a9a4-a7697cc3ec8b` recorded `pre_enqueue_latency_ms=526` and `736` on the first two reviewed turns before the harness lost the SSE stream on turn 3 with an HTTP/2 client error even though tmux showed the exact expected reply
   - current conclusion: keep the shipped baseline at the pre-experiment path and continue this task only with smaller producer-side changes plus better per-turn instrumentation, not another broad hot-path rewrite
+- Commit `be593ce2` tightened the explicit managed-local file sync path so `longhouse-engine ship --file` only advances offsets when unread transcript content includes assistant/tool reply evidence.
+  - Local verification after that slice: engine + managed-local focused tests passed and `make test` passed (`1189 passed` before the new route regressions landed).
+  - Post-deploy, the first hosted continuation run exposed a follow-on route gap: if the early pre-terminal direct ship exhausted its retry ladder with the recoverable no-op (`exit_code=13`, "did not ship new events"), `/api/sessions/{id}/chat` could sit on pending durability until a much later background ship rescued the turn.
+- Commit `3a60d665` fixes that route gap without widening retries to hard failures:
+  - `/api/sessions/{id}/chat` now retries the direct Claude sync after terminal only when the earlier ship already finished with the specific recoverable no-op outcome.
+  - Hard failures like missing runner metadata or missing `longhouse-engine` do not get retried.
+  - Targeted regression coverage now includes both cases in `tests_lite/test_managed_local_session_chat.py`, and `make test` passed (`1191 passed`).
+- Fresh hosted verification after `3a60d665`:
+  - Deploy path completed cleanly: GHCR build `23600517435` passed, marketing + control plane redeployed, `david010` reprovisioned, health stayed `healthy` with `write_serializer.errors = 0`.
+  - `make qa-live` passed (`11 passed`).
+  - Single-turn hosted managed-local Claude stress with the default 30s timeout passed on session `afc8f7c0-6818-49b9-b398-cfd456510ccd`.
+  - A cold multi-turn stress run immediately after reprovision still hit a launch-path `httpx.ReadTimeout` on `POST /api/sessions/managed-local/this-device` while the server created the session anyway. That looks separate from continuation durability and should be tracked as launch warmup noise unless it starts reproducing outside the immediate post-reprovision window.
+  - Warmed 6-turn hosted managed-local Claude stress with `--chat-timeout-secs 60` passed `6/6` on session `4a102ba6-9098-49ac-9f3d-94ba7763aa4c`; every turn returned `api_done=1`, `api_timed_out=0`, `sync_status=complete`, `control_status=completed`.
+  - Review timings on that warmed run:
+    - turn 1: `pre_enqueue_latency_ms=905`, `claim_latency_ms=15`, `controller_latency_ms=1287`, `review_latency_ms=2221`
+    - turn 2: `pre_enqueue_latency_ms=622`, `claim_latency_ms=11`, `controller_latency_ms=1673`, `review_latency_ms=2317`
+    - turn 3: `pre_enqueue_latency_ms=877`, `claim_latency_ms=46`, `controller_latency_ms=675`, `review_latency_ms=1612`
+    - turn 4: `pre_enqueue_latency_ms=1305`, `claim_latency_ms=13`, `controller_latency_ms=724`, `review_latency_ms=2057`
+    - turn 5: `pre_enqueue_latency_ms=980`, `claim_latency_ms=42`, `controller_latency_ms=803`, `review_latency_ms=1836`
+    - turn 6: `pre_enqueue_latency_ms=25231`, `claim_latency_ms=37`, `controller_latency_ms=966`, `review_latency_ms=26252`
+- Current conclusion after the route fix:
+  - The new correctness hole is closed; the hot path no longer falls back to `sync_status=pending` just because the early direct ship no-op'd before terminal.
+  - The remaining tail is still producer-side and now more specific: turn 6 on `4a102ba6-9098-49ac-9f3d-94ba7763aa4c` accepted the send at `14:53:19.146Z`, but the turn ledger did not stamp `terminal_at` / `durable_at` until `14:53:50.5Z` even though the final assistant event timestamp inside the transcript was `14:53:25.316Z`.
+  - That points to the next slice more clearly: instrument or reduce the gap between "assistant reply visible in the TUI / transcript timestamped" and "reply evidence becomes durably shippable," rather than doing more queue/controller tuning.
