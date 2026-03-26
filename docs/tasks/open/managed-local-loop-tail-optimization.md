@@ -75,6 +75,10 @@ Current focus:
   - Local verification after the revert: focused continuation/hook slice passed (`41 passed`) and `make test` passed (`1180 passed`).
   - Post-deploy verification after the revert: first `make qa-live` run hit the same warmup flake on the initial timeline test, immediate rerun passed (`11 passed`), and a one-turn hosted managed-local Claude stress run passed on session `f95f199e-beb6-4dc0-a3a9-5688926018ce`.
   - That post-revert session recorded `pre_enqueue_latency_ms=849`, `claim_latency_ms=12`, `controller_latency_ms=843`, `worker_latency_ms=861`, `review_latency_ms=1720`.
+  - Full warmed follow-up after the revert: session `1f01642a-8202-48cc-ae79-70675fa9447b`.
+    - `pre_enqueue_latency_ms`: `1412`, `1126`, `766`, `558`, `863`, `1328` (avg `1009ms`, warm avg `928ms`)
+    - `review_latency_ms`: `3633`, `1931`, `1674`, `1408`, `1845`, `2352` (avg `2140ms`, warm avg `1842ms`)
+    - `claim_latency_ms` stayed low outside the first turn (`35`, `29`, `36`, `20`, `11` warm).
 - Commit `9d0e4d03` reduced `/sessions/{id}/chat` managed-local poll/grace timings (`MANAGED_LOCAL_POLL_INTERVAL_SECS=0.1`, `MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS=0.1`).
   - Local verification: focused continuation/control slice passed (`36 passed`) and `make test` passed (`1180 passed`).
   - Post-deploy verification: first `make qa-live` rerun flaked once on the initial timeline auth reload during warmup (`10/11`), immediate rerun passed (`11 passed`), and hosted managed-local Claude stress passed (`6/6`) on session `fccc4083-7428-4c9f-aa6f-45ad10d9e58c`.
