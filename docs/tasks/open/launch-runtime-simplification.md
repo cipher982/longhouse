@@ -22,6 +22,7 @@ Make the launch story match the real product: sessions, conversations, Oikos, ru
 - [x] Rename launch-facing cloud work labels to `cloud session` or equivalent
 - [x] Remove obviously stale fiche/dashboard-era primary-path language
 - [x] Define the deletion path for `OikosService` / `oikos_react_engine` / runner-facing harness seams
+- [x] Phase 1a: extract dispatch contract into `services/dispatch_contract.py`
 
 ## OikosService / react_engine Deletion Path
 
