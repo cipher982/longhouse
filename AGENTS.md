@@ -20,10 +20,10 @@ Skills-Dir: .agents/skills
 
 ## Task Tracking
 
-- **Master task list:** `TODO.md` is a slim index of current work only
-- **Substantial active tasks:** put one file in `docs/tasks/open/` and link it from `TODO.md`
-- **Completed task files:** move them to `docs/tasks/done/YYYY-MM/` if the notes are worth keeping; otherwise delete them and rely on git history
-- **Historical dumps:** keep old snapshots in `docs/tasks/archive/`; do not append completed-task journals into `TODO.md`
+- **`TODO.md`** is a slim index of current work only.
+- **Multi-commit work** gets one file in `docs/tasks/open/` linked from `TODO.md`.
+- **When work ships:** delete the task file and any spec. Git history is the record.
+- **No `done/` folder, no backlog folder.** If it's not active, it doesn't belong here.
 
 ## Quick Reference
 
@@ -125,7 +125,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 3. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
 4. **Auth disabled in dev** — `AUTH_DISABLED=1` set by dev.sh.
 5. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
-6. **Master task list:** `TODO.md` is current work only; use `docs/tasks/open/` for multi-step tasks and keep historical notes out of the main list.
+6. **Task tracking:** See § Task Tracking above. Delete task/spec files when work ships.
 7. **Backend README required** — pyproject.toml needs it; don't delete `server/README.md`.
 8. **Stripe key rotation** — Use `~/git/me/mytech/scripts/update-stripe-key.sh sk_live_...`. It validates against Stripe before touching anything, then updates Coolify and redeploys.
 9. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
