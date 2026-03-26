@@ -17,7 +17,7 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 - [Proactive Oikos operator mode](docs/tasks/open/oikos-proactive-operator.md) — Phase 1 complete (wakeups, policy, ledger, shadow journeys); Phase 2 in progress (broader actions, browser/hosted smokes).
 - [Oikos conversations + Gmail launch](docs/tasks/open/oikos-conversations-email.md) — Phases 1-9 done; Phase 10 stalled: real Gmail canaries (OSS, hosted, cross-browser) need mailbox infra.
 
-- [Codex/Gemini continuation parity](docs/tasks/open/codex-gemini-continuation-parity.md) — architecture ready; needs provider-specific resume builders, output parsers, session state reconstruction.
+- [Codex/Gemini continuation parity](docs/tasks/open/codex-gemini-continuation-parity.md) — Codex cloud continuation done; Gemini blocked on upstream CLI resume support.
 
 ## Backlog
 
