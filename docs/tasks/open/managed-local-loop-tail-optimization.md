@@ -2,7 +2,7 @@
 
 Status: In progress
 Owner: Codex
-Last updated: 2026-03-25
+Last updated: 2026-03-26
 
 ## Goal
 
@@ -11,7 +11,7 @@ Use the now-persisted managed-local Loop timing trail to shave the remaining hos
 Current focus:
 
 - reduce the remaining pre-enqueue latency from assistant-finished to `turn_loop` enqueue
-- reduce the remaining claim/worker tail once the task is enqueued
+- keep claim latency low while focusing on ship/ingest variance
 - keep the work narrow and measurement-driven
 
 ## Done when
@@ -46,3 +46,18 @@ Current focus:
   - turn 6: `pre_enqueue_latency_ms=864`, `claim_latency_ms=14`, `review_latency_ms=1780`
 - Main improvement from this slice: steady-state claim latency dropped from roughly `119-430ms` to `7-14ms`.
 - Remaining tail is now clearly pre-enqueue / first-ship latency, not worker claim latency. The cold first session immediately after reprovision (`8c907c51-274e-4223-a134-421fec381487`) still produced a large first-turn outlier, so the next slice should target warmup / pre-enqueue behavior rather than the queue worker.
+- Commit `ee50815a` shared and densified the managed-local Claude ship retry ladder for both the Stop hook and the direct ship command. Absolute attempts are now `0, 0.1, 0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8` seconds.
+- Commit `e1042e04` starts the Claude Stop ship loop before the synchronous presence POST so transcript shipping no longer inherits that network round-trip on the hot path.
+- Local verification on the final combined branch state: focused hook/control tests passed (`26 passed`) and `make test` passed (`1166 passed`).
+- Post-deploy verification on the final branch state: `make qa-live` passed (`11 passed`) and hosted managed-local Claude stress passed twice (`6/6` both times).
+- Fresh hosted run after `ee50815a`: session `54385d04-ed3f-475d-8cea-d7fb58cd4033`.
+  - `pre_enqueue_latency_ms`: `1702`, `1207`, `552`, `910`, `448`, `1275`
+  - `review_latency_ms`: `2795`, `2073`, `1597`, `1596`, `1151`, `1901`
+  - Average `pre_enqueue_latency_ms` dropped to about `1016ms` from the earlier warm baseline of about `1351ms`.
+  - Average `review_latency_ms` dropped to about `1852ms` from the earlier warm baseline of about `2366ms`.
+- Fresh hosted run after `e1042e04`: session `635b0c38-d302-4dad-8322-56c3bc842014`.
+  - First-turn `pre_enqueue_latency_ms` improved from `1702ms` on the prior fresh-after-reprovision run to `868ms`.
+  - The same run was still noisy on later turns (`761-1669ms` sampled pre-enqueue), so this helped the cold first-turn path more than steady-state variance.
+- Additional warm follow-up after `e1042e04`: session `0eb7e67d-ffe2-4e46-aaac-41d8d483c18e`.
+  - Sampled `pre_enqueue_latency_ms`: `879`, `1697`, `785`, `2401`, `1739`
+  - Warm steady-state variance is still real, so the remaining bottleneck is still pre-enqueue/ship variability, not claim latency or controller runtime.
