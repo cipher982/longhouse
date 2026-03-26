@@ -22,6 +22,7 @@ repos:
         args: [--allow-multiple-documents]
       - id: check-added-large-files
         args: [--maxkb=1500]
+        exclude: ^server/zerg/_tiktoken_cache/(9b5ad71b2ce5302211f9c61530b329a4922fc6a4|fb374d419588a4632f3f557e76b4b70aebbca790)$
       - id: check-merge-conflict
 
   # =========================================================================
