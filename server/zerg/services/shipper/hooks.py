@@ -43,7 +43,7 @@ import stat
 import tomllib
 from pathlib import Path
 
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
+from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_WAIT_READY_MS
 
 logger = logging.getLogger(__name__)
 
@@ -121,9 +121,9 @@ PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
 # Kick this off before the presence POST so shipping does not inherit that
 # network round-trip on the managed-local hot path. Presence is still
 # recorded before the hook exits.
-# Detach the ship loop with nohup because Claude can reap hook children as
-# soon as the hook exits, and retry for a few seconds because Stop can fire
-# before the transcript file exists or before the final tail is flushed.
+# Detach the ship request with nohup because Claude can reap hook children as
+# soon as the hook exits, and let the engine wait briefly for the transcript
+# file to exist and the final tail to become parseable.
 # Engine path is quoted to handle paths with spaces.
 ENGINE="__ENGINE_PATH__"
 if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
@@ -143,14 +143,7 @@ if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
     if [[ -n "$managed_session_id" ]]; then
       ship_args+=(--session-id "$managed_session_id")
     fi
-    for delay in __MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__; do
-      if [[ "$delay" != "0" ]]; then
-        sleep "$delay"
-      fi
-      if [[ -f "$transcript" ]]; then
-        "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true
-      fi
-    done
+    "$engine" ship --file "$transcript" "${ship_args[@]}" --wait-ready-ms __MANAGED_LOCAL_CLAUDE_SHIP_WAIT_READY_MS__ --quiet >/dev/null 2>&1 || true
   ' _ "$ENGINE" "$TRANSCRIPT" "$MANAGED_SESSION_ID" "$TARGET_URL" "$TARGET_TOKEN" >/dev/null 2>&1 < /dev/null &
 fi
 
@@ -168,7 +161,7 @@ fi
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
 # instead?" prompt, which interrupts the session.
 exit 0
-""".replace("__MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__", MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL)
+""".replace("__MANAGED_LOCAL_CLAUDE_SHIP_WAIT_READY_MS__", str(MANAGED_LOCAL_CLAUDE_SHIP_WAIT_READY_MS))
 
 SESSION_START_HOOK_SCRIPT = """\
 #!/bin/bash

@@ -14,7 +14,7 @@ mod watcher;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
@@ -44,6 +44,8 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 }
+
+const EXPLICIT_SHIP_WAIT_READY_POLL_MS: u64 = 25;
 
 #[derive(Subcommand)]
 enum Commands {
@@ -180,6 +182,10 @@ enum Commands {
         /// Override session ID for managed-local sessions (uses provider's native ID as provider_session_id)
         #[arg(long)]
         session_id: Option<String>,
+
+        /// For explicit --file shipping, wait this long for the unread range to include reply events
+        #[arg(long, default_value = "0")]
+        wait_ready_ms: u64,
     },
 }
 
@@ -328,6 +334,7 @@ fn main() -> anyhow::Result<()> {
             max_batch_bytes,
             machine_name,
             session_id,
+            wait_ready_ms,
         } => {
             let algo = parse_compression_algo(&compression)?;
             // Initialize machine name for payload labeling
@@ -352,6 +359,7 @@ fn main() -> anyhow::Result<()> {
                     algo,
                     max_batch_bytes,
                     session_id.as_deref(),
+                    wait_ready_ms,
                 ))?;
             } else {
                 rt.block_on(cmd_ship(
@@ -758,6 +766,82 @@ fn print_recent_dead_letters(
     Ok(())
 }
 
+struct ExplicitFilePrepareOutcome {
+    prepared: Option<shipper::PreparedFile>,
+    replay_events_shipped: usize,
+    replay_reply_events_shipped: usize,
+    replay_failed: usize,
+    replay_had_connect_error: bool,
+    replay_blocked_by_spool_backpressure: bool,
+}
+
+async fn prepare_explicit_file_for_ship(
+    path: &std::path::Path,
+    provider: &str,
+    algo: CompressionAlgo,
+    conn: &rusqlite::Connection,
+    max_batch_bytes: u64,
+    session_id_override: Option<&str>,
+    client: &ShipperClient,
+) -> anyhow::Result<ExplicitFilePrepareOutcome> {
+    let mut prepared = shipper::prepare_file_batches(
+        path,
+        provider,
+        algo,
+        conn,
+        max_batch_bytes,
+        session_id_override,
+    )?;
+    let mut replay_events_shipped = 0usize;
+    let mut replay_reply_events_shipped = 0usize;
+    let mut replay_failed = 0usize;
+    let mut replay_had_connect_error = false;
+    let mut replay_blocked_by_spool_backpressure = false;
+
+    if prepared.is_none() {
+        let path_str = path.to_string_lossy().to_string();
+        let recovered_gap = shipper::recover_gap_for_path(conn, path)?;
+        let has_pending_replay = !Spool::new(conn)
+            .pending_entries_for_path_now(&path_str, 1)?
+            .is_empty();
+        replay_blocked_by_spool_backpressure =
+            recovered_gap.had_gap && !recovered_gap.replay_ready && !has_pending_replay;
+        if recovered_gap.replay_ready || has_pending_replay {
+            let replay = shipper::replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+                conn,
+                client,
+                algo,
+                path,
+                32,
+                max_batch_bytes,
+                None,
+            )
+            .await?;
+            replay_events_shipped = replay.events_shipped;
+            replay_reply_events_shipped = replay.reply_events_shipped;
+            replay_failed = replay.failed;
+            replay_had_connect_error = replay.had_connect_error;
+            prepared = shipper::prepare_file_batches(
+                path,
+                provider,
+                algo,
+                conn,
+                max_batch_bytes,
+                session_id_override,
+            )?;
+        }
+    }
+
+    Ok(ExplicitFilePrepareOutcome {
+        prepared,
+        replay_events_shipped,
+        replay_reply_events_shipped,
+        replay_failed,
+        replay_had_connect_error,
+        replay_blocked_by_spool_backpressure,
+    })
+}
+
 async fn cmd_ship_file(
     path: &std::path::Path,
     provider_override: Option<&str>,
@@ -769,16 +853,29 @@ async fn cmd_ship_file(
     algo: CompressionAlgo,
     max_batch_bytes: Option<u64>,
     session_id_override: Option<&str>,
+    wait_ready_ms: u64,
 ) -> anyhow::Result<()> {
-    if !path.exists() {
-        anyhow::bail!("File not found: {}", path.display());
-    }
-
     let provider = detect_provider_for_file(path, provider_override)?;
 
     let config =
         ShipperConfig::from_env()?.with_overrides(url, token, db_path, None, None, max_batch_bytes);
     pipeline::compressor::set_machine_name(&config.machine_name);
+
+    let wait_deadline =
+        (wait_ready_ms > 0).then(|| Instant::now() + Duration::from_millis(wait_ready_ms));
+    while !path.exists() {
+        let Some(deadline) = wait_deadline else {
+            anyhow::bail!("File not found: {}", path.display());
+        };
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            anyhow::bail!("File not found: {}", path.display());
+        };
+        if remaining.is_zero() {
+            anyhow::bail!("File not found: {}", path.display());
+        }
+        tokio::time::sleep(remaining.min(Duration::from_millis(EXPLICIT_SHIP_WAIT_READY_POLL_MS)))
+            .await;
+    }
 
     if !json_output {
         eprintln!("Shipping file: {}", path.display());
@@ -789,8 +886,7 @@ async fn cmd_ship_file(
     }
 
     let conn = open_db(config.db_path.as_deref())?;
-
-    let mut prepared = shipper::prepare_file_batches(
+    let initial_prepared = shipper::prepare_file_batches(
         path,
         &provider,
         algo,
@@ -798,47 +894,9 @@ async fn cmd_ship_file(
         config.max_batch_bytes,
         session_id_override,
     )?;
-    let mut replay_events_shipped = 0usize;
-    let mut replay_failed = 0usize;
-    let mut replay_had_connect_error = false;
-    let mut replay_blocked_by_spool_backpressure = false;
-
-    if prepared.is_none() && !dry_run {
-        let path_str = path.to_string_lossy().to_string();
-        let recovered_gap = shipper::recover_gap_for_path(&conn, path)?;
-        let has_pending_replay = !Spool::new(&conn)
-            .pending_entries_for_path_now(&path_str, 1)?
-            .is_empty();
-        replay_blocked_by_spool_backpressure =
-            recovered_gap.had_gap && !recovered_gap.replay_ready && !has_pending_replay;
-        if recovered_gap.replay_ready || has_pending_replay {
-            let client = ShipperClient::with_compression(&config, algo)?;
-            let replay = shipper::replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
-                &conn,
-                &client,
-                algo,
-                path,
-                32,
-                config.max_batch_bytes,
-                None,
-            )
-            .await?;
-            replay_events_shipped = replay.events_shipped;
-            replay_failed = replay.failed;
-            replay_had_connect_error = replay.had_connect_error;
-            prepared = shipper::prepare_file_batches(
-                path,
-                &provider,
-                algo,
-                &conn,
-                config.max_batch_bytes,
-                session_id_override,
-            )?;
-        }
-    }
 
     if dry_run {
-        let prepared = match prepared {
+        let prepared = match initial_prepared {
             Some(prepared) => prepared,
             None => {
                 let spool = Spool::new(&conn);
@@ -879,62 +937,109 @@ async fn cmd_ship_file(
     }
 
     let client = ShipperClient::with_compression(&config, algo)?;
-    let prepared = match prepared {
-        Some(prepared) => prepared,
+    let first_attempt = match initial_prepared {
+        Some(prepared) => ExplicitFilePrepareOutcome {
+            prepared: Some(prepared),
+            replay_events_shipped: 0,
+            replay_reply_events_shipped: 0,
+            replay_failed: 0,
+            replay_had_connect_error: false,
+            replay_blocked_by_spool_backpressure: false,
+        },
         None => {
-            let spool = Spool::new(&conn);
-            let spool_dead = spool.dead_count()?;
-            let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
-            if json_output {
-                let summary = serde_json::json!({
-                    "status": "ok",
-                    "file": path.display().to_string(),
-                    "events_shipped": replay_events_shipped,
-                    "spool_dead": spool_dead,
-                    "recent_dead_letters": recent_dead_letters,
-                    "dry_run": false,
-                    "had_connect_error": replay_had_connect_error,
-                    "replay_failed": replay_failed,
-                    "spool_backpressure": replay_blocked_by_spool_backpressure,
-                });
-                println!("{}", serde_json::to_string_pretty(&summary)?);
-            } else if replay_events_shipped > 0 {
-                println!("Shipped {} events", replay_events_shipped);
-                if replay_had_connect_error {
-                    println!("Some replay work was deferred due to a connection error");
-                } else if replay_failed > 0 {
-                    println!(
-                        "Some replay work was deferred after {} replay failure(s)",
-                        replay_failed
-                    );
-                }
-                if spool_dead > 0 {
-                    println!("Dead-lettered ranges retained: {}", spool_dead);
-                    print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
-                }
-            } else {
-                if replay_blocked_by_spool_backpressure {
-                    println!("Replay deferred because the local spool is at capacity");
-                } else if replay_had_connect_error {
-                    println!("Replay deferred due to connection error");
-                } else if replay_failed > 0 {
-                    println!(
-                        "Replay deferred after {} replay failure(s)",
-                        replay_failed
-                    );
-                } else {
-                    println!("No new events");
-                }
-                if spool_dead > 0 {
-                    println!("Dead-lettered ranges retained: {}", spool_dead);
-                    print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
-                }
-            }
-            return Ok(());
+            prepare_explicit_file_for_ship(
+                path,
+                &provider,
+                algo,
+                &conn,
+                config.max_batch_bytes,
+                session_id_override,
+                &client,
+            )
+            .await?
         }
     };
-    let outcome = shipper::ship_prepared_file(prepared, &client, &conn, None).await?;
-    let events_shipped = replay_events_shipped + outcome.events_shipped;
+
+    let mut replay_events_shipped = 0usize;
+    let mut replay_reply_events_shipped = 0usize;
+    let mut replay_failed = 0usize;
+    let mut replay_had_connect_error = false;
+    let mut replay_blocked_by_spool_backpressure = false;
+    let mut fresh_events_shipped = 0usize;
+    let mut fresh_reply_shipped = false;
+    let mut fresh_had_connect_error = false;
+    let mut fresh_fully_processed = true;
+    let mut attempt = Some(first_attempt);
+
+    loop {
+        let current_attempt = match attempt.take() {
+            Some(current_attempt) => current_attempt,
+            None => {
+                prepare_explicit_file_for_ship(
+                    path,
+                    &provider,
+                    algo,
+                    &conn,
+                    config.max_batch_bytes,
+                    session_id_override,
+                    &client,
+                )
+                .await?
+            }
+        };
+
+        replay_events_shipped += current_attempt.replay_events_shipped;
+        replay_reply_events_shipped += current_attempt.replay_reply_events_shipped;
+        replay_failed += current_attempt.replay_failed;
+        replay_had_connect_error |= current_attempt.replay_had_connect_error;
+        replay_blocked_by_spool_backpressure |=
+            current_attempt.replay_blocked_by_spool_backpressure;
+
+        if let Some(prepared) = current_attempt.prepared {
+            let deadline_elapsed = wait_deadline.is_some_and(|deadline| Instant::now() >= deadline);
+            if wait_deadline.is_some() && !deadline_elapsed && !prepared.has_reply_event {
+                let remaining = wait_deadline
+                    .and_then(|deadline| deadline.checked_duration_since(Instant::now()))
+                    .unwrap_or_default();
+                if remaining.is_zero() {
+                    continue;
+                }
+                tokio::time::sleep(
+                    remaining.min(Duration::from_millis(EXPLICIT_SHIP_WAIT_READY_POLL_MS)),
+                )
+                .await;
+                continue;
+            }
+
+            let outcome = shipper::ship_prepared_file(prepared, &client, &conn, None).await?;
+            fresh_events_shipped += outcome.events_shipped;
+            if outcome.reply_events_shipped > 0 {
+                fresh_reply_shipped = true;
+            }
+            fresh_had_connect_error |= outcome.had_connect_error;
+            fresh_fully_processed &= outcome.fully_processed;
+
+            if fresh_reply_shipped || outcome.had_connect_error || !outcome.fully_processed {
+                break;
+            }
+        } else if replay_had_connect_error || replay_blocked_by_spool_backpressure {
+            break;
+        }
+
+        let Some(deadline) = wait_deadline else {
+            break;
+        };
+        let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            break;
+        };
+        if remaining.is_zero() {
+            break;
+        }
+        tokio::time::sleep(remaining.min(Duration::from_millis(EXPLICIT_SHIP_WAIT_READY_POLL_MS)))
+            .await;
+    }
+
+    let events_shipped = replay_events_shipped + fresh_events_shipped;
     let spool = Spool::new(&conn);
     let spool_dead = spool.dead_count()?;
     let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
@@ -944,13 +1049,49 @@ async fn cmd_ship_file(
             "status": "ok",
             "file": path.display().to_string(),
             "events_shipped": events_shipped,
+            "replay_events_shipped": replay_events_shipped,
+            "fresh_events_shipped": fresh_events_shipped,
+            "replay_reply_events_shipped": replay_reply_events_shipped,
+            "fresh_reply_shipped": fresh_reply_shipped,
             "spool_dead": spool_dead,
             "recent_dead_letters": recent_dead_letters,
             "dry_run": false,
+            "had_connect_error": replay_had_connect_error || fresh_had_connect_error,
+            "replay_failed": replay_failed,
+            "spool_backpressure": replay_blocked_by_spool_backpressure,
+            "fully_processed": fresh_fully_processed,
         });
         println!("{}", serde_json::to_string_pretty(&summary)?);
-    } else {
+    } else if events_shipped > 0 {
         println!("Shipped {} events", events_shipped);
+        if fresh_reply_shipped {
+            println!("Fresh reply evidence shipped for explicit file request");
+        }
+        if replay_had_connect_error || fresh_had_connect_error {
+            println!("Some shipping work was deferred due to a connection error");
+        } else if replay_failed > 0 {
+            println!(
+                "Some replay work was deferred after {} replay failure(s)",
+                replay_failed
+            );
+        }
+        if !fresh_fully_processed && !fresh_had_connect_error {
+            println!("Some fresh file work was deferred for later retry");
+        }
+        if spool_dead > 0 {
+            println!("Dead-lettered ranges retained: {}", spool_dead);
+            print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
+        }
+    } else {
+        if replay_blocked_by_spool_backpressure {
+            println!("Replay deferred because the local spool is at capacity");
+        } else if replay_had_connect_error || fresh_had_connect_error {
+            println!("Replay deferred due to connection error");
+        } else if replay_failed > 0 {
+            println!("Replay deferred after {} replay failure(s)", replay_failed);
+        } else {
+            println!("No new events");
+        }
         if spool_dead > 0 {
             println!("Dead-lettered ranges retained: {}", spool_dead);
             print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
@@ -1139,6 +1280,7 @@ mod tests {
             CompressionAlgo::Gzip,
             None,
             None,
+            0,
         ))
         .unwrap();
 
@@ -1155,6 +1297,60 @@ mod tests {
                 .unwrap(),
             0,
             "dry-run should not advance queued_offset",
+        );
+    }
+
+    #[test]
+    fn test_cmd_ship_file_dry_run_does_not_replay_explicit_file_gap() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "dryrungap1111-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"dry-gap-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"dry-gap-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+                "\n",
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        let file_str = file.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&file).unwrap().len();
+
+        file_state
+            .set_queued_offset(
+                &file_str,
+                file_len,
+                "claude",
+                "dryrungap1111-2222-3333-4444-555566667777",
+                "dryrungap1111-2222-3333-4444-555566667777",
+            )
+            .unwrap();
+
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            None,
+            None,
+            Some(&db_path),
+            true,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            0,
+        ))
+        .unwrap();
+
+        let reopened = open_db(Some(&db_path)).unwrap();
+        let reopened_state = FileState::new(&reopened);
+        assert_eq!(reopened_state.get_offset(&file_str).unwrap(), 0);
+        assert_eq!(
+            reopened_state.get_queued_offset(&file_str).unwrap(),
+            file_len
         );
     }
 
@@ -1200,6 +1396,7 @@ mod tests {
             CompressionAlgo::Gzip,
             None,
             None,
+            0,
         ))
         .unwrap();
         handle.join().unwrap();
@@ -1216,6 +1413,122 @@ mod tests {
             .pending_entries_for_path_now(&file_str, 10)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn test_cmd_ship_file_waits_for_reply_before_shipping_fresh_events() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "replywait1111-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"wait-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"wait-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"h"#,
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+
+        let append_path = file.clone();
+        let append_handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&append_path)
+                .unwrap();
+            file.write_all(b"i\"}]}}\n").unwrap();
+            file.flush().unwrap();
+        });
+
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            Some(&url),
+            Some("test-token"),
+            Some(&db_path),
+            false,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            400,
+        ))
+        .unwrap();
+        handle.join().unwrap();
+        append_handle.join().unwrap();
+
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        let final_len = std::fs::metadata(&file).unwrap().len();
+        assert_eq!(
+            file_state.get_offset(&file.to_string_lossy()).unwrap(),
+            final_len
+        );
+        assert_eq!(
+            file_state
+                .get_queued_offset(&file.to_string_lossy())
+                .unwrap(),
+            final_len
+        );
+    }
+
+    #[test]
+    fn test_cmd_ship_file_waits_for_file_to_exist_before_shipping() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir
+            .path()
+            .join("waitforfile1111-2222-3333-4444-555566667777.jsonl");
+        let db_path = dir.path().join("engine.db");
+
+        let create_path = file.clone();
+        let create_handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            std::fs::write(
+                &create_path,
+                concat!(
+                    r#"{"type":"user","uuid":"wait-file-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                    "\n",
+                    r#"{"type":"assistant","uuid":"wait-file-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+                    "\n",
+                ),
+            )
+            .unwrap();
+        });
+
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            Some(&url),
+            Some("test-token"),
+            Some(&db_path),
+            false,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            400,
+        ))
+        .unwrap();
+        handle.join().unwrap();
+        create_handle.join().unwrap();
+
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        let final_len = std::fs::metadata(&file).unwrap().len();
+        assert_eq!(
+            file_state.get_offset(&file.to_string_lossy()).unwrap(),
+            final_len
+        );
+        assert_eq!(
+            file_state
+                .get_queued_offset(&file.to_string_lossy())
+                .unwrap(),
+            final_len
+        );
     }
 }
 

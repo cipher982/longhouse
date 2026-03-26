@@ -27,6 +27,7 @@ pub struct ShipItem {
     pub offset: u64,
     pub new_offset: u64,
     pub event_count: usize,
+    pub reply_event_count: usize,
     pub session_id: String,
     pub compressed: Vec<u8>,
 }
@@ -59,6 +60,7 @@ pub struct PreparedFile {
     pub path_str: String,
     pub offset: u64,
     pub new_offset: u64,
+    pub has_reply_event: bool,
     pub actions: Vec<PreparedAction>,
 }
 
@@ -98,6 +100,20 @@ impl PreparedFile {
     }
 }
 
+fn is_reply_event(event: &crate::pipeline::parser::ParsedEvent) -> bool {
+    event.tool_name.is_some()
+        || matches!(event.role, crate::pipeline::parser::Role::Assistant)
+            && event
+                .content_text
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|text| !text.is_empty())
+}
+
+fn count_reply_events(events: &[crate::pipeline::parser::ParsedEvent]) -> usize {
+    events.iter().filter(|event| is_reply_event(event)).count()
+}
+
 pub fn log_slow_file_processing(
     context: &str,
     path: &Path,
@@ -125,6 +141,7 @@ pub fn log_slow_file_processing(
 
 pub struct ShipPreparedOutcome {
     pub events_shipped: usize,
+    pub reply_events_shipped: usize,
     pub bytes_shipped: u64,
     pub dead_lettered: usize,
     pub fully_processed: bool,
@@ -135,6 +152,7 @@ impl Default for ShipPreparedOutcome {
     fn default() -> Self {
         Self {
             events_shipped: 0,
+            reply_events_shipped: 0,
             bytes_shipped: 0,
             dead_lettered: 0,
             fully_processed: true,
@@ -147,6 +165,7 @@ pub(crate) struct ReplaySpoolOutcome {
     pub resolved: usize,
     pub failed: usize,
     pub events_shipped: usize,
+    pub reply_events_shipped: usize,
     pub had_connect_error: bool,
 }
 
@@ -156,6 +175,7 @@ impl Default for ReplaySpoolOutcome {
             resolved: 0,
             failed: 0,
             events_shipped: 0,
+            reply_events_shipped: 0,
             had_connect_error: false,
         }
     }
@@ -269,6 +289,7 @@ pub fn prepare_file(
         offset,
         new_offset,
         event_count,
+        reply_event_count: count_reply_events(&parse_result.events),
         session_id: parse_result.metadata.session_id.clone(),
         compressed,
     }))
@@ -567,6 +588,7 @@ fn prepare_whole_document_action(
             offset: start_offset,
             new_offset: end_offset,
             event_count: parse_result.events.len(),
+            reply_event_count: count_reply_events(&parse_result.events),
             session_id: payload_session_id.to_string(),
             compressed,
         })]);
@@ -617,6 +639,7 @@ fn materialize_ship_range(
                 .event_range
                 .end
                 .saturating_sub(range.event_range.start),
+            reply_event_count: count_reply_events(&parse_result.events[range.event_range.clone()]),
             session_id: payload_session_id.to_string(),
             compressed,
         })]);
@@ -802,6 +825,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
             path_str: path_str.clone(),
             offset,
             new_offset,
+            has_reply_event: false,
             actions: vec![PreparedAction::AckOnly(AckOnlyItem {
                 path_str,
                 provider: provider.to_string(),
@@ -845,6 +869,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
         path_str,
         offset,
         new_offset,
+        has_reply_event: parse_result.events.iter().any(is_reply_event),
         actions,
     }))
 }
@@ -1069,6 +1094,7 @@ pub async fn ship_prepared_file(
                         &item.provider,
                     )?;
                     outcome.events_shipped += item.event_count;
+                    outcome.reply_events_shipped += item.reply_event_count;
                     outcome.bytes_shipped += item.new_offset - item.offset;
                 }
                 AttemptedShip::Transient {
@@ -1402,6 +1428,7 @@ async fn replay_spool_entries(
                 PreparedAction::Ship(item) => match attempt_ship(item, client, None).await {
                     AttemptedShip::Shipped(item) => {
                         outcome.events_shipped += item.event_count;
+                        outcome.reply_events_shipped += item.reply_event_count;
                         file_state.set_acked_offset(&entry.file_path, item.new_offset)?;
                         if item.new_offset >= entry.end_offset {
                             spool.mark_shipped(entry.id)?;
@@ -2242,6 +2269,7 @@ mod tests {
             path_str: "/tmp/gemini-info.json".to_string(),
             offset: 0,
             new_offset: 413,
+            has_reply_event: false,
             actions: vec![PreparedAction::AckOnly(AckOnlyItem {
                 path_str: "/tmp/gemini-info.json".to_string(),
                 provider: "gemini".to_string(),
