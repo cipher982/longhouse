@@ -117,19 +117,10 @@ PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
       --arg tool "$TOOL" --arg cwd "$CWD" \\
   '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}')
 
-if ! emit_presence "$PAYLOAD"; then
-  # Write presence to outbox (atomic: write to .tmp.* then rename to prs.*.json)
-  # Temp file starts with '.' so the daemon skips it during the write.
-  # Final file starts with 'prs.' — daemon picks it up, POSTs, deletes.
-  OUTBOX="$HOME/.claude/outbox"
-  [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
-  TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
-  printf '%s\n' "$PAYLOAD" > "$TMPFILE"
-  mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
-fi
-
 # Stop: also ship the session transcript via engine binary.
-# Done AFTER the outbox write so idle state is always recorded.
+# Kick this off before the presence POST so shipping does not inherit that
+# network round-trip on the managed-local hot path. Presence is still
+# recorded before the hook exits.
 # Detach the ship loop with nohup because Claude can reap hook children as
 # soon as the hook exits, and retry for a few seconds because Stop can fire
 # before the transcript file exists or before the final tail is flushed.
@@ -161,6 +152,17 @@ if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
       fi
     done
   ' _ "$ENGINE" "$TRANSCRIPT" "$MANAGED_SESSION_ID" "$TARGET_URL" "$TARGET_TOKEN" >/dev/null 2>&1 < /dev/null &
+fi
+
+if ! emit_presence "$PAYLOAD"; then
+  # Write presence to outbox (atomic: write to .tmp.* then rename to prs.*.json)
+  # Temp file starts with '.' so the daemon skips it during the write.
+  # Final file starts with 'prs.' — daemon picks it up, POSTs, deletes.
+  OUTBOX="$HOME/.claude/outbox"
+  [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
+  TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
+  printf '%s\n' "$PAYLOAD" > "$TMPFILE"
+  mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
 fi
 
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do

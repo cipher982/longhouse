@@ -16,6 +16,12 @@ def test_claude_hook_script_detaches_stop_shipping_and_retries_until_file_exists
     assert '[[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]' not in HOOK_SCRIPT
 
 
+def test_claude_stop_hook_starts_shipping_before_presence_emit():
+    stop_ship_index = HOOK_SCRIPT.index('if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then')
+    emit_presence_index = HOOK_SCRIPT.index('if ! emit_presence "$PAYLOAD"; then')
+    assert stop_ship_index < emit_presence_index
+
+
 def test_claude_hook_script_supports_direct_hook_target_overrides():
     assert 'TARGET_URL="${LONGHOUSE_HOOK_URL:-}"' in HOOK_SCRIPT
     assert 'TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"' in HOOK_SCRIPT
