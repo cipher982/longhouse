@@ -22,6 +22,7 @@ from zerg.database import make_sessionmaker
 from zerg.models import CommisJob
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import ManagedLocalTurn
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeState
 from zerg.models.agents import SessionTurnReview
@@ -845,6 +846,78 @@ async def test_turn_review_serializer_wraps_existing_review_timing_updates(monke
         assert _normalize_test_utc(result.assistant_turn_finished_at) is not None
         assert _normalize_test_utc(result.turn_loop_enqueued_at) == _normalize_test_utc(enqueued_at)
         assert _normalize_test_utc(result.turn_loop_claimed_at) == _normalize_test_utc(claimed_at)
+
+
+@pytest.mark.asyncio
+async def test_turn_review_attaches_review_to_matching_managed_local_turn(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_attach_managed_local.db")
+    labels: list[str] = []
+
+    class _FakeSerializer:
+        is_configured = True
+
+        async def execute_or_direct(self, fn, fallback_db=None, *, label="", auto_commit=True):
+            labels.append(label)
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="wait",
+            summary="The managed-local turn should wait for user input.",
+            rationale="The assistant completed the current turn and should not continue automatically.",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"wait"}',
+            loop_thread_id=17,
+        )
+
+    async def _noop_execute(*, db, review):
+        return None
+
+    async def _noop_wakeup(*, db, review):
+        return None
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.get_write_serializer", lambda: _FakeSerializer())
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_execute_recorded_turn_review", _noop_execute)
+    monkeypatch.setattr("zerg.services.session_turn_reviews.maybe_enqueue_turn_review_operator_wakeup", _noop_wakeup)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="what should we do next?",
+            assistant_text="I finished the last turn and need your direction on the next step.",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+        db.add(
+            ManagedLocalTurn(
+                session_id=session_id,
+                request_id="req-review-attach",
+                baseline_event_id=0,
+                baseline_runtime_event_id=0,
+                expected_user_text_hash="unused-in-this-test",
+                send_accepted_at=_now(),
+                durable_user_event_id=1,
+                durable_assistant_event_id=2,
+                durable_at=_now(),
+            )
+        )
+        db.commit()
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert review is not None
+
+        turn = db.query(ManagedLocalTurn).filter(ManagedLocalTurn.session_id == session_id).one()
+        assert turn.review_id == review.id
+        assert labels == ["turn-review-create", "turn-review-complete", "managed-local-turn-review-attach"]
 
 
 def test_classify_turn_review_outcome_keeps_notify_reviews_actionable_without_jobs(tmp_path):

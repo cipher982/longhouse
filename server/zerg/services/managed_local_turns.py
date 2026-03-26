@@ -1,0 +1,220 @@
+"""Minimal per-turn shadow ledger for managed-local continuation."""
+
+from __future__ import annotations
+
+import hashlib
+from datetime import datetime
+from datetime import timezone
+from uuid import UUID
+
+from sqlalchemy.orm import Session
+
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import ManagedLocalTurn
+
+
+def _normalize_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def hash_managed_local_turn_text(text: str) -> str:
+    return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+
+
+def create_managed_local_turn(
+    db: Session,
+    *,
+    session_id: UUID,
+    request_id: str,
+    baseline_event_id: int,
+    baseline_runtime_event_id: int,
+    expected_user_text: str,
+) -> ManagedLocalTurn:
+    existing = (
+        db.query(ManagedLocalTurn)
+        .filter(
+            ManagedLocalTurn.session_id == session_id,
+            ManagedLocalTurn.request_id == request_id,
+        )
+        .one_or_none()
+    )
+    if existing is not None:
+        return existing
+
+    turn = ManagedLocalTurn(
+        session_id=session_id,
+        request_id=str(request_id),
+        baseline_event_id=int(baseline_event_id or 0),
+        baseline_runtime_event_id=int(baseline_runtime_event_id or 0),
+        expected_user_text_hash=hash_managed_local_turn_text(expected_user_text),
+    )
+    db.add(turn)
+    db.flush()
+    return turn
+
+
+def mark_managed_local_turn_send_accepted(
+    db: Session,
+    *,
+    session_id: UUID,
+    request_id: str,
+    accepted_at: datetime | None = None,
+) -> bool:
+    turn = _get_turn_by_request(db, session_id=session_id, request_id=request_id)
+    if turn is None or turn.send_accepted_at is not None:
+        return False
+    turn.send_accepted_at = _normalize_utc(accepted_at) or datetime.now(timezone.utc)
+    return True
+
+
+def mark_managed_local_turn_terminal(
+    db: Session,
+    *,
+    session_id: UUID,
+    request_id: str,
+    phase: str,
+    terminal_at: datetime | None = None,
+    terminal_runtime_event_id: int | None = None,
+) -> bool:
+    turn = _get_turn_by_request(db, session_id=session_id, request_id=request_id)
+    if turn is None or turn.terminal_at is not None:
+        return False
+    turn.terminal_phase = str(phase or "").strip() or None
+    turn.terminal_at = _normalize_utc(terminal_at) or datetime.now(timezone.utc)
+    if terminal_runtime_event_id is not None and turn.terminal_runtime_event_id is None:
+        turn.terminal_runtime_event_id = int(terminal_runtime_event_id)
+    return True
+
+
+def mark_managed_local_turn_failed(
+    db: Session,
+    *,
+    session_id: UUID,
+    request_id: str,
+    error_code: str,
+) -> bool:
+    turn = _get_turn_by_request(db, session_id=session_id, request_id=request_id)
+    if turn is None or turn.error_code is not None:
+        return False
+    turn.error_code = str(error_code or "").strip() or None
+    return True
+
+
+def maybe_mark_managed_local_turn_durable(db: Session, *, session_id: UUID) -> ManagedLocalTurn | None:
+    pending_turns = (
+        db.query(ManagedLocalTurn)
+        .filter(
+            ManagedLocalTurn.session_id == session_id,
+            ManagedLocalTurn.send_accepted_at.isnot(None),
+            ManagedLocalTurn.durable_at.is_(None),
+            ManagedLocalTurn.error_code.is_(None),
+        )
+        .order_by(ManagedLocalTurn.created_at.asc(), ManagedLocalTurn.id.asc())
+        .all()
+    )
+    if not pending_turns:
+        return None
+
+    for turn in pending_turns:
+        events = (
+            db.query(AgentEvent)
+            .filter(
+                AgentEvent.session_id == session_id,
+                AgentEvent.id > int(turn.baseline_event_id or 0),
+            )
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+            .all()
+        )
+        match = _match_durable_turn(events=events, expected_user_text_hash=str(turn.expected_user_text_hash or ""))
+        if match is None:
+            continue
+
+        user_event, assistant_event = match
+        turn.durable_user_event_id = int(user_event.id)
+        turn.durable_assistant_event_id = int(assistant_event.id)
+        turn.durable_at = datetime.now(timezone.utc)
+        db.flush()
+        return turn
+
+    return None
+
+
+def attach_review_to_managed_local_turn(
+    db: Session,
+    *,
+    session_id: UUID,
+    assistant_event_id: int,
+    review_id: int,
+) -> bool:
+    turn = (
+        db.query(ManagedLocalTurn)
+        .filter(
+            ManagedLocalTurn.session_id == session_id,
+            ManagedLocalTurn.durable_assistant_event_id == int(assistant_event_id),
+            ManagedLocalTurn.review_id.is_(None),
+        )
+        .order_by(ManagedLocalTurn.created_at.asc(), ManagedLocalTurn.id.asc())
+        .first()
+    )
+    if turn is None:
+        return False
+    turn.review_id = int(review_id)
+    db.flush()
+    return True
+
+
+def get_managed_local_turn(
+    db: Session,
+    *,
+    session_id: UUID,
+    request_id: str,
+) -> ManagedLocalTurn | None:
+    return _get_turn_by_request(db, session_id=session_id, request_id=request_id)
+
+
+def _get_turn_by_request(
+    db: Session,
+    *,
+    session_id: UUID,
+    request_id: str,
+) -> ManagedLocalTurn | None:
+    return (
+        db.query(ManagedLocalTurn)
+        .filter(
+            ManagedLocalTurn.session_id == session_id,
+            ManagedLocalTurn.request_id == str(request_id),
+        )
+        .one_or_none()
+    )
+
+
+def _match_durable_turn(
+    *,
+    events: list[AgentEvent],
+    expected_user_text_hash: str,
+) -> tuple[AgentEvent, AgentEvent] | None:
+    expected_hash = str(expected_user_text_hash or "").strip()
+    if not expected_hash:
+        return None
+
+    matched_user: AgentEvent | None = None
+    for event in events:
+        role = str(getattr(event, "role", "") or "").strip().lower()
+        content_text = str(getattr(event, "content_text", "") or "")
+        tool_name = str(getattr(event, "tool_name", "") or "").strip()
+
+        if matched_user is None:
+            if role == "user" and hash_managed_local_turn_text(content_text) == expected_hash:
+                matched_user = event
+            continue
+
+        if tool_name:
+            return matched_user, event
+        if role == "assistant" and content_text.strip():
+            return matched_user, event
+
+    return None

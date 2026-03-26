@@ -1587,7 +1587,9 @@ class AgentsStore:
 
         if events_inserted > 0:
             from zerg.services.ingest_task_queue import enqueue_ingest_tasks
+            from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
 
+            maybe_mark_managed_local_turn_durable(self.db, session_id=session_id)
             enqueue_ingest_tasks(self.db, str(session_id))
 
         from zerg.services.session_runtime import RuntimeEventIngest

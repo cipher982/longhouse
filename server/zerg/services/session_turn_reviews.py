@@ -26,6 +26,7 @@ from zerg.models.user import User
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_runtime import persist_managed_local_turn_idle
 from zerg.services.managed_local_runtime import persist_managed_local_turn_needs_user
+from zerg.services.managed_local_turns import attach_review_to_managed_local_turn
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.presence_cache import get_presence_cache
@@ -1553,6 +1554,20 @@ async def maybe_process_session_turn_loop(
     if updated:
         db.expire_all()
         review = db.query(SessionTurnReview).filter(SessionTurnReview.id == review_id).first()
+    if session is not None and is_managed_local_session:
+        ws = get_write_serializer()
+        attached = await ws.execute_or_direct(
+            lambda wdb: attach_review_to_managed_local_turn(
+                wdb,
+                session_id=session.id,
+                assistant_event_id=int(review.assistant_event_id),
+                review_id=review_id,
+            ),
+            db,
+            label="managed-local-turn-review-attach",
+        )
+        if attached:
+            db.expire_all()
     if is_managed_local_session and session is not None:
         if review.execution_state in _ATTENTION_EXECUTION_STATES:
             await persist_managed_local_turn_needs_user(
