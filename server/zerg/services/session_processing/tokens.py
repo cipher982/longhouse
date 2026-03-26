@@ -3,6 +3,9 @@
 Callers specify the encoding — never change the default silently. The default
 ``cl100k_base`` matches the default embedding model. Callers using
 GPT-5 era models should pass ``o200k_base`` explicitly.
+
+The two vendored tokenizer blobs live under ``zerg/vendor/tiktoken``. They are
+read-only seed data for the runtime cache, not an in-repo writable cache.
 """
 
 from __future__ import annotations
@@ -21,7 +24,7 @@ _ENCODING_URLS = {
     "o200k_base": "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken",
 }
 _FALLBACK_ENCODINGS = {"o200k_base": "cl100k_base"}
-_BUNDLED_TIKTOKEN_CACHE_DIR = Path(__file__).resolve().parents[2] / "_tiktoken_cache"
+_VENDORED_TIKTOKEN_DIR = Path(__file__).resolve().parents[2] / "vendor" / "tiktoken"
 
 
 def _default_runtime_tiktoken_cache_dir() -> Path:
@@ -38,13 +41,13 @@ def _default_runtime_tiktoken_cache_dir() -> Path:
     return Path.home() / ".cache" / "longhouse" / "tiktoken"
 
 
-def _seed_runtime_tiktoken_cache_from_bundle(*, bundled_dir: Path, runtime_cache_dir: Path) -> Path | None:
-    bundled_files = [path for path in bundled_dir.iterdir() if path.is_file()]
-    if not bundled_files:
+def _seed_runtime_tiktoken_cache_from_vendor(*, vendored_dir: Path, runtime_cache_dir: Path) -> Path | None:
+    vendored_files = [path for path in vendored_dir.iterdir() if path.is_file()]
+    if not vendored_files:
         return None
 
     runtime_cache_dir.mkdir(parents=True, exist_ok=True)
-    for source_path in bundled_files:
+    for source_path in vendored_files:
         target_path = runtime_cache_dir / source_path.name
         if target_path.is_file() and target_path.stat().st_size == source_path.stat().st_size:
             continue
@@ -52,47 +55,47 @@ def _seed_runtime_tiktoken_cache_from_bundle(*, bundled_dir: Path, runtime_cache
     return runtime_cache_dir
 
 
-def _bundled_cache_has_known_encodings(bundled_dir: Path) -> bool:
+def _vendored_dir_has_known_encodings(vendored_dir: Path) -> bool:
     for url in _ENCODING_URLS.values():
-        if not (bundled_dir / hashlib.sha1(url.encode()).hexdigest()).is_file():
+        if not (vendored_dir / hashlib.sha1(url.encode()).hexdigest()).is_file():
             return False
     return True
 
 
-def _use_bundled_cache_if_available() -> Path | None:
-    """Seed a writable runtime cache from bundled blobs when no cache dir is configured.
+def _use_vendored_tiktoken_data_if_available() -> Path | None:
+    """Seed a writable runtime cache from vendored blobs when no cache dir is configured.
 
     tiktoken lazily downloads its BPE files on first use. That makes unit tests
     and fresh runtimes depend on external network reachability. When this repo
-    includes the hashed cache blobs, prefer them transparently without writing
-    back into the repo or installed package directory.
+    vendors the hashed tokenizer blobs, prefer them transparently without
+    writing back into the repo or installed package directory.
     """
     if os.getenv("TIKTOKEN_CACHE_DIR") or os.getenv("DATA_GYM_CACHE_DIR"):
         return None
-    if not _BUNDLED_TIKTOKEN_CACHE_DIR.is_dir():
+    if not _VENDORED_TIKTOKEN_DIR.is_dir():
         return None
 
     try:
-        runtime_cache_dir = _seed_runtime_tiktoken_cache_from_bundle(
-            bundled_dir=_BUNDLED_TIKTOKEN_CACHE_DIR,
+        runtime_cache_dir = _seed_runtime_tiktoken_cache_from_vendor(
+            vendored_dir=_VENDORED_TIKTOKEN_DIR,
             runtime_cache_dir=_default_runtime_tiktoken_cache_dir(),
         )
     except OSError:
-        if _bundled_cache_has_known_encodings(_BUNDLED_TIKTOKEN_CACHE_DIR):
-            os.environ["TIKTOKEN_CACHE_DIR"] = str(_BUNDLED_TIKTOKEN_CACHE_DIR)
-            return _BUNDLED_TIKTOKEN_CACHE_DIR
+        if _vendored_dir_has_known_encodings(_VENDORED_TIKTOKEN_DIR):
+            os.environ["TIKTOKEN_CACHE_DIR"] = str(_VENDORED_TIKTOKEN_DIR)
+            return _VENDORED_TIKTOKEN_DIR
         return None
     if runtime_cache_dir is None:
-        if _bundled_cache_has_known_encodings(_BUNDLED_TIKTOKEN_CACHE_DIR):
-            os.environ["TIKTOKEN_CACHE_DIR"] = str(_BUNDLED_TIKTOKEN_CACHE_DIR)
-            return _BUNDLED_TIKTOKEN_CACHE_DIR
+        if _vendored_dir_has_known_encodings(_VENDORED_TIKTOKEN_DIR):
+            os.environ["TIKTOKEN_CACHE_DIR"] = str(_VENDORED_TIKTOKEN_DIR)
+            return _VENDORED_TIKTOKEN_DIR
         return None
 
     os.environ["TIKTOKEN_CACHE_DIR"] = str(runtime_cache_dir)
     return runtime_cache_dir
 
 
-_use_bundled_cache_if_available()
+_use_vendored_tiktoken_data_if_available()
 
 
 def _cache_blob_path(encoding: str) -> Path | None:

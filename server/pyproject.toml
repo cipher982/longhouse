@@ -87,14 +87,14 @@ packages = ["zerg"]
 # without requiring a sibling monorepo checkout.
 "../config/models.json" = "zerg/_config/models.json"
 # Bundle the vendored tiktoken encoding blobs as read-only seed data.
-"zerg/_tiktoken_cache" = "zerg/_tiktoken_cache"
+"zerg/vendor/tiktoken" = "zerg/vendor/tiktoken"
 
 [tool.hatch.build.targets.sdist.force-include]
 # Also include frontend in sdist so building from source works
 "../web/dist" = "zerg/_frontend_dist"
 "../control-plane/longhouse_shared" = "longhouse_shared"
 "../config/models.json" = "zerg/_config/models.json"
-"zerg/_tiktoken_cache" = "zerg/_tiktoken_cache"
+"zerg/vendor/tiktoken" = "zerg/vendor/tiktoken"
 
 [tool.uv]
 # Keep cache inside repo for hermetic test runs
