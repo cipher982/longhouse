@@ -362,6 +362,50 @@ def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_
         )
 
 
+def _fetch_managed_local_events_between_ids(
+    *,
+    db_bind,
+    session_id: UUID,
+    start_event_id: int,
+    end_event_id: int,
+) -> list[AgentEvent]:
+    with Session(bind=db_bind) as poll_db:
+        return (
+            poll_db.query(AgentEvent)
+            .filter(AgentEvent.session_id == session_id)
+            .filter(AgentEvent.id >= int(start_event_id))
+            .filter(AgentEvent.id <= int(end_event_id))
+            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
+            .all()
+        )
+
+
+def _get_managed_local_turn_snapshot_best_effort(
+    *,
+    db_bind,
+    session_id: UUID,
+    request_id: str,
+):
+    try:
+        return get_managed_local_turn_snapshot(
+            db_bind=db_bind,
+            session_id=session_id,
+            request_id=request_id,
+        )
+    except SQLAlchemyTimeoutError:
+        logger.warning(
+            "Managed-local turn ledger snapshot timed out for %s; falling back to direct evidence",
+            session_id,
+        )
+    except Exception:
+        logger.warning(
+            "Managed-local turn ledger snapshot read failed for %s; falling back to direct evidence",
+            session_id,
+            exc_info=True,
+        )
+    return None
+
+
 def _hydrate_managed_local_turn_events_from_ledger(
     *,
     db_bind,
@@ -369,19 +413,39 @@ def _hydrate_managed_local_turn_events_from_ledger(
     request_id: str,
     expected_user_message: str,
 ) -> tuple[object | None, list[AgentEvent]]:
-    snapshot = get_managed_local_turn_snapshot(
+    snapshot = _get_managed_local_turn_snapshot_best_effort(
         db_bind=db_bind,
         session_id=session_id,
         request_id=request_id,
     )
-    if snapshot is None or snapshot.durable_at is None:
+    if (
+        snapshot is None
+        or snapshot.durable_at is None
+        or snapshot.durable_user_event_id is None
+        or snapshot.durable_assistant_event_id is None
+    ):
         return snapshot, []
 
-    events = _fetch_managed_local_events_since(
-        db_bind=db_bind,
-        session_id=session_id,
-        after_event_id=int(snapshot.baseline_event_id or 0),
-    )
+    try:
+        events = _fetch_managed_local_events_between_ids(
+            db_bind=db_bind,
+            session_id=session_id,
+            start_event_id=int(snapshot.durable_user_event_id),
+            end_event_id=int(snapshot.durable_assistant_event_id),
+        )
+    except SQLAlchemyTimeoutError:
+        logger.warning(
+            "Managed-local turn ledger event hydration timed out for %s; falling back to direct evidence",
+            session_id,
+        )
+        return snapshot, []
+    except Exception:
+        logger.warning(
+            "Managed-local turn ledger event hydration failed for %s; falling back to direct evidence",
+            session_id,
+            exc_info=True,
+        )
+        return snapshot, []
     if expected_user_message and not _managed_local_events_include_expected_turn(
         events=events,
         expected_user_message=expected_user_message,
@@ -763,7 +827,7 @@ async def _stream_managed_local_output(
                 session_id=source_session.id,
             ),
         )
-    turn_snapshot = get_managed_local_turn_snapshot(
+    turn_snapshot = _get_managed_local_turn_snapshot_best_effort(
         db_bind=db.get_bind(),
         session_id=source_session.id,
         request_id=request_id,

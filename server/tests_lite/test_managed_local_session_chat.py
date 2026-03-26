@@ -765,13 +765,16 @@ def test_chat_with_session_reads_durable_events_from_ledger_when_event_waiter_is
                 baseline_event_id=0,
                 terminal_phase="idle",
                 terminal_at=datetime.now(timezone.utc),
+                durable_user_event_id=101,
+                durable_assistant_event_id=102,
                 durable_at=datetime.now(timezone.utc),
                 error_code=None,
             )
 
-        def fake_fetch_events_since(*, db_bind, session_id, after_event_id):
+        def fake_fetch_events_between_ids(*, db_bind, session_id, start_event_id, end_event_id):
             assert session_id == source_session.id
-            assert after_event_id == 0
+            assert start_event_id == 101
+            assert end_event_id == 102
             return [
                 SimpleNamespace(
                     id=101,
@@ -796,7 +799,7 @@ def test_chat_with_session_reads_durable_events_from_ledger_when_event_waiter_is
             fake_wait_for_events,
         )
         monkeypatch.setattr("zerg.routers.session_chat.get_managed_local_turn_snapshot", fake_get_turn_snapshot)
-        monkeypatch.setattr("zerg.routers.session_chat._fetch_managed_local_events_since", fake_fetch_events_since)
+        monkeypatch.setattr("zerg.routers.session_chat._fetch_managed_local_events_between_ids", fake_fetch_events_between_ids)
         monkeypatch.setattr(session_chat, "MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS", 0.01)
 
         try:
@@ -807,6 +810,69 @@ def test_chat_with_session_reads_durable_events_from_ledger_when_event_waiter_is
             assert response.status_code == 200, response.text
             body = response.text
             assert "Ledger durable reply" in body
+            assert '"sync_status": "complete"' in body
+            assert '"control_status": "completed"' in body
+            assert '"persisted_events": 2' in body
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_chat_with_session_falls_back_when_ledger_snapshot_read_times_out(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        async def fake_wait_for_terminal(**_kwargs):
+            return SimpleNamespace(
+                phase="idle",
+                control_status="completed",
+                runtime_event_id=93,
+                occurred_at=datetime.now(timezone.utc),
+            )
+
+        async def fake_wait_for_events(**_kwargs):
+            return [
+                SimpleNamespace(
+                    id=101,
+                    role="user",
+                    content_text="continue",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+                SimpleNamespace(
+                    id=102,
+                    role="assistant",
+                    content_text="Direct evidence reply",
+                    tool_name=None,
+                    tool_call_id=None,
+                ),
+            ]
+
+        def fake_get_turn_snapshot(*, db_bind, session_id, request_id):
+            raise SQLAlchemyTimeoutError("pool timeout")
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat.await_managed_local_turn_terminal", fake_wait_for_terminal)
+        monkeypatch.setattr(
+            "zerg.routers.session_chat._await_managed_local_turn_events",
+            fake_wait_for_events,
+        )
+        monkeypatch.setattr("zerg.routers.session_chat.get_managed_local_turn_snapshot", fake_get_turn_snapshot)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 200, response.text
+            body = response.text
+            assert "Direct evidence reply" in body
             assert '"sync_status": "complete"' in body
             assert '"control_status": "completed"' in body
             assert '"persisted_events": 2' in body
