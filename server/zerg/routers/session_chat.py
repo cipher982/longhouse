@@ -1879,15 +1879,18 @@ async def continuation_readiness(
     """
     backend = _get_session_chat_backend()
     issues: list[str] = []
+    warnings: list[str] = []
 
     claude_available = _check_claude_binary()
     codex_available = _check_codex_binary()
 
+    # Claude CLI is required for the primary continuation path
     if not claude_available:
         issues.append("'claude' CLI not found on PATH (required for Claude session continuation)")
 
+    # Codex is optional — missing it only limits Codex session continuation
     if not codex_available:
-        issues.append("'codex' CLI not found on PATH (required for Codex session continuation)")
+        warnings.append("'codex' CLI not found on PATH (Codex session continuation unavailable)")
 
     if backend == SESSION_CHAT_BACKEND_ZAI:
         if not os.getenv("ZAI_API_KEY", "").strip():
@@ -1899,12 +1902,13 @@ async def continuation_readiness(
         pass  # Uses IAM roles, hard to pre-check
 
     if not os.getenv("OPENAI_API_KEY", "").strip():
-        issues.append("OPENAI_API_KEY not set (required for Codex session continuation)")
+        warnings.append("OPENAI_API_KEY not set (Codex session continuation unavailable)")
 
     return {
-        "ready": claude_available and codex_available and len(issues) == 0,
+        "ready": len(issues) == 0,
         "backend": backend,
         "claude_available": claude_available,
         "codex_available": codex_available,
         "issues": issues,
+        "warnings": warnings,
     }
