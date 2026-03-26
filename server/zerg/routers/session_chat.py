@@ -106,6 +106,7 @@ MANAGED_LOCAL_STABLE_POLLS = 1
 MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS = 0.1
 MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 10.0
 MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS = 1.0
+MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS = 0.5
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
     [
         "Message was sent to the managed local session, but Longhouse ",
@@ -584,6 +585,19 @@ async def _await_managed_local_events_task(
         return []
 
 
+async def _await_managed_local_terminal_task(
+    terminal_task: asyncio.Task,
+    *,
+    timeout_secs: float,
+):
+    if terminal_task.done():
+        return terminal_task.result()
+    try:
+        return await asyncio.wait_for(asyncio.shield(terminal_task), timeout=timeout_secs)
+    except asyncio.TimeoutError:
+        return None
+
+
 async def _stream_managed_local_output(
     *,
     source_session,
@@ -723,6 +737,12 @@ async def _stream_managed_local_output(
             new_events = events_task.result() or []
         if terminal_task in done:
             terminal_result = terminal_task.result()
+
+        if new_events and terminal_result is None:
+            terminal_result = await _await_managed_local_terminal_task(
+                terminal_task,
+                timeout_secs=MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS,
+            )
 
         if not new_events:
             if terminal_task in done:
