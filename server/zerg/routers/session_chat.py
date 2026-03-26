@@ -591,10 +591,21 @@ async def _await_managed_local_terminal_task(
     timeout_secs: float,
 ):
     if terminal_task.done():
-        return terminal_task.result()
+        try:
+            return terminal_task.result()
+        except asyncio.CancelledError:
+            return None
+        except Exception:
+            logger.warning("Managed-local terminal waiter failed after durable events", exc_info=True)
+            return None
     try:
         return await asyncio.wait_for(asyncio.shield(terminal_task), timeout=timeout_secs)
     except asyncio.TimeoutError:
+        return None
+    except asyncio.CancelledError:
+        return None
+    except Exception:
+        logger.warning("Managed-local terminal waiter failed after durable events", exc_info=True)
         return None
 
 
