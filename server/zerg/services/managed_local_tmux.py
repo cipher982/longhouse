@@ -11,6 +11,7 @@ TMUX_SESSION_NAME_MAX = 64
 _TMUX_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 MANAGED_LOCAL_TMUX_SERVER_LABEL = "longhouse-managed"
 TMUX_NOT_INSTALLED_MESSAGE = "tmux is not installed"
+MANAGED_LOCAL_TMUX_HISTORY_LIMIT = 50000
 
 
 def normalize_tmux_session_name(seed: str, *, prefix: str = "lh") -> str:
@@ -79,6 +80,17 @@ def _tmux_prefix() -> str:
     return f"tmux -L {_quote(MANAGED_LOCAL_TMUX_SERVER_LABEL)}"
 
 
+def _managed_local_tmux_launch_options() -> tuple[str, ...]:
+    """Options that make the dedicated managed tmux server less intrusive."""
+    return (
+        "set-option -s escape-time 0",
+        "set-option -g status off",
+        "set-option -g mouse on",
+        f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT}",
+        "set-option -g remain-on-exit failed",
+    )
+
+
 def build_tmux_launch_command(
     *,
     session_name: str,
@@ -106,11 +118,9 @@ def build_tmux_launch_command(
             f"chmod +x {_quote(script_path)}",
         ]
     )
-    tmux_command = (
-        f"{_tmux_prefix()} start-server \\; "
-        "set-option -g remain-on-exit failed \\; "
-        f"new-session -d -s {_quote(name)} -c {_quote(working_dir)} {_quote(script_path)}"
-    )
+    tmux_segments = [f"{_tmux_prefix()} start-server", *_managed_local_tmux_launch_options()]
+    tmux_segments.append(f"new-session -d -s {_quote(name)} -c {_quote(working_dir)} {_quote(script_path)}")
+    tmux_command = " \\; ".join(tmux_segments)
     return _wrap_managed_local_shell_command("\n".join([write_script, tmux_command]), tmux_tmpdir=tmux_tmpdir)
 
 

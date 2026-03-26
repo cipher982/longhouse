@@ -207,7 +207,7 @@ def _build_codex_entry_command(
         [
             *exports,
             "source ~/.zshrc >/dev/null 2>&1 || true",
-            "exec codex --enable codex_hooks",
+            "exec codex --enable codex_hooks --no-alt-screen",
         ]
     )
     return f"zsh -lc {shlex.quote(inner)}"

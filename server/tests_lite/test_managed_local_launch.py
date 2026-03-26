@@ -28,6 +28,7 @@ from zerg.services.managed_local_launcher import _build_entry_command
 from zerg.services.managed_local_launcher import _build_hooks_ensure_command
 from zerg.services.managed_local_launcher import _build_preflight_command
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_HISTORY_LIMIT
 
 
 def _inner_command(command: str) -> str:
@@ -218,7 +219,7 @@ def test_build_entry_command_codex_injects_longhouse_session_id():
         managed_session_name="lh-zerg-codex",
     )
     inner = _inner_command(cmd)
-    assert inner.endswith("exec codex --enable codex_hooks")
+    assert inner.endswith("exec codex --enable codex_hooks --no-alt-screen")
     assert "claude-code" not in inner
     assert "--session-id" not in inner
     assert "export LONGHOUSE_SESSION_ID=" in inner
@@ -354,6 +355,10 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert auth.device_id == runner.name
             assert (
                 f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; "
+                "set-option -s escape-time 0 \\; "
+                "set-option -g status off \\; "
+                "set-option -g mouse on \\; "
+                f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT} \\; "
                 "set-option -g remain-on-exit failed \\; "
                 f"new-session -d -s"
             ) in launch_inner
@@ -630,7 +635,7 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
             assert "${HOME}/.codex/hooks.json" in hooks_inner
 
             launch_inner = _inner_command(dispatcher.calls[2]["command"])
-            assert "exec codex --enable codex_hooks" in launch_inner
+            assert "exec codex --enable codex_hooks --no-alt-screen" in launch_inner
             assert "claude-code" not in launch_inner
 
             # Must inject LONGHOUSE_SESSION_ID so hook routes presence to Longhouse's UUID
