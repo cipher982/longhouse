@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
+import sys
 from functools import lru_cache
 from pathlib import Path
 
@@ -22,20 +24,72 @@ _FALLBACK_ENCODINGS = {"o200k_base": "cl100k_base"}
 _BUNDLED_TIKTOKEN_CACHE_DIR = Path(__file__).resolve().parents[2] / "_tiktoken_cache"
 
 
+def _default_runtime_tiktoken_cache_dir() -> Path:
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "longhouse" / "tiktoken"
+    if os.name == "nt":
+        local_app_data = os.getenv("LOCALAPPDATA")
+        if local_app_data:
+            return Path(local_app_data) / "Longhouse" / "tiktoken"
+        return Path.home() / "AppData" / "Local" / "Longhouse" / "tiktoken"
+    xdg_cache_home = os.getenv("XDG_CACHE_HOME")
+    if xdg_cache_home:
+        return Path(xdg_cache_home).expanduser() / "longhouse" / "tiktoken"
+    return Path.home() / ".cache" / "longhouse" / "tiktoken"
+
+
+def _seed_runtime_tiktoken_cache_from_bundle(*, bundled_dir: Path, runtime_cache_dir: Path) -> Path | None:
+    bundled_files = [path for path in bundled_dir.iterdir() if path.is_file()]
+    if not bundled_files:
+        return None
+
+    runtime_cache_dir.mkdir(parents=True, exist_ok=True)
+    for source_path in bundled_files:
+        target_path = runtime_cache_dir / source_path.name
+        if target_path.is_file() and target_path.stat().st_size == source_path.stat().st_size:
+            continue
+        shutil.copy2(source_path, target_path)
+    return runtime_cache_dir
+
+
+def _bundled_cache_has_known_encodings(bundled_dir: Path) -> bool:
+    for url in _ENCODING_URLS.values():
+        if not (bundled_dir / hashlib.sha1(url.encode()).hexdigest()).is_file():
+            return False
+    return True
+
+
 def _use_bundled_cache_if_available() -> Path | None:
-    """Point tiktoken at bundled cache blobs when no cache dir is configured.
+    """Seed a writable runtime cache from bundled blobs when no cache dir is configured.
 
     tiktoken lazily downloads its BPE files on first use. That makes unit tests
     and fresh runtimes depend on external network reachability. When this repo
-    includes the hashed cache blobs, prefer them transparently.
+    includes the hashed cache blobs, prefer them transparently without writing
+    back into the repo or installed package directory.
     """
     if os.getenv("TIKTOKEN_CACHE_DIR") or os.getenv("DATA_GYM_CACHE_DIR"):
         return None
     if not _BUNDLED_TIKTOKEN_CACHE_DIR.is_dir():
         return None
 
-    os.environ["TIKTOKEN_CACHE_DIR"] = str(_BUNDLED_TIKTOKEN_CACHE_DIR)
-    return _BUNDLED_TIKTOKEN_CACHE_DIR
+    try:
+        runtime_cache_dir = _seed_runtime_tiktoken_cache_from_bundle(
+            bundled_dir=_BUNDLED_TIKTOKEN_CACHE_DIR,
+            runtime_cache_dir=_default_runtime_tiktoken_cache_dir(),
+        )
+    except OSError:
+        if _bundled_cache_has_known_encodings(_BUNDLED_TIKTOKEN_CACHE_DIR):
+            os.environ["TIKTOKEN_CACHE_DIR"] = str(_BUNDLED_TIKTOKEN_CACHE_DIR)
+            return _BUNDLED_TIKTOKEN_CACHE_DIR
+        return None
+    if runtime_cache_dir is None:
+        if _bundled_cache_has_known_encodings(_BUNDLED_TIKTOKEN_CACHE_DIR):
+            os.environ["TIKTOKEN_CACHE_DIR"] = str(_BUNDLED_TIKTOKEN_CACHE_DIR)
+            return _BUNDLED_TIKTOKEN_CACHE_DIR
+        return None
+
+    os.environ["TIKTOKEN_CACHE_DIR"] = str(runtime_cache_dir)
+    return runtime_cache_dir
 
 
 _use_bundled_cache_if_available()

@@ -252,11 +252,35 @@ class TestCountTokens:
     def test_uses_bundled_tiktoken_cache_when_available(self, monkeypatch, tmp_path):
         bundled = tmp_path / "tiktoken-cache"
         bundled.mkdir()
-        (bundled / hashlib.sha1(tokens_mod._ENCODING_URLS["cl100k_base"].encode()).hexdigest()).write_bytes(b"cached")
+        blob_name = hashlib.sha1(tokens_mod._ENCODING_URLS["cl100k_base"].encode()).hexdigest()
+        (bundled / blob_name).write_bytes(b"cached")
+        runtime_cache = tmp_path / "runtime-tiktoken-cache"
 
         monkeypatch.delenv("TIKTOKEN_CACHE_DIR", raising=False)
         monkeypatch.delenv("DATA_GYM_CACHE_DIR", raising=False)
         monkeypatch.setattr(tokens_mod, "_BUNDLED_TIKTOKEN_CACHE_DIR", bundled)
+        monkeypatch.setattr(tokens_mod, "_default_runtime_tiktoken_cache_dir", lambda: runtime_cache)
+
+        resolved = tokens_mod._use_bundled_cache_if_available()
+
+        assert resolved == runtime_cache
+        assert os.environ["TIKTOKEN_CACHE_DIR"] == str(runtime_cache)
+        assert (runtime_cache / blob_name).read_bytes() == b"cached"
+
+    def test_falls_back_to_bundled_cache_when_runtime_cache_is_unavailable(self, monkeypatch, tmp_path):
+        bundled = tmp_path / "tiktoken-cache"
+        bundled.mkdir()
+        for url in tokens_mod._ENCODING_URLS.values():
+            (bundled / hashlib.sha1(url.encode()).hexdigest()).write_bytes(b"cached")
+
+        monkeypatch.delenv("TIKTOKEN_CACHE_DIR", raising=False)
+        monkeypatch.delenv("DATA_GYM_CACHE_DIR", raising=False)
+        monkeypatch.setattr(tokens_mod, "_BUNDLED_TIKTOKEN_CACHE_DIR", bundled)
+
+        def fail_seed(*, bundled_dir, runtime_cache_dir):
+            raise OSError("read-only runtime cache")
+
+        monkeypatch.setattr(tokens_mod, "_seed_runtime_tiktoken_cache_from_bundle", fail_seed)
 
         resolved = tokens_mod._use_bundled_cache_if_available()
 

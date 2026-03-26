@@ -86,7 +86,7 @@ packages = ["zerg"]
 # Bundle the shared model routing config so source/wheel installs can start
 # without requiring a sibling monorepo checkout.
 "../config/models.json" = "zerg/_config/models.json"
-# Bundle the tiktoken cache so fresh installs do not need first-use network fetches.
+# Bundle the vendored tiktoken encoding blobs as read-only seed data.
 "zerg/_tiktoken_cache" = "zerg/_tiktoken_cache"
 
 [tool.hatch.build.targets.sdist.force-include]
