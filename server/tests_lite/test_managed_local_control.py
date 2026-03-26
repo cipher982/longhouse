@@ -283,8 +283,8 @@ def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_pa
         assert "Managed local Claude transcript did not ship a fresh reply event" in command
 
 
-def test_managed_local_claude_ship_wait_ready_budget_preserves_long_tail_coverage():
-    assert MANAGED_LOCAL_CLAUDE_SHIP_WAIT_READY_MS == 8000
+def test_managed_local_claude_ship_wait_ready_budget_is_short_and_bounded():
+    assert MANAGED_LOCAL_CLAUDE_SHIP_WAIT_READY_MS == 1500
 
 
 def test_validate_managed_local_chat_done_payload_accepts_successful_zero_exit_code():
