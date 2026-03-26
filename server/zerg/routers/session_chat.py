@@ -587,6 +587,18 @@ async def _force_managed_local_claude_sync(
         )
 
 
+def _should_retry_managed_local_claude_sync_after_terminal(ship_result) -> bool:
+    if ship_result is None or getattr(ship_result, "ok", False):
+        return False
+
+    exit_code = getattr(ship_result, "exit_code", None)
+    if exit_code == 13:
+        return True
+
+    error_text = str(getattr(ship_result, "error", "") or "").strip().lower()
+    return "did not ship new events" in error_text or "no new transcript events" in error_text
+
+
 def _detach_managed_local_ship_task(task: asyncio.Task, *, session_id: UUID) -> None:
     """Let a direct-ship retry continue in the background after the route returns."""
 
@@ -837,7 +849,19 @@ async def _stream_managed_local_output(
             )
 
             if not new_events and provider_is_claude:
-                if ship_task is None:
+                if ship_task is not None and ship_task.done() and ship_result is None:
+                    try:
+                        ship_result = ship_task.result()
+                    except asyncio.CancelledError:
+                        ship_result = None
+                    except Exception:
+                        logger.exception(
+                            "Managed-local Claude direct ship task crashed for %s",
+                            source_session.id,
+                        )
+                        ship_result = None
+
+                if ship_task is None or (ship_task.done() and _should_retry_managed_local_claude_sync_after_terminal(ship_result)):
                     ship_task = asyncio.create_task(
                         _force_managed_local_claude_sync(
                             db_bind=db.get_bind(),
@@ -846,6 +870,7 @@ async def _stream_managed_local_output(
                             request_id=request_id,
                         )
                     )
+                    ship_result = None
 
                 done, _ = await asyncio.wait(
                     {events_task, ship_task},
