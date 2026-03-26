@@ -190,6 +190,23 @@ def attach_review_to_managed_local_turn(
     return True
 
 
+def get_next_reviewable_managed_local_turn(
+    db: Session,
+    *,
+    session_id: UUID,
+) -> ManagedLocalTurn | None:
+    return (
+        db.query(ManagedLocalTurn)
+        .filter(
+            ManagedLocalTurn.session_id == session_id,
+            ManagedLocalTurn.durable_at.isnot(None),
+            ManagedLocalTurn.review_id.is_(None),
+        )
+        .order_by(ManagedLocalTurn.created_at.asc(), ManagedLocalTurn.id.asc())
+        .first()
+    )
+
+
 def get_managed_local_turn(
     db: Session,
     *,

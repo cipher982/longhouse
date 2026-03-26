@@ -11,7 +11,7 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 
 ## Active
 
-- [Managed-local turn ledger phase 2](docs/tasks/open/managed-local-turn-ledger-phase-2.md) — `IN PROGRESS (Codex)`; move `/api/sessions/{id}/chat` onto the ledger read path for terminal + durability, with a bounded fallback while the transition hardens.
+- [Managed-local turn ledger phase 3](docs/tasks/open/managed-local-turn-ledger-phase-3.md) — `IN PROGRESS (Codex)`; make `turn_loop` consume durable ledger rows for managed-local sessions instead of rediscovering turns from transcript + presence inference.
 - [Managed-local Loop tail optimization](docs/tasks/open/managed-local-loop-tail-optimization.md) — `IN PROGRESS (Codex)`; use the persisted review timings to shave the remaining pre-enqueue + claim latency now that correctness is green.
 - [Managed-local session control](docs/tasks/open/managed-local-session-control.md) — dedicated tmux server isolation, failed pane inspection, readiness hook bridge, end-to-end dogfood.
 - [Runtime story simplification](docs/tasks/open/launch-runtime-simplification.md) — copy/narrative done; remaining work is the OikosService/react_engine deletion path (3k LOC, 36+ call sites).

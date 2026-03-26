@@ -172,7 +172,7 @@ Phase 1 is done when:
 
 ## Current State
 
-Phase 1 is now shipped.
+Phases 1 and 2 are now shipped.
 
 What is implemented:
 
@@ -181,8 +181,10 @@ What is implemented:
 - ingest can bind durable prompt + assistant evidence
 - turn review creation can attach the resulting review id
 - shadow writes are best-effort and isolated so ledger failures do not break the live path
+- `/api/sessions/{id}/chat` now prefers the ledger for terminal and durability
+  reads, with bounded fallback to direct evidence if a ledger read is missing or
+  late
 
 What is intentionally not implemented yet:
 
-- route behavior reading the ledger as the primary completion source
 - Loop consuming the ledger instead of transcript/presence inference
