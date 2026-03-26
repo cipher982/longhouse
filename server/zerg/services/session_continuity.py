@@ -229,6 +229,54 @@ async def prepare_session_for_resume(
     return provider_session_id
 
 
+def get_codex_config_dir() -> Path:
+    """Get the Codex config directory, respecting CODEX_HOME env var."""
+    config_dir = os.getenv("CODEX_HOME")
+    if config_dir:
+        return Path(config_dir)
+    return Path.home() / ".codex"
+
+
+async def prepare_codex_session_for_resume(
+    session_id: str,
+    db: Session | None = None,
+) -> str:
+    """Fetch session from Zerg and prepare it for Codex exec resume.
+
+    Downloads the session JSONL and places it at the path Codex expects:
+    {codex_home}/sessions/{YYYY}/{MM}/{DD}/rollout-{timestamp}-{session_id}.jsonl
+
+    Args:
+        session_id: Session UUID to fetch
+        db: Optional local DB session for direct export
+
+    Returns:
+        The provider_session_id to pass to codex exec resume
+
+    Raises:
+        ValueError: If session not found or configuration error
+    """
+    jsonl_bytes, _original_cwd, provider_session_id = await fetch_session_from_zerg(session_id, db=db)
+
+    if not provider_session_id:
+        raise ValueError(f"Session {session_id} has no provider_session_id - cannot resume")
+
+    validate_session_id(provider_session_id)
+
+    codex_home = get_codex_config_dir()
+    now = datetime.now(timezone.utc)
+    session_dir = codex_home / "sessions" / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp_str = now.strftime("%Y-%m-%dT%H-%M-%S")
+    session_file = session_dir / f"rollout-{timestamp_str}-{provider_session_id}.jsonl"
+    session_file.write_bytes(jsonl_bytes)
+
+    logger.info(f"Prepared Codex session {session_id} for resume at {session_file}")
+
+    return provider_session_id
+
+
 async def ship_session_to_zerg(
     workspace_path: Path,
     commis_id: str,
@@ -241,40 +289,63 @@ async def ship_session_to_zerg(
     continuation_kind: str | None = None,
     origin_label: str | None = None,
     branched_from_event_id: int | None = None,
+    provider: str = "claude",
+    explicit_session_file: Path | None = None,
 ) -> ShipSessionResult | None:
-    """Ship a Claude Code session from workspace to Zerg.
+    """Ship a CLI session from workspace to Zerg.
 
-    Finds the most recent session file in the workspace's Claude config
-    and ships it to Zerg for future resumption.
+    For Claude: finds the most recent session file in the workspace's Claude config.
+    For Codex: uses explicit_session_file or searches ~/.codex/sessions/.
+    Ships to Zerg for future resumption.
 
     Args:
-        workspace_path: The workspace directory where Claude Code ran
+        workspace_path: The workspace directory where the CLI ran
         commis_id: Commis ID for logging/tracking
         claude_config_dir: Override for Claude config dir (default: from CLAUDE_CONFIG_DIR or ~/.claude)
+        provider: Session provider ("claude" or "codex")
+        explicit_session_file: If provided, ship this file directly (skips file search)
 
     Returns:
         The session ID if shipped successfully, None otherwise
     """
-    # Determine Claude config directory (respects CLAUDE_CONFIG_DIR env var)
-    config_dir = claude_config_dir or get_claude_config_dir()
+    session_file: Path | None = explicit_session_file
 
-    # Find session file for this workspace
-    encoded_cwd = encode_cwd_for_claude(str(workspace_path.absolute()))
-    session_dir = config_dir / "projects" / encoded_cwd
+    if session_file is None:
+        if provider == "codex":
+            session_file = _find_latest_codex_session_file()
+        else:
+            # Claude: search in projects directory
+            config_dir = claude_config_dir or get_claude_config_dir()
+            encoded_cwd = encode_cwd_for_claude(str(workspace_path.absolute()))
+            session_dir = config_dir / "projects" / encoded_cwd
 
-    if not session_dir.exists():
-        logger.debug(f"No Claude sessions found for workspace {workspace_path}")
+            if not session_dir.exists():
+                logger.debug(f"No Claude sessions found for workspace {workspace_path}")
+                return None
+
+            session_files = sorted(session_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if not session_files:
+                logger.debug(f"No session files found in {session_dir}")
+                return None
+            session_file = session_files[0]
+
+    if session_file is None or not session_file.exists():
+        logger.debug(f"No session file found for provider={provider}")
         return None
 
-    # Find most recent .jsonl file
-    session_files = sorted(session_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
-
-    if not session_files:
-        logger.debug(f"No session files found in {session_dir}")
-        return None
-
-    session_file = session_files[0]
     provider_session_id = session_file.stem
+    # For Codex rollout files, extract session ID from "rollout-{timestamp}-{uuid}" pattern
+    if provider == "codex" and provider_session_id.startswith("rollout-"):
+        parts = provider_session_id.split("-", 3)  # rollout, date, time, uuid...
+        if len(parts) >= 4:
+            # The UUID is everything after "rollout-YYYY-MM-DDTHH-MM-SS-"
+            # Filename: rollout-2026-03-26T10-24-39-019d2a51-8721-7653-ad24-c3a3dad5d04f
+            # Split on the timestamp pattern to extract UUID
+            import re as _re
+
+            match = _re.search(r"rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)", provider_session_id)
+            if match:
+                provider_session_id = match.group(1)
 
     logger.info(f"Shipping session {provider_session_id} for commis {commis_id}")
 
@@ -334,7 +405,7 @@ async def ship_session_to_zerg(
     # instead of silently inventing a sibling session on every resume.
     device_id = f"zerg-commis-{platform.node()}:{provider_session_id}"
     payload = {
-        "provider": "claude",
+        "provider": provider,
         "environment": get_machine_name_label(),
         "provider_session_id": provider_session_id,
         "project": metadata.project or workspace_path.name,
@@ -404,10 +475,23 @@ async def ship_session_to_zerg(
         return None
 
 
+def _find_latest_codex_session_file() -> Path | None:
+    """Find the most recently modified Codex session file."""
+    codex_home = get_codex_config_dir()
+    sessions_dir = codex_home / "sessions"
+    if not sessions_dir.exists():
+        return None
+
+    # Search for most recent rollout-*.jsonl across all date subdirectories
+    session_files = sorted(sessions_dir.rglob("rollout-*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return session_files[0] if session_files else None
+
+
 __all__ = [
     "encode_cwd_for_claude",
     "fetch_session_from_zerg",
     "prepare_session_for_resume",
+    "prepare_codex_session_for_resume",
     "ship_session_to_zerg",
     "ShipSessionResult",
     "SessionLockManager",
