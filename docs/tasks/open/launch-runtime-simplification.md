@@ -23,6 +23,7 @@ Make the launch story match the real product: sessions, conversations, Oikos, ru
 - [x] Remove obviously stale fiche/dashboard-era primary-path language
 - [x] Define the deletion path for `OikosService` / `oikos_react_engine` / runner-facing harness seams
 - [x] Phase 1a: extract dispatch contract into `services/dispatch_contract.py`
+- [x] Phase 1b: commis barrier logic already standalone in `services/commis_barrier.py`
 
 ## OikosService / react_engine Deletion Path
 
