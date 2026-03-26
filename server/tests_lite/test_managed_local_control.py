@@ -280,9 +280,7 @@ def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_pa
         assert f"--session-id {session.id}" in command
         assert f"delays=({MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL})" in command
         assert 'for delay in "${delays[@]}"' in command
-        assert "transcript_ready() {" in command
-        assert "tail -c 1" in command
-        assert 'transcript_ready "$transcript" || continue' in command
+        assert '[ -f "$transcript" ] || continue' in command
         assert "--json" in command
         assert "events_shipped" in command
         assert "Managed local Claude transcript did not ship new events" in command

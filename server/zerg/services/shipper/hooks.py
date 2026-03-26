@@ -44,7 +44,6 @@ import tomllib
 from pathlib import Path
 
 from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_TRANSCRIPT_READY_CHECK_SHELL
 
 logger = logging.getLogger(__name__)
 
@@ -144,13 +143,13 @@ if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
     if [[ -n "$managed_session_id" ]]; then
       ship_args+=(--session-id "$managed_session_id")
     fi
-    __MANAGED_LOCAL_CLAUDE_TRANSCRIPT_READY_CHECK__
     for delay in __MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__; do
       if [[ "$delay" != "0" ]]; then
         sleep "$delay"
       fi
-      transcript_ready "$transcript" || continue
-      "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true
+      if [[ -f "$transcript" ]]; then
+        "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true
+      fi
     done
   ' _ "$ENGINE" "$TRANSCRIPT" "$MANAGED_SESSION_ID" "$TARGET_URL" "$TARGET_TOKEN" >/dev/null 2>&1 < /dev/null &
 fi
@@ -169,9 +168,7 @@ fi
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
 # instead?" prompt, which interrupts the session.
 exit 0
-""".replace("__MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__", MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL).replace(
-    "__MANAGED_LOCAL_CLAUDE_TRANSCRIPT_READY_CHECK__", MANAGED_LOCAL_CLAUDE_TRANSCRIPT_READY_CHECK_SHELL
-)
+""".replace("__MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__", MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL)
 
 SESSION_START_HOOK_SCRIPT = """\
 #!/bin/bash

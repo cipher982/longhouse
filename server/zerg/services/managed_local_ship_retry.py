@@ -1,10 +1,9 @@
 """Shared retry timing for managed-local Claude transcript shipping.
 
 The pre-enqueue tail is now mostly the gap between Claude finishing locally and
-the final transcript line becoming parser-ready. Keep the first 1.5 seconds
-dense and share the exact shell readiness check + retry schedule across the
-hook path and the direct managed-local ship command so the two paths do not
-drift.
+the transcript being ready for another useful ship attempt. Keep the first
+1.5 seconds dense and share the exact shell retry schedule across the hook path
+and the direct managed-local ship command so the two paths do not drift.
 """
 
 from __future__ import annotations
@@ -47,12 +46,3 @@ def get_managed_local_claude_ship_retry_sleep_delays() -> tuple[float, ...]:
 MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL = " ".join(
     _format_shell_delay(delay) for delay in get_managed_local_claude_ship_retry_sleep_delays()
 )
-
-
-MANAGED_LOCAL_CLAUDE_TRANSCRIPT_READY_CHECK_SHELL = """\
-transcript_ready() {
-  local transcript="$1"
-  [[ -s "$transcript" ]] || return 1
-  [[ "$(tail -c 1 "$transcript" 2>/dev/null | wc -l | tr -d '[:space:]')" == "1" ]]
-}
-""".rstrip()
