@@ -87,3 +87,26 @@ Current focus:
 - Current conclusion: queue claim and controller runtime are no longer the primary problem, and simple route/poll timing tuning is not enough. The next bounded slice should move closer to first principles:
   - either ship immediately on transcript-ready detection instead of sampling coarse retry checkpoints
   - or teach `longhouse-engine ship --file` to resolve/replay its own queued gap for the target path before returning a no-op
+- Commit `e9ea245e` shipped the engine-side version of that second option:
+  - explicit `longhouse-engine ship --file <path>` now recovers queued gaps for the target file, replays pending spool entries for that file immediately, and preserves the spooled `session_id` override during replay
+  - commit `5edc83eb` updated `.github/workflows/runtime-image.yml` so future `engine/**` changes trigger the runtime image build automatically
+  - local verification after the engine slice: `make test` passed (`1181 passed`)
+  - fresh single-turn hosted verification after deploy/reprovision: session `ec133057-7e17-4fa9-8ddb-bf0cd8a5b912` recorded `pre_enqueue_latency_ms=919`, `claim_latency_ms=12`, `controller_latency_ms=772`, `worker_latency_ms=791`, `review_latency_ms=1717`
+- The first multi-turn hosted run after the engine change exposed a new route-side edge:
+  - session `2ed5aecd-8645-4c6d-b8e3-b68bf483cfc5` timed out on turn 4 even though the turn later became durable and reviewed
+  - root cause: `/api/sessions/{id}/chat` could observe durable current-turn events, cancel the pending terminal waiter, and leave the ledger without `terminal_at`, which then inflated downstream review settle latency
+  - commit `6a3cdd6a` now waits briefly for the terminal hook after durable current-turn events arrive
+  - follow-up review found that terminal-waiter exceptions should stay non-fatal once durability is present, so commit `cf69022a` now swallows timeout/error/cancel from that grace wait and keeps the durable reply path alive
+  - local verification after the hardening slice: `make test` passed (`1182 passed`)
+- Fresh hosted verification after the route fix: session `a968f41e-9a53-4bce-a99a-f5353812a926`.
+  - hosted managed-local Claude stress passed `6/6`; every turn returned `api_done=1`, `api_timed_out=0`, `sync_status=complete`, `control_status=completed`
+  - `turn_reviews` for that session recorded:
+    - turn 1: `pre_enqueue_latency_ms=938`, `claim_latency_ms=25`, `controller_latency_ms=1592`, `worker_latency_ms=1630`, `review_latency_ms=2580`
+    - turn 2: `pre_enqueue_latency_ms=582`, `claim_latency_ms=18`, `controller_latency_ms=769`, `worker_latency_ms=785`, `review_latency_ms=1382`
+    - turn 3: `pre_enqueue_latency_ms=615`, `claim_latency_ms=12`, `controller_latency_ms=762`, `worker_latency_ms=779`, `review_latency_ms=1402`
+    - turn 4: `pre_enqueue_latency_ms=881`, `claim_latency_ms=21`, `controller_latency_ms=743`, `worker_latency_ms=761`, `review_latency_ms=1661`
+    - turn 5: `pre_enqueue_latency_ms=841`, `claim_latency_ms=39`, `controller_latency_ms=923`, `worker_latency_ms=946`, `review_latency_ms=1818`
+    - turn 6: `pre_enqueue_latency_ms=871`, `claim_latency_ms=45`, `controller_latency_ms=696`, `worker_latency_ms=726`, `review_latency_ms=1628`
+  - Average `pre_enqueue_latency_ms` is now about `788ms`; warm-turn average is about `758ms`
+  - Average `review_latency_ms` is now about `1745ms`; warm-turn average is about `1578ms`
+  - `make qa-live` passed on rerun after reprovision; the first run still hit the existing browser reload flake on the opening timeline test, but the backend path stayed healthy throughout
