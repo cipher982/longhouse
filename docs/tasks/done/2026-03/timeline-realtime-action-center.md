@@ -1,6 +1,6 @@
 # Timeline Realtime Desktop Control View
 
-Status: In progress
+Status: Done
 Spec: `docs/specs/timeline-realtime-action-center.md`
 Last updated: 2026-03-25
 
@@ -36,7 +36,7 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - [x] Collapse the main Timeline off the secondary `/sessions/active` overlay path
 - [x] Reduce ad hoc runtime fallback paths on the Timeline read path
 - [x] Replace the backend 1-second full-list SSE polling loop with a cheaper change detector
-- [ ] Verify the timeline manually with multiple concurrent sessions and long-running silent turns
+- [x] Verify the timeline manually with multiple concurrent sessions and long-running silent turns
 
 ## Notes
 
