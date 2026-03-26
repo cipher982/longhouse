@@ -130,6 +130,8 @@ class WriteSerializer:
         self._next_seq = 0
         self._writer_active = False
         self._background_tasks: set[asyncio.Task[None]] = set()
+        self._change_event = asyncio.Event()
+        self._change_seq = 0
 
     def configure(self, session_factory: sessionmaker) -> None:
         """Set the write session factory. Call once at startup."""
@@ -267,7 +269,32 @@ class WriteSerializer:
             raise
 
         await _finalize(was_cancelled=False)
+        self._notify_change()
         return result
+
+    def _notify_change(self) -> None:
+        """Signal that a write completed. Wakes any waiting SSE loops."""
+        self._change_seq += 1
+        self._change_event.set()
+        self._change_event = asyncio.Event()
+
+    @property
+    def change_seq(self) -> int:
+        """Monotonic counter incremented after every successful write."""
+        return self._change_seq
+
+    async def wait_for_change(self, timeout: float = 5.0) -> bool:
+        """Wait up to *timeout* seconds for the next write to complete.
+
+        Returns True if a change was signalled, False on timeout.
+        SSE loops use this instead of blind ``asyncio.sleep(1)``.
+        """
+        evt = self._change_event
+        try:
+            await asyncio.wait_for(evt.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     async def execute_or_direct(
         self,
