@@ -31,9 +31,7 @@ from zerg.services.managed_local_control import build_managed_local_claude_ship_
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_control import ship_managed_local_claude_transcript
 from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
-from zerg.services.managed_local_ship_retry import get_managed_local_claude_ship_retry_sleep_delays
+from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_WAIT_READY_MS
 from zerg.services.presence_cache import get_presence_cache
 
 
@@ -278,53 +276,15 @@ def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_pa
         assert "command -v longhouse-engine" in command
         assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
         assert f"--session-id {session.id}" in command
-        assert f"delays=({MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL})" in command
-        assert 'for delay in "${delays[@]}"' in command
-        assert '[ -f "$transcript" ] || continue' in command
+        assert f"--wait-ready-ms {MANAGED_LOCAL_CLAUDE_SHIP_WAIT_READY_MS}" in command
+        assert 'fresh_reply_shipped=0' in command
+        assert '"fresh_reply_shipped"' in command
         assert "--json" in command
-        assert "events_shipped" in command
-        assert "Managed local Claude transcript did not ship new events" in command
+        assert "Managed local Claude transcript did not ship a fresh reply event" in command
 
 
-def test_managed_local_claude_ship_retry_schedule_is_dense_in_first_second():
-    assert MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS[:10] == (
-        0.0,
-        0.05,
-        0.1,
-        0.15,
-        0.2,
-        0.25,
-        0.5,
-        0.75,
-        1.0,
-        1.25,
-    )
-    assert get_managed_local_claude_ship_retry_sleep_delays() == (
-        0.0,
-        0.05,
-        0.05,
-        0.05,
-        0.05,
-        0.05,
-        0.25,
-        0.25,
-        0.25,
-        0.25,
-        0.25,
-        0.5,
-        1.0,
-        1.0,
-        2.0,
-        2.0,
-    )
-    assert MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL == "0 0.05 0.05 0.05 0.05 0.05 0.25 0.25 0.25 0.25 0.25 0.5 1 1 2 2"
-    post_one_second_attempts = [
-        attempt for attempt in MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS if attempt >= 1.0
-    ]
-    post_one_second_gaps = [
-        later - earlier for earlier, later in zip(post_one_second_attempts, post_one_second_attempts[1:], strict=False)
-    ]
-    assert max(post_one_second_gaps) <= 2.0
+def test_managed_local_claude_ship_wait_ready_budget_is_short_and_bounded():
+    assert MANAGED_LOCAL_CLAUDE_SHIP_WAIT_READY_MS == 1500
 
 
 def test_validate_managed_local_chat_done_payload_accepts_successful_zero_exit_code():
@@ -409,7 +369,7 @@ def test_ship_managed_local_claude_transcript_dispatches_runner_job(monkeypatch,
         assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
         assert f"--session-id {session.id}" in command
         assert "--json" in command
-        assert "total_shipped=0" in command
+        assert "fresh_reply_shipped=0" in command
 
 
 def test_ship_managed_local_claude_transcript_retries_after_transient_runner_disconnect(monkeypatch, tmp_path):
