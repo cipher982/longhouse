@@ -180,6 +180,10 @@ enum Commands {
         /// Override session ID for managed-local sessions (uses provider's native ID as provider_session_id)
         #[arg(long)]
         session_id: Option<String>,
+
+        /// When using --file, only ship once the unread range includes assistant/tool reply evidence
+        #[arg(long)]
+        require_reply_evidence: bool,
     },
 }
 
@@ -328,6 +332,7 @@ fn main() -> anyhow::Result<()> {
             max_batch_bytes,
             machine_name,
             session_id,
+            require_reply_evidence,
         } => {
             let algo = parse_compression_algo(&compression)?;
             // Initialize machine name for payload labeling
@@ -352,6 +357,7 @@ fn main() -> anyhow::Result<()> {
                     algo,
                     max_batch_bytes,
                     session_id.as_deref(),
+                    require_reply_evidence,
                 ))?;
             } else {
                 rt.block_on(cmd_ship(
@@ -758,6 +764,18 @@ fn print_recent_dead_letters(
     Ok(())
 }
 
+fn reported_ship_events(
+    replay_events_shipped: usize,
+    shipped_events: usize,
+    require_reply_evidence: bool,
+    reply_evidence_pending: bool,
+) -> usize {
+    if require_reply_evidence && reply_evidence_pending {
+        return 0;
+    }
+    replay_events_shipped + shipped_events
+}
+
 async fn cmd_ship_file(
     path: &std::path::Path,
     provider_override: Option<&str>,
@@ -769,6 +787,7 @@ async fn cmd_ship_file(
     algo: CompressionAlgo,
     max_batch_bytes: Option<u64>,
     session_id_override: Option<&str>,
+    require_reply_evidence: bool,
 ) -> anyhow::Result<()> {
     if !path.exists() {
         anyhow::bail!("File not found: {}", path.display());
@@ -798,6 +817,11 @@ async fn cmd_ship_file(
         config.max_batch_bytes,
         session_id_override,
     )?;
+    let mut reply_evidence_pending = false;
+    if require_reply_evidence && prepared.as_ref().is_some_and(|item| !item.has_reply_evidence) {
+        reply_evidence_pending = true;
+        prepared = None;
+    }
     let mut replay_events_shipped = 0usize;
     let mut replay_failed = 0usize;
     let mut replay_had_connect_error = false;
@@ -834,6 +858,12 @@ async fn cmd_ship_file(
                 config.max_batch_bytes,
                 session_id_override,
             )?;
+            if require_reply_evidence
+                && prepared.as_ref().is_some_and(|item| !item.has_reply_evidence)
+            {
+                reply_evidence_pending = true;
+                prepared = None;
+            }
         }
     }
 
@@ -852,6 +882,7 @@ async fn cmd_ship_file(
                         "spool_dead": spool_dead,
                         "recent_dead_letters": recent_dead_letters,
                         "dry_run": true,
+                        "reply_evidence_pending": reply_evidence_pending,
                     });
                     println!("{}", serde_json::to_string_pretty(&summary)?);
                 } else {
@@ -896,6 +927,7 @@ async fn cmd_ship_file(
                     "had_connect_error": replay_had_connect_error,
                     "replay_failed": replay_failed,
                     "spool_backpressure": replay_blocked_by_spool_backpressure,
+                    "reply_evidence_pending": reply_evidence_pending,
                 });
                 println!("{}", serde_json::to_string_pretty(&summary)?);
             } else if replay_events_shipped > 0 {
@@ -934,7 +966,12 @@ async fn cmd_ship_file(
         }
     };
     let outcome = shipper::ship_prepared_file(prepared, &client, &conn, None).await?;
-    let events_shipped = replay_events_shipped + outcome.events_shipped;
+    let events_shipped = reported_ship_events(
+        replay_events_shipped,
+        outcome.events_shipped,
+        require_reply_evidence,
+        reply_evidence_pending,
+    );
     let spool = Spool::new(&conn);
     let spool_dead = spool.dead_count()?;
     let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
@@ -944,6 +981,7 @@ async fn cmd_ship_file(
             "status": "ok",
             "file": path.display().to_string(),
             "events_shipped": events_shipped,
+            "replay_events_shipped": replay_events_shipped,
             "spool_dead": spool_dead,
             "recent_dead_letters": recent_dead_letters,
             "dry_run": false,
@@ -1139,6 +1177,7 @@ mod tests {
             CompressionAlgo::Gzip,
             None,
             None,
+            false,
         ))
         .unwrap();
 
@@ -1200,6 +1239,7 @@ mod tests {
             CompressionAlgo::Gzip,
             None,
             None,
+            false,
         ))
         .unwrap();
         handle.join().unwrap();
@@ -1216,6 +1256,94 @@ mod tests {
             .pending_entries_for_path_now(&file_str, 10)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn test_cmd_ship_file_require_reply_evidence_skips_user_only_partial_turn() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "replyevidence1111-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"reply-gap-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"reply-gap-2","timestamp":"2026-02-15T10:00:01Z","message":{"con"#,
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            Some("http://127.0.0.1:9"),
+            Some("test-token"),
+            Some(&db_path),
+            false,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            true,
+        ))
+        .unwrap();
+
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let file_str = file.to_string_lossy().to_string();
+        assert_eq!(file_state.get_offset(&file_str).unwrap(), 0);
+        assert_eq!(file_state.get_queued_offset(&file_str).unwrap(), 0);
+        assert!(spool.pending_entries_for_path_now(&file_str, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_cmd_ship_file_require_reply_evidence_ships_complete_turn() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "replyevidence2222-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"reply-ok-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"reply-ok-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+                "\n",
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+        let file_len = std::fs::metadata(&file).unwrap().len();
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            Some(&url),
+            Some("test-token"),
+            Some(&db_path),
+            false,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            true,
+        ))
+        .unwrap();
+        handle.join().unwrap();
+
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        let file_str = file.to_string_lossy().to_string();
+        assert_eq!(file_state.get_offset(&file_str).unwrap(), file_len);
+        assert_eq!(file_state.get_queued_offset(&file_str).unwrap(), file_len);
+    }
+
+    #[test]
+    fn test_reported_ship_events_ignore_replay_while_reply_evidence_is_pending() {
+        assert_eq!(reported_ship_events(3, 0, true, true), 0);
+        assert_eq!(reported_ship_events(3, 0, true, false), 3);
+        assert_eq!(reported_ship_events(0, 2, true, false), 2);
+        assert_eq!(reported_ship_events(3, 2, false, true), 5);
     }
 }
 

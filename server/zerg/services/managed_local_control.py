@@ -175,7 +175,7 @@ def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
             'for delay in "${delays[@]}"; do '
             'if [ "$delay" != "0" ]; then sleep "$delay"; fi; '
             '[ -f "$transcript" ] || continue; '
-            f'"$engine" ship --file "$transcript" --session-id {shlex.quote(longhouse_session_id)} --json '
+            f'"$engine" ship --file "$transcript" --session-id {shlex.quote(longhouse_session_id)} --require-reply-evidence --json '
             '>"$tmp_json" 2>/dev/null || true; '
             'shipped="$(grep -Eo \'"events_shipped"[[:space:]]*:[[:space:]]*[0-9]+\' "$tmp_json" '
             "| grep -Eo '[0-9]+' | head -1 || true)\"; "

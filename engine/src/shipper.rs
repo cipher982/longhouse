@@ -59,6 +59,7 @@ pub struct PreparedFile {
     pub path_str: String,
     pub offset: u64,
     pub new_offset: u64,
+    pub has_reply_evidence: bool,
     pub actions: Vec<PreparedAction>,
 }
 
@@ -478,6 +479,22 @@ fn event_range_for_offsets(
     start..end
 }
 
+fn event_is_reply_evidence(event: &parser::ParsedEvent) -> bool {
+    matches!(event.role, parser::Role::Assistant | parser::Role::Tool)
+}
+
+fn range_has_reply_evidence(
+    events: &[parser::ParsedEvent],
+    start_offset: u64,
+    end_offset: u64,
+) -> bool {
+    events.iter().any(|event| {
+        event.source_offset >= start_offset
+            && event.source_offset < end_offset
+            && event_is_reply_evidence(event)
+    })
+}
+
 fn dead_letter_from_raw_range(
     path_str: &str,
     provider: &str,
@@ -802,6 +819,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
             path_str: path_str.clone(),
             offset,
             new_offset,
+            has_reply_evidence: false,
             actions: vec![PreparedAction::AckOnly(AckOnlyItem {
                 path_str,
                 provider: provider.to_string(),
@@ -826,6 +844,8 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
         return Ok(None);
     }
 
+    let has_reply_evidence = range_has_reply_evidence(&parse_result.events, offset, new_offset);
+
     let actions = build_prepared_actions(
         &parse_result,
         &path_str,
@@ -845,6 +865,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
         path_str,
         offset,
         new_offset,
+        has_reply_evidence,
         actions,
     }))
 }
@@ -2040,6 +2061,28 @@ mod tests {
     }
 
     #[test]
+    fn test_prepare_file_batches_marks_user_only_partial_turn_as_not_reply_ready() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("replyready1111-2222-3333-4444-555566667777.jsonl");
+
+        let complete = r#"{"type":"user","uuid":"replyready-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"complete"}}"#;
+        let partial = r#"{"type":"assistant","uuid":"replyready-2","timestamp":"2026-02-15T10:00:01Z","message":{"con"#;
+        std::fs::write(&path, format!("{}\n{}", complete, partial)).unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None)
+                .unwrap()
+                .expect("file should still prepare the complete user line");
+
+        assert!(!prepared.has_reply_evidence);
+        assert_eq!(prepared.total_event_count(), 1);
+        assert_eq!(prepared.new_offset, (complete.len() + 1) as u64);
+    }
+
+    #[test]
     fn test_prepare_file_batches_split_small_batch_limit() {
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
@@ -2242,6 +2285,7 @@ mod tests {
             path_str: "/tmp/gemini-info.json".to_string(),
             offset: 0,
             new_offset: 413,
+            has_reply_evidence: false,
             actions: vec![PreparedAction::AckOnly(AckOnlyItem {
                 path_str: "/tmp/gemini-info.json".to_string(),
                 provider: "gemini".to_string(),
