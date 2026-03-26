@@ -777,17 +777,42 @@ async def _stream_managed_local_output(
 
     terminal_result = None
     new_events: list[AgentEvent] = []
+    provider_is_claude = str(getattr(source_session, "provider", "") or "").strip().lower() == "claude"
+    ship_task: asyncio.Task | None = None
+    ship_result = None
 
     try:
-        done, _pending = await asyncio.wait(
-            {terminal_task, events_task},
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        if provider_is_claude:
+            done, _pending = await asyncio.wait(
+                {terminal_task, events_task},
+                timeout=MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if not done:
+                ship_task = asyncio.create_task(
+                    _force_managed_local_claude_sync(
+                        db_bind=db.get_bind(),
+                        owner_id=owner_id,
+                        source_session=source_session,
+                        request_id=request_id,
+                    )
+                )
+                done, _pending = await asyncio.wait(
+                    {terminal_task, events_task, ship_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+        else:
+            done, _pending = await asyncio.wait(
+                {terminal_task, events_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
 
         if events_task in done:
             new_events = events_task.result() or []
         if terminal_task in done:
             terminal_result = terminal_task.result()
+        if ship_task is not None and ship_task in done:
+            ship_result = ship_task.result()
 
         if new_events and terminal_result is None:
             terminal_result = await _await_managed_local_terminal_task(
@@ -802,7 +827,6 @@ async def _stream_managed_local_output(
                 terminal_result = await terminal_task
 
         if not new_events and terminal_result is not None:
-            provider_is_claude = str(getattr(source_session, "provider", "") or "").strip().lower() == "claude"
             if provider_is_claude:
                 initial_grace_secs = MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS
             else:
@@ -812,37 +836,30 @@ async def _stream_managed_local_output(
                 timeout_secs=initial_grace_secs,
             )
 
-            ship_result = None
             if not new_events and provider_is_claude:
-                ship_task = asyncio.create_task(
-                    _force_managed_local_claude_sync(
-                        db_bind=db.get_bind(),
-                        owner_id=owner_id,
-                        source_session=source_session,
-                        request_id=request_id,
-                    )
-                )
-                try:
-                    done, _ = await asyncio.wait(
-                        {events_task, ship_task},
-                        timeout=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    if events_task in done:
-                        new_events = events_task.result() or []
-                    elif ship_task in done:
-                        ship_result = ship_task.result()
-                        new_events = await _await_managed_local_events_task(
-                            events_task,
-                            timeout_secs=MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS,
+                if ship_task is None:
+                    ship_task = asyncio.create_task(
+                        _force_managed_local_claude_sync(
+                            db_bind=db.get_bind(),
+                            owner_id=owner_id,
+                            source_session=source_session,
+                            request_id=request_id,
                         )
-                finally:
-                    if not ship_task.done():
-                        if new_events:
-                            ship_task.cancel()
-                            await asyncio.gather(ship_task, return_exceptions=True)
-                        else:
-                            _detach_managed_local_ship_task(ship_task, session_id=source_session.id)
+                    )
+
+                done, _ = await asyncio.wait(
+                    {events_task, ship_task},
+                    timeout=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if events_task in done:
+                    new_events = events_task.result() or []
+                elif ship_task in done:
+                    ship_result = ship_task.result()
+                    new_events = await _await_managed_local_events_task(
+                        events_task,
+                        timeout_secs=MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS,
+                    )
 
             if ship_result is not None and not ship_result.ok:
                 log_message = ship_result.error or f"exit_code={ship_result.exit_code}"
@@ -875,6 +892,21 @@ async def _stream_managed_local_output(
                 continue
             task.cancel()
         await asyncio.gather(terminal_task, events_task, return_exceptions=True)
+        if ship_task is not None:
+            if not ship_task.done():
+                if new_events:
+                    ship_task.cancel()
+                    await asyncio.gather(ship_task, return_exceptions=True)
+                else:
+                    _detach_managed_local_ship_task(ship_task, session_id=source_session.id)
+            elif ship_result is None:
+                try:
+                    ship_result = ship_task.result()
+                except asyncio.CancelledError:
+                    ship_result = None
+                except Exception:
+                    logger.exception("Managed-local Claude direct ship task crashed for %s", source_session.id)
+                    ship_result = None
 
     if terminal_result is not None:
         run_best_effort_managed_local_turn_write(
