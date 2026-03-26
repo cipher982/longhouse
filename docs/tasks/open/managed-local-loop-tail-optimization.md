@@ -65,11 +65,16 @@ Current focus:
   - `pre_enqueue_latency_ms`: `1722`, `905`, `1040`, `862`, `1129`, `431` (avg `1015ms`)
   - `review_latency_ms`: `2593`, `1632`, `1781`, `1617`, `1957`, `1314` (avg `1816ms`)
   - `terminal_to_durable_ms` from `managed_local_turns`: `1408`, `540`, `751`, `471`, `845`, `145`
-- Commit `131a9ebd` gates both Claude ship paths on a parser-ready transcript and tightens the early retry ladder to `0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8`.
+- Commit `131a9ebd` initially added a parser-ready gate and tightened the early retry ladder to `0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8`.
   - Local verification: focused continuation/hook slice passed (`41 passed`) and `make test` passed (`1180 passed`).
   - Post-deploy verification: `make qa-live` passed (`11 passed`) and hosted managed-local Claude stress passed (`6/6`) on session `fb1e89e1-3388-4556-88b0-5d5d8865ab5c`.
   - Result: still noisy, mostly lateral. `pre_enqueue_latency_ms` was `1583`, `768`, `1075`, `810`, `1487`, `490` (avg `1036ms`, warm avg `926ms`), and `review_latency_ms` was `2828`, `1948`, `2026`, `1538`, `2109`, `1348` (avg `1966ms`, warm avg `1794ms`).
   - The ledger still clustered `terminal_to_durable_ms` near the retry checkpoints: `1307`, `489`, `791`, `506`, `1101`, `118`.
+- Follow-up review found that the strict parser-ready gate was too aggressive for the engine parser contract: a partial EOF line should not block shipping already-complete earlier lines.
+  - Commit `7bc5661b` removes that gate while keeping the denser retry ladder.
+  - Local verification after the revert: focused continuation/hook slice passed (`41 passed`) and `make test` passed (`1180 passed`).
+  - Post-deploy verification after the revert: first `make qa-live` run hit the same warmup flake on the initial timeline test, immediate rerun passed (`11 passed`), and a one-turn hosted managed-local Claude stress run passed on session `f95f199e-beb6-4dc0-a3a9-5688926018ce`.
+  - That post-revert session recorded `pre_enqueue_latency_ms=849`, `claim_latency_ms=12`, `controller_latency_ms=843`, `worker_latency_ms=861`, `review_latency_ms=1720`.
 - Commit `9d0e4d03` reduced `/sessions/{id}/chat` managed-local poll/grace timings (`MANAGED_LOCAL_POLL_INTERVAL_SECS=0.1`, `MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS=0.1`).
   - Local verification: focused continuation/control slice passed (`36 passed`) and `make test` passed (`1180 passed`).
   - Post-deploy verification: first `make qa-live` rerun flaked once on the initial timeline auth reload during warmup (`10/11`), immediate rerun passed (`11 passed`), and hosted managed-local Claude stress passed (`6/6`) on session `fccc4083-7428-4c9f-aa6f-45ad10d9e58c`.
