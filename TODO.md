@@ -9,10 +9,6 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 - When a task finishes, move its file to `docs/tasks/done/YYYY-MM/` if the notes are worth keeping; otherwise delete it and let git history carry it.
 - Deferred or speculative work belongs in `docs/tasks/backlog/`, not the active list.
 
-## Close Out (done or ~15 min to finish)
-
-- [Mobile loop inbox](docs/tasks/open/mobile-loop-inbox.md) — code complete; needs live dogfood of push notification flow with VAPID keys on instance.
-
 ## Active
 
 - [Managed-local Loop tail optimization](docs/tasks/open/managed-local-loop-tail-optimization.md) — `IN PROGRESS (Codex)`; use the persisted review timings to shave the remaining pre-enqueue + claim latency now that correctness is green.
