@@ -35,6 +35,9 @@ runtime polling plus persisted events.
   - route now re-reads the ledger before final `done` decision and can hydrate
     durable events from the ledger baseline when the direct event waiter returns empty
   - route now prefers ledger terminal phase for `control_status` when present
+  - follow-up hardening from review:
+    - ledger fallback now hydrates only the exact durable event span already bound in the ledger
+    - ledger reads are best-effort so DB timeout/read errors fall back to the pre-phase-2 direct evidence path
 - Local verification on the current branch state:
-  - targeted slice: `44 passed`
-  - full backend suite: `make test` → `1173 passed`
+  - targeted slice: `45 passed`
+  - full backend suite: `make test` → `1174 passed`
