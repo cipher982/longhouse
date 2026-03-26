@@ -16,7 +16,7 @@ Current work only. Historical task logs live in [docs/tasks/archive/todo-history
 - [Runtime story simplification](docs/tasks/open/launch-runtime-simplification.md) — copy/narrative done; remaining work is the OikosService/react_engine deletion path (3k LOC, 36+ call sites).
 - [Proactive Oikos operator mode](docs/tasks/open/oikos-proactive-operator.md) — Phase 1 complete (wakeups, policy, ledger, shadow journeys); Phase 2 in progress (broader actions, browser/hosted smokes).
 - [Oikos conversations + Gmail launch](docs/tasks/open/oikos-conversations-email.md) — Phases 1-9 done; Phase 10 stalled: real Gmail canaries (OSS, hosted, cross-browser) need mailbox infra.
-- [Realtime Timeline desktop control view](docs/tasks/open/timeline-realtime-action-center.md) — Phases 1-2 done (honest labels, execution-home); Phases 3-4 remain (managed runtime class, SSE poll cleanup).
+- [Realtime Timeline desktop control view](docs/tasks/open/timeline-realtime-action-center.md) — SSE poll, overlay collapse, fallback paths all done; remaining: Phase 3 (managed runtime class) + manual multi-session verification.
 - [Codex/Gemini continuation parity](docs/tasks/open/codex-gemini-continuation-parity.md) — architecture ready; needs provider-specific resume builders, output parsers, session state reconstruction.
 
 ## Backlog
