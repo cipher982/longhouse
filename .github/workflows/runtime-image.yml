@@ -10,6 +10,7 @@ on:
       - "bun.lock"
       - "server/**"
       - "web/**"
+      - "engine/**"
       - "config/**"
       - "docker/entrypoint.sh"
       - "docker/runtime.dockerfile"
