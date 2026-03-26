@@ -249,49 +249,49 @@ class TestIsToolResult:
 # =====================================================================
 
 class TestCountTokens:
-    def test_uses_bundled_tiktoken_cache_when_available(self, monkeypatch, tmp_path):
-        bundled = tmp_path / "tiktoken-cache"
-        bundled.mkdir()
+    def test_uses_vendored_tiktoken_data_when_available(self, monkeypatch, tmp_path):
+        vendored = tmp_path / "vendored-tiktoken"
+        vendored.mkdir()
         blob_name = hashlib.sha1(tokens_mod._ENCODING_URLS["cl100k_base"].encode()).hexdigest()
-        (bundled / blob_name).write_bytes(b"cached")
+        (vendored / blob_name).write_bytes(b"cached")
         runtime_cache = tmp_path / "runtime-tiktoken-cache"
 
         monkeypatch.delenv("TIKTOKEN_CACHE_DIR", raising=False)
         monkeypatch.delenv("DATA_GYM_CACHE_DIR", raising=False)
-        monkeypatch.setattr(tokens_mod, "_BUNDLED_TIKTOKEN_CACHE_DIR", bundled)
+        monkeypatch.setattr(tokens_mod, "_VENDORED_TIKTOKEN_DIR", vendored)
         monkeypatch.setattr(tokens_mod, "_default_runtime_tiktoken_cache_dir", lambda: runtime_cache)
 
-        resolved = tokens_mod._use_bundled_cache_if_available()
+        resolved = tokens_mod._use_vendored_tiktoken_data_if_available()
 
         assert resolved == runtime_cache
         assert os.environ["TIKTOKEN_CACHE_DIR"] == str(runtime_cache)
         assert (runtime_cache / blob_name).read_bytes() == b"cached"
 
-    def test_falls_back_to_bundled_cache_when_runtime_cache_is_unavailable(self, monkeypatch, tmp_path):
-        bundled = tmp_path / "tiktoken-cache"
-        bundled.mkdir()
+    def test_falls_back_to_vendored_dir_when_runtime_cache_is_unavailable(self, monkeypatch, tmp_path):
+        vendored = tmp_path / "vendored-tiktoken"
+        vendored.mkdir()
         for url in tokens_mod._ENCODING_URLS.values():
-            (bundled / hashlib.sha1(url.encode()).hexdigest()).write_bytes(b"cached")
+            (vendored / hashlib.sha1(url.encode()).hexdigest()).write_bytes(b"cached")
 
         monkeypatch.delenv("TIKTOKEN_CACHE_DIR", raising=False)
         monkeypatch.delenv("DATA_GYM_CACHE_DIR", raising=False)
-        monkeypatch.setattr(tokens_mod, "_BUNDLED_TIKTOKEN_CACHE_DIR", bundled)
+        monkeypatch.setattr(tokens_mod, "_VENDORED_TIKTOKEN_DIR", vendored)
 
-        def fail_seed(*, bundled_dir, runtime_cache_dir):
+        def fail_seed(*, vendored_dir, runtime_cache_dir):
             raise OSError("read-only runtime cache")
 
-        monkeypatch.setattr(tokens_mod, "_seed_runtime_tiktoken_cache_from_bundle", fail_seed)
+        monkeypatch.setattr(tokens_mod, "_seed_runtime_tiktoken_cache_from_vendor", fail_seed)
 
-        resolved = tokens_mod._use_bundled_cache_if_available()
+        resolved = tokens_mod._use_vendored_tiktoken_data_if_available()
 
-        assert resolved == bundled
-        assert os.environ["TIKTOKEN_CACHE_DIR"] == str(bundled)
+        assert resolved == vendored
+        assert os.environ["TIKTOKEN_CACHE_DIR"] == str(vendored)
 
     def test_testing_falls_back_to_cl100k_when_o200k_cache_missing(self, monkeypatch, tmp_path):
-        bundled = tmp_path / "tiktoken-cache"
-        bundled.mkdir()
+        vendored = tmp_path / "vendored-tiktoken"
+        vendored.mkdir()
         monkeypatch.setenv("TESTING", "1")
-        monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(bundled))
+        monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(vendored))
         monkeypatch.delenv("DATA_GYM_CACHE_DIR", raising=False)
         tokens_mod._get_encoding.cache_clear()
         calls: list[str] = []
