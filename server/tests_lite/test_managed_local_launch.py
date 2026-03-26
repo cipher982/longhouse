@@ -258,6 +258,8 @@ def test_build_preflight_command_codex_checks_codex():
 def test_build_hooks_ensure_command_installs_longhouse_hooks_for_codex():
     cmd = _build_hooks_ensure_command(provider="codex")
     inner = _inner_command(cmd)
+    assert 'test -x "${HOME}/.codex/hooks/longhouse-codex-hook.sh"' in inner
+    assert 'test -f "${HOME}/.codex/hooks.json"' in inner
     assert "command -v longhouse" in inner
     assert "longhouse connect --hooks-only" in inner
     assert "${HOME}/.codex/hooks/longhouse-codex-hook.sh" in inner
@@ -643,6 +645,8 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
             assert payload["provider_session_id"] in launch_inner
             assert "codex app-server" not in launch_inner
             assert "--remote" not in launch_inner
+            assert len(dispatcher.calls) == 4
+            assert "has-session" in _inner_command(dispatcher.calls[3]["command"])
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -718,8 +722,8 @@ def test_launch_managed_local_rejects_invalid_provider(monkeypatch, tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
-def test_launch_managed_local_codex_shell_error_reports_codex(monkeypatch, tmp_path):
-    """Codex launch error message should reference Codex, not Claude."""
+def test_launch_managed_local_codex_returns_without_waiting_for_ui_boot(monkeypatch, tmp_path):
+    """Managed-local Codex should return once tmux is live, not after TUI readiness."""
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -745,13 +749,15 @@ def test_launch_managed_local_codex_shell_error_reports_codex(monkeypatch, tmp_p
                     "provider": "codex",
                 },
             )
-            assert response.status_code == 424, response.text
-            assert "failed to start Codex" in response.json()["detail"]
+            assert response.status_code == 200, response.text
+            assert len(dispatcher.calls) == 4
+            assert all("display-message" not in _inner_command(call["command"]) for call in dispatcher.calls)
+            assert all("capture-pane" not in _inner_command(call["command"]) for call in dispatcher.calls)
         finally:
             api_app_ref.dependency_overrides = {}
 
 
-def test_launch_managed_local_codex_rejects_script_name_false_positive(monkeypatch, tmp_path):
+def test_launch_managed_local_codex_ignores_bootstrap_script_probe_on_launch(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -781,9 +787,9 @@ def test_launch_managed_local_codex_rejects_script_name_false_positive(monkeypat
                     "provider": "codex",
                 },
             )
-            assert response.status_code == 424, response.text
-            assert "unexpected pane command" in response.json()["detail"]
-            assert "longhouse-managed-lh-codex-cli-smoke-3649a5df.zsh" in response.json()["detail"]
+            assert response.status_code == 200, response.text
+            assert len(dispatcher.calls) == 4
+            assert all("display-message" not in _inner_command(call["command"]) for call in dispatcher.calls)
         finally:
             api_app_ref.dependency_overrides = {}
 
