@@ -30,7 +30,7 @@ def test_claude_hook_script_supports_direct_hook_target_overrides():
     assert "LONGHOUSE_SESSION_ID" in HOOK_SCRIPT
     assert '--url "$target_url"' in HOOK_SCRIPT
     assert '--token "$target_token"' in HOOK_SCRIPT
-    assert '--session-id "$managed_session_id"' in HOOK_SCRIPT
+    assert '--session-id "$managed_session_id" --require-reply-evidence' in HOOK_SCRIPT
 
 
 def test_session_start_hook_prefers_direct_hook_target_overrides():

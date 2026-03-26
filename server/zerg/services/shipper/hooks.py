@@ -141,7 +141,7 @@ if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
       ship_args+=(--token "$target_token")
     fi
     if [[ -n "$managed_session_id" ]]; then
-      ship_args+=(--session-id "$managed_session_id")
+      ship_args+=(--session-id "$managed_session_id" --require-reply-evidence)
     fi
     for delay in __MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__; do
       if [[ "$delay" != "0" ]]; then
