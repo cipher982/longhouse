@@ -2,7 +2,7 @@
 
 Status: In progress
 Spec: `docs/specs/timeline-realtime-action-center.md`
-Last updated: 2026-03-21
+Last updated: 2026-03-25
 
 ## Goal
 
@@ -35,7 +35,7 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - [ ] Phase 3: treat managed-local as a stronger runtime class than transcript-only legacy sessions
 - [ ] Collapse the main Timeline off the secondary `/sessions/active` overlay path
 - [ ] Reduce ad hoc runtime fallback paths on the Timeline read path
-- [ ] Replace the backend 1-second full-list SSE polling loop with a cheaper change detector
+- [x] Replace the backend 1-second full-list SSE polling loop with a cheaper change detector
 - [ ] Verify the timeline manually with multiple concurrent sessions and long-running silent turns
 
 ## Notes
