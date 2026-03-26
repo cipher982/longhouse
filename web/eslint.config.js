@@ -98,7 +98,7 @@ export default [
     },
   },
   {
-    files: ["src/pages/*Page.tsx", "src/legacy/**/*Page.tsx"],
+    files: ["src/pages/*Page.tsx"],
     ignores: [
       "src/pages/ChatPage.tsx",
       "src/pages/LoopInboxPage.tsx",

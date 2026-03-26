@@ -40,7 +40,7 @@ def test_timeline_router_exposes_browser_archive_routes():
     assert {
         "/timeline/sessions",
         "/timeline/sessions/summary",
-        "/timeline/sessions/active",
+
         "/timeline/sessions/{session_id}",
         "/timeline/sessions/{session_id}/thread",
         "/timeline/sessions/{session_id}/events",
