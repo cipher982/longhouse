@@ -20,6 +20,7 @@ RUNNER_UPDATE_MANIFEST_URL="${RUNNER_UPDATE_MANIFEST_URL:-__UPDATE_MANIFEST_URL_
 RUNNER_AUTO_UPDATE_POLICY="${RUNNER_AUTO_UPDATE_POLICY:-notify}"
 RUNNER_UPDATE_CHECK_INTERVAL_SEC="${RUNNER_UPDATE_CHECK_INTERVAL_SEC:-14400}"
 RUNNER_UPDATE_JITTER_SEC="${RUNNER_UPDATE_JITTER_SEC:-300}"
+RUNNER_COMMON_SERVICE_PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 # Validate required vars
 if [ -z "$ENROLL_TOKEN" ]; then
@@ -265,7 +266,7 @@ EOF
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>$HOME/.local/bin:$HOME/bin:$RUNNER_COMMON_SERVICE_PATH</string>
     </dict>
     <key>WorkingDirectory</key>
     <string>$HOME</string>
@@ -371,7 +372,7 @@ EOF
       echo "Credentials saved to $ENV_FILE"
 
       SERVICE_FILE="$SYSTEMD_USER_DIR/longhouse-runner.service"
-      cat > "$SERVICE_FILE" <<'SERVICEEOF'
+      cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Longhouse Runner
 After=network-online.target
@@ -379,6 +380,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=PATH=$HOME/.local/bin:$HOME/bin:$RUNNER_COMMON_SERVICE_PATH
 ExecStart=%h/.local/bin/longhouse-runner --envfile %h/.config/longhouse/runner.env
 Restart=always
 RestartSec=5
@@ -387,7 +389,7 @@ StartLimitBurst=3
 
 [Install]
 WantedBy=default.target
-SERVICEEOF
+EOF
 
       systemctl --user daemon-reload
 
@@ -478,6 +480,7 @@ User=$INSTALL_USER
 Group=$INSTALL_GROUP
 WorkingDirectory=$INSTALL_HOME
 Environment=HOME=$INSTALL_HOME
+Environment=PATH=$INSTALL_HOME/.local/bin:$INSTALL_HOME/bin:$RUNNER_COMMON_SERVICE_PATH
 EnvironmentFile=/etc/longhouse/runner.env
 ExecStart=$LAUNCHER_PATH
 Restart=always

@@ -275,6 +275,8 @@ def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_pa
 
         command = build_managed_local_claude_ship_command(session=session)
 
+        assert 'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"' in command
+        assert "if ! command -v longhouse-engine >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in command
         assert "command -v longhouse-engine" in command
         assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
         assert f"--session-id {session.id}" in command

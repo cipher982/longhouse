@@ -192,6 +192,8 @@ def test_build_entry_command_claude_includes_session_id():
     cmd = _build_entry_command(provider="claude", provider_session_id="abc-123", display_name=None)
     inner = _inner_command(cmd)
     assert "export LONGHOUSE_SESSION_ID=abc-123" in inner
+    assert 'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"' in inner
+    assert "if ! command -v claude-code >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner
     assert "claude-code --session-id abc-123" in inner
     assert "codex" not in inner
 
@@ -223,6 +225,8 @@ def test_build_entry_command_codex_injects_longhouse_session_id():
     assert "claude-code" not in inner
     assert "--session-id" not in inner
     assert "export LONGHOUSE_SESSION_ID=" in inner
+    assert 'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"' in inner
+    assert "if ! command -v codex >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner
     assert "abc-123" in inner
     assert "codex app-server" not in inner
     assert "--remote" not in inner
@@ -244,6 +248,11 @@ def test_build_entry_command_codex_does_not_depend_on_remote_tui():
 def test_build_preflight_command_claude_checks_claude_code():
     cmd = _build_preflight_command(provider="claude", cwd="/tmp/test")
     inner = _inner_command(cmd)
+    assert 'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"' in inner
+    assert (
+        "if ! command -v claude-code >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; "
+        "then source ~/.zshrc >/dev/null 2>&1 || true; fi"
+    ) in inner
     assert "command -v claude-code" in inner
     assert "command -v codex" not in inner
 
@@ -251,6 +260,10 @@ def test_build_preflight_command_claude_checks_claude_code():
 def test_build_preflight_command_codex_checks_codex():
     cmd = _build_preflight_command(provider="codex", cwd="/tmp/test")
     inner = _inner_command(cmd)
+    assert (
+        "if ! command -v codex >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; "
+        "then source ~/.zshrc >/dev/null 2>&1 || true; fi"
+    ) in inner
     assert "command -v codex" in inner
     assert "command -v claude-code" not in inner
 
@@ -260,6 +273,8 @@ def test_build_hooks_ensure_command_installs_longhouse_hooks_for_codex():
     inner = _inner_command(cmd)
     assert 'test -x "${HOME}/.codex/hooks/longhouse-codex-hook.sh"' in inner
     assert 'test -f "${HOME}/.codex/hooks.json"' in inner
+    assert 'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"' in inner
+    assert "if ! command -v longhouse >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner
     assert "command -v longhouse" in inner
     assert "longhouse connect --hooks-only" in inner
     assert "${HOME}/.codex/hooks/longhouse-codex-hook.sh" in inner
@@ -338,15 +353,18 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
 
             assert len(dispatcher.calls) == 5
             assert dispatcher.calls[0]["runner_id"] == runner.id
+            assert 'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"' in preflight_inner
             assert "command -v tmux" in preflight_inner
             assert "command -v claude-code" in preflight_inner
             assert "printf '__LONGHOUSE_TMUX_TMPDIR__=%s\\n' \"${TMUX_TMPDIR:-}\"" in preflight_inner
+            assert "if ! command -v longhouse >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in hooks_inner
             assert "longhouse connect --hooks-only" in hooks_inner
             assert "${HOME}/.claude/hooks/longhouse-hook.sh" in hooks_inner
             assert "${HOME}/.claude/settings.json" in hooks_inner
             assert "cat > /tmp/longhouse-managed-" in launch_inner
             assert "__LONGHOUSE_MANAGED_LOCAL__" in launch_inner
             assert "export LONGHOUSE_HOOK_URL=http://testserver" in launch_inner
+            assert "if ! command -v claude-code >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in launch_inner
             token_fragment = launch_inner.split("export LONGHOUSE_HOOK_TOKEN=", 1)[1].split(";", 1)[0].strip()
             hook_token = shlex.split(token_fragment)[0]
             auth = validate_managed_local_hook_token(hook_token)

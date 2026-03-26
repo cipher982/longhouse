@@ -7,6 +7,9 @@ from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_HISTORY_LIMIT
 from zerg.services.managed_local_tmux import build_tmux_attach_command
 from zerg.services.managed_local_tmux import build_tmux_capture_command
 from zerg.services.managed_local_tmux import build_tmux_current_command_command
+from zerg.services.managed_local_tmux import build_managed_local_conditional_zshrc_source
+from zerg.services.managed_local_tmux import build_managed_local_path_export
+from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
 from zerg.services.managed_local_tmux import build_tmux_kill_session_command
 from zerg.services.managed_local_tmux import build_tmux_launch_command
@@ -44,7 +47,8 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
     )
 
     inner = _wrapped_inner(command)
-    assert "source ~/.zshrc >/dev/null 2>&1" in inner
+    assert build_managed_local_path_export() in inner
+    assert "if ! command -v tmux >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner
     assert "command -v tmux >/dev/null 2>&1" in inner
     assert (
         f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; "
@@ -86,6 +90,25 @@ def test_build_tmux_capture_command_exports_launch_tmux_tmpdir():
         )
     )
     assert "export TMUX_TMPDIR='/tmp/lh tmux'" in inner
+
+
+def test_build_managed_local_shell_prelude_sources_zshrc_only_when_required_commands_are_missing():
+    prelude = build_managed_local_shell_prelude(require_tmux=False, required_commands=("codex", "longhouse"))
+
+    assert build_managed_local_path_export() in prelude
+    assert (
+        "if ! command -v codex >/dev/null 2>&1 || ! command -v longhouse >/dev/null 2>&1; "
+        "then source ~/.zshrc >/dev/null 2>&1 || true; fi"
+    ) in prelude
+
+
+def test_build_managed_local_conditional_zshrc_source_dedupes_required_commands():
+    fallback = build_managed_local_conditional_zshrc_source(required_commands=("tmux", "tmux", "codex"))
+
+    assert fallback == (
+        "if ! command -v tmux >/dev/null 2>&1 || ! command -v codex >/dev/null 2>&1; "
+        "then source ~/.zshrc >/dev/null 2>&1 || true; fi"
+    )
 
 
 def test_build_tmux_kill_session_command_targets_session():

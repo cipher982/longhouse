@@ -61,11 +61,13 @@ def test_install_script_defaults_to_desktop_mode_and_is_valid_bash(tmp_path):
     assert 'RUNNER_BINARY_VERSION="${RUNNER_BINARY_VERSION:-9.9.9}"' in response.text
     assert 'RUNNER_UPDATE_MANIFEST_URL="${RUNNER_UPDATE_MANIFEST_URL:-https://github.com/cipher982/longhouse/releases/latest/download/longhouse-runner-manifest.json}"' in response.text
     assert 'RUNNER_AUTO_UPDATE_POLICY="${RUNNER_AUTO_UPDATE_POLICY:-notify}"' in response.text
+    assert 'RUNNER_COMMON_SERVICE_PATH="/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin"' in response.text
     assert 'RUNNER_CAPABILITIES=$RUNNER_CAPABILITIES' in response.text
     assert 'RUNNER_INSTALL_MODE=$RUNNER_INSTALL_MODE' in response.text
     assert 'RUNNER_AVAILABILITY_POLICY=$RUNNER_AVAILABILITY_POLICY' in response.text
     assert 'RUNNER_INSTALL_ROOT=$INSTALL_ROOT' in response.text
     assert 'RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH' in response.text
+    assert '<string>$HOME/.local/bin:$HOME/bin:$RUNNER_COMMON_SERVICE_PATH</string>' in response.text
     assert "systemctl --user enable longhouse-runner" in response.text
     assert 'VERSION_DIR="$INSTALL_ROOT/versions/$RUNNER_BINARY_VERSION"' in response.text
     assert 'BINARY_PATH="$VERSION_DIR/longhouse-runner"' in response.text
@@ -95,6 +97,7 @@ def test_install_script_server_mode_exposes_system_service_contract(tmp_path):
     assert 'RUNNER_AVAILABILITY_POLICY=$RUNNER_AVAILABILITY_POLICY' in response.text
     assert 'RUNNER_INSTALL_ROOT=$INSTALL_ROOT' in response.text
     assert 'RUNNER_LAUNCHER_PATH=$LAUNCHER_PATH' in response.text
+    assert 'Environment=PATH=$INSTALL_HOME/.local/bin:$INSTALL_HOME/bin:$RUNNER_COMMON_SERVICE_PATH' in response.text
     assert "EnvironmentFile=/etc/longhouse/runner.env" in response.text
     assert 'ExecStart=$LAUNCHER_PATH' in response.text
     assert "WantedBy=multi-user.target" in response.text

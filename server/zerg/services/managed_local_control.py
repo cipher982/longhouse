@@ -164,6 +164,7 @@ def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
         build_managed_local_shell_prelude(
             tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
             require_tmux=False,
+            required_commands=("longhouse-engine",),
         ),
         'engine="$(command -v longhouse-engine || true)"',
         '[ -n "$engine" ] || { echo "longhouse-engine is not available" >&2; exit 12; }',
