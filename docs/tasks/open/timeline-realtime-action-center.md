@@ -32,7 +32,7 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - [x] Refresh the spec/task docs to match shipped reality
 - [x] Phase 1: weaken inferred user-facing labels and keep confidence explicit
 - [x] Phase 2: add execution-home metadata to session APIs and Timeline rows
-- [ ] Phase 3: treat managed-local as a stronger runtime class than transcript-only legacy sessions
+- [x] Phase 3: treat managed-local as a stronger runtime class than transcript-only legacy sessions
 - [x] Collapse the main Timeline off the secondary `/sessions/active` overlay path
 - [x] Reduce ad hoc runtime fallback paths on the Timeline read path
 - [x] Replace the backend 1-second full-list SSE polling loop with a cheaper change detector
@@ -53,3 +53,4 @@ Make Timeline the primary desktop runtime/control view for agent sessions. Keep 
 - Legacy `web/src/legacy/forum/` (ForumCanvas, ForumPage, 2.3k LOC) deleted — no remaining consumers.
 - The only non-thread path on the timeline read surface is query/hybrid search, which returns raw sessions that the frontend reshapes via `buildCompatibilityTimelineCards()`. This is intentional until thread-aware search ranking is built.
 - `build_fallback_runtime_view()` is the structural fallback for sessions without materialized `SessionRuntimeState` rows — it tags confidence explicitly ("live", "inferred", "ended"), not an ad hoc path.
+- Phase 3 (managed runtime class) is satisfied by the existing confidence/phase_source system: `semantic` phase_source gets `live` confidence → rich display ("Running bash", "Needs you"); `progress` phase_source gets `inferred` confidence → weak display ("Recent progress"). Verified on david010 with real managed-local and transcript-only sessions.
