@@ -340,6 +340,32 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         .context("missing thread.id in codex bridge thread/start response")?;
     let thread_path = extract_string(&thread_response, &["thread", "path"]);
 
+    // Seed the rollout file so `codex resume <thread_id> --remote` can find it.
+    // The app-server creates the thread in memory but only writes the JSONL file
+    // after the first turn completes, so `codex resume` would fail on a fresh
+    // zero-turn thread without this bootstrap.
+    if let Some(ref tp) = thread_path {
+        let rollout = Path::new(tp);
+        if !rollout.exists() {
+            if let Some(parent) = rollout.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let meta = json!({
+                "timestamp": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "type": "session_meta",
+                "payload": {
+                    "id": thread_id,
+                    "timestamp": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                    "cwd": config.cwd.display().to_string(),
+                    "originator": "longhouse_codex_bridge",
+                }
+            });
+            if let Err(e) = fs::write(rollout, format!("{}\n", meta)) {
+                eprintln!("[codex-bridge] warning: could not seed rollout file {}: {e}", tp);
+            }
+        }
+    }
+
     let mut context = BridgeContext {
         state_file: config.state_file.clone(),
         state: BridgeStateFile {
