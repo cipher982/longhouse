@@ -26,14 +26,9 @@ from zerg.crud import runner_crud
 from zerg.models.agents import AgentSession
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
-from zerg.services.managed_local_tmux import build_tmux_attach_command
-from zerg.services.managed_local_tmux import build_tmux_capture_command
-from zerg.services.managed_local_tmux import build_tmux_current_command_command
-from zerg.services.managed_local_tmux import build_tmux_has_session_command
-from zerg.services.managed_local_tmux import build_tmux_kill_session_command
-from zerg.services.managed_local_tmux import build_tmux_launch_command
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
-from zerg.services.managed_local_tmux import validate_managed_transport
+from zerg.services.managed_local_transport import build_managed_local_launch_transport_plan
+from zerg.services.managed_local_transport import coerce_managed_transport
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import ManagedSessionTransport
@@ -288,9 +283,20 @@ def _pane_command_is_bootstrap_script(*, pane_command: str, managed_session_name
 
 
 async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
-    transport = validate_managed_transport(params.managed_transport)
-    if transport != ManagedSessionTransport.TMUX.value:
-        raise ManagedLocalLaunchError(f"Unsupported managed transport '{transport}'", status_code=400)
+    try:
+        transport = coerce_managed_transport(
+            params.managed_transport,
+            default=ManagedSessionTransport.TMUX,
+        )
+    except ValueError as exc:
+        raise ManagedLocalLaunchError(str(exc), status_code=400) from exc
+    if transport is None:
+        transport = ManagedSessionTransport.TMUX
+    if transport != ManagedSessionTransport.TMUX:
+        raise ManagedLocalLaunchError(
+            f"Managed local transport '{transport.value}' is not implemented yet",
+            status_code=501,
+        )
 
     provider = params.provider or "claude"
     if provider not in _VALID_PROVIDERS:
@@ -360,6 +366,22 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             device_id=runner.name,
         )
 
+    entry_command = _build_entry_command(
+        provider=provider,
+        provider_session_id=provider_session_id,
+        display_name=params.display_name,
+        managed_session_name=managed_session_name,
+        hook_url=params.hook_url,
+        hook_token=hook_token,
+    )
+    transport_plan = build_managed_local_launch_transport_plan(
+        transport=transport,
+        session_name=managed_session_name,
+        cwd=cwd,
+        entry_command=entry_command,
+        tmux_tmpdir=managed_tmux_tmpdir,
+    )
+
     session = AgentSession(
         id=session_uuid,
         provider=provider,
@@ -383,7 +405,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         is_sidechain=0,
         loop_mode=params.loop_mode,
         execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
-        managed_transport=transport,
+        managed_transport=transport.value,
         source_runner_id=runner.id,
         source_runner_name=runner.name,
         managed_session_name=managed_session_name,
@@ -392,44 +414,16 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     db.add(session)
     db.flush()
 
-    entry_command = _build_entry_command(
-        provider=provider,
-        provider_session_id=provider_session_id,
-        display_name=params.display_name,
-        managed_session_name=managed_session_name,
-        hook_url=params.hook_url,
-        hook_token=hook_token,
-    )
-    launch_command = build_tmux_launch_command(
-        session_name=managed_session_name,
-        cwd=cwd,
-        launch_command=entry_command,
-        tmux_tmpdir=managed_tmux_tmpdir,
-    )
-    verify_session_command = build_tmux_has_session_command(
-        session_name=managed_session_name,
-        tmux_tmpdir=managed_tmux_tmpdir,
-    )
-    verify_command = build_tmux_current_command_command(
-        session_name=managed_session_name,
-        tmux_tmpdir=managed_tmux_tmpdir,
-    )
-    capture_command = build_tmux_capture_command(
-        session_name=managed_session_name,
-        lines=80,
-        tmux_tmpdir=managed_tmux_tmpdir,
-    )
-
     async def _cleanup_tmux_session() -> None:
+        cleanup_command = transport_plan.cleanup_command
+        if not cleanup_command:
+            return
         try:
             await dispatcher.dispatch_job(
                 db=db,
                 owner_id=params.owner_id,
                 runner_id=runner.id,
-                command=build_tmux_kill_session_command(
-                    session_name=managed_session_name,
-                    tmux_tmpdir=managed_tmux_tmpdir,
-                ),
+                command=cleanup_command,
                 timeout_secs=10,
                 commis_id=None,
                 run_id=None,
@@ -441,7 +435,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         db=db,
         owner_id=params.owner_id,
         runner_id=runner.id,
-        command=launch_command,
+        command=transport_plan.launch_command,
         timeout_secs=20,
         commis_id=None,
         run_id=None,
@@ -461,7 +455,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         db=db,
         owner_id=params.owner_id,
         runner_id=runner.id,
-        command=verify_session_command,
+        command=transport_plan.verify_session_command,
         timeout_secs=10,
         commis_id=None,
         run_id=None,
@@ -485,10 +479,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         db.refresh(session)
         return ManagedLocalLaunchResult(
             session=session,
-            attach_command=build_tmux_attach_command(
-                session_name=managed_session_name,
-                tmux_tmpdir=managed_tmux_tmpdir,
-            ),
+            attach_command=str(transport_plan.attach_command or ""),
         )
 
     if provider == "codex":
@@ -504,7 +495,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             db=db,
             owner_id=params.owner_id,
             runner_id=runner.id,
-            command=verify_command,
+            command=str(transport_plan.verify_command or ""),
             timeout_secs=10,
             commis_id=None,
             run_id=None,
@@ -540,7 +531,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             db=db,
             owner_id=params.owner_id,
             runner_id=runner.id,
-            command=capture_command,
+            command=str(transport_plan.capture_command or ""),
             timeout_secs=10,
             commis_id=None,
             run_id=None,

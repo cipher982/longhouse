@@ -24,14 +24,13 @@ from zerg.models.agents import SessionRuntimeEvent
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
-from zerg.services.managed_local_tmux import build_tmux_paste_text_command
-from zerg.services.managed_local_tmux import build_tmux_send_text_command
+from zerg.services.managed_local_transport import ManagedLocalTransportError
+from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.presence_cache import get_presence_cache
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.services.session_continuity import encode_cwd_for_claude
 from zerg.services.session_continuity import validate_session_id
-from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 
 logger = logging.getLogger(__name__)
@@ -512,7 +511,7 @@ async def send_text_to_managed_local_session(
     verify_turn_started: bool = False,
     verification_timeout_secs: float | None = None,
 ) -> ManagedLocalSendResult:
-    """Send text into a tmux-backed managed-local session.
+    """Send text into a managed-local session via its configured transport.
 
     Returns a normalized result so callers do not need to know the runner
     dispatch envelope details.
@@ -520,14 +519,9 @@ async def send_text_to_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
-    if str(getattr(session, "managed_transport", "") or "").strip() != ManagedSessionTransport.TMUX.value:
-        return ManagedLocalSendResult(ok=False, error="Managed local session does not use tmux transport")
     if not getattr(session, "source_runner_id", None):
         return ManagedLocalSendResult(ok=False, error="Managed local session is missing source runner metadata")
-    if not getattr(session, "managed_session_name", None):
-        return ManagedLocalSendResult(ok=False, error="Managed local session is missing tmux metadata")
 
-    provider = str(getattr(session, "provider", "") or "").strip().lower()
     baseline_event_id = get_managed_local_latest_event_id(db=db, session_id=session.id)
     baseline_hook_runtime_event_id = (
         get_managed_local_latest_hook_runtime_event_id(db=db, session_id=session.id) if verify_turn_started else 0
@@ -535,18 +529,10 @@ async def send_text_to_managed_local_session(
     baseline_presence_updated_at = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET
     if verify_turn_started:
         baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=session.id)
-    if provider == "codex":
-        command = build_tmux_paste_text_command(
-            session_name=str(session.managed_session_name),
-            text=text,
-            tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
-        )
-    else:
-        command = build_tmux_send_text_command(
-            session_name=str(session.managed_session_name),
-            text=text,
-            tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
-        )
+    try:
+        command = build_managed_local_send_text_command(session=session, text=text)
+    except ManagedLocalTransportError as exc:
+        return ManagedLocalSendResult(ok=False, error=str(exc))
     dispatcher = get_runner_job_dispatcher()
     result = await dispatcher.dispatch_job(
         db=db,

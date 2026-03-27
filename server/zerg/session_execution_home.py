@@ -18,3 +18,4 @@ class ManagedSessionTransport(str, Enum):
     """Execution transport for Longhouse-managed sessions."""
 
     TMUX = "tmux"
+    CODEX_APP_SERVER = "codex_app_server"

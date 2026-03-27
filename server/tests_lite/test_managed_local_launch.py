@@ -396,6 +396,29 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             api_app_ref.dependency_overrides = {}
 
 
+def test_launch_managed_local_session_rejects_unimplemented_transport(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        client, api_app_ref = _make_client(db, user)
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": runner.name,
+                    "cwd": "/Users/davidrose/git/zerg",
+                    "provider": "codex",
+                    "managed_transport": "codex_app_server",
+                },
+            )
+            assert response.status_code == 501, response.text
+            assert response.json()["detail"] == "Managed local transport 'codex_app_server' is not implemented yet"
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_launch_managed_local_session_accepts_shell_wrapper_when_capture_has_output(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 
