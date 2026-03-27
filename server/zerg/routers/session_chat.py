@@ -314,6 +314,10 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     git_branch: str | None = Field(None, description="Optional git branch name")
     display_name: str | None = Field(None, description="Optional display name for the session")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
+    managed_transport: ManagedSessionTransport = Field(
+        ManagedSessionTransport.TMUX,
+        description="Managed local transport (tmux or codex_app_server for native Codex)",
+    )
     machine_name: str | None = Field(
         None,
         description="Optional local Longhouse machine label override used to resolve this device's runner",
@@ -862,7 +866,10 @@ async def _stream_managed_local_output(
                         )
                         ship_result = None
 
-                if ship_task is None or (ship_task.done() and _should_retry_managed_local_claude_sync_after_terminal(ship_result)):
+                should_restart_ship = ship_task is None or (
+                    ship_task.done() and _should_retry_managed_local_claude_sync_after_terminal(ship_result)
+                )
+                if should_restart_ship:
                     ship_task = asyncio.create_task(
                         _force_managed_local_claude_sync(
                             db_bind=db.get_bind(),
@@ -1017,7 +1024,8 @@ async def _stream_managed_local_output(
     else:
         control_status = terminal_result.control_status
 
-    if not new_events and ((turn_snapshot is not None and turn_snapshot.terminal_at is not None) or terminal_result is not None):
+    turn_reached_terminal = (turn_snapshot is not None and turn_snapshot.terminal_at is not None) or terminal_result is not None
+    if not new_events and turn_reached_terminal:
         yield SSEEvent(
             event="done",
             data=json.dumps(
@@ -1867,6 +1875,7 @@ async def launch_managed_local_this_device(
                 git_branch=body.git_branch,
                 display_name=body.display_name,
                 loop_mode=body.loop_mode.value,
+                managed_transport=body.managed_transport.value,
                 hook_url=hook_url,
             ),
         )

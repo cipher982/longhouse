@@ -15,6 +15,7 @@ import typer
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
+from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 
 
@@ -24,6 +25,7 @@ class ManagedLocalLaunchResponse:
     provider_session_id: str
     attach_command: str
     source_runner_name: str
+    managed_transport: ManagedSessionTransport = ManagedSessionTransport.TMUX
 
 
 def _interactive_stdio() -> bool:
@@ -97,6 +99,7 @@ def _launch_managed_local_from_api(
     name: str | None,
     machine_name: str,
     provider: str = "claude",
+    managed_transport: ManagedSessionTransport = ManagedSessionTransport.TMUX,
 ) -> ManagedLocalLaunchResponse:
     git_repo, git_branch = _infer_git_context(cwd)
     payload = {
@@ -108,6 +111,7 @@ def _launch_managed_local_from_api(
         "display_name": name,
         "loop_mode": loop_mode.value,
         "machine_name": machine_name,
+        "managed_transport": managed_transport.value,
     }
 
     try:
@@ -145,6 +149,7 @@ def _launch_managed_local_from_api(
         provider_session_id=str(body["provider_session_id"]),
         attach_command=str(body["attach_command"]),
         source_runner_name=str(body.get("source_runner_name") or machine_name),
+        managed_transport=ManagedSessionTransport(str(body.get("managed_transport") or ManagedSessionTransport.TMUX.value)),
     )
 
 

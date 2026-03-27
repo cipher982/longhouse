@@ -95,6 +95,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
                 "display_name": "Demo session",
                 "loop_mode": "assist",
                 "machine_name": "work-laptop",
+                "managed_transport": "tmux",
             },
         }
     ]
