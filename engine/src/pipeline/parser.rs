@@ -220,7 +220,11 @@ fn extract_gemini_text(v: &serde_json::Value) -> Option<String> {
     match v {
         serde_json::Value::String(s) => {
             let t = s.trim().to_string();
-            if t.is_empty() { None } else { Some(t) }
+            if t.is_empty() {
+                None
+            } else {
+                Some(t)
+            }
         }
         serde_json::Value::Array(arr) => {
             // Try to concatenate "text" fields from a parts array
@@ -2603,13 +2607,11 @@ mod tests {
         assert_eq!(result.events[4].tool_call_id.as_deref(), Some("tc-write"));
         assert_eq!(result.events[5].role, Role::Tool);
         assert_eq!(result.events[5].tool_call_id.as_deref(), Some("tc-write"));
-        assert!(
-            result.events[5]
-                .tool_output_text
-                .as_deref()
-                .unwrap_or("")
-                .contains("cancelled")
-        );
+        assert!(result.events[5]
+            .tool_output_text
+            .as_deref()
+            .unwrap_or("")
+            .contains("cancelled"));
     }
 
     #[test]

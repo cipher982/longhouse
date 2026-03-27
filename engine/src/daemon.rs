@@ -682,14 +682,14 @@ mod tests {
             (
                 PathBuf::from("/tmp/retry-now.jsonl"),
                 DeferredRetry {
-                due_at: now - Duration::from_secs(1),
+                    due_at: now - Duration::from_secs(1),
                     provider: "claude",
                 },
             ),
             (
                 PathBuf::from("/tmp/retry-later.jsonl"),
                 DeferredRetry {
-                due_at: now + Duration::from_secs(60),
+                    due_at: now + Duration::from_secs(60),
                     provider: "claude",
                 },
             ),

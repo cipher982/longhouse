@@ -263,18 +263,60 @@ mod tests {
     fn test_scheduler_gives_retry_and_scan_turns_under_watch_pressure() {
         let mut scheduler = PathScheduler::new(8);
 
-        scheduler.enqueue(PathBuf::from("/tmp/watch-1.jsonl"), "claude", WorkPriority::Watch);
-        scheduler.enqueue(PathBuf::from("/tmp/watch-2.jsonl"), "claude", WorkPriority::Watch);
-        scheduler.enqueue(PathBuf::from("/tmp/watch-3.jsonl"), "claude", WorkPriority::Watch);
-        scheduler.enqueue(PathBuf::from("/tmp/watch-4.jsonl"), "claude", WorkPriority::Watch);
-        scheduler.enqueue(PathBuf::from("/tmp/retry.jsonl"), "claude", WorkPriority::Retry);
-        scheduler.enqueue(PathBuf::from("/tmp/scan.jsonl"), "claude", WorkPriority::Scan);
+        scheduler.enqueue(
+            PathBuf::from("/tmp/watch-1.jsonl"),
+            "claude",
+            WorkPriority::Watch,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/watch-2.jsonl"),
+            "claude",
+            WorkPriority::Watch,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/watch-3.jsonl"),
+            "claude",
+            WorkPriority::Watch,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/watch-4.jsonl"),
+            "claude",
+            WorkPriority::Watch,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/retry.jsonl"),
+            "claude",
+            WorkPriority::Retry,
+        );
+        scheduler.enqueue(
+            PathBuf::from("/tmp/scan.jsonl"),
+            "claude",
+            WorkPriority::Scan,
+        );
 
-        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Watch);
-        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Watch);
-        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Retry);
-        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Scan);
-        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Watch);
-        assert_eq!(scheduler.pop_launchable().unwrap().priority, WorkPriority::Watch);
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Watch
+        );
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Watch
+        );
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Retry
+        );
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Scan
+        );
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Watch
+        );
+        assert_eq!(
+            scheduler.pop_launchable().unwrap().priority,
+            WorkPriority::Watch
+        );
     }
 }

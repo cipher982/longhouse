@@ -204,6 +204,9 @@ mod tests {
              VALUES ('claude', '/dup.jsonl', 100, 500, datetime('now'), datetime('now'), 'pending')",
             [],
         );
-        assert!(err.is_err(), "unique pending range index should reject duplicates");
+        assert!(
+            err.is_err(),
+            "unique pending range index should reject duplicates"
+        );
     }
 }
