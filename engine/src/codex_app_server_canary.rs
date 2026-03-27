@@ -44,6 +44,7 @@ pub struct CanarySummary {
     pub session_source: String,
     pub isolated_home: bool,
     pub effective_home_path: String,
+    pub effective_codex_home_path: String,
     pub isolated_home_path: Option<String>,
     pub thread_id: String,
     pub thread_path: Option<String>,
@@ -54,6 +55,7 @@ pub struct CanarySummary {
     pub assistant_text: String,
     pub hook_session_id: Option<String>,
     pub hook_states: Vec<String>,
+    pub hook_notification_counts: BTreeMap<String, usize>,
     pub log_jsonl: Option<String>,
     pub sent_requests: BTreeMap<String, usize>,
     pub received_notifications: BTreeMap<String, usize>,
@@ -180,6 +182,9 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         .or_else(|| isolated_home.clone())
         .unwrap_or(home_dir()?);
 
+    let effective_codex_home = effective_home.join(".codex");
+    let spawn_home_override = config.home_override.as_deref().or(isolated_home.as_deref());
+
     let hook_session_id = if config.verify_hooks {
         Some(Uuid::new_v4().to_string())
     } else {
@@ -194,7 +199,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
     let mut logger = JsonlLogger::new(config.log_jsonl.as_deref())?;
     let mut client = spawn_client(
         &config,
-        isolated_home.as_deref(),
+        spawn_home_override,
         hook_session_id.as_deref(),
         &mut logger,
     )
@@ -369,12 +374,20 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         None
     };
 
+    let hook_notification_counts = state
+        .received_notifications
+        .iter()
+        .filter(|(method, _)| method.starts_with("hook/"))
+        .map(|(method, count)| (method.clone(), *count))
+        .collect::<BTreeMap<_, _>>();
+
     let summary = CanarySummary {
         codex_bin: config.codex_bin,
         cwd: config.cwd.display().to_string(),
         session_source: config.session_source,
         isolated_home: config.isolate_home,
         effective_home_path: effective_home.display().to_string(),
+        effective_codex_home_path: effective_codex_home.display().to_string(),
         isolated_home_path,
         thread_id,
         thread_path: thread_path.clone(),
@@ -391,6 +404,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         assistant_text: state.assistant_text.trim().to_string(),
         hook_session_id,
         hook_states,
+        hook_notification_counts,
         log_jsonl: config.log_jsonl.map(|path| path.display().to_string()),
         sent_requests: state.sent_requests,
         received_notifications: state.received_notifications,
@@ -402,8 +416,9 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         && !contains_subsequence(&summary.hook_states, &["idle", "thinking", "idle"])
     {
         bail!(
-            "Codex hooks did not produce the expected idle/thinking/idle sequence in isolated outbox. observed={:?}",
-            summary.hook_states
+            "Codex hooks did not produce the expected idle/thinking/idle sequence in isolated outbox. observed={:?} hook_notifications={:?}",
+            summary.hook_states,
+            summary.hook_notification_counts
         );
     }
 
@@ -412,7 +427,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
 
 async fn spawn_client(
     config: &CanaryConfig,
-    isolated_home: Option<&Path>,
+    home_override: Option<&Path>,
     hook_session_id: Option<&str>,
     logger: &mut JsonlLogger,
 ) -> Result<RpcClient> {
@@ -421,14 +436,17 @@ async fn spawn_client(
         .arg("app-server")
         .arg("--listen")
         .arg("stdio://")
+        .arg("--enable")
+        .arg("codex_hooks")
         .arg("--session-source")
         .arg(&config.session_source)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    if let Some(home) = isolated_home {
+    if let Some(home) = home_override {
         command.env("HOME", home);
+        command.env("CODEX_HOME", home.join(".codex"));
     }
     if let Some(session_id) = hook_session_id {
         command.env("LONGHOUSE_SESSION_ID", session_id);
@@ -467,10 +485,13 @@ async fn spawn_client(
     logger.write_text(
         "meta",
         &format!(
-            "spawned {} app-server{}",
+            "spawned {} app-server{}{}",
             config.codex_bin,
-            isolated_home
+            home_override
                 .map(|path| format!(" HOME={}", path.display()))
+                .unwrap_or_default(),
+            home_override
+                .map(|path| format!(" CODEX_HOME={}", path.join(".codex").display()))
                 .unwrap_or_default()
         ),
     )?;
