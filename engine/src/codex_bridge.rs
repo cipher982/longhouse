@@ -26,7 +26,6 @@ pub struct BridgeStartConfig {
     pub api_url: String,
     pub api_token: String,
     pub codex_bin: String,
-    pub session_source: String,
     pub approval_policy: Option<String>,
     pub sandbox: Option<String>,
     pub model: Option<String>,
@@ -44,7 +43,7 @@ pub struct BridgeRunConfig {
     pub api_url: String,
     pub api_token: String,
     pub codex_bin: String,
-    pub session_source: String,
+    pub session_source: Option<String>,
     pub approval_policy: Option<String>,
     pub sandbox: Option<String>,
     pub model: Option<String>,
@@ -219,8 +218,6 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         .arg(&config.api_token)
         .arg("--codex-bin")
         .arg(&config.codex_bin)
-        .arg("--session-source")
-        .arg(&config.session_source)
         .arg("--state-file")
         .arg(&paths.state_file)
         .arg("--log-file")
@@ -598,9 +595,11 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         .arg("--enable")
         .arg("exec_permission_approvals")
         .arg("--enable")
-        .arg("request_permissions_tool")
-        .arg("--session-source")
-        .arg(&config.session_source)
+        .arg("request_permissions_tool");
+    if let Some(src) = config.session_source.as_deref() {
+        command.arg("--session-source").arg(src);
+    }
+    command
         .env("LONGHOUSE_SESSION_ID", &config.session_id)
         .env("LONGHOUSE_HOOK_URL", &config.api_url)
         .env("LONGHOUSE_HOOK_TOKEN", &config.api_token)
