@@ -22,6 +22,8 @@ pub struct CanaryConfig {
     pub prompt: String,
     pub cwd: PathBuf,
     pub home_override: Option<PathBuf>,
+    pub approval_policy: String,
+    pub sandbox: String,
     pub model: Option<String>,
     pub effort: Option<String>,
     pub codex_bin: String,
@@ -30,6 +32,9 @@ pub struct CanaryConfig {
     pub steer_text: Option<String>,
     pub steer_after_ms: u64,
     pub interrupt_after_ms: Option<u64>,
+    pub auto_approve: bool,
+    pub probe_thread_read: bool,
+    pub probe_thread_list: bool,
     pub event_timeout_secs: u64,
     pub log_jsonl: Option<PathBuf>,
     pub isolate_home: bool,
@@ -42,6 +47,7 @@ pub struct CanarySummary {
     pub codex_bin: String,
     pub cwd: String,
     pub session_source: String,
+    pub sandbox: String,
     pub isolated_home: bool,
     pub effective_home_path: String,
     pub effective_codex_home_path: String,
@@ -56,6 +62,10 @@ pub struct CanarySummary {
     pub hook_session_id: Option<String>,
     pub hook_states: Vec<String>,
     pub hook_notification_counts: BTreeMap<String, usize>,
+    pub server_request_counts: BTreeMap<String, usize>,
+    pub thread_read_turn_count: Option<usize>,
+    pub thread_list_count: Option<usize>,
+    pub thread_list_contains_thread: Option<bool>,
     pub log_jsonl: Option<String>,
     pub sent_requests: BTreeMap<String, usize>,
     pub received_notifications: BTreeMap<String, usize>,
@@ -93,6 +103,7 @@ struct ObservationState {
     assistant_text: String,
     sent_requests: BTreeMap<String, usize>,
     received_notifications: BTreeMap<String, usize>,
+    server_request_counts: BTreeMap<String, usize>,
     response_errors: Vec<String>,
     stderr_lines: Vec<String>,
 }
@@ -181,6 +192,9 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         .clone()
         .or_else(|| isolated_home.clone())
         .unwrap_or(home_dir()?);
+    let canonical_effective_home = effective_home
+        .canonicalize()
+        .unwrap_or_else(|_| effective_home.clone());
 
     let effective_codex_home = effective_home.join(".codex");
     let spawn_home_override = config.home_override.as_deref().or(isolated_home.as_deref());
@@ -208,6 +222,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
 
     let deadline = Instant::now() + Duration::from_secs(config.event_timeout_secs);
     let initialize_response = send_request(
+        &config,
         &mut client,
         &mut state,
         &mut logger,
@@ -230,6 +245,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
 
     let thread_response = if let Some(thread_id) = config.resume_thread_id.as_deref() {
         send_request(
+            &config,
             &mut client,
             &mut state,
             &mut logger,
@@ -237,8 +253,8 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
             json!({
                 "threadId": thread_id,
                 "cwd": config.cwd.to_string_lossy(),
-                "approvalPolicy": "never",
-                "sandbox": "read-only",
+                "approvalPolicy": config.approval_policy,
+                "sandbox": config.sandbox,
                 "model": config.model.clone(),
             }),
             deadline,
@@ -246,14 +262,15 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         .await?
     } else {
         send_request(
+            &config,
             &mut client,
             &mut state,
             &mut logger,
             "thread/start",
             json!({
                 "cwd": config.cwd.to_string_lossy(),
-                "approvalPolicy": "never",
-                "sandbox": "read-only",
+                "approvalPolicy": config.approval_policy,
+                "sandbox": config.sandbox,
                 "model": config.model.clone(),
             }),
             deadline,
@@ -276,6 +293,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         turn_params["effort"] = Value::String(effort.to_string());
     }
     let turn_response = send_request(
+        &config,
         &mut client,
         &mut state,
         &mut logger,
@@ -316,6 +334,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
                 match action {
                     ScheduledAction::Steer(text) => {
                         send_request(
+                            &config,
                             &mut client,
                             &mut state,
                             &mut logger,
@@ -330,6 +349,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
                     }
                     ScheduledAction::Interrupt => {
                         send_request(
+                            &config,
                             &mut client,
                             &mut state,
                             &mut logger,
@@ -344,7 +364,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
                 }
             }
             event = recv_event(&mut client, deadline) => {
-                process_event(event?, &mut client, &mut state, &mut logger)?;
+                process_event(&config, event?, &mut client, &mut state, &mut logger).await?;
             }
         }
     }
@@ -352,6 +372,60 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
     if config.verify_hooks {
         sleep(Duration::from_millis(750)).await;
     }
+
+    let thread_read_turn_count = if config.probe_thread_read {
+        let thread_read = send_request(
+            &config,
+            &mut client,
+            &mut state,
+            &mut logger,
+            "thread/read",
+            json!({
+                "threadId": thread_id,
+                "includeTurns": true,
+            }),
+            deadline,
+        )
+        .await?;
+        thread_read
+            .get("thread")
+            .and_then(|thread| thread.get("turns"))
+            .and_then(Value::as_array)
+            .map(Vec::len)
+    } else {
+        None
+    };
+
+    let (thread_list_count, thread_list_contains_thread) = if config.probe_thread_list {
+        let thread_list = send_request(
+            &config,
+            &mut client,
+            &mut state,
+            &mut logger,
+            "thread/list",
+            json!({
+                "limit": 50,
+                "cwd": config.cwd.to_string_lossy(),
+                "sourceKinds": ["appServer", "custom"],
+            }),
+            deadline,
+        )
+        .await?;
+        let threads = thread_list
+            .get("data")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let contains_thread = threads.iter().any(|thread| {
+            thread
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|candidate| candidate == thread_id)
+        });
+        (Some(threads.len()), Some(contains_thread))
+    } else {
+        (None, None)
+    };
 
     let hook_states = if let (Some(outbox_dir), Some(hook_session_id)) =
         (outbox_dir.as_deref(), hook_session_id.as_deref())
@@ -385,6 +459,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         codex_bin: config.codex_bin,
         cwd: config.cwd.display().to_string(),
         session_source: config.session_source,
+        sandbox: config.sandbox,
         isolated_home: config.isolate_home,
         effective_home_path: effective_home.display().to_string(),
         effective_codex_home_path: effective_codex_home.display().to_string(),
@@ -395,16 +470,21 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
             .as_deref()
             .map(Path::new)
             .is_some_and(Path::exists),
-        thread_path_within_home: thread_path
-            .as_deref()
-            .map(Path::new)
-            .is_some_and(|path| path.starts_with(&effective_home)),
+        thread_path_within_home: thread_path.as_deref().map(Path::new).is_some_and(|path| {
+            path.canonicalize()
+                .unwrap_or_else(|_| path.to_path_buf())
+                .starts_with(&canonical_effective_home)
+        }),
         turn_id,
         turn_status: state.turn_status.unwrap_or_else(|| "unknown".to_string()),
         assistant_text: state.assistant_text.trim().to_string(),
         hook_session_id,
         hook_states,
         hook_notification_counts,
+        server_request_counts: state.server_request_counts,
+        thread_read_turn_count,
+        thread_list_count,
+        thread_list_contains_thread,
         log_jsonl: config.log_jsonl.map(|path| path.display().to_string()),
         sent_requests: state.sent_requests,
         received_notifications: state.received_notifications,
@@ -524,6 +604,7 @@ async fn send_notification(
 }
 
 async fn send_request(
+    config: &CanaryConfig,
     client: &mut RpcClient,
     state: &mut ObservationState,
     logger: &mut JsonlLogger,
@@ -554,7 +635,8 @@ async fn send_request(
             StreamEvent::Rpc(value) => {
                 logger.write_value("server_message", value.clone())?;
                 if value.get("id").is_some() && value.get("method").is_some() {
-                    bail!("received unsupported app-server request from server while waiting for {method}: {}", value);
+                    handle_server_request(config, value, client, state, logger).await?;
+                    continue;
                 }
                 if let Some(id) = value.get("id").and_then(Value::as_u64) {
                     let method_name = client
@@ -613,7 +695,8 @@ async fn recv_event(client: &mut RpcClient, deadline: Instant) -> Result<StreamE
     }
 }
 
-fn process_event(
+async fn process_event(
+    config: &CanaryConfig,
     event: StreamEvent,
     client: &mut RpcClient,
     state: &mut ObservationState,
@@ -623,10 +706,8 @@ fn process_event(
         StreamEvent::Rpc(value) => {
             logger.write_value("server_message", value.clone())?;
             if value.get("id").is_some() && value.get("method").is_some() {
-                bail!(
-                    "received unsupported app-server request from server: {}",
-                    value
-                );
+                handle_server_request(config, value, client, state, logger).await?;
+                return Ok(());
             }
             if let Some(id) = value.get("id").and_then(Value::as_u64) {
                 let method_name = client
@@ -652,6 +733,105 @@ fn process_event(
         }
     }
     Ok(())
+}
+
+async fn handle_server_request(
+    config: &CanaryConfig,
+    value: Value,
+    client: &mut RpcClient,
+    state: &mut ObservationState,
+    logger: &mut JsonlLogger,
+) -> Result<()> {
+    let method = value
+        .get("method")
+        .and_then(Value::as_str)
+        .context("server request missing method")?;
+    let request_id = value
+        .get("id")
+        .cloned()
+        .context("server request missing id")?;
+    let params = value.get("params").cloned().unwrap_or(Value::Null);
+    *state
+        .server_request_counts
+        .entry(method.to_string())
+        .or_insert(0) += 1;
+
+    let result = match method {
+        "item/commandExecution/requestApproval" => json!({
+            "decision": if config.auto_approve { "accept" } else { "decline" }
+        }),
+        "item/fileChange/requestApproval" => json!({
+            "decision": if config.auto_approve { "accept" } else { "decline" }
+        }),
+        "item/permissions/requestApproval" => json!({
+            "scope": "turn",
+            "permissions": if config.auto_approve {
+                params.get("permissions").cloned().unwrap_or_else(|| json!({}))
+            } else {
+                json!({})
+            }
+        }),
+        "item/tool/requestUserInput" => json!({
+            "answers": build_request_user_input_answers(&params, config.auto_approve)
+        }),
+        "mcpServer/elicitation/request" => json!({
+            "action": "decline",
+            "content": Value::Null,
+        }),
+        "applyPatchApproval" | "execCommandApproval" => json!({
+            "decision": if config.auto_approve { "Approved" } else { "Denied" }
+        }),
+        _ => bail!(
+            "received unsupported app-server request from server: {}",
+            value
+        ),
+    };
+
+    send_response(client, logger, request_id, result).await
+}
+
+async fn send_response(
+    client: &mut RpcClient,
+    logger: &mut JsonlLogger,
+    request_id: Value,
+    result: Value,
+) -> Result<()> {
+    let payload = json!({
+        "id": request_id,
+        "result": result,
+    });
+    logger.write_value("client_response", payload.clone())?;
+    let line = serde_json::to_string(&payload)?;
+    client.stdin.write_all(line.as_bytes()).await?;
+    client.stdin.write_all(b"\n").await?;
+    client.stdin.flush().await?;
+    Ok(())
+}
+
+fn build_request_user_input_answers(params: &Value, auto_approve: bool) -> Value {
+    let mut answers = serde_json::Map::new();
+    let Some(questions) = params.get("questions").and_then(Value::as_array) else {
+        return Value::Object(answers);
+    };
+    for question in questions {
+        let Some(id) = question.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let question_answers = if auto_approve {
+            question
+                .get("options")
+                .and_then(Value::as_array)
+                .and_then(|options| options.first())
+                .and_then(|option| option.get("label"))
+                .and_then(Value::as_str)
+                .map(|label| vec![Value::String(label.to_string())])
+                .unwrap_or_else(|| vec![Value::String("canary".to_string())])
+        } else {
+            Vec::new()
+        };
+        answers.insert(id.to_string(), json!({ "answers": question_answers }));
+    }
+    Value::Object(answers)
 }
 
 fn process_rpc_value(value: Value, state: &mut ObservationState) -> Result<()> {
@@ -978,6 +1158,10 @@ for line in sys.stdin:
         emit({"method": "item/agentMessage/delta", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "item_1", "delta": "CANARY"}})
         emit({"method": "item/completed", "params": {"threadId": "thr_test", "turnId": "turn_test", "item": {"id": "item_1", "type": "assistantMessage"}}})
         emit({"method": "turn/completed", "params": {"threadId": "thr_test", "turn": {"id": "turn_test", "status": "completed", "items": []}}})
+    elif method == "thread/read":
+        emit({"id": msg["id"], "result": {"thread": {"id": "thr_test", "turns": [{"id": "turn_test"}]}}})
+    elif method == "thread/list":
+        emit({"id": msg["id"], "result": {"data": [{"id": "thr_test"}], "hasMore": False}})
     else:
         emit({"id": msg["id"], "result": {}})
 "#,
@@ -992,6 +1176,8 @@ for line in sys.stdin:
             prompt: "Reply with CANARY".to_string(),
             cwd: workspace,
             home_override: None,
+            approval_policy: "never".to_string(),
+            sandbox: "read-only".to_string(),
             model: None,
             effort: None,
             codex_bin: bin.display().to_string(),
@@ -1000,6 +1186,9 @@ for line in sys.stdin:
             steer_text: None,
             steer_after_ms: 250,
             interrupt_after_ms: None,
+            auto_approve: false,
+            probe_thread_read: true,
+            probe_thread_list: true,
             event_timeout_secs: 5,
             log_jsonl: Some(log_path.clone()),
             isolate_home: false,
@@ -1015,6 +1204,9 @@ for line in sys.stdin:
         assert_eq!(summary.turn_id, "turn_test");
         assert_eq!(summary.turn_status, "completed");
         assert_eq!(summary.assistant_text, "CANARY");
+        assert_eq!(summary.thread_read_turn_count, Some(1));
+        assert_eq!(summary.thread_list_count, Some(1));
+        assert_eq!(summary.thread_list_contains_thread, Some(true));
         assert!(
             summary
                 .received_notifications
@@ -1026,5 +1218,110 @@ for line in sys.stdin:
         let log_text = fs::read_to_string(log_path).unwrap();
         assert!(log_text.contains("\"direction\":\"client_request\""));
         assert!(log_text.contains("\"direction\":\"server_message\""));
+    }
+
+    #[tokio::test]
+    async fn canary_auto_approves_server_requests() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let bin = temp.path().join("codex");
+        fs::write(
+            &bin,
+            r#"#!/usr/bin/env python3
+import json
+import sys
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+def expect_response(expected_id, check):
+    line = sys.stdin.readline()
+    if not line:
+        sys.exit(3)
+    msg = json.loads(line)
+    if msg.get("id") != expected_id:
+        sys.exit(4)
+    if not check(msg.get("result", {})):
+        sys.exit(5)
+
+if len(sys.argv) < 2 or sys.argv[1] != "app-server":
+    sys.exit(2)
+
+for line in sys.stdin:
+    msg = json.loads(line)
+    method = msg.get("method")
+    if method == "initialize":
+        emit({"id": msg["id"], "result": {"platformFamily": "unix", "platformOs": "linux", "userAgent": "fake/1.0"}})
+    elif method == "initialized":
+        pass
+    elif method == "thread/start":
+        emit({"method": "thread/started", "params": {"thread": {"id": "thr_test"}}})
+        emit({"id": msg["id"], "result": {"thread": {"id": "thr_test"}}})
+    elif method == "turn/start":
+        emit({"id": msg["id"], "result": {"turn": {"id": "turn_test", "status": "inProgress", "items": []}}})
+        emit({"method": "turn/started", "params": {"threadId": "thr_test", "turn": {"id": "turn_test", "status": "inProgress", "items": []}}})
+        emit({"id": 99, "method": "item/commandExecution/requestApproval", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "cmd_1"}})
+        expect_response(99, lambda result: result.get("decision") == "accept")
+        emit({"id": 100, "method": "item/permissions/requestApproval", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "perm_1", "permissions": {"network": {"hosts": ["example.com"]}}}})
+        expect_response(100, lambda result: result.get("scope") == "turn" and result.get("permissions", {}).get("network", {}).get("hosts") == ["example.com"])
+        emit({"id": 101, "method": "item/tool/requestUserInput", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "input_1", "questions": [{"id": "color", "header": "Color", "question": "Pick one", "options": [{"label": "blue", "description": "Blue"}, {"label": "red", "description": "Red"}]}]}})
+        expect_response(101, lambda result: result.get("answers", {}).get("color", {}).get("answers") == ["blue"])
+        emit({"method": "turn/completed", "params": {"threadId": "thr_test", "turn": {"id": "turn_test", "status": "completed", "items": []}}})
+    else:
+        emit({"id": msg["id"], "result": {}})
+"#,
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&bin, perms).unwrap();
+
+        let summary = run(CanaryConfig {
+            prompt: "Exercise approvals".to_string(),
+            cwd: workspace,
+            home_override: None,
+            approval_policy: "on-request".to_string(),
+            sandbox: "workspace-write".to_string(),
+            model: None,
+            effort: None,
+            codex_bin: bin.display().to_string(),
+            session_source: "longhouse-test".to_string(),
+            resume_thread_id: None,
+            steer_text: None,
+            steer_after_ms: 250,
+            interrupt_after_ms: None,
+            auto_approve: true,
+            probe_thread_read: false,
+            probe_thread_list: false,
+            event_timeout_secs: 5,
+            log_jsonl: None,
+            isolate_home: false,
+            keep_home: false,
+            verify_hooks: false,
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(
+            summary
+                .server_request_counts
+                .get("item/commandExecution/requestApproval"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary
+                .server_request_counts
+                .get("item/permissions/requestApproval"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary
+                .server_request_counts
+                .get("item/tool/requestUserInput"),
+            Some(&1)
+        );
+        assert_eq!(summary.turn_status, "completed");
     }
 }

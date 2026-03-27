@@ -202,6 +202,14 @@ enum Commands {
         #[arg(long)]
         home: Option<PathBuf>,
 
+        /// Approval policy stamped onto thread start/resume
+        #[arg(long, default_value = "never")]
+        approval_policy: String,
+
+        /// Sandbox mode stamped onto thread start/resume
+        #[arg(long, default_value = "read-only")]
+        sandbox: String,
+
         /// Optional model override for thread/turn start
         #[arg(long)]
         model: Option<String>,
@@ -233,6 +241,18 @@ enum Commands {
         /// Delay before sending turn/interrupt
         #[arg(long)]
         interrupt_after_ms: Option<u64>,
+
+        /// Auto-approve server-initiated approval requests instead of declining them
+        #[arg(long)]
+        auto_approve: bool,
+
+        /// Probe thread/read after the run and report turn count
+        #[arg(long)]
+        probe_thread_read: bool,
+
+        /// Probe thread/list after the run and report whether the managed thread is discoverable
+        #[arg(long)]
+        probe_thread_list: bool,
 
         /// Overall timeout for the full canary run
         #[arg(long, default_value = "60")]
@@ -449,6 +469,8 @@ fn main() -> anyhow::Result<()> {
             prompt,
             cwd,
             home,
+            approval_policy,
+            sandbox,
             model,
             effort,
             codex_bin,
@@ -457,6 +479,9 @@ fn main() -> anyhow::Result<()> {
             steer_text,
             steer_after_ms,
             interrupt_after_ms,
+            auto_approve,
+            probe_thread_read,
+            probe_thread_list,
             event_timeout_secs,
             log_jsonl,
             json,
@@ -469,6 +494,8 @@ fn main() -> anyhow::Result<()> {
                 prompt,
                 cwd: cwd.unwrap_or(std::env::current_dir()?),
                 home_override: home,
+                approval_policy,
+                sandbox,
                 model,
                 effort,
                 codex_bin,
@@ -477,6 +504,9 @@ fn main() -> anyhow::Result<()> {
                 steer_text,
                 steer_after_ms,
                 interrupt_after_ms,
+                auto_approve,
+                probe_thread_read,
+                probe_thread_list,
                 event_timeout_secs,
                 log_jsonl,
                 isolate_home: !real_home,
@@ -489,6 +519,7 @@ fn main() -> anyhow::Result<()> {
                 println!("thread_id: {}", summary.thread_id);
                 println!("turn_id: {}", summary.turn_id);
                 println!("turn_status: {}", summary.turn_status);
+                println!("sandbox: {}", summary.sandbox);
                 if !summary.assistant_text.is_empty() {
                     println!("assistant_text: {}", summary.assistant_text);
                 }
@@ -499,6 +530,10 @@ fn main() -> anyhow::Result<()> {
                     println!("isolated_home: {}", home);
                 }
                 println!("effective_home: {}", summary.effective_home_path);
+                println!(
+                    "effective_codex_home: {}",
+                    summary.effective_codex_home_path
+                );
                 if let Some(path) = summary.thread_path.as_deref() {
                     println!("thread_path: {}", path);
                     println!("thread_path_exists: {}", summary.thread_path_exists);
@@ -509,6 +544,22 @@ fn main() -> anyhow::Result<()> {
                 }
                 if summary.hook_session_id.is_some() {
                     println!("hook_states: {:?}", summary.hook_states);
+                    println!(
+                        "hook_notification_counts: {:?}",
+                        summary.hook_notification_counts
+                    );
+                }
+                if !summary.server_request_counts.is_empty() {
+                    println!("server_request_counts: {:?}", summary.server_request_counts);
+                }
+                if let Some(turn_count) = summary.thread_read_turn_count {
+                    println!("thread_read_turn_count: {}", turn_count);
+                }
+                if let Some(thread_list_count) = summary.thread_list_count {
+                    println!("thread_list_count: {}", thread_list_count);
+                }
+                if let Some(contains_thread) = summary.thread_list_contains_thread {
+                    println!("thread_list_contains_thread: {}", contains_thread);
                 }
                 if !summary.response_errors.is_empty() {
                     println!("response_errors: {:?}", summary.response_errors);
