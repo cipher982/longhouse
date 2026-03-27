@@ -1,6 +1,6 @@
 # Managed-Local Native Codex
 
-Status: In progress
+Status: Demo-ready (E2E verified 2026-03-27)
 Spec: `docs/specs/managed-local-native-codex-demo.md`
 Last updated: 2026-03-27
 
@@ -72,3 +72,5 @@ Ship a managed-local Codex experience where Longhouse is operationally present b
 - (2026-03-27) Loop continue/reply already routes through the transport abstraction: `build_managed_local_send_text_command` builds `codex-bridge send` for `CODEX_APP_SERVER` sessions. Interrupt is now wired via `build_managed_local_interrupt_command` → `codex-bridge interrupt`.
 - (2026-03-27) Tmux fallback is automatic: if `_start_native_codex_bridge` fails, `longhouse codex` retries with tmux transport.
 - (2026-03-27) Rust bridge cleanup: `RpcClient.child` is now `Option<Child>` (no more dummy `true` process for WebSocket clients), and the dead `or_else` fallback in `cmd_codex_bridge_interrupt` was removed.
+- (2026-03-27) Compatibility fix: `--session-source` is now optional in the bridge. Codex v0.117.0 does not support this flag; omitting it defaults to `cli` session source which is the desired behavior.
+- (2026-03-27) **Live E2E smoke test passed**: bridge start → turn submit ("2+2"→"4") → loop continue ("multiply by 10"→"40") → interrupt. Transcript shipped (4 events), runtime events posted (11+ events), provider_session_id correlated to Codex thread ID, summary auto-generated.
