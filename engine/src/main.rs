@@ -333,8 +333,8 @@ enum CodexBridgeCommands {
         #[arg(long, default_value = "codex")]
         codex_bin: String,
 
-        #[arg(long, default_value = "cli")]
-        session_source: String,
+        #[arg(long)]
+        session_source: Option<String>,
 
         #[arg(long)]
         approval_policy: Option<String>,
@@ -381,8 +381,8 @@ enum CodexBridgeCommands {
         #[arg(long, default_value = "codex")]
         codex_bin: String,
 
-        #[arg(long, default_value = "cli")]
-        session_source: String,
+        #[arg(long)]
+        session_source: Option<String>,
 
         #[arg(long)]
         approval_policy: Option<String>,
@@ -748,7 +748,7 @@ fn main() -> anyhow::Result<()> {
                     url,
                     token,
                     codex_bin,
-                    session_source,
+                    session_source: _,
                     approval_policy,
                     sandbox,
                     model,
@@ -765,7 +765,6 @@ fn main() -> anyhow::Result<()> {
                         api_url: url,
                         api_token: token,
                         codex_bin,
-                        session_source,
                         approval_policy,
                         sandbox,
                         model,
