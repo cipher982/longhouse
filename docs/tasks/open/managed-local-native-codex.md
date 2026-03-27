@@ -1,6 +1,7 @@
 # Managed-Local Native Codex
 
 Status: In progress
+Spec: `docs/specs/managed-local-native-codex-demo.md`
 Last updated: 2026-03-27
 
 ## Goal
@@ -40,10 +41,13 @@ Ship a managed-local Codex experience where Longhouse is operationally present b
 - [x] Implement and unit-test server-initiated app-server request handling in the canary, starting with approvals.
 - [ ] Prove a live approval-request round-trip against the real Codex binary.
 - [x] Define the managed-session transport interface in Longhouse (`tmux_legacy` vs `codex_app_server`).
-- [ ] Decide the persistent control bridge for `codex_app_server`: extend the runner protocol for long-lived stdin/stdout sessions, or route native managed Codex through a local sidecar/daemon.
-- [ ] Build an experimental backend launch/control path for app-server-managed Codex sessions.
+- [x] Decide the demo-path control bridge for `codex_app_server`: use a local Rust sidecar/daemon, not the current one-shot runner protocol.
+- [ ] Prove the dual-client topology: stock Codex TUI via `--remote` plus a second Longhouse client attached to the same local app-server/thread.
+- [ ] Build a Rust `longhouse-engine codex-bridge` MVP that owns app-server lifecycle, session/thread correlation, and approval handling.
+- [ ] Build an experimental backend live-sync/control path for app-server-managed Codex sessions.
 - [ ] Correlate Longhouse session IDs with Codex thread IDs durably.
 - [ ] Add a real managed-local native-Codex dogfood path behind a feature flag.
+- [ ] Route Loop continue/reply/interrupt actions through the native Codex bridge.
 - [ ] Keep tmux as an explicit fallback path during rollout.
 
 ## Notes
@@ -55,3 +59,4 @@ Ship a managed-local Codex experience where Longhouse is operationally present b
 - Live validation on 2026-03-27 proved hooks, `thread/read`, and `thread/list` when `sourceKinds` includes both `appServer` and `custom`.
 - Live validation on 2026-03-27 also showed that workspace file writes surface as `fileChange` items/diffs without necessarily producing an approval request, and direct `command/exec` did not trigger an approval request in the basic `/bin/pwd` probe.
 - Current runner transport is not a drop-in app-server bridge: `runner_job_dispatcher` is one-shot and single-active-job-per-runner, while `runner/src/protocol.ts` only supports `exec_request` / `exec_cancel` plus stdout/stderr chunks. There is no persistent stdin channel or process session handle today.
+- Architecture decision for the demo path: stop trying to make tmux invisible. Use a local Rust bridge that owns `codex app-server`, let stock Codex connect through `--remote`, and keep tmux only as fallback.
