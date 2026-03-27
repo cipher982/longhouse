@@ -4,18 +4,36 @@ use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
+use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::time::{sleep, Instant};
+use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
 use walkdir::WalkDir;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppServerTransport {
+    Stdio,
+    WebSocket,
+}
+
+pub fn parse_app_server_transport(value: &str) -> Result<AppServerTransport> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "stdio" => Ok(AppServerTransport::Stdio),
+        "websocket" | "ws" => Ok(AppServerTransport::WebSocket),
+        other => bail!("Unsupported app-server transport '{other}'. Use stdio or websocket"),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CanaryConfig {
@@ -27,12 +45,17 @@ pub struct CanaryConfig {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub codex_bin: String,
+    pub app_server_transport: AppServerTransport,
+    pub listen_port: u16,
     pub session_source: String,
     pub resume_thread_id: Option<String>,
     pub steer_text: Option<String>,
     pub steer_after_ms: u64,
     pub interrupt_after_ms: Option<u64>,
     pub auto_approve: bool,
+    pub spawn_remote_tui: bool,
+    pub remote_tui_grace_ms: u64,
+    pub remote_tui_log: Option<PathBuf>,
     pub probe_thread_read: bool,
     pub probe_thread_list: bool,
     pub event_timeout_secs: u64,
@@ -46,6 +69,8 @@ pub struct CanaryConfig {
 pub struct CanarySummary {
     pub codex_bin: String,
     pub cwd: String,
+    pub app_server_transport: AppServerTransport,
+    pub app_server_ws_url: Option<String>,
     pub session_source: String,
     pub sandbox: String,
     pub isolated_home: bool,
@@ -66,6 +91,11 @@ pub struct CanarySummary {
     pub thread_read_turn_count: Option<usize>,
     pub thread_list_count: Option<usize>,
     pub thread_list_contains_thread: Option<bool>,
+    pub remote_tui_spawned: bool,
+    pub remote_tui_alive_after_grace: Option<bool>,
+    pub remote_tui_alive_before_shutdown: Option<bool>,
+    pub remote_tui_log: Option<String>,
+    pub remote_tui_stderr_lines: Vec<String>,
     pub log_jsonl: Option<String>,
     pub sent_requests: BTreeMap<String, usize>,
     pub received_notifications: BTreeMap<String, usize>,
@@ -89,10 +119,24 @@ enum ScheduledAction {
 #[derive(Debug)]
 struct RpcClient {
     child: Child,
-    stdin: ChildStdin,
+    outbound: RpcOutbound,
     events_rx: mpsc::UnboundedReceiver<StreamEvent>,
     next_request_id: u64,
     pending_methods: BTreeMap<u64, String>,
+    ws_url: Option<String>,
+}
+
+#[derive(Debug)]
+enum RpcOutbound {
+    Stdio(ChildStdin),
+    WebSocket(mpsc::UnboundedSender<String>),
+}
+
+#[derive(Debug)]
+struct RemoteTuiHandle {
+    child: Child,
+    log_path: PathBuf,
+    stderr_lines: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Debug, Default)]
@@ -165,6 +209,9 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
     if !config.cwd.is_dir() {
         bail!("cwd does not exist: {}", config.cwd.display());
     }
+    if config.spawn_remote_tui && config.app_server_transport != AppServerTransport::WebSocket {
+        bail!("--spawn-remote-tui requires --app-server-transport websocket");
+    }
     if config.verify_hooks
         && config.resume_thread_id.is_some()
         && config.home_override.is_none()
@@ -218,7 +265,10 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         &mut logger,
     )
     .await?;
+    let app_server_ws_url = client.ws_url.clone();
     let mut state = ObservationState::default();
+    let mut remote_tui = None;
+    let mut remote_tui_alive_after_grace = None;
 
     let deadline = Instant::now() + Duration::from_secs(config.event_timeout_secs);
     let initialize_response = send_request(
@@ -282,8 +332,33 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
     let thread_path = extract_string(&thread_response, &["thread", "path"]);
     state.thread_id = Some(thread_id.clone());
 
+    if config.spawn_remote_tui {
+        let mut handle = spawn_remote_tui(
+            &config,
+            app_server_ws_url
+                .as_deref()
+                .context("websocket transport did not expose a listen URL")?,
+            &thread_id,
+            spawn_home_override,
+        )
+        .await?;
+        sleep(Duration::from_millis(config.remote_tui_grace_ms)).await;
+        let alive = handle.is_alive().await?;
+        remote_tui_alive_after_grace = Some(alive);
+        if !alive {
+            let stderr_lines = handle.stderr_lines().await;
+            let log_tail = handle.log_tail(4000);
+            bail!(
+                "remote TUI exited early after launch. stderr={:?} log_tail={}",
+                stderr_lines,
+                log_tail
+            );
+        }
+        remote_tui = Some(handle);
+    }
+
     let mut turn_params = json!({
-        "threadId": thread_id,
+        "threadId": thread_id.clone(),
         "input": [{"type": "text", "text": config.prompt}],
     });
     if let Some(model) = config.model.as_deref() {
@@ -406,7 +481,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
             json!({
                 "limit": 50,
                 "cwd": config.cwd.to_string_lossy(),
-                "sourceKinds": ["appServer", "custom"],
+                "sourceKinds": ["appServer", "custom", "cli", "vscode"],
             }),
             deadline,
         )
@@ -435,6 +510,21 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         Vec::new()
     };
 
+    let remote_tui_alive_before_shutdown = match remote_tui.as_mut() {
+        Some(handle) => Some(handle.is_alive().await?),
+        None => None,
+    };
+    let remote_tui_log = remote_tui
+        .as_ref()
+        .map(|handle| handle.log_path.display().to_string());
+    let remote_tui_stderr_lines = match remote_tui.as_ref() {
+        Some(handle) => handle.stderr_lines().await,
+        None => Vec::new(),
+    };
+    if let Some(handle) = remote_tui.as_mut() {
+        handle.shutdown().await?;
+    }
+
     shutdown_child(&mut client).await?;
 
     let isolated_home_path = if config.keep_home {
@@ -458,6 +548,8 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
     let summary = CanarySummary {
         codex_bin: config.codex_bin,
         cwd: config.cwd.display().to_string(),
+        app_server_transport: config.app_server_transport,
+        app_server_ws_url,
         session_source: config.session_source,
         sandbox: config.sandbox,
         isolated_home: config.isolate_home,
@@ -485,6 +577,11 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         thread_read_turn_count,
         thread_list_count,
         thread_list_contains_thread,
+        remote_tui_spawned: config.spawn_remote_tui,
+        remote_tui_alive_after_grace,
+        remote_tui_alive_before_shutdown,
+        remote_tui_log,
+        remote_tui_stderr_lines,
         log_jsonl: config.log_jsonl.map(|path| path.display().to_string()),
         sent_requests: state.sent_requests,
         received_notifications: state.received_notifications,
@@ -511,19 +608,27 @@ async fn spawn_client(
     hook_session_id: Option<&str>,
     logger: &mut JsonlLogger,
 ) -> Result<RpcClient> {
+    let listen_arg = match config.app_server_transport {
+        AppServerTransport::Stdio => "stdio://".to_string(),
+        AppServerTransport::WebSocket => format!("ws://127.0.0.1:{}", config.listen_port),
+    };
     let mut command = Command::new(&config.codex_bin);
     command
         .arg("app-server")
         .arg("--listen")
-        .arg("stdio://")
+        .arg(&listen_arg)
         .arg("--enable")
         .arg("codex_hooks")
         .arg("--session-source")
         .arg(&config.session_source)
-        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if config.app_server_transport == AppServerTransport::Stdio {
+        command.stdin(Stdio::piped());
+    } else {
+        command.stdin(Stdio::null());
+    }
     if let Some(home) = home_override {
         command.env("HOME", home);
         command.env("CODEX_HOME", home.join(".codex"));
@@ -535,7 +640,6 @@ async fn spawn_client(
     let mut child = command
         .spawn()
         .with_context(|| format!("spawning `{}` app-server", config.codex_bin))?;
-    let stdin = child.stdin.take().context("missing app-server stdin")?;
     let stdout = child.stdout.take().context("missing app-server stdout")?;
     let stderr = child.stderr.take().context("missing app-server stderr")?;
 
@@ -555,9 +659,16 @@ async fn spawn_client(
         }
     });
     let stderr_tx = events_tx.clone();
+    let (ws_listen_tx, ws_listen_rx) = oneshot::channel();
     tokio::spawn(async move {
+        let mut maybe_ws_listen_tx = Some(ws_listen_tx);
         let mut lines = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            if let Some(url) = extract_websocket_listen_url(&line) {
+                if let Some(tx) = maybe_ws_listen_tx.take() {
+                    let _ = tx.send(url);
+                }
+            }
             let _ = stderr_tx.send(StreamEvent::Stderr(line));
         }
     });
@@ -576,12 +687,63 @@ async fn spawn_client(
         ),
     )?;
 
+    let (outbound, ws_url) = match config.app_server_transport {
+        AppServerTransport::Stdio => (
+            RpcOutbound::Stdio(child.stdin.take().context("missing app-server stdin")?),
+            None,
+        ),
+        AppServerTransport::WebSocket => {
+            let ws_url = tokio::time::timeout(Duration::from_secs(10), ws_listen_rx)
+                .await
+                .context("timed out waiting for websocket listen URL")?
+                .context("app-server websocket listener did not announce a URL")?;
+            let (ws_stream, _response) = connect_async(ws_url.as_str())
+                .await
+                .with_context(|| format!("connecting websocket client to {ws_url}"))?;
+            let (mut ws_write, mut ws_read) = ws_stream.split();
+            let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+            tokio::spawn(async move {
+                while let Some(line) = outbound_rx.recv().await {
+                    if ws_write.send(Message::Text(line.into())).await.is_err() {
+                        break;
+                    }
+                }
+                let _ = ws_write.close().await;
+            });
+            let ws_events_tx = events_tx.clone();
+            tokio::spawn(async move {
+                while let Some(message) = ws_read.next().await {
+                    match message {
+                        Ok(Message::Text(text)) => match serde_json::from_str::<Value>(&text) {
+                            Ok(value) => {
+                                let _ = ws_events_tx.send(StreamEvent::Rpc(value));
+                            }
+                            Err(err) => {
+                                let _ = ws_events_tx
+                                    .send(StreamEvent::StdoutParseError(format!("{err}: {text}")));
+                            }
+                        },
+                        Ok(Message::Close(_)) => break,
+                        Ok(_) => {}
+                        Err(err) => {
+                            let _ = ws_events_tx
+                                .send(StreamEvent::Stderr(format!("websocket read error: {err}")));
+                            break;
+                        }
+                    }
+                }
+            });
+            (RpcOutbound::WebSocket(outbound_tx), Some(ws_url))
+        }
+    };
+
     Ok(RpcClient {
         child,
-        stdin,
+        outbound,
         events_rx,
         next_request_id: 1,
         pending_methods: BTreeMap::new(),
+        ws_url,
     })
 }
 
@@ -596,10 +758,22 @@ async fn send_notification(
         "params": params,
     });
     logger.write_value("client_notification", payload.clone())?;
-    let line = serde_json::to_string(&payload)?;
-    client.stdin.write_all(line.as_bytes()).await?;
-    client.stdin.write_all(b"\n").await?;
-    client.stdin.flush().await?;
+    send_payload(client, &payload).await
+}
+
+async fn send_payload(client: &mut RpcClient, payload: &Value) -> Result<()> {
+    let line = serde_json::to_string(payload)?;
+    match &mut client.outbound {
+        RpcOutbound::Stdio(stdin) => {
+            stdin.write_all(line.as_bytes()).await?;
+            stdin.write_all(b"\n").await?;
+            stdin.flush().await?;
+        }
+        RpcOutbound::WebSocket(tx) => {
+            tx.send(line)
+                .map_err(|_| anyhow!("websocket outbound channel closed"))?;
+        }
+    }
     Ok(())
 }
 
@@ -624,10 +798,7 @@ async fn send_request(
         "params": params,
     });
     logger.write_value("client_request", payload.clone())?;
-    let line = serde_json::to_string(&payload)?;
-    client.stdin.write_all(line.as_bytes()).await?;
-    client.stdin.write_all(b"\n").await?;
-    client.stdin.flush().await?;
+    send_payload(client, &payload).await?;
 
     loop {
         let event = recv_event(client, deadline).await?;
@@ -801,11 +972,7 @@ async fn send_response(
         "result": result,
     });
     logger.write_value("client_response", payload.clone())?;
-    let line = serde_json::to_string(&payload)?;
-    client.stdin.write_all(line.as_bytes()).await?;
-    client.stdin.write_all(b"\n").await?;
-    client.stdin.flush().await?;
-    Ok(())
+    send_payload(client, &payload).await
 }
 
 fn build_request_user_input_answers(params: &Value, auto_approve: bool) -> Value {
@@ -868,12 +1035,114 @@ fn process_rpc_value(value: Value, state: &mut ObservationState) -> Result<()> {
 }
 
 async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
-    let _ = client.stdin.shutdown().await;
+    if let RpcOutbound::Stdio(stdin) = &mut client.outbound {
+        let _ = stdin.shutdown().await;
+    }
     if client.child.try_wait()?.is_none() {
         let _ = client.child.start_kill();
     }
     let _ = client.child.wait().await;
     Ok(())
+}
+
+fn extract_websocket_listen_url(line: &str) -> Option<String> {
+    let marker = "listening on:";
+    let (_, tail) = line.split_once(marker)?;
+    let candidate = tail.trim();
+    if candidate.starts_with("ws://") || candidate.starts_with("wss://") {
+        Some(candidate.to_string())
+    } else {
+        None
+    }
+}
+
+async fn spawn_remote_tui(
+    config: &CanaryConfig,
+    ws_url: &str,
+    thread_id: &str,
+    home_override: Option<&Path>,
+) -> Result<RemoteTuiHandle> {
+    let log_path = config.remote_tui_log.clone().unwrap_or_else(|| {
+        std::env::temp_dir().join(format!("longhouse-codex-remote-{}.log", Uuid::new_v4()))
+    });
+    if let Some(parent) = log_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("creating remote TUI log directory {}", parent.display()))?;
+    }
+    let remote_cmd = format!(
+        "exec {} resume {} --enable tui_app_server --remote {} --no-alt-screen",
+        shell_quote(&config.codex_bin),
+        shell_quote(thread_id),
+        shell_quote(ws_url),
+    );
+    let mut command = Command::new("script");
+    command
+        .arg("-q")
+        .arg(&log_path)
+        .arg("zsh")
+        .arg("-lc")
+        .arg(remote_cmd)
+        .current_dir(&config.cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    if let Some(home) = home_override {
+        command.env("HOME", home);
+        command.env("CODEX_HOME", home.join(".codex"));
+    }
+    let mut child = command
+        .spawn()
+        .context("spawning remote Codex TUI through `script`")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("missing remote TUI stderr pipe")?;
+    let stderr_lines = Arc::new(Mutex::new(Vec::new()));
+    let stderr_lines_clone = stderr_lines.clone();
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            stderr_lines_clone.lock().await.push(line);
+        }
+    });
+
+    Ok(RemoteTuiHandle {
+        child,
+        log_path,
+        stderr_lines,
+    })
+}
+
+fn shell_quote(value: &str) -> String {
+    let escaped = value.replace('\'', r#"'\''"#);
+    format!("'{escaped}'")
+}
+
+impl RemoteTuiHandle {
+    async fn is_alive(&mut self) -> Result<bool> {
+        Ok(self.child.try_wait()?.is_none())
+    }
+
+    async fn stderr_lines(&self) -> Vec<String> {
+        self.stderr_lines.lock().await.clone()
+    }
+
+    fn log_tail(&self, max_chars: usize) -> String {
+        let text = fs::read_to_string(&self.log_path).unwrap_or_default();
+        if text.len() <= max_chars {
+            return text;
+        }
+        text[text.len() - max_chars..].to_string()
+    }
+
+    async fn shutdown(&mut self) -> Result<()> {
+        if self.child.try_wait()?.is_none() {
+            let _ = self.child.start_kill();
+        }
+        let _ = self.child.wait().await;
+        Ok(())
+    }
 }
 
 fn extract_string(value: &Value, path: &[&str]) -> Option<String> {
@@ -1122,6 +1391,18 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn extract_websocket_listen_url_parses_startup_line() {
+        assert_eq!(
+            extract_websocket_listen_url("  listening on: ws://127.0.0.1:4601"),
+            Some("ws://127.0.0.1:4601".to_string())
+        );
+        assert_eq!(
+            extract_websocket_listen_url("readyz: http://127.0.0.1:4601/readyz"),
+            None
+        );
+    }
+
     #[tokio::test]
     async fn canary_runs_against_fake_codex_app_server() {
         let temp = tempfile::tempdir().unwrap();
@@ -1181,12 +1462,17 @@ for line in sys.stdin:
             model: None,
             effort: None,
             codex_bin: bin.display().to_string(),
+            app_server_transport: AppServerTransport::Stdio,
+            listen_port: 0,
             session_source: "longhouse-test".to_string(),
             resume_thread_id: None,
             steer_text: None,
             steer_after_ms: 250,
             interrupt_after_ms: None,
             auto_approve: false,
+            spawn_remote_tui: false,
+            remote_tui_grace_ms: 3000,
+            remote_tui_log: None,
             probe_thread_read: true,
             probe_thread_list: true,
             event_timeout_secs: 5,
@@ -1287,12 +1573,17 @@ for line in sys.stdin:
             model: None,
             effort: None,
             codex_bin: bin.display().to_string(),
+            app_server_transport: AppServerTransport::Stdio,
+            listen_port: 0,
             session_source: "longhouse-test".to_string(),
             resume_thread_id: None,
             steer_text: None,
             steer_after_ms: 250,
             interrupt_after_ms: None,
             auto_approve: true,
+            spawn_remote_tui: false,
+            remote_tui_grace_ms: 3000,
+            remote_tui_log: None,
             probe_thread_read: false,
             probe_thread_list: false,
             event_timeout_secs: 5,

@@ -124,7 +124,7 @@ Responsibilities:
 - start and supervise `codex app-server`
 - prefer loopback websocket transport (`ws://127.0.0.1:<port>`)
 - force-enable `codex_hooks`
-- stamp `--session-source longhouse_managed`
+- run the demo path with `--session-source cli` so native Codex history/pickers continue to treat the thread like a normal CLI session
 - connect to app-server as Longhouse's control/observer client
 - maintain the Longhouse session ID ↔ Codex thread ID mapping
 - receive `thread/*`, `turn/*`, `item/*`, `hook/*`, and approval requests
@@ -174,7 +174,7 @@ But hooks should no longer be the primary live-sync mechanism for the managed-na
 2. Longhouse creates or reserves a managed-local session record in the backend.
 3. The local CLI starts `longhouse-engine codex-bridge` with the session ID, cwd, and auth context.
 4. The bridge starts `codex app-server` on loopback websocket and connects as Longhouse's control client.
-5. The wrapper launches `codex --remote` against that local websocket.
+5. The wrapper launches `codex resume <thread_id> --enable tui_app_server --remote` against that local websocket.
 6. The bridge correlates the active Codex thread with the Longhouse session and reports readiness.
 
 ### Live sync
@@ -195,17 +195,12 @@ But hooks should no longer be the primary live-sync mechanism for the managed-na
 
 There is one remaining launch-sequence question:
 
-- should the bridge create/resume the thread first and let the TUI attach to it?
-- or should the TUI create the thread and let the bridge adopt it immediately?
+This is now resolved for the demo path:
 
-This is a validation item, not an architectural blocker.
+- the bridge should create or resume the thread first
+- the TUI should attach to that exact thread with `codex resume <thread_id> --enable tui_app_server --remote ...`
 
-The recommended bias is:
-
-- let the bridge own the session if remote TUI attach UX is clean
-- otherwise let the TUI create the first thread and have the bridge adopt/correlate it
-
-Either way, the bridge must end up owning the durable Longhouse mapping and away-mode control path.
+That gives Longhouse the deterministic thread mapping up front and avoids a race to discover whichever fresh thread the TUI created.
 
 ## Non-Goals For This Demo Slice
 
@@ -227,7 +222,7 @@ Prove the local topology before product integration:
 - Longhouse bridge as a second websocket client
 - shared visibility into the same thread
 - hooks still firing under the same managed session
-- clarity on whether the bridge or TUI should own initial thread creation
+- confirmation that bridge-first thread ownership is viable on the real binary
 
 Exit criteria:
 
