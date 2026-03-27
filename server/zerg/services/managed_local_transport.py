@@ -1,8 +1,8 @@
 """Managed-local transport seam.
 
-Tmux is the only implemented transport today. `codex_app_server` is reserved so
-launch/control callers can stop hard-coding tmux semantics before the native
-Codex path is wired up.
+tmux still owns the fully runner-launched path, but native Codex managed-local
+sessions now use a local `longhouse-engine codex-bridge` sidecar for reattach
+and remote control.
 """
 
 from __future__ import annotations
@@ -40,6 +40,36 @@ class ManagedLocalTransportError(ValueError):
 
 class ManagedLocalTransportNotImplementedError(ManagedLocalTransportError):
     """Raised when a valid transport exists conceptually but is not wired yet."""
+
+
+def _build_engine_bridge_shell_command(
+    *,
+    session_id: str,
+    subcommand: str,
+    args: tuple[str, ...] = (),
+    required_commands: tuple[str, ...] = ("longhouse-engine",),
+    exec_engine: bool = False,
+) -> str:
+    engine_invocation = " ".join(
+        [
+            '"$engine"',
+            "codex-bridge",
+            subcommand,
+            "--session-id",
+            shlex.quote(session_id),
+            *args,
+        ]
+    )
+    inner_parts = [
+        build_managed_local_shell_prelude(
+            require_tmux=False,
+            required_commands=required_commands,
+        ),
+        'engine="$(command -v longhouse-engine || true)"',
+        '[ -n "$engine" ] || { echo "longhouse-engine is not available" >&2; exit 12; }',
+        (f"exec {engine_invocation}" if exec_engine else engine_invocation),
+    ]
+    return f"zsh -lc {shlex.quote('; '.join(inner_parts))}"
 
 
 def coerce_managed_transport(
@@ -111,6 +141,16 @@ def build_managed_local_attach_command(*, session: AgentSession) -> str | None:
         getattr(session, "managed_transport", None),
         default=ManagedSessionTransport.TMUX,
     )
+    if transport == ManagedSessionTransport.CODEX_APP_SERVER:
+        session_id = str(getattr(session, "id", "") or "").strip()
+        if not session_id:
+            return None
+        return _build_engine_bridge_shell_command(
+            session_id=session_id,
+            subcommand="attach",
+            required_commands=("longhouse-engine", "codex"),
+            exec_engine=True,
+        )
     if transport != ManagedSessionTransport.TMUX:
         return None
     session_name = str(getattr(session, "managed_session_name", "") or "").strip()
@@ -131,18 +171,11 @@ def build_managed_local_send_text_command(*, session: AgentSession, text: str) -
         session_id = str(getattr(session, "id", "") or "").strip()
         if not session_id:
             raise ManagedLocalTransportError("Managed local session is missing session ID")
-        inner = "; ".join(
-            [
-                build_managed_local_shell_prelude(
-                    require_tmux=False,
-                    required_commands=("longhouse-engine",),
-                ),
-                'engine="$(command -v longhouse-engine || true)"',
-                '[ -n "$engine" ] || { echo "longhouse-engine is not available" >&2; exit 12; }',
-                f'"$engine" codex-bridge send --session-id {shlex.quote(session_id)} --message {shlex.quote(text)}',
-            ]
+        return _build_engine_bridge_shell_command(
+            session_id=session_id,
+            subcommand="send",
+            args=("--text", shlex.quote(text)),
         )
-        return f"zsh -lc {shlex.quote(inner)}"
     if transport != ManagedSessionTransport.TMUX:
         raise ManagedLocalTransportNotImplementedError(f"Managed local send-text is not implemented for transport '{transport.value}'")
 

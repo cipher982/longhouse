@@ -61,14 +61,20 @@ def test_build_managed_local_launch_transport_plan_rejects_unimplemented_transpo
         raise AssertionError("expected ManagedLocalTransportNotImplementedError")
 
 
-def test_build_managed_local_attach_command_returns_none_for_non_tmux_transport():
+def test_build_managed_local_attach_command_uses_engine_bridge_for_codex_app_server():
     session = SimpleNamespace(
+        id="session-123",
         managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
         managed_session_name="lh-demo",
         managed_tmux_tmpdir="/tmp/lh-transport",
     )
 
-    assert build_managed_local_attach_command(session=session) is None
+    command = build_managed_local_attach_command(session=session)
+    assert command is not None
+    inner = _wrapped_inner(command)
+    assert 'engine="$(command -v longhouse-engine || true)"' in inner
+    assert "command -v codex" in inner
+    assert 'exec "$engine" codex-bridge attach --session-id session-123' in inner
 
 
 def test_build_managed_local_send_text_command_uses_engine_bridge_for_codex_app_server():
@@ -81,7 +87,7 @@ def test_build_managed_local_send_text_command_uses_engine_bridge_for_codex_app_
     command = build_managed_local_send_text_command(session=session, text="continue")
     inner = _wrapped_inner(command)
     assert 'engine="$(command -v longhouse-engine || true)"' in inner
-    assert '"$engine" codex-bridge send --session-id session-123 --message continue' in inner
+    assert '"$engine" codex-bridge send --session-id session-123 --text continue' in inner
 
 
 def test_build_managed_local_send_text_command_uses_codex_bracketed_paste_for_tmux():
@@ -98,6 +104,6 @@ def test_build_managed_local_send_text_command_uses_codex_bracketed_paste_for_tm
     assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} paste-buffer -dpr -b send-lh-demo -t lh-demo" in inner
 
 
-def test_managed_local_transport_supports_interactive_chat_only_for_tmux():
+def test_managed_local_transport_supports_interactive_chat_for_tmux_and_native_codex():
     assert managed_local_transport_supports_interactive_chat(ManagedSessionTransport.TMUX.value) is True
     assert managed_local_transport_supports_interactive_chat(ManagedSessionTransport.CODEX_APP_SERVER.value) is True
