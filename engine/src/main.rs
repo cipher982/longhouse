@@ -1,4 +1,5 @@
 mod bench;
+mod codex_app_server_canary;
 mod config;
 mod daemon;
 mod discovery;
@@ -19,6 +20,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 
+use codex_app_server_canary::{run as run_codex_app_server_canary, CanaryConfig};
 use config::ShipperConfig;
 use pipeline::compressor::CompressionAlgo;
 use shipping::client::ShipperClient;
@@ -184,6 +186,73 @@ enum Commands {
         /// When using --file, only ship once the unread range includes assistant/tool reply evidence
         #[arg(long)]
         require_reply_evidence: bool,
+    },
+
+    /// Dev canary: talk directly to `codex app-server` over stdio and capture the full stream
+    CodexAppServerCanary {
+        /// Initial user prompt to send as the first turn
+        #[arg(long)]
+        prompt: String,
+
+        /// Working directory to bind the thread to (default: current directory)
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+
+        /// Optional model override for thread/turn start
+        #[arg(long)]
+        model: Option<String>,
+
+        /// Optional reasoning effort override for turn/start
+        #[arg(long)]
+        effort: Option<String>,
+
+        /// Codex binary to invoke
+        #[arg(long, default_value = "codex")]
+        codex_bin: String,
+
+        /// Session source tag stamped into new threads
+        #[arg(long, default_value = "longhouse_canary")]
+        session_source: String,
+
+        /// Resume an existing Codex app-server thread instead of creating a new one
+        #[arg(long)]
+        resume_thread_id: Option<String>,
+
+        /// Optional follow-up input to send via turn/steer after the initial turn starts
+        #[arg(long)]
+        steer_text: Option<String>,
+
+        /// Delay before sending --steer-text
+        #[arg(long, default_value = "1500")]
+        steer_after_ms: u64,
+
+        /// Delay before sending turn/interrupt
+        #[arg(long)]
+        interrupt_after_ms: Option<u64>,
+
+        /// Overall timeout for the full canary run
+        #[arg(long, default_value = "60")]
+        event_timeout_secs: u64,
+
+        /// Write every client/server message as JSONL for debugging
+        #[arg(long)]
+        log_jsonl: Option<PathBuf>,
+
+        /// Print the final summary as JSON instead of human-readable text
+        #[arg(long)]
+        json: bool,
+
+        /// Use the real HOME instead of the default isolated temp HOME
+        #[arg(long)]
+        real_home: bool,
+
+        /// Keep the isolated temp HOME after the run for manual inspection
+        #[arg(long)]
+        keep_home: bool,
+
+        /// Verify Codex hook presence by watching the isolated outbox for idle/thinking/idle
+        #[arg(long)]
+        verify_hooks: bool,
     },
 }
 
@@ -370,6 +439,65 @@ fn main() -> anyhow::Result<()> {
                     algo,
                     max_batch_bytes,
                 ))?;
+            }
+        }
+        Commands::CodexAppServerCanary {
+            prompt,
+            cwd,
+            model,
+            effort,
+            codex_bin,
+            session_source,
+            resume_thread_id,
+            steer_text,
+            steer_after_ms,
+            interrupt_after_ms,
+            event_timeout_secs,
+            log_jsonl,
+            json,
+            real_home,
+            keep_home,
+            verify_hooks,
+        } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            let summary = rt.block_on(run_codex_app_server_canary(CanaryConfig {
+                prompt,
+                cwd: cwd.unwrap_or(std::env::current_dir()?),
+                model,
+                effort,
+                codex_bin,
+                session_source,
+                resume_thread_id,
+                steer_text,
+                steer_after_ms,
+                interrupt_after_ms,
+                event_timeout_secs,
+                log_jsonl,
+                isolate_home: !real_home,
+                keep_home,
+                verify_hooks,
+            }))?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                println!("thread_id: {}", summary.thread_id);
+                println!("turn_id: {}", summary.turn_id);
+                println!("turn_status: {}", summary.turn_status);
+                if !summary.assistant_text.is_empty() {
+                    println!("assistant_text: {}", summary.assistant_text);
+                }
+                if let Some(path) = summary.log_jsonl.as_deref() {
+                    println!("log_jsonl: {}", path);
+                }
+                if let Some(home) = summary.isolated_home_path.as_deref() {
+                    println!("isolated_home: {}", home);
+                }
+                if summary.hook_session_id.is_some() {
+                    println!("hook_states: {:?}", summary.hook_states);
+                }
+                if !summary.response_errors.is_empty() {
+                    println!("response_errors: {:?}", summary.response_errors);
+                }
             }
         }
     }
@@ -818,7 +946,11 @@ async fn cmd_ship_file(
         session_id_override,
     )?;
     let mut reply_evidence_pending = false;
-    if require_reply_evidence && prepared.as_ref().is_some_and(|item| !item.has_reply_evidence) {
+    if require_reply_evidence
+        && prepared
+            .as_ref()
+            .is_some_and(|item| !item.has_reply_evidence)
+    {
         reply_evidence_pending = true;
         prepared = None;
     }
@@ -859,7 +991,9 @@ async fn cmd_ship_file(
                 session_id_override,
             )?;
             if require_reply_evidence
-                && prepared.as_ref().is_some_and(|item| !item.has_reply_evidence)
+                && prepared
+                    .as_ref()
+                    .is_some_and(|item| !item.has_reply_evidence)
             {
                 reply_evidence_pending = true;
                 prepared = None;
@@ -950,10 +1084,7 @@ async fn cmd_ship_file(
                 } else if replay_had_connect_error {
                     println!("Replay deferred due to connection error");
                 } else if replay_failed > 0 {
-                    println!(
-                        "Replay deferred after {} replay failure(s)",
-                        replay_failed
-                    );
+                    println!("Replay deferred after {} replay failure(s)", replay_failed);
                 } else {
                     println!("No new events");
                 }
@@ -1294,7 +1425,10 @@ mod tests {
         let file_str = file.to_string_lossy().to_string();
         assert_eq!(file_state.get_offset(&file_str).unwrap(), 0);
         assert_eq!(file_state.get_queued_offset(&file_str).unwrap(), 0);
-        assert!(spool.pending_entries_for_path_now(&file_str, 10).unwrap().is_empty());
+        assert!(spool
+            .pending_entries_for_path_now(&file_str, 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
