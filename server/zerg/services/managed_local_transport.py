@@ -7,9 +7,11 @@ Codex path is wired up.
 
 from __future__ import annotations
 
+import shlex
 from dataclasses import dataclass
 
 from zerg.models.agents import AgentSession
+from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_attach_command
 from zerg.services.managed_local_tmux import build_tmux_capture_command
 from zerg.services.managed_local_tmux import build_tmux_current_command_command
@@ -56,7 +58,8 @@ def coerce_managed_transport(
 def managed_local_transport_supports_interactive_chat(
     value: str | ManagedSessionTransport | None,
 ) -> bool:
-    return coerce_managed_transport(value, default=ManagedSessionTransport.TMUX) == ManagedSessionTransport.TMUX
+    resolved = coerce_managed_transport(value, default=ManagedSessionTransport.TMUX)
+    return resolved in {ManagedSessionTransport.TMUX, ManagedSessionTransport.CODEX_APP_SERVER}
 
 
 def build_managed_local_launch_transport_plan(
@@ -124,6 +127,22 @@ def build_managed_local_send_text_command(*, session: AgentSession, text: str) -
         getattr(session, "managed_transport", None),
         default=ManagedSessionTransport.TMUX,
     )
+    if transport == ManagedSessionTransport.CODEX_APP_SERVER:
+        session_id = str(getattr(session, "id", "") or "").strip()
+        if not session_id:
+            raise ManagedLocalTransportError("Managed local session is missing session ID")
+        inner = "; ".join(
+            [
+                build_managed_local_shell_prelude(
+                    require_tmux=False,
+                    required_commands=("longhouse-engine",),
+                ),
+                'engine="$(command -v longhouse-engine || true)"',
+                '[ -n "$engine" ] || { echo "longhouse-engine is not available" >&2; exit 12; }',
+                f'"$engine" codex-bridge send --session-id {shlex.quote(session_id)} --message {shlex.quote(text)}',
+            ]
+        )
+        return f"zsh -lc {shlex.quote(inner)}"
     if transport != ManagedSessionTransport.TMUX:
         raise ManagedLocalTransportNotImplementedError(f"Managed local send-text is not implemented for transport '{transport.value}'")
 

@@ -12,6 +12,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.cli import claude as claude_cli
 from zerg.cli import codex as codex_cli
 from zerg.cli.main import app
+from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 
 
@@ -56,6 +57,7 @@ def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path
                 "provider_session_id": "provider-123",
                 "attach_command": "zsh -lc 'exec tmux attach -t lh-demo'",
                 "source_runner_name": "work-laptop",
+                "managed_transport": "codex_app_server",
             },
         )
     )
@@ -71,11 +73,13 @@ def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path
         loop_mode=SessionLoopMode.AUTOPILOT,
         name="Demo session",
         machine_name="work-laptop",
+        managed_transport=ManagedSessionTransport.CODEX_APP_SERVER,
     )
 
     assert result.session_id == "session-123"
     assert result.provider_session_id == "provider-123"
     assert result.attach_command == "zsh -lc 'exec tmux attach -t lh-demo'"
+    assert result.managed_transport == ManagedSessionTransport.CODEX_APP_SERVER
     assert fake_client.calls == [
         {
             "url": "https://longhouse.test/api/sessions/managed-local/this-device",
@@ -89,15 +93,16 @@ def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path
                 "display_name": "Demo session",
                 "loop_mode": "autopilot",
                 "machine_name": "work-laptop",
+                "managed_transport": "codex_app_server",
             },
         }
     ]
 
 
-def test_codex_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp_path):
+def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     runner = CliRunner()
-    attach_calls: list[str] = []
     open_calls: list[str] = []
+    native_tui_calls: list[tuple[str, str, str]] = []
 
     monkeypatch.setattr(
         codex_cli,
@@ -111,13 +116,19 @@ def test_codex_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp_
         lambda **_kwargs: codex_cli.ManagedLocalLaunchResponse(
             session_id="session-123",
             provider_session_id="provider-123",
-            attach_command="zsh -lc 'exec tmux attach -t lh-demo'",
+            attach_command="",
             source_runner_name="work-laptop",
+            managed_transport=ManagedSessionTransport.CODEX_APP_SERVER,
         ),
     )
-    monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: True)
-    monkeypatch.setattr(claude_cli, "_run_attach_command", lambda command: attach_calls.append(command) or 0)
-    monkeypatch.setattr(claude_cli, "_open_session_url", lambda url: open_calls.append(url) or True)
+    monkeypatch.setattr(codex_cli, "_start_native_codex_bridge", lambda **_kwargs: ("thr_123", "ws://127.0.0.1:4800"))
+    monkeypatch.setattr(codex_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(
+        codex_cli,
+        "_run_native_codex_tui",
+        lambda *, thread_id, ws_url, cwd: native_tui_calls.append((thread_id, ws_url, str(cwd))) or 0,
+    )
+    monkeypatch.setattr(codex_cli, "_open_session_url", lambda url: open_calls.append(url) or True)
 
     result = runner.invoke(
         app,
@@ -141,8 +152,44 @@ def test_codex_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp_
     assert "Session ID: session-123" in result.output
     assert "Provider session ID: provider-123" in result.output
     assert "Session URL: https://longhouse.test/timeline/session-123" in result.output
-    assert "Attach: zsh -lc 'exec tmux attach -t lh-demo'" in result.output
+    assert "Starting native Codex bridge..." in result.output
+    assert "Codex thread: thr_123" in result.output
+    assert "Remote target: ws://127.0.0.1:4800" in result.output
     assert "Opening session in browser..." in result.output
     assert "Attaching..." in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
-    assert attach_calls == ["zsh -lc 'exec tmux attach -t lh-demo'"]
+    assert native_tui_calls == [("thr_123", "ws://127.0.0.1:4800", str(tmp_path))]
+
+
+def test_codex_command_tmux_fallback_uses_generic_finalize(monkeypatch, tmp_path):
+    runner = CliRunner()
+    finalize_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        codex_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        codex_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: codex_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="zsh -lc 'exec tmux attach -t lh-demo'",
+            source_runner_name="work-laptop",
+            managed_transport=ManagedSessionTransport.TMUX,
+        ),
+    )
+    monkeypatch.setattr(
+        codex_cli,
+        "_finalize_managed_local_launch",
+        lambda **kwargs: finalize_calls.append(kwargs),
+    )
+
+    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path), "--transport", "tmux"])
+
+    assert result.exit_code == 0, result.output
+    assert len(finalize_calls) == 1
+    assert finalize_calls[0]["provider_label"] == "Codex"

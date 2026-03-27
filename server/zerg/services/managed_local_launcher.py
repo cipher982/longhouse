@@ -214,14 +214,22 @@ def _build_codex_entry_command(
     return f"zsh -lc {shlex.quote(inner)}"
 
 
-def _build_preflight_command(*, provider: str, cwd: str) -> str:
+def _build_preflight_command(
+    *,
+    provider: str,
+    cwd: str,
+    require_tmux: bool = True,
+) -> str:
     quoted_cwd = shlex.quote(cwd)
     cli_name = "codex" if provider == "codex" else "claude-code"
     checks = [
-        build_managed_local_shell_prelude(required_commands=(cli_name,)),
+        build_managed_local_shell_prelude(
+            require_tmux=require_tmux,
+            required_commands=(cli_name,),
+        ),
         f"command -v {cli_name} >/dev/null 2>&1 || {{ echo '{cli_name} is not available' >&2; exit 12; }}",
         f"test -d {quoted_cwd} || {{ echo 'working directory does not exist' >&2; exit 13; }}",
-        f"printf {shlex.quote(_MANAGED_LOCAL_TMUX_TMPDIR_MARKER + '%s\\n')} \"${{TMUX_TMPDIR:-}}\"",
+        f'printf {shlex.quote(_MANAGED_LOCAL_TMUX_TMPDIR_MARKER + "%s\\n")} "${{TMUX_TMPDIR:-}}"',
     ]
     return f"zsh -lc {shlex.quote('; '.join(checks))}"
 
@@ -245,7 +253,10 @@ def _build_hooks_ensure_command(*, provider: str) -> str:
         "longhouse connect --hooks-only >/dev/null 2>&1 || { echo 'failed to install Longhouse hooks' >&2; exit 15; }",
         f"test -x \"{shell_script_path}\" || {{ echo 'Longhouse hook script missing after install' >&2; exit 16; }}",
         f"test -f \"{shell_config_path}\" || {{ echo 'Longhouse hook config missing after install' >&2; exit 17; }}",
-        f"grep -q {quoted_marker} \"{shell_config_path}\" || {{ echo 'Longhouse hook config is missing the expected hook entry' >&2; exit 18; }}",
+        (
+            f'grep -q {quoted_marker} "{shell_config_path}" '
+            "|| { echo 'Longhouse hook config is missing the expected hook entry' >&2; exit 18; }"
+        ),
     ]
     command = " && ".join(hook_present_checks) + f" || {{ {'; '.join(install_checks)}; }}"
     return f"zsh -lc {shlex.quote(command)}"
@@ -292,7 +303,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         raise ManagedLocalLaunchError(str(exc), status_code=400) from exc
     if transport is None:
         transport = ManagedSessionTransport.TMUX
-    if transport != ManagedSessionTransport.TMUX:
+    if transport not in {ManagedSessionTransport.TMUX, ManagedSessionTransport.CODEX_APP_SERVER}:
         raise ManagedLocalLaunchError(
             f"Managed local transport '{transport.value}' is not implemented yet",
             status_code=501,
@@ -301,6 +312,11 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     provider = params.provider or "claude"
     if provider not in _VALID_PROVIDERS:
         raise ManagedLocalLaunchError(f"Unsupported provider '{provider}' for managed local", status_code=400)
+    if transport == ManagedSessionTransport.CODEX_APP_SERVER and provider != "codex":
+        raise ManagedLocalLaunchError(
+            "Managed local transport 'codex_app_server' currently only supports provider 'codex'",
+            status_code=400,
+        )
     provider_name = _PROVIDER_DISPLAY_NAMES.get(provider, provider)
 
     cwd = params.cwd.strip()
@@ -315,7 +331,11 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         db=db,
         owner_id=params.owner_id,
         runner_id=runner.id,
-        command=_build_preflight_command(provider=provider, cwd=cwd),
+        command=_build_preflight_command(
+            provider=provider,
+            cwd=cwd,
+            require_tmux=(transport == ManagedSessionTransport.TMUX),
+        ),
         timeout_secs=10,
         commis_id=None,
         run_id=None,
@@ -330,7 +350,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         stdout = (preflight_data.get("stdout") or "").strip()
         detail = stderr or stdout or "Managed local preflight failed"
         raise ManagedLocalLaunchError(detail, status_code=400)
-    managed_tmux_tmpdir = _extract_tmux_tmpdir(preflight_data.get("stdout"))
+    managed_tmux_tmpdir = _extract_tmux_tmpdir(preflight_data.get("stdout")) if transport == ManagedSessionTransport.TMUX else None
 
     hooks_ensure_result = await dispatcher.dispatch_job(
         db=db,
@@ -374,14 +394,6 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         hook_url=params.hook_url,
         hook_token=hook_token,
     )
-    transport_plan = build_managed_local_launch_transport_plan(
-        transport=transport,
-        session_name=managed_session_name,
-        cwd=cwd,
-        entry_command=entry_command,
-        tmux_tmpdir=managed_tmux_tmpdir,
-    )
-
     session = AgentSession(
         id=session_uuid,
         provider=provider,
@@ -413,6 +425,20 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     )
     db.add(session)
     db.flush()
+
+    if transport == ManagedSessionTransport.CODEX_APP_SERVER:
+        mark_managed_local_session_launched(db, session=session)
+        db.commit()
+        db.refresh(session)
+        return ManagedLocalLaunchResult(session=session, attach_command="")
+
+    transport_plan = build_managed_local_launch_transport_plan(
+        transport=transport,
+        session_name=managed_session_name,
+        cwd=cwd,
+        entry_command=entry_command,
+        tmux_tmpdir=managed_tmux_tmpdir,
+    )
 
     async def _cleanup_tmux_session() -> None:
         cleanup_command = transport_plan.cleanup_command
@@ -553,8 +579,9 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
 
         if attempt == _MANAGED_LOCAL_VERIFY_ATTEMPTS - 1:
             await _cleanup_tmux_session()
+            pane_label = pane_command or "empty pane"
             raise ManagedLocalLaunchError(
-                f"Managed local session started an idle shell instead of {provider_name} ({pane_command or 'empty pane'})",
+                f"Managed local session started an idle shell instead of {provider_name} ({pane_label})",
                 status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS,
             )
         await asyncio.sleep(_MANAGED_LOCAL_VERIFY_INTERVAL_SECS)
