@@ -42,7 +42,7 @@ Ship a managed-local Codex experience where Longhouse is operationally present b
 - [ ] Prove a live approval-request round-trip against the real Codex binary.
 - [x] Define the managed-session transport interface in Longhouse (`tmux_legacy` vs `codex_app_server`).
 - [x] Decide the demo-path control bridge for `codex_app_server`: use a local Rust sidecar/daemon, not the current one-shot runner protocol.
-- [ ] Prove the dual-client topology: stock Codex TUI via `--remote` plus a second Longhouse client attached to the same local app-server/thread.
+- [x] Prove the dual-client topology: stock Codex TUI via `--remote` plus a second Longhouse client attached to the same local app-server/thread.
 - [ ] Build a Rust `longhouse-engine codex-bridge` MVP that owns app-server lifecycle, session/thread correlation, and approval handling.
 - [ ] Build an experimental backend live-sync/control path for app-server-managed Codex sessions.
 - [ ] Correlate Longhouse session IDs with Codex thread IDs durably.
@@ -60,3 +60,8 @@ Ship a managed-local Codex experience where Longhouse is operationally present b
 - Live validation on 2026-03-27 also showed that workspace file writes surface as `fileChange` items/diffs without necessarily producing an approval request, and direct `command/exec` did not trigger an approval request in the basic `/bin/pwd` probe.
 - Current runner transport is not a drop-in app-server bridge: `runner_job_dispatcher` is one-shot and single-active-job-per-runner, while `runner/src/protocol.ts` only supports `exec_request` / `exec_cancel` plus stdout/stderr chunks. There is no persistent stdin channel or process session handle today.
 - Architecture decision for the demo path: stop trying to make tmux invisible. Use a local Rust bridge that owns `codex app-server`, let stock Codex connect through `--remote`, and keep tmux only as fallback.
+- Live validation on 2026-03-27 proved the stronger bridge-first topology on the real Codex binary: the observer can `thread/start`, launch stock Codex as `codex resume <thread_id> --enable tui_app_server --remote ws://127.0.0.1:<port>`, and then drive a successful `turn/start` on that same thread while the remote TUI stays alive.
+- The installed Codex build on this machine still needs `--enable tui_app_server` for `--remote`; the flag exists in help text but the feature is not effectively on by default.
+- For demo/history compatibility, `codex app-server` should run with `--session-source cli` and Longhouse should rely on explicit `thread_id` mapping rather than a custom session source.
+- The canary `thread/list` probe must include `cli` and `vscode` alongside `appServer` and `custom` when validating sessions launched with `session_source=cli`.
+- One remaining canary caveat: the remote TUI bootstrap succeeded reliably against the real HOME, but the isolated-home variant failed on this machine with `account/rateLimits/read failed during TUI bootstrap`. That is a canary/home-isolation issue, not evidence that the real native topology is broken.

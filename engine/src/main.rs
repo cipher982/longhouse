@@ -20,7 +20,9 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 
-use codex_app_server_canary::{run as run_codex_app_server_canary, CanaryConfig};
+use codex_app_server_canary::{
+    parse_app_server_transport, run as run_codex_app_server_canary, CanaryConfig,
+};
 use config::ShipperConfig;
 use pipeline::compressor::CompressionAlgo;
 use shipping::client::ShipperClient;
@@ -222,6 +224,14 @@ enum Commands {
         #[arg(long, default_value = "codex")]
         codex_bin: String,
 
+        /// App-server transport for the canary client
+        #[arg(long, default_value = "stdio")]
+        app_server_transport: String,
+
+        /// WebSocket listen port when using --app-server-transport websocket (0 = auto)
+        #[arg(long, default_value = "0")]
+        listen_port: u16,
+
         /// Session source tag stamped into new threads
         #[arg(long, default_value = "longhouse_canary")]
         session_source: String,
@@ -245,6 +255,18 @@ enum Commands {
         /// Auto-approve server-initiated approval requests instead of declining them
         #[arg(long)]
         auto_approve: bool,
+
+        /// Spawn a real `codex resume --remote` TUI against the managed thread before sending the prompt
+        #[arg(long)]
+        spawn_remote_tui: bool,
+
+        /// How long to wait for the remote TUI to stay alive after launch
+        #[arg(long, default_value = "3000")]
+        remote_tui_grace_ms: u64,
+
+        /// Optional path for the PTY log captured from the remote TUI when --spawn-remote-tui is used
+        #[arg(long)]
+        remote_tui_log: Option<PathBuf>,
 
         /// Probe thread/read after the run and report turn count
         #[arg(long)]
@@ -474,12 +496,17 @@ fn main() -> anyhow::Result<()> {
             model,
             effort,
             codex_bin,
+            app_server_transport,
+            listen_port,
             session_source,
             resume_thread_id,
             steer_text,
             steer_after_ms,
             interrupt_after_ms,
             auto_approve,
+            spawn_remote_tui,
+            remote_tui_grace_ms,
+            remote_tui_log,
             probe_thread_read,
             probe_thread_list,
             event_timeout_secs,
@@ -499,12 +526,17 @@ fn main() -> anyhow::Result<()> {
                 model,
                 effort,
                 codex_bin,
+                app_server_transport: parse_app_server_transport(&app_server_transport)?,
+                listen_port,
                 session_source,
                 resume_thread_id,
                 steer_text,
                 steer_after_ms,
                 interrupt_after_ms,
                 auto_approve,
+                spawn_remote_tui,
+                remote_tui_grace_ms,
+                remote_tui_log,
                 probe_thread_read,
                 probe_thread_list,
                 event_timeout_secs,
