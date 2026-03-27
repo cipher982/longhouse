@@ -13,6 +13,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 from zerg.services.managed_local_transport import ManagedLocalTransportNotImplementedError
 from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.services.managed_local_transport import build_managed_local_interrupt_command
 from zerg.services.managed_local_transport import build_managed_local_launch_transport_plan
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.managed_local_transport import coerce_managed_transport
@@ -102,6 +103,30 @@ def test_build_managed_local_send_text_command_uses_codex_bracketed_paste_for_tm
     inner = _wrapped_inner(command)
     assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} set-buffer -b send-lh-demo continue" in inner
     assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} paste-buffer -dpr -b send-lh-demo -t lh-demo" in inner
+
+
+def test_build_managed_local_interrupt_command_uses_engine_bridge_for_codex_app_server():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CODEX_APP_SERVER.value,
+    )
+
+    command = build_managed_local_interrupt_command(session=session)
+    inner = _wrapped_inner(command)
+    assert 'engine="$(command -v longhouse-engine || true)"' in inner
+    assert '"$engine" codex-bridge interrupt --session-id session-123' in inner
+
+
+def test_build_managed_local_interrupt_command_uses_tmux_c_c_for_tmux():
+    session = SimpleNamespace(
+        managed_transport=ManagedSessionTransport.TMUX.value,
+        managed_session_name="lh-demo",
+        managed_tmux_tmpdir="/tmp/lh-transport",
+    )
+
+    command = build_managed_local_interrupt_command(session=session)
+    inner = _wrapped_inner(command)
+    assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo C-c" in inner
 
 
 def test_managed_local_transport_supports_interactive_chat_for_tmux_and_native_codex():

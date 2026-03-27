@@ -162,6 +162,38 @@ def build_managed_local_attach_command(*, session: AgentSession) -> str | None:
     )
 
 
+def build_managed_local_interrupt_command(*, session: AgentSession) -> str:
+    """Build a command to interrupt the active turn on a managed-local session."""
+    transport = coerce_managed_transport(
+        getattr(session, "managed_transport", None),
+        default=ManagedSessionTransport.TMUX,
+    )
+    if transport == ManagedSessionTransport.CODEX_APP_SERVER:
+        session_id = str(getattr(session, "id", "") or "").strip()
+        if not session_id:
+            raise ManagedLocalTransportError("Managed local session is missing session ID")
+        return _build_engine_bridge_shell_command(
+            session_id=session_id,
+            subcommand="interrupt",
+        )
+    if transport == ManagedSessionTransport.TMUX:
+        session_name = str(getattr(session, "managed_session_name", "") or "").strip()
+        if not session_name:
+            raise ManagedLocalTransportError("Managed local session is missing tmux metadata")
+        from zerg.services.managed_local_tmux import _quote
+        from zerg.services.managed_local_tmux import _tmux_prefix
+        from zerg.services.managed_local_tmux import _wrap_managed_local_shell_command
+        from zerg.services.managed_local_tmux import normalize_tmux_session_name
+
+        name = normalize_tmux_session_name(session_name, prefix="")
+        cmd = f"{_tmux_prefix()} send-keys -t {_quote(name)} C-c"
+        return _wrap_managed_local_shell_command(
+            cmd,
+            tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
+        )
+    raise ManagedLocalTransportNotImplementedError(f"Managed local interrupt is not implemented for transport '{transport.value}'")
+
+
 def build_managed_local_send_text_command(*, session: AgentSession, text: str) -> str:
     transport = coerce_managed_transport(
         getattr(session, "managed_transport", None),
@@ -203,6 +235,7 @@ __all__ = [
     "ManagedLocalTransportError",
     "ManagedLocalTransportNotImplementedError",
     "build_managed_local_attach_command",
+    "build_managed_local_interrupt_command",
     "build_managed_local_launch_transport_plan",
     "build_managed_local_send_text_command",
     "coerce_managed_transport",

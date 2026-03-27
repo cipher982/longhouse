@@ -124,7 +124,7 @@ enum RpcOutbound {
 
 #[derive(Debug)]
 struct RpcClient {
-    child: Child,
+    child: Option<Child>,
     outbound: RpcOutbound,
     events_rx: mpsc::UnboundedReceiver<StreamEvent>,
     pending_methods: BTreeMap<u64, String>,
@@ -458,13 +458,6 @@ pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result
     let turn_id = state
         .active_turn_id
         .clone()
-        .or_else(|| {
-            state
-                .last_turn_status
-                .as_ref()
-                .filter(|status| *status == "inProgress")
-                .and(state.active_turn_id.clone())
-        })
         .context("bridge state does not have an active turn to interrupt")?;
     let ws_url = state
         .ws_url
@@ -695,7 +688,7 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
     });
 
     Ok(RpcClient {
-        child,
+        child: Some(child),
         outbound: RpcOutbound::WebSocket(outbound_tx),
         events_rx,
         pending_methods: BTreeMap::new(),
@@ -743,14 +736,8 @@ async fn connect_remote_client(ws_url: &str) -> Result<RpcClient> {
         }
     });
 
-    let mut child = Command::new("true")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("spawning inert bridge child placeholder")?;
-    let _ = child.wait().await;
     Ok(RpcClient {
-        child,
+        child: None,
         outbound: RpcOutbound::WebSocket(outbound_tx),
         events_rx,
         pending_methods: BTreeMap::new(),
@@ -867,8 +854,10 @@ async fn recv_event(client: &mut RpcClient) -> Result<StreamEvent> {
     match client.events_rx.recv().await {
         Some(event) => Ok(event),
         None => {
-            if let Some(status) = client.child.try_wait()? {
-                bail!("codex app-server exited early with status {status}");
+            if let Some(ref mut child) = client.child {
+                if let Some(status) = child.try_wait()? {
+                    bail!("codex app-server exited early with status {status}");
+                }
             }
             bail!("codex app-server closed its output stream unexpectedly");
         }
@@ -1247,10 +1236,12 @@ fn update_bridge_error(context: &mut BridgeContext, error: &str) -> Result<()> {
 }
 
 async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
-    if client.child.try_wait()?.is_none() {
-        let _ = client.child.start_kill();
+    if let Some(ref mut child) = client.child {
+        if child.try_wait()?.is_none() {
+            let _ = child.start_kill();
+        }
+        let _ = child.wait().await;
     }
-    let _ = client.child.wait().await;
     Ok(())
 }
 
