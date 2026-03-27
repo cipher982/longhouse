@@ -198,6 +198,10 @@ enum Commands {
         #[arg(long)]
         cwd: Option<PathBuf>,
 
+        /// Reuse an explicit HOME directory for Codex state instead of creating a fresh temp HOME
+        #[arg(long)]
+        home: Option<PathBuf>,
+
         /// Optional model override for thread/turn start
         #[arg(long)]
         model: Option<String>,
@@ -444,6 +448,7 @@ fn main() -> anyhow::Result<()> {
         Commands::CodexAppServerCanary {
             prompt,
             cwd,
+            home,
             model,
             effort,
             codex_bin,
@@ -463,6 +468,7 @@ fn main() -> anyhow::Result<()> {
             let summary = rt.block_on(run_codex_app_server_canary(CanaryConfig {
                 prompt,
                 cwd: cwd.unwrap_or(std::env::current_dir()?),
+                home_override: home,
                 model,
                 effort,
                 codex_bin,
@@ -491,6 +497,15 @@ fn main() -> anyhow::Result<()> {
                 }
                 if let Some(home) = summary.isolated_home_path.as_deref() {
                     println!("isolated_home: {}", home);
+                }
+                println!("effective_home: {}", summary.effective_home_path);
+                if let Some(path) = summary.thread_path.as_deref() {
+                    println!("thread_path: {}", path);
+                    println!("thread_path_exists: {}", summary.thread_path_exists);
+                    println!(
+                        "thread_path_within_home: {}",
+                        summary.thread_path_within_home
+                    );
                 }
                 if summary.hook_session_id.is_some() {
                     println!("hook_states: {:?}", summary.hook_states);
