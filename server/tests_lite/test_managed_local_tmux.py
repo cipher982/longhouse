@@ -34,8 +34,9 @@ def test_normalize_tmux_session_name_rewrites_tmux_target_separator():
     assert normalize_tmux_session_name("colon:test") == "lh-colon-test"
 
 
-def test_validate_managed_transport_accepts_tmux_and_empty():
+def test_validate_managed_transport_accepts_known_transports_and_empty():
     assert validate_managed_transport("tmux") == "tmux"
+    assert validate_managed_transport("codex_app_server") == "codex_app_server"
     assert validate_managed_transport(None) is None
 
 

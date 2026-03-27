@@ -39,7 +39,7 @@ Ship a managed-local Codex experience where Longhouse is operationally present b
 - [x] Prove `thread/list` can discover Longhouse-managed sessions reliably.
 - [x] Implement and unit-test server-initiated app-server request handling in the canary, starting with approvals.
 - [ ] Prove a live approval-request round-trip against the real Codex binary.
-- [ ] Define the managed-session transport interface in Longhouse (`tmux_legacy` vs `codex_app_server`).
+- [x] Define the managed-session transport interface in Longhouse (`tmux_legacy` vs `codex_app_server`).
 - [ ] Build an experimental backend launch/control path for app-server-managed Codex sessions.
 - [ ] Correlate Longhouse session IDs with Codex thread IDs durably.
 - [ ] Add a real managed-local native-Codex dogfood path behind a feature flag.
@@ -48,6 +48,7 @@ Ship a managed-local Codex experience where Longhouse is operationally present b
 ## Notes
 
 - Current canary commits: `6d9c3988`, `72d968ed`, `00a7420d`.
+- The managed-local transport seam now lives in `server/zerg/services/managed_local_transport.py`; tmux remains the only implemented runtime path, and `codex_app_server` is now an explicit reserved transport instead of an implicit future idea.
 - The invalid earlier conclusion was "hooks do not fire under app-server." The corrected finding is that the canary had the wrong env/feature setup.
 - Current critical risk is approvals and other server-initiated requests, not hooks.
 - Live validation on 2026-03-27 proved hooks, `thread/read`, and `thread/list` when `sourceKinds` includes both `appServer` and `custom`.

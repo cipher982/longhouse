@@ -59,6 +59,7 @@ from zerg.services.managed_local_control import ship_managed_local_claude_transc
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
+from zerg.services.managed_local_transport import managed_local_transport_supports_interactive_chat
 from zerg.services.managed_local_turns import create_managed_local_turn
 from zerg.services.managed_local_turns import get_managed_local_turn_snapshot
 from zerg.services.managed_local_turns import mark_managed_local_turn_failed
@@ -299,7 +300,7 @@ class ManagedLocalSessionLaunchRequest(BaseModel):
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
     managed_transport: ManagedSessionTransport = Field(
         ManagedSessionTransport.TMUX,
-        description="Managed local transport (tmux only in v1)",
+        description="Managed local transport (tmux today; codex_app_server reserved for the native Codex path)",
     )
 
 
@@ -1678,7 +1679,7 @@ async def chat_with_session(
 
     try:
         if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
-            if source_session.managed_transport != ManagedSessionTransport.TMUX.value:
+            if not managed_local_transport_supports_interactive_chat(source_session.managed_transport):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Unsupported managed local transport: {source_session.managed_transport}",
@@ -1803,10 +1804,10 @@ async def launch_managed_local(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_oikos_user),
 ):
-    """Start a managed local AI agent session inside tmux on a connected runner.
+    """Start a managed local AI agent session on a connected runner.
 
-    Supports both Claude and Codex providers. The tmux transport is
-    provider-agnostic — Longhouse owns the launch, lifecycle, and input routing.
+    Supports both Claude and Codex providers. tmux is the current implementation;
+    other managed transports can slot in behind the same API contract.
     """
     hook_url = get_request_public_base_url(request)
     try:

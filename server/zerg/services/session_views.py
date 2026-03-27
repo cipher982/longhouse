@@ -25,7 +25,8 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.services.agents_store import AgentsStore
-from zerg.services.managed_local_tmux import build_tmux_attach_command
+from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.services.managed_local_transport import coerce_managed_transport
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
@@ -60,10 +61,8 @@ def _coerce_execution_home(value: str | None) -> SessionExecutionHome | None:
 
 
 def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
-    if value is None:
-        return None
     try:
-        return ManagedSessionTransport(value)
+        return coerce_managed_transport(value)
     except ValueError:
         return None
 
@@ -90,15 +89,7 @@ def resolve_execution_home(session: AgentSession) -> SessionExecutionHome:
 
 
 def build_attach_command(session: AgentSession) -> str | None:
-    if _coerce_managed_transport(getattr(session, "managed_transport", None)) != ManagedSessionTransport.TMUX:
-        return None
-    session_name = str(getattr(session, "managed_session_name", "") or "").strip()
-    if not session_name:
-        return None
-    return build_tmux_attach_command(
-        session_name=session_name,
-        tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
-    )
+    return build_managed_local_attach_command(session=session)
 
 
 # ---------------------------------------------------------------------------
