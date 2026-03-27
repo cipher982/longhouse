@@ -1,5 +1,6 @@
 mod bench;
 mod codex_app_server_canary;
+mod codex_bridge;
 mod config;
 mod daemon;
 mod discovery;
@@ -22,6 +23,11 @@ use rayon::prelude::*;
 
 use codex_app_server_canary::{
     parse_app_server_transport, run as run_codex_app_server_canary, CanaryConfig,
+};
+use codex_bridge::{
+    cmd_codex_bridge_attach, cmd_codex_bridge_interrupt, cmd_codex_bridge_run,
+    cmd_codex_bridge_send, cmd_codex_bridge_start, BridgeAttachConfig, BridgeInterruptConfig,
+    BridgeRunConfig, BridgeSendConfig, BridgeStartConfig,
 };
 use config::ShipperConfig;
 use pipeline::compressor::CompressionAlgo;
@@ -299,6 +305,141 @@ enum Commands {
         /// Verify Codex hook presence by watching the isolated outbox for idle/thinking/idle
         #[arg(long)]
         verify_hooks: bool,
+    },
+
+    /// Native managed Codex bridge utilities
+    CodexBridge {
+        #[command(subcommand)]
+        command: CodexBridgeCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum CodexBridgeCommands {
+    /// Start a detached bridge daemon and print the ready thread metadata
+    Start {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        cwd: PathBuf,
+
+        #[arg(long)]
+        url: String,
+
+        #[arg(long)]
+        token: String,
+
+        #[arg(long, default_value = "codex")]
+        codex_bin: String,
+
+        #[arg(long, default_value = "cli")]
+        session_source: String,
+
+        #[arg(long)]
+        approval_policy: Option<String>,
+
+        #[arg(long)]
+        sandbox: Option<String>,
+
+        #[arg(long)]
+        model: Option<String>,
+
+        #[arg(long)]
+        machine_name: Option<String>,
+
+        #[arg(long)]
+        auto_approve: bool,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+
+        #[arg(long)]
+        log_file: Option<PathBuf>,
+
+        #[arg(long, default_value_t = 25)]
+        start_timeout_secs: u64,
+
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Long-lived bridge daemon process (normally started via `codex-bridge start`)
+    Run {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        cwd: PathBuf,
+
+        #[arg(long)]
+        url: String,
+
+        #[arg(long)]
+        token: String,
+
+        #[arg(long, default_value = "codex")]
+        codex_bin: String,
+
+        #[arg(long, default_value = "cli")]
+        session_source: String,
+
+        #[arg(long)]
+        approval_policy: Option<String>,
+
+        #[arg(long)]
+        sandbox: Option<String>,
+
+        #[arg(long)]
+        model: Option<String>,
+
+        #[arg(long)]
+        machine_name: Option<String>,
+
+        #[arg(long)]
+        auto_approve: bool,
+
+        #[arg(long)]
+        state_file: PathBuf,
+
+        #[arg(long)]
+        log_file: PathBuf,
+    },
+
+    /// Attach stock Codex TUI to a running managed bridge
+    Attach {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+
+        #[arg(long)]
+        codex_bin: Option<String>,
+    },
+
+    /// Send a prompt into a running managed bridge thread
+    Send {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        text: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Interrupt the currently active turn for a managed bridge thread
+    Interrupt {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
     },
 }
 
@@ -595,6 +736,132 @@ fn main() -> anyhow::Result<()> {
                 }
                 if !summary.response_errors.is_empty() {
                     println!("response_errors: {:?}", summary.response_errors);
+                }
+            }
+        }
+        Commands::CodexBridge { command } => {
+            let rt = tokio::runtime::Runtime::new()?;
+            match command {
+                CodexBridgeCommands::Start {
+                    session_id,
+                    cwd,
+                    url,
+                    token,
+                    codex_bin,
+                    session_source,
+                    approval_policy,
+                    sandbox,
+                    model,
+                    machine_name,
+                    auto_approve,
+                    state_root,
+                    log_file,
+                    start_timeout_secs,
+                    json,
+                } => {
+                    let summary = rt.block_on(cmd_codex_bridge_start(BridgeStartConfig {
+                        session_id,
+                        cwd,
+                        api_url: url,
+                        api_token: token,
+                        codex_bin,
+                        session_source,
+                        approval_policy,
+                        sandbox,
+                        model,
+                        machine_name,
+                        auto_approve,
+                        state_root,
+                        log_file,
+                        start_timeout_secs,
+                    }))?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&summary)?);
+                    } else {
+                        println!("session_id: {}", summary.session_id);
+                        println!("pid: {}", summary.pid);
+                        println!("state_file: {}", summary.state_file);
+                        println!("log_file: {}", summary.log_file);
+                        println!("ws_url: {}", summary.ws_url);
+                        println!("thread_id: {}", summary.thread_id);
+                        if let Some(path) = summary.thread_path.as_deref() {
+                            println!("thread_path: {}", path);
+                        }
+                    }
+                }
+                CodexBridgeCommands::Run {
+                    session_id,
+                    cwd,
+                    url,
+                    token,
+                    codex_bin,
+                    session_source,
+                    approval_policy,
+                    sandbox,
+                    model,
+                    machine_name,
+                    auto_approve,
+                    state_file,
+                    log_file,
+                } => {
+                    rt.block_on(cmd_codex_bridge_run(BridgeRunConfig {
+                        session_id,
+                        cwd,
+                        api_url: url,
+                        api_token: token,
+                        codex_bin,
+                        session_source,
+                        approval_policy,
+                        sandbox,
+                        model,
+                        machine_name,
+                        auto_approve,
+                        state_file,
+                        log_file,
+                    }))?;
+                }
+                CodexBridgeCommands::Attach {
+                    session_id,
+                    state_root,
+                    codex_bin,
+                } => {
+                    let exit_code = cmd_codex_bridge_attach(BridgeAttachConfig {
+                        session_id,
+                        state_root,
+                        codex_bin,
+                    })?;
+                    if exit_code != 0 {
+                        std::process::exit(exit_code);
+                    }
+                }
+                CodexBridgeCommands::Send {
+                    session_id,
+                    text,
+                    state_root,
+                    json,
+                } => {
+                    let summary = rt.block_on(cmd_codex_bridge_send(BridgeSendConfig {
+                        session_id,
+                        text,
+                        state_root,
+                    }))?;
+                    if json {
+                        println!("{}", serde_json::to_string_pretty(&summary)?);
+                    } else {
+                        println!("session_id: {}", summary.session_id);
+                        println!("thread_id: {}", summary.thread_id);
+                        println!("turn_id: {}", summary.turn_id);
+                        println!("turn_status: {}", summary.turn_status);
+                    }
+                }
+                CodexBridgeCommands::Interrupt {
+                    session_id,
+                    state_root,
+                } => {
+                    rt.block_on(cmd_codex_bridge_interrupt(BridgeInterruptConfig {
+                        session_id,
+                        state_root,
+                    }))?;
                 }
             }
         }
