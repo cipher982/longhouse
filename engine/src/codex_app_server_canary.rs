@@ -21,6 +21,7 @@ use walkdir::WalkDir;
 pub struct CanaryConfig {
     pub prompt: String,
     pub cwd: PathBuf,
+    pub home_override: Option<PathBuf>,
     pub model: Option<String>,
     pub effort: Option<String>,
     pub codex_bin: String,
@@ -42,8 +43,12 @@ pub struct CanarySummary {
     pub cwd: String,
     pub session_source: String,
     pub isolated_home: bool,
+    pub effective_home_path: String,
     pub isolated_home_path: Option<String>,
     pub thread_id: String,
+    pub thread_path: Option<String>,
+    pub thread_path_exists: bool,
+    pub thread_path_within_home: bool,
     pub turn_id: String,
     pub turn_status: String,
     pub assistant_text: String,
@@ -147,20 +152,33 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
     if !config.cwd.is_dir() {
         bail!("cwd does not exist: {}", config.cwd.display());
     }
-    if config.verify_hooks && config.resume_thread_id.is_some() && config.isolate_home {
+    if config.verify_hooks
+        && config.resume_thread_id.is_some()
+        && config.home_override.is_none()
+        && config.isolate_home
+    {
         bail!(
             "--verify-hooks with isolated HOME cannot resume an existing thread; use --real-home"
         );
     }
 
-    let isolated_home = if config.isolate_home {
+    let isolated_home = if let Some(home) = config.home_override.as_ref() {
+        fs::create_dir_all(home.join(".codex"))?;
+        fs::create_dir_all(home.join(".claude").join("outbox"))?;
+        prepare_isolated_home(home, config.verify_hooks).await?;
+        None
+    } else if config.isolate_home {
         let home = create_isolated_home()?;
         prepare_isolated_home(&home, config.verify_hooks).await?;
         Some(home)
     } else {
         None
     };
-    let effective_home = isolated_home.clone().unwrap_or(home_dir()?);
+    let effective_home = config
+        .home_override
+        .clone()
+        .or_else(|| isolated_home.clone())
+        .unwrap_or(home_dir()?);
 
     let hook_session_id = if config.verify_hooks {
         Some(Uuid::new_v4().to_string())
@@ -239,6 +257,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
     };
     let thread_id = extract_string(&thread_response, &["thread", "id"])
         .context("missing thread.id in thread response")?;
+    let thread_path = extract_string(&thread_response, &["thread", "path"]);
     state.thread_id = Some(thread_id.clone());
 
     let mut turn_params = json!({
@@ -355,8 +374,18 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         cwd: config.cwd.display().to_string(),
         session_source: config.session_source,
         isolated_home: config.isolate_home,
+        effective_home_path: effective_home.display().to_string(),
         isolated_home_path,
         thread_id,
+        thread_path: thread_path.clone(),
+        thread_path_exists: thread_path
+            .as_deref()
+            .map(Path::new)
+            .is_some_and(Path::exists),
+        thread_path_within_home: thread_path
+            .as_deref()
+            .map(Path::new)
+            .is_some_and(|path| path.starts_with(&effective_home)),
         turn_id,
         turn_status: state.turn_status.unwrap_or_else(|| "unknown".to_string()),
         assistant_text: state.assistant_text.trim().to_string(),
@@ -725,6 +754,9 @@ fn copy_optional_tree(source: &Path, destination: &Path) -> Result<()> {
     if !source.exists() {
         return Ok(());
     }
+    if destination.exists() {
+        return Ok(());
+    }
     let metadata = fs::symlink_metadata(source)
         .with_context(|| format!("reading metadata for {}", source.display()))?;
     if metadata.file_type().is_symlink() {
@@ -938,6 +970,7 @@ for line in sys.stdin:
         let summary = run(CanaryConfig {
             prompt: "Reply with CANARY".to_string(),
             cwd: workspace,
+            home_override: None,
             model: None,
             effort: None,
             codex_bin: bin.display().to_string(),
@@ -956,6 +989,8 @@ for line in sys.stdin:
         .unwrap();
 
         assert_eq!(summary.thread_id, "thr_test");
+        assert_eq!(summary.thread_path, None);
+        assert!(!summary.thread_path_within_home);
         assert_eq!(summary.turn_id, "turn_test");
         assert_eq!(summary.turn_status, "completed");
         assert_eq!(summary.assistant_text, "CANARY");
