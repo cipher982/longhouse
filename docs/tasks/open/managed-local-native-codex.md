@@ -46,9 +46,9 @@ Ship a managed-local Codex experience where Longhouse is operationally present b
 - [x] Build a Rust `longhouse-engine codex-bridge` MVP that owns app-server lifecycle, session/thread correlation, and approval handling.
 - [x] Build an experimental backend live-sync/control path for app-server-managed Codex sessions.
 - [x] Correlate Longhouse session IDs with Codex thread IDs durably.
-- [ ] Add a real managed-local native-Codex dogfood path behind a feature flag.
-- [ ] Route Loop continue/reply/interrupt actions through the native Codex bridge.
-- [ ] Keep tmux as an explicit fallback path during rollout.
+- [x] Add a real managed-local native-Codex dogfood path behind a feature flag.
+- [x] Route Loop continue/reply/interrupt actions through the native Codex bridge.
+- [x] Keep tmux as an explicit fallback path during rollout.
 
 ## Notes
 
@@ -68,3 +68,7 @@ Ship a managed-local Codex experience where Longhouse is operationally present b
 - For demo/history compatibility, `codex app-server` should run with `--session-source cli` and Longhouse should rely on explicit `thread_id` mapping rather than a custom session source.
 - The canary `thread/list` probe must include `cli` and `vscode` alongside `appServer` and `custom` when validating sessions launched with `session_source=cli`.
 - One remaining canary caveat: the remote TUI bootstrap succeeded reliably against the real HOME, but the isolated-home variant failed on this machine with `account/rateLimits/read failed during TUI bootstrap`. That is a canary/home-isolation issue, not evidence that the real native topology is broken.
+- (2026-03-27) Feature flag: `LONGHOUSE_CODEX_TRANSPORT` env var controls the default transport (`codex_app_server` | `native` | `tmux`). CLI also accepts `--transport tmux` to override per-invocation.
+- (2026-03-27) Loop continue/reply already routes through the transport abstraction: `build_managed_local_send_text_command` builds `codex-bridge send` for `CODEX_APP_SERVER` sessions. Interrupt is now wired via `build_managed_local_interrupt_command` → `codex-bridge interrupt`.
+- (2026-03-27) Tmux fallback is automatic: if `_start_native_codex_bridge` fails, `longhouse codex` retries with tmux transport.
+- (2026-03-27) Rust bridge cleanup: `RpcClient.child` is now `Option<Child>` (no more dummy `true` process for WebSocket clients), and the dead `or_else` fallback in `cmd_codex_bridge_interrupt` was removed.
