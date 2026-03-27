@@ -198,7 +198,7 @@ enum Commands {
         #[arg(long)]
         cwd: Option<PathBuf>,
 
-        /// Reuse an explicit HOME directory for Codex state instead of creating a fresh temp HOME
+        /// Reuse an explicit home root instead of creating a fresh temp one; the canary maps CODEX_HOME to <home>/.codex
         #[arg(long)]
         home: Option<PathBuf>,
 
@@ -246,11 +246,11 @@ enum Commands {
         #[arg(long)]
         json: bool,
 
-        /// Use the real HOME instead of the default isolated temp HOME
+        /// Use the real HOME/CODEX_HOME instead of the default isolated temp home root
         #[arg(long)]
         real_home: bool,
 
-        /// Keep the isolated temp HOME after the run for manual inspection
+        /// Keep the isolated temp home root after the run for manual inspection
         #[arg(long)]
         keep_home: bool,
 
