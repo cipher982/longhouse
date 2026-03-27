@@ -425,7 +425,6 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
         .context("bridge state is missing ws_url")?;
     let mut client = connect_remote_client(&ws_url).await?;
     initialize_client(&mut client).await?;
-    resume_existing_thread(&mut client, &thread_id, &state.cwd).await?;
 
     let response = send_request(
         &mut client,
@@ -474,7 +473,6 @@ pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result
 
     let mut client = connect_remote_client(&ws_url).await?;
     initialize_client(&mut client).await?;
-    resume_existing_thread(&mut client, &thread_id, &state.cwd).await?;
     let _ = send_request(
         &mut client,
         "turn/interrupt",
@@ -604,6 +602,10 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         .arg("ws://127.0.0.1:0")
         .arg("--enable")
         .arg("codex_hooks")
+        .arg("--enable")
+        .arg("exec_permission_approvals")
+        .arg("--enable")
+        .arg("request_permissions_tool")
         .arg("--session-source")
         .arg(&config.session_source)
         .env("LONGHOUSE_SESSION_ID", &config.session_id)
@@ -793,22 +795,6 @@ async fn start_managed_thread(client: &mut RpcClient, config: &BridgeRunConfig) 
         params.insert("model".to_string(), Value::String(model.clone()));
     }
     send_request(client, "thread/start", Value::Object(params)).await
-}
-
-async fn resume_existing_thread(
-    client: &mut RpcClient,
-    thread_id: &str,
-    cwd: &str,
-) -> Result<Value> {
-    send_request(
-        client,
-        "thread/resume",
-        json!({
-            "threadId": thread_id,
-            "cwd": cwd,
-        }),
-    )
-    .await
 }
 
 async fn send_notification(client: &mut RpcClient, method: &str, params: Value) -> Result<()> {
