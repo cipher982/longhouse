@@ -26,6 +26,15 @@ This gives us the right product story:
 - Loop/away-mode can steer the exact same laptop thread later
 - tmux remains only as a guarded fallback path during rollout
 
+## Current Proof
+
+Live validation on 2026-03-27 established the core feasibility of the demo path:
+
+- `longhouse-engine codex-bridge` can launch and supervise `codex app-server`, correlate a Longhouse session to a real Codex thread, and expose reattach/send/interrupt commands.
+- A real approval round-trip now works against the production Codex binary when app-server is launched with `codex_hooks`, `exec_permission_approvals`, and `request_permissions_tool`, using `approvalPolicy=on-request` plus a prompt that explicitly invokes `request_permissions`.
+- Against a real local dev backend, a bridge-backed managed-local Codex session posted runtime state live, shipped transcript turns through the existing Codex shipper, replaced the placeholder Longhouse-side `provider_session_id` with the real Codex `thread_id`, and accepted a second follow-up turn on the same session/thread.
+- One important bridge nuance is now understood: before the first turn persists a rollout file, remote control must target the already-loaded thread directly with `turn/start`; trying `thread/resume` first on a zero-turn thread fails because there is no rollout to reopen yet.
+
 ## Demo Target
 
 The demo is successful when the following flow works on one real laptop and one remote surface (phone or browser):
@@ -300,15 +309,11 @@ The demo slice is done when all of the following are true:
 
 We still need a crisp validation of the best launch order for `codex --remote` versus bridge-owned thread creation.
 
-### 2. Real approval-flow proof
-
-The canary now handles approval requests structurally, but we still need a deterministic real-binary proof path that emits them on demand.
-
-### 3. Bridge reconnect behavior
+### 2. Bridge reconnect behavior
 
 Laptop sleep, backend reconnects, and temporary network loss need recovery rules so the bridge does not orphan a session.
 
-### 4. Event-model mapping
+### 3. Event-model mapping
 
 We need a clean mapping from app-server notifications into:
 
