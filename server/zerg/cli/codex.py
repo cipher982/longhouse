@@ -98,8 +98,6 @@ def _run_native_codex_tui(*, thread_id: str, ws_url: str, cwd: Path) -> int:
     completed = subprocess.run(
         [
             codex_bin,
-            "resume",
-            thread_id,
             "--enable",
             "tui_app_server",
             "--remote",
@@ -257,11 +255,11 @@ def codex(
             typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
 
     if not attach:
-        typer.echo("Attach: " + f"codex resume {thread_id} --enable tui_app_server --remote {ws_url}")
+        typer.echo("Attach: " + f"codex --enable tui_app_server --remote {ws_url}")
         return
     if not _interactive_stdio():
         typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
-        typer.echo("Attach: " + f"codex resume {thread_id} --enable tui_app_server --remote {ws_url}")
+        typer.echo("Attach: " + f"codex --enable tui_app_server --remote {ws_url}")
         return
 
     typer.echo("Attaching...")
