@@ -6,7 +6,6 @@ import {
   saveEmailConfig,
   testEmail,
   deleteEmailConfig,
-  type EmailStatus,
 } from "../services/api/emailConfig";
 import { Badge, Button, Card, Input, Spinner } from "./ui";
 
@@ -149,7 +148,7 @@ export default function EmailConfigCard() {
       </Card.Header>
       <Card.Body>
         <p className="section-description">
-          Email delivery for job notifications, digests, and alerts via AWS SES.
+          Email delivery via AWS SES. One instance email receives alerts, digests, and test mail.
         </p>
 
         {error ? (
@@ -179,7 +178,7 @@ export default function EmailConfigCard() {
                   )}
                 </div>
                 <span className="llm-capability-features">
-                  Enables: job failure alerts, daily digests, notification emails
+                  Enables: job failure alerts, daily digests, and system notification emails
                 </span>
               </div>
               <div className="llm-capability-actions">
@@ -286,16 +285,16 @@ export default function EmailConfigCard() {
 
                   <div className="form-group">
                     <label className="form-label">
-                      Notification Email
+                      Instance Email
                     </label>
                     <Input
                       value={form.notify_email}
                       onChange={(e) =>
                         setForm({ ...form, notify_email: e.target.value })
                       }
-                      placeholder="you@example.com (default recipient)"
+                      placeholder="you@example.com"
                     />
-                    <small>Default recipient for alerts and notifications</small>
+                    <small>Used for alerts, digests, and test emails</small>
                   </div>
                 </div>
 

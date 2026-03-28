@@ -17,13 +17,17 @@ from botocore.exceptions import ClientError
 
 logger = logging.getLogger(__name__)
 
-# Well-known JobSecret keys for email configuration
+# Active email config keys. Longhouse uses one recipient for all instance mail.
 _EMAIL_SECRET_KEYS = [
     "AWS_SES_ACCESS_KEY_ID",
     "AWS_SES_SECRET_ACCESS_KEY",
     "AWS_SES_REGION",
     "FROM_EMAIL",
     "NOTIFY_EMAIL",
+]
+
+# Legacy recipient override keys kept only so cleanup paths can remove them.
+_LEGACY_EMAIL_SECRET_KEYS = [
     "DIGEST_EMAIL",
     "ALERT_EMAIL",
 ]
@@ -185,13 +189,10 @@ def send_digest_email(
     job_id: str = "unknown",
     metadata: dict[str, Any] | None = None,
 ) -> str | None:
-    """Send a routine digest email."""
-    config = resolve_email_config()
-    digest_email = config.get("DIGEST_EMAIL")
+    """Send a routine digest email to the instance notification address."""
     return send_email(
         f"LONGHOUSE DIGEST: {subject}",
         body,
-        to_email=digest_email,
         html=html,
         alert_type=alert_type,
         job_id=job_id,
@@ -215,12 +216,9 @@ def send_alert_email(
         SES Message-ID if sent successfully, None otherwise.
     """
     level = (level or "WARNING").upper()
-    config = resolve_email_config()
-    alert_email = config.get("ALERT_EMAIL")
     return send_email(
         f"{level} (LONGHOUSE): {subject}",
         body,
-        to_email=alert_email,
         html=html,
         alert_type=alert_type,
         job_id=job_id,

@@ -784,10 +784,15 @@ async def lifespan(app: FastAPI):
                         email_cfg.get("AWS_SES_ACCESS_KEY_ID"),
                         email_cfg.get("AWS_SES_SECRET_ACCESS_KEY"),
                         email_cfg.get("FROM_EMAIL"),
+                        email_cfg.get("NOTIFY_EMAIL"),
                     )
                 )
                 if email_configured:
-                    logger.info("Email configured (from=%s)", email_cfg.get("FROM_EMAIL"))
+                    logger.info(
+                        "Email configured (from=%s to=%s)",
+                        email_cfg.get("FROM_EMAIL"),
+                        email_cfg.get("NOTIFY_EMAIL"),
+                    )
                 else:
                     logger.warning("Email not configured — job notifications disabled")
             except Exception:
@@ -1458,6 +1463,7 @@ async def health_check():
                     email_cfg.get("AWS_SES_ACCESS_KEY_ID"),
                     email_cfg.get("AWS_SES_SECRET_ACCESS_KEY"),
                     email_cfg.get("FROM_EMAIL"),
+                    email_cfg.get("NOTIFY_EMAIL"),
                 )
             )
         )
@@ -1465,6 +1471,7 @@ async def health_check():
             "status": "pass" if email_configured else "warn",
             "configured": email_configured,
             "from_email": email_cfg.get("FROM_EMAIL") if email_configured else None,
+            "notify_email": email_cfg.get("NOTIFY_EMAIL") if email_configured else None,
         }
     except Exception as e:
         checks["email"] = {"status": "warn", "error": str(e)}

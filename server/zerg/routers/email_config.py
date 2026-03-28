@@ -4,6 +4,9 @@ Lets users see whether email is configured (and from what source),
 override platform defaults with custom SES credentials, test delivery,
 and revert to platform defaults.
 
+Longhouse uses one recipient email for all instance mail. Alerts, digests,
+and test sends all go through NOTIFY_EMAIL.
+
 All email secrets are stored as JobSecret rows (owner_id=current_user.id)
 with well-known keys (AWS_SES_ACCESS_KEY_ID, etc.).
 """
@@ -25,6 +28,7 @@ from zerg.dependencies.auth import get_current_user
 from zerg.models.models import JobSecret
 from zerg.models.models import User
 from zerg.shared.email import _EMAIL_SECRET_KEYS
+from zerg.shared.email import _LEGACY_EMAIL_SECRET_KEYS
 from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
 
@@ -34,8 +38,9 @@ router = APIRouter(prefix="/system/email", tags=["email-config"])
 
 # Keys that are SES credentials (sensitive)
 _SES_CREDENTIAL_KEYS = {"AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY"}
-# All configurable email keys
-_ALL_EMAIL_KEYS = set(_EMAIL_SECRET_KEYS)
+# All configurable email keys, including legacy recipient overrides that are no
+# longer used but should still be removable from existing tenant DBs.
+_ALL_EMAIL_KEYS = set(_EMAIL_SECRET_KEYS) | set(_LEGACY_EMAIL_SECRET_KEYS)
 
 
 # ---------------------------------------------------------------------------
@@ -50,7 +55,7 @@ class EmailKeyStatus(BaseModel):
 
 
 class EmailStatusResponse(BaseModel):
-    configured: bool = Field(description="Whether email can send (SES creds + FROM_EMAIL present)")
+    configured: bool = Field(description="Whether email can send (SES creds + FROM_EMAIL + NOTIFY_EMAIL present)")
     source: str | None = Field(None, description="Primary source: 'db', 'env', or None")
     keys: list[EmailKeyStatus]
 
@@ -61,12 +66,10 @@ class EmailConfigRequest(BaseModel):
     aws_ses_region: str | None = None
     from_email: str | None = None
     notify_email: str | None = None
-    digest_email: str | None = None
-    alert_email: str | None = None
 
 
 class EmailTestRequest(BaseModel):
-    to_email: str | None = Field(None, description="Override recipient (defaults to NOTIFY_EMAIL or user email)")
+    to_email: str | None = Field(None, description="Override recipient (defaults to NOTIFY_EMAIL)")
 
 
 class EmailTestResponse(BaseModel):
@@ -109,10 +112,13 @@ def email_status(
     """Show which email keys are configured and from what source."""
     keys = [_resolve_key_status(k, db, current_user.id) for k in _EMAIL_SECRET_KEYS]
 
-    # Email is "configured" when we have SES creds + FROM_EMAIL
+    # Email is "configured" when we have SES creds + sender + single recipient
     key_map = {k.key: k for k in keys}
     has_creds = (
-        key_map["AWS_SES_ACCESS_KEY_ID"].configured and key_map["AWS_SES_SECRET_ACCESS_KEY"].configured and key_map["FROM_EMAIL"].configured
+        key_map["AWS_SES_ACCESS_KEY_ID"].configured
+        and key_map["AWS_SES_SECRET_ACCESS_KEY"].configured
+        and key_map["FROM_EMAIL"].configured
+        and key_map["NOTIFY_EMAIL"].configured
     )
 
     # Primary source = source of the access key (most important credential)
@@ -138,8 +144,6 @@ def save_email_config(
         "aws_ses_region": "AWS_SES_REGION",
         "from_email": "FROM_EMAIL",
         "notify_email": "NOTIFY_EMAIL",
-        "digest_email": "DIGEST_EMAIL",
-        "alert_email": "ALERT_EMAIL",
     }
 
     saved = 0
@@ -191,9 +195,9 @@ def test_email(
     if not config.get("FROM_EMAIL"):
         return EmailTestResponse(success=False, message="FROM_EMAIL not configured")
 
-    recipient = request.to_email or config.get("NOTIFY_EMAIL") or current_user.email
+    recipient = request.to_email or config.get("NOTIFY_EMAIL")
     if not recipient:
-        return EmailTestResponse(success=False, message="No recipient email available")
+        return EmailTestResponse(success=False, message="NOTIFY_EMAIL not configured")
 
     message_id = send_email(
         subject="Longhouse Email Test",

@@ -4189,10 +4189,10 @@ export interface paths {
         put?: never;
         /**
          * Launch Managed Local
-         * @description Start a managed local AI agent session inside tmux on a connected runner.
+         * @description Start a managed local AI agent session on a connected runner.
          *
-         *     Supports both Claude and Codex providers. The tmux transport is
-         *     provider-agnostic — Longhouse owns the launch, lifecycle, and input routing.
+         *     Supports both Claude and Codex providers. tmux is the current implementation;
+         *     other managed transports can slot in behind the same API contract.
          */
         post: operations["launch_managed_local_sessions_managed_local_post"];
         delete?: never;
@@ -4366,23 +4366,6 @@ export interface paths {
         };
         /** List Timeline Session Summaries */
         get: operations["list_timeline_session_summaries_timeline_sessions_summary_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/timeline/sessions/active": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Timeline Active Sessions */
-        get: operations["list_timeline_active_sessions_timeline_sessions_active_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4591,82 +4574,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/briefing": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Briefing
-         * @description Pre-computed session summaries formatted for AI context injection.
-         *
-         *     Returns a compact briefing of recent sessions for a project, suitable
-         *     for injection into Claude Code's ``additionalContext`` via the SessionStart hook.
-         *
-         *     Only includes sessions that have a pre-computed summary (generated async
-         *     after ingest).
-         */
-        get: operations["get_briefing_agents_briefing_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/backfill-summaries": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Backfill Progress
-         * @description Check backfill progress.
-         */
-        get: operations["backfill_progress_agents_backfill_summaries_get"];
-        put?: never;
-        /**
-         * Backfill Summaries
-         * @description Start backfilling missing summaries as a background task.
-         *
-         *     Returns immediately. Check progress via GET /backfill-summaries.
-         */
-        post: operations["backfill_summaries_agents_backfill_summaries_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/backfill-embeddings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Backfill Embeddings Progress
-         * @description Check embedding backfill progress.
-         */
-        get: operations["backfill_embeddings_progress_agents_backfill_embeddings_get"];
-        put?: never;
-        /**
-         * Backfill Embeddings
-         * @description Start backfilling embeddings for sessions that need them.
-         */
-        post: operations["backfill_embeddings_agents_backfill_embeddings_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agents/sessions/semantic": {
         parameters: {
             query?: never;
@@ -4677,8 +4584,6 @@ export interface paths {
         /**
          * Semantic Search Sessions
          * @description Search sessions by semantic similarity using embeddings.
-         *
-         *     Falls back to empty results if embeddings are not configured.
          */
         get: operations["semantic_search_sessions_agents_sessions_semantic_get"];
         put?: never;
@@ -4699,50 +4604,8 @@ export interface paths {
         /**
          * Recall Sessions
          * @description Recall specific knowledge from past sessions.
-         *
-         *     Searches turn-level embeddings and returns context windows around matches.
          */
         get: operations["recall_sessions_agents_recall_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/ingest-health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Ingest Health
-         * @description Check ingest freshness — detects if sessions have stopped shipping.
-         */
-        get: operations["get_ingest_health_agents_ingest_health_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/usage-stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Usage Stats
-         * @description Session activity statistics by provider, queried live from sessions table.
-         */
-        get: operations["get_usage_stats_agents_usage_stats_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4761,9 +4624,6 @@ export interface paths {
         /**
          * List Sessions
          * @description List sessions with optional filters.
-         *
-         *     Returns sessions sorted by start time (most recent first).
-         *     By default, test and e2e sessions are excluded.
          */
         get: operations["list_sessions_agents_sessions_get"];
         put?: never;
@@ -4844,41 +4704,11 @@ export interface paths {
         /**
          * Get Filters
          * @description Get distinct filter values for UI dropdowns.
-         *
-         *     Returns lists of distinct projects and providers found in sessions
-         *     from the specified time range.
          */
         get: operations["get_filters_agents_filters_get"];
         put?: never;
         post?: never;
         delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/agents/demo": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Seed Demo Sessions
-         * @description Seed missing demo sessions for the timeline (idempotent top-up).
-         */
-        post: operations["seed_demo_sessions_agents_demo_post"];
-        /**
-         * Reset Demo Sessions
-         * @description Delete all demo-seeded sessions (provider_session_id LIKE 'demo-%').
-         *
-         *     Only available when AUTH_DISABLED=1. Used by the zerg-ui skill to set up
-         *     a clean empty state before screenshot capture (SCENE=empty).
-         */
-        delete: operations["reset_demo_sessions_agents_demo_delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4896,11 +4726,6 @@ export interface paths {
         /**
          * Set Session Action
          * @description Set user-driven bucket state for a session (park/snooze/archive/resume).
-         *
-         *     - park: keep visible but visually dimmed; user is aware, not acting
-         *     - snooze: hide from live sessions view until the session signals again
-         *     - archive: hide from live sessions view permanently (still searchable)
-         *     - resume: return to active (un-park/snooze/archive)
          */
         post: operations["set_session_action_agents_sessions__session_id__action_post"];
         delete?: never;
@@ -4925,9 +4750,6 @@ export interface paths {
         /**
          * Set Session Loop Mode
          * @description Set the explicit loop mode for a coding session.
-         *
-         *     This is the structured per-session autonomy knob that future UI surfaces
-         *     can expose as a small radio-button control.
          */
         patch: operations["set_session_loop_mode_agents_sessions__session_id__loop_mode_patch"];
         trace?: never;
@@ -5022,11 +4844,116 @@ export interface paths {
         /**
          * Export Session
          * @description Export session as JSONL for Claude Code --resume.
-         *
-         *     Returns the session as a JSONL file with headers containing
-         *     session metadata for the session continuity service.
          */
         get: operations["export_session_agents_sessions__session_id__export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/backfill-summaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backfill Progress
+         * @description Check backfill progress.
+         */
+        get: operations["backfill_progress_agents_backfill_summaries_get"];
+        put?: never;
+        /**
+         * Backfill Summaries
+         * @description Start backfilling missing summaries as a background task.
+         */
+        post: operations["backfill_summaries_agents_backfill_summaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/backfill-embeddings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Backfill Embeddings Progress
+         * @description Check embedding backfill progress.
+         */
+        get: operations["backfill_embeddings_progress_agents_backfill_embeddings_get"];
+        put?: never;
+        /**
+         * Backfill Embeddings
+         * @description Start backfilling missing embeddings as a background task.
+         */
+        post: operations["backfill_embeddings_agents_backfill_embeddings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/ingest-health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Ingest Health
+         * @description Check ingest freshness -- detects if sessions have stopped shipping.
+         */
+        get: operations["get_ingest_health_agents_ingest_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/usage-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Usage Stats
+         * @description Session activity statistics by provider, queried live from sessions table.
+         */
+        get: operations["get_usage_stats_agents_usage_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/briefing": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Briefing
+         * @description Pre-computed session summaries formatted for AI context injection.
+         */
+        get: operations["get_briefing_agents_briefing_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5047,10 +4974,6 @@ export interface paths {
         /**
          * Trigger Reflection
          * @description Trigger a reflection run to analyze recent sessions and extract insights.
-         *
-         *     Analyzes sessions that haven't been reflected on yet (reflected_at IS NULL)
-         *     within the specified time window. Uses LLM to identify patterns, failures,
-         *     and learnings across sessions.
          */
         post: operations["trigger_reflection_agents_reflect_post"];
         delete?: never;
@@ -5079,6 +5002,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/demo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Seed Demo Sessions
+         * @description Seed missing demo sessions for the timeline (idempotent top-up).
+         */
+        post: operations["seed_demo_sessions_agents_demo_post"];
+        /**
+         * Reset Demo Sessions
+         * @description Delete all demo-seeded sessions (provider_session_id LIKE 'demo-%').
+         */
+        delete: operations["reset_demo_sessions_agents_demo_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/test-cleanup": {
         parameters: {
             query?: never;
@@ -5092,9 +5039,6 @@ export interface paths {
         /**
          * Cleanup Test Sessions
          * @description Delete test sessions by project pattern (dev-only).
-         *
-         *     Only available when AUTH_DISABLED=1. Used by E2E tests to clean up
-         *     test data after runs.
          */
         delete: operations["cleanup_test_sessions_agents_test_cleanup_delete"];
         options?: never;
@@ -5367,6 +5311,9 @@ export interface paths {
          *     Unlike /health (which always returns 200 for observability), this endpoint
          *     returns a non-2xx status code so load balancers and provisioners can gate
          *     on it. Used by the Docker HEALTHCHECK and the control-plane wait_for_health.
+         *
+         *     Uses a raw SQLite connection with a short timeout so it never blocks behind
+         *     a long write transaction (the main cause of health-check flapping).
          */
         get: operations["readyz_check_get"];
         put?: never;
@@ -6970,10 +6917,6 @@ export interface components {
             from_email?: string | null;
             /** Notify Email */
             notify_email?: string | null;
-            /** Digest Email */
-            digest_email?: string | null;
-            /** Alert Email */
-            alert_email?: string | null;
         };
         /**
          * EmailContactCreate
@@ -7045,7 +6988,7 @@ export interface components {
         EmailStatusResponse: {
             /**
              * Configured
-             * @description Whether email can send (SES creds + FROM_EMAIL present)
+             * @description Whether email can send (SES creds + FROM_EMAIL + NOTIFY_EMAIL present)
              */
             configured: boolean;
             /**
@@ -7060,7 +7003,7 @@ export interface components {
         EmailTestRequest: {
             /**
              * To Email
-             * @description Override recipient (defaults to NOTIFY_EMAIL or user email)
+             * @description Override recipient (defaults to NOTIFY_EMAIL)
              */
             to_email?: string | null;
         };
@@ -8195,7 +8138,7 @@ export interface components {
              */
             loop_mode: components["schemas"]["SessionLoopMode"];
             /**
-             * @description Managed local transport (tmux only in v1)
+             * @description Managed local transport (tmux today; codex_app_server reserved for the native Codex path)
              * @default tmux
              */
             managed_transport: components["schemas"]["ManagedSessionTransport"];
@@ -8265,6 +8208,11 @@ export interface components {
              */
             loop_mode: components["schemas"]["SessionLoopMode"];
             /**
+             * @description Managed local transport (tmux or codex_app_server for native Codex)
+             * @default tmux
+             */
+            managed_transport: components["schemas"]["ManagedSessionTransport"];
+            /**
              * Machine Name
              * @description Optional local Longhouse machine label override used to resolve this device's runner
              */
@@ -8275,7 +8223,7 @@ export interface components {
          * @description Execution transport for Longhouse-managed sessions.
          * @enum {string}
          */
-        ManagedSessionTransport: "tmux";
+        ManagedSessionTransport: "tmux" | "codex_app_server";
         /** MessageCreate */
         MessageCreate: {
             /** Role */
@@ -10081,7 +10029,7 @@ export interface components {
             match_role?: string | null;
             /**
              * Match Score
-             * @description Semantic similarity score (0–1) when result is from vector search
+             * @description Semantic similarity score (0-1) when result is from vector search
              */
             match_score?: number | null;
             /**
@@ -10287,10 +10235,28 @@ export interface components {
             assistant_turn_finished_at?: string | null;
             /** Turn Loop Enqueued At */
             turn_loop_enqueued_at?: string | null;
+            /** Turn Loop Claimed At */
+            turn_loop_claimed_at?: string | null;
+            /** Controller Started At */
+            controller_started_at?: string | null;
+            /** Controller Completed At */
+            controller_completed_at?: string | null;
             /** Turn Loop Completed At */
             turn_loop_completed_at?: string | null;
+            /** Pre Enqueue Latency Ms */
+            pre_enqueue_latency_ms?: number | null;
             /** Queue Latency Ms */
             queue_latency_ms?: number | null;
+            /** Claim Latency Ms */
+            claim_latency_ms?: number | null;
+            /** Controller Latency Ms */
+            controller_latency_ms?: number | null;
+            /** Review Write Latency Ms */
+            review_write_latency_ms?: number | null;
+            /** Post Review Latency Ms */
+            post_review_latency_ms?: number | null;
+            /** Worker Latency Ms */
+            worker_latency_ms?: number | null;
             /** Review Latency Ms */
             review_latency_ms?: number | null;
             /** Processing Latency Ms */
@@ -19219,47 +19185,6 @@ export interface operations {
             };
         };
     };
-    list_timeline_active_sessions_timeline_sessions_active_get: {
-        parameters: {
-            query?: {
-                /** @description Filter by project */
-                project?: string | null;
-                /** @description Filter by status (working, active, idle, completed) */
-                status?: string | null;
-                /** @description Filter by attention (auto) */
-                attention?: string | null;
-                /** @description Max results */
-                limit?: number;
-                /** @description Days to look back */
-                days_back?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ActiveSessionsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     preview_timeline_session_timeline_sessions__session_id__preview_get: {
         parameters: {
             query?: {
@@ -19653,177 +19578,6 @@ export interface operations {
             };
         };
     };
-    get_briefing_agents_briefing_get: {
-        parameters: {
-            query: {
-                /** @description Project name to get briefing for */
-                project: string;
-                /** @description Max sessions to include */
-                limit?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BriefingResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    backfill_progress_agents_backfill_summaries_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackfillProgressResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    backfill_summaries_agents_backfill_summaries_post: {
-        parameters: {
-            query?: {
-                /** @description Max concurrent LLM requests */
-                concurrency?: number;
-                /** @description Optional project filter */
-                project?: string | null;
-                /** @description Re-summarize sessions that already have summaries */
-                force?: boolean;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackfillSummariesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    backfill_embeddings_progress_agents_backfill_embeddings_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackfillEmbeddingsProgressResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    backfill_embeddings_agents_backfill_embeddings_post: {
-        parameters: {
-            query?: {
-                /** @description Max concurrent embedding requests */
-                concurrency?: number;
-                /** @description Sessions per batch */
-                batch_size?: number;
-                /** @description Max batches to process */
-                max_batches?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BackfillEmbeddingsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     semantic_search_sessions_agents_sessions_semantic_get: {
         parameters: {
             query: {
@@ -19899,70 +19653,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RecallResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_ingest_health_agents_ingest_health_get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IngestHealthResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_usage_stats_agents_usage_stats_get: {
-        parameters: {
-            query?: {
-                /** @description Days to look back (max 365) */
-                days?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["UsageStatsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -20180,70 +19870,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FiltersResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    seed_demo_sessions_agents_demo_post: {
-        parameters: {
-            query?: {
-                /** @description Delete existing demo sessions before seeding fresh demo data */
-                replace?: boolean;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DemoSeedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reset_demo_sessions_agents_demo_delete: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DemoSeedResponse"];
                 };
             };
             /** @description Validation Error */
@@ -20518,6 +20144,241 @@ export interface operations {
             };
         };
     };
+    backfill_progress_agents_backfill_summaries_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillProgressResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_summaries_agents_backfill_summaries_post: {
+        parameters: {
+            query?: {
+                /** @description Max concurrent LLM requests */
+                concurrency?: number;
+                /** @description Optional project filter */
+                project?: string | null;
+                /** @description Re-summarize sessions that already have summaries */
+                force?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillSummariesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_embeddings_progress_agents_backfill_embeddings_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillEmbeddingsProgressResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    backfill_embeddings_agents_backfill_embeddings_post: {
+        parameters: {
+            query?: {
+                /** @description Max concurrent embedding requests */
+                concurrency?: number;
+                /** @description Optional project filter */
+                project?: string | null;
+                /** @description Re-embed sessions that already have embeddings */
+                force?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BackfillEmbeddingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_ingest_health_agents_ingest_health_get: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["IngestHealthResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_usage_stats_agents_usage_stats_get: {
+        parameters: {
+            query?: {
+                /** @description Days to look back (max 365) */
+                days?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageStatsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_briefing_agents_briefing_get: {
+        parameters: {
+            query: {
+                /** @description Project name to get briefing for */
+                project: string;
+                /** @description Max sessions to include */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BriefingResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     trigger_reflection_agents_reflect_post: {
         parameters: {
             query?: {
@@ -20575,6 +20436,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReflectionListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    seed_demo_sessions_agents_demo_post: {
+        parameters: {
+            query?: {
+                /** @description Delete existing demo sessions before seeding fresh demo data */
+                replace?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoSeedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reset_demo_sessions_agents_demo_delete: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DemoSeedResponse"];
                 };
             };
             /** @description Validation Error */

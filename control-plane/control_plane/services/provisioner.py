@@ -218,7 +218,7 @@ def _env_for(
             env["AWS_SES_REGION"] = settings.instance_aws_ses_region
         if settings.instance_from_email:
             env["FROM_EMAIL"] = settings.instance_from_email
-        # NOTIFY_EMAIL = the instance owner's email (they get their own notifications)
+        # Longhouse uses one instance recipient for alerts, digests, and test mail.
         env["NOTIFY_EMAIL"] = owner_email
 
     if _openai_env_allowed(subdomain, owner_email):

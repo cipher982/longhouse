@@ -114,7 +114,6 @@ class TestResolveEmailConfig:
         clean_env = {k: "" for k in [
             "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
             "AWS_SES_REGION", "FROM_EMAIL", "NOTIFY_EMAIL",
-            "DIGEST_EMAIL", "ALERT_EMAIL",
         ]}
         with patch.dict(os.environ, clean_env, clear=False):
             with patch(
@@ -168,7 +167,6 @@ class TestEmailConfigAPI:
         clean_env = {k: "" for k in [
             "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
             "AWS_SES_REGION", "FROM_EMAIL", "NOTIFY_EMAIL",
-            "DIGEST_EMAIL", "ALERT_EMAIL",
         ]}
         with patch.dict(os.environ, clean_env, clear=False):
             resp = client.get("/system/email/status")
@@ -190,10 +188,11 @@ class TestEmailConfigAPI:
                     "aws_ses_access_key_id": "AKIA_TEST",
                     "aws_ses_secret_access_key": "secret_test",
                     "from_email": "test@example.com",
+                    "notify_email": "ops@example.com",
                 },
             )
             assert resp.status_code == 200
-            assert resp.json()["keys_saved"] == 3
+            assert resp.json()["keys_saved"] == 4
 
             # Status should now show configured
             resp = client.get("/system/email/status")
@@ -206,7 +205,7 @@ class TestEmailConfigAPI:
         """Delete removes DB overrides."""
         clean_env = {k: "" for k in [
             "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
-            "FROM_EMAIL",
+            "FROM_EMAIL", "NOTIFY_EMAIL",
         ]}
         with patch.dict(os.environ, clean_env, clear=False):
             # Save first
@@ -216,13 +215,14 @@ class TestEmailConfigAPI:
                     "aws_ses_access_key_id": "AKIA_TEST",
                     "aws_ses_secret_access_key": "secret_test",
                     "from_email": "test@example.com",
+                    "notify_email": "ops@example.com",
                 },
             )
 
             # Delete
             resp = client.delete("/system/email/config")
             assert resp.status_code == 200
-            assert resp.json()["keys_deleted"] == 3
+            assert resp.json()["keys_deleted"] == 4
 
             # Status should now show not configured
             resp = client.get("/system/email/status")
@@ -234,7 +234,6 @@ class TestEmailConfigAPI:
         clean_env = {k: "" for k in [
             "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
             "FROM_EMAIL", "AWS_SES_REGION", "NOTIFY_EMAIL",
-            "DIGEST_EMAIL", "ALERT_EMAIL",
         ]}
         with patch.dict(os.environ, clean_env, clear=False):
             resp = client.put(
@@ -251,6 +250,22 @@ class TestEmailConfigAPI:
             # Status should still be unconfigured
             resp = client.get("/system/email/status")
             assert resp.json()["configured"] is False
+
+    def test_test_email_requires_notify_email_when_no_override(self, client):
+        env = {
+            "AWS_SES_ACCESS_KEY_ID": "AKIA_ENV",
+            "AWS_SES_SECRET_ACCESS_KEY": "secret_env",
+            "FROM_EMAIL": "from@env.com",
+            "NOTIFY_EMAIL": "",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            resp = client.post("/system/email/test", json={})
+            assert resp.status_code == 200
+            assert resp.json() == {
+                "success": False,
+                "message": "NOTIFY_EMAIL not configured",
+                "message_id": None,
+            }
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +315,6 @@ class TestNonDefaultOwnerID:
         clean_env = {k: "" for k in [
             "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
             "FROM_EMAIL", "AWS_SES_REGION", "NOTIFY_EMAIL",
-            "DIGEST_EMAIL", "ALERT_EMAIL",
         ]}
         with patch.dict(os.environ, clean_env, clear=False):
             with patch(
@@ -340,7 +354,6 @@ class TestNonDefaultOwnerID:
         clean_env = {k: "" for k in [
             "AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY",
             "FROM_EMAIL", "AWS_SES_REGION", "NOTIFY_EMAIL",
-            "DIGEST_EMAIL", "ALERT_EMAIL",
         ]}
         try:
             with patch.dict(os.environ, clean_env, clear=False):
@@ -351,10 +364,11 @@ class TestNonDefaultOwnerID:
                         "aws_ses_access_key_id": "AKIA_U5",
                         "aws_ses_secret_access_key": "secret_u5",
                         "from_email": "from@u5.com",
+                        "notify_email": "notify@u5.com",
                     },
                 )
                 assert resp.status_code == 200
-                assert resp.json()["keys_saved"] == 3
+                assert resp.json()["keys_saved"] == 4
 
                 # Status should show configured (secrets are under user 5)
                 resp = client.get("/system/email/status")
@@ -403,7 +417,6 @@ class TestMixedSourceResolution:
         assert result["AWS_SES_SECRET_ACCESS_KEY"] == "secret_env"
         assert result["FROM_EMAIL"] == "from@env.com"
         assert result["NOTIFY_EMAIL"] == "notify@env.com"
-
 
 # ---------------------------------------------------------------------------
 # Tests: status endpoint validates values, not just row presence

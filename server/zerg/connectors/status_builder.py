@@ -168,9 +168,14 @@ def _has_platform_email_credentials() -> bool:
     """Check if platform-level email credentials are configured via env vars.
 
     Returns:
-        True if AWS SES credentials and FROM_EMAIL are set.
+        True if AWS SES credentials, FROM_EMAIL, and NOTIFY_EMAIL are set.
     """
-    return bool(os.getenv("AWS_SES_ACCESS_KEY_ID") and os.getenv("AWS_SES_SECRET_ACCESS_KEY") and os.getenv("FROM_EMAIL"))
+    return bool(
+        os.getenv("AWS_SES_ACCESS_KEY_ID")
+        and os.getenv("AWS_SES_SECRET_ACCESS_KEY")
+        and os.getenv("FROM_EMAIL")
+        and os.getenv("NOTIFY_EMAIL")
+    )
 
 
 def _has_platform_sms_credentials() -> bool:
