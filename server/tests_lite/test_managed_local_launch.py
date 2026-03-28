@@ -463,6 +463,33 @@ def test_launch_managed_local_session_creates_native_codex_session_without_tmux(
             api_app_ref.dependency_overrides = {}
 
 
+def test_launch_managed_local_session_rejects_unknown_runner_for_native_codex_transport(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user = User(email="managed-local@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        client, api_app_ref = _make_client(db, user)
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": "missing-runner",
+                    "cwd": "/Users/davidrose/git/zerg",
+                    "provider": "codex",
+                    "managed_transport": "codex_app_server",
+                },
+            )
+            assert response.status_code == 404, response.text
+            assert response.json()["detail"] == "Runner 'missing-runner' not found"
+            assert db.query(AgentSession).count() == 0
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_launch_managed_local_session_rejects_codex_native_transport_for_claude(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 
@@ -648,6 +675,59 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             assert auth.session_id == payload["session_id"]
             assert auth.project == "hiring"
             assert auth.device_id == "work-laptop"
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_this_device_allows_native_codex_without_runner_row(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user = User(email="managed-local@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        device_token = SimpleNamespace(owner_id=user.id, device_id="work-laptop", id="token-1")
+        client, api_app_ref = _make_device_client(db, device_token)
+
+        def _unexpected_dispatcher():
+            raise AssertionError("native codex launch should not request runner dispatch")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            _unexpected_dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                headers={"X-Agents-Token": "zdt_test_token"},
+                json={
+                    "machine_name": "work-laptop",
+                    "cwd": "/Users/davidrose/git/zerg",
+                    "provider": "codex",
+                    "managed_transport": "codex_app_server",
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["managed_transport"] == "codex_app_server"
+            assert payload["source_runner_id"] == 0
+            assert payload["source_runner_name"] == "work-laptop"
+            assert payload["attach_command"] == ""
+
+            session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+            assert session.managed_transport == "codex_app_server"
+            assert session.source_runner_id is None
+            assert session.source_runner_name == "work-laptop"
+            assert session.managed_tmux_tmpdir is None
+
+            runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
+            assert runtime_state.phase == "idle"
+            presence = db.query(SessionPresence).filter(SessionPresence.session_id == str(session.id)).one()
+            assert presence.state == "idle"
+            assert presence.provider == "codex"
         finally:
             api_app_ref.dependency_overrides = {}
 

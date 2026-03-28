@@ -378,12 +378,18 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             detail = stderr or stdout or "Managed local hook installation failed"
             raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
     else:
-        # For codex_app_server: still resolve runner if available (for device_id label),
-        # but don't require it to be online
-        try:
+        # Native Codex bridge launches on the caller's device, so `/this-device`
+        # can continue even before that device has a persisted Runner row.
+        # The generic `/managed-local` route still takes an explicit runner target
+        # and should keep failing if it cannot be resolved.
+        if params.machine_name:
+            try:
+                runner = _resolve_runner(db, params.owner_id, params.runner_target)
+            except ManagedLocalLaunchError as exc:
+                if exc.status_code != 404:
+                    raise
+        else:
             runner = _resolve_runner(db, params.owner_id, params.runner_target)
-        except ManagedLocalLaunchError:
-            pass
 
     session_uuid = uuid4()
     provider_session_id = str(session_uuid)
