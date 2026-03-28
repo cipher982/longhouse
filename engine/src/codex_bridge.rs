@@ -405,7 +405,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             format!("bridge:launch:{}", context.state.session_id),
             None,
         )
-        .await?;
+        .await;
 
     loop {
         let event = recv_event(&mut client).await?;
@@ -920,7 +920,7 @@ async fn handle_server_request(
                     ),
                     Some("approval".to_string()),
                 )
-                .await?;
+                .await;
         }
         "item/tool/requestUserInput" | "mcpServer/elicitation/request" => {
             context
@@ -934,7 +934,7 @@ async fn handle_server_request(
                     ),
                     None,
                 )
-                .await?;
+                .await;
         }
         _ => {}
     }
@@ -1003,7 +1003,7 @@ async fn process_notification(
                     ),
                     None,
                 )
-                .await?;
+                .await;
         }
         "item/agentMessage/delta" => {
             if should_emit_progress(context.last_progress_emit, DEFAULT_PROGRESS_THROTTLE_MS) {
@@ -1015,7 +1015,7 @@ async fn process_notification(
                         context.state.session_id,
                         Uuid::new_v4()
                     ))
-                    .await?;
+                    .await;
             }
         }
         "turn/completed" => {
@@ -1033,7 +1033,7 @@ async fn process_notification(
                     ),
                     None,
                 )
-                .await?;
+                .await;
             if let Some(thread_path) = context.state.thread_path.clone() {
                 let session_id = context.state.session_id.clone();
                 let api_url = config.api_url.clone();
@@ -1069,7 +1069,7 @@ async fn process_notification(
                             ),
                             None,
                         )
-                        .await?;
+                        .await;
                 }
             }
         }
@@ -1125,7 +1125,7 @@ impl BridgeRuntimeSink {
         phase: &str,
         dedupe_key: String,
         tool_name: Option<String>,
-    ) -> Result<()> {
+    ) {
         let freshness_ms = match phase {
             "thinking" => Some(90_000),
             "running" => Some(600_000),
@@ -1151,10 +1151,10 @@ impl BridgeRuntimeSink {
                 "thread_id": self.thread_id,
             }
         })])
-        .await
+        .await;
     }
 
-    async fn post_progress(&self, dedupe_key: String) -> Result<()> {
+    async fn post_progress(&self, dedupe_key: String) {
         self.post_runtime_events(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
@@ -1172,11 +1172,11 @@ impl BridgeRuntimeSink {
                 "thread_id": self.thread_id,
             }
         })])
-        .await
+        .await;
     }
 
-    async fn post_runtime_events(&self, events: Vec<Value>) -> Result<()> {
-        let response = self
+    async fn post_runtime_events(&self, events: Vec<Value>) {
+        let response = match self
             .http
             .post(format!(
                 "{}/api/agents/runtime/events/batch",
@@ -1186,13 +1186,18 @@ impl BridgeRuntimeSink {
             .json(&json!({ "events": events }))
             .send()
             .await
-            .context("posting bridge runtime events")?;
+        {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("[codex-bridge] runtime ingest network error: {e}");
+                return;
+            }
+        };
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            bail!("bridge runtime ingest failed: {} {}", status, body);
+            eprintln!("[codex-bridge] runtime ingest failed: {status} {body}");
         }
-        Ok(())
     }
 }
 

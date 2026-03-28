@@ -21,6 +21,7 @@ on:
           - e2e-a11y
           - e2e-single
           - full
+          - codex-bridge-e2e
       test:
         description: 'Playwright test path for e2e-single (e.g. tests/core/sessions.spec.ts)'
         required: false
@@ -79,7 +80,7 @@ jobs:
         run: cd web && bun install && bun run build
 
       - name: Pre-install backend deps
-        if: contains('validate unit e2e-core e2e-a11y e2e-single full', inputs.suite)
+        if: contains('validate unit e2e-core e2e-a11y e2e-single full codex-bridge-e2e', inputs.suite)
         run: cd server && uv sync
 
       - name: Install Playwright browsers + deps
@@ -124,6 +125,10 @@ jobs:
               ;;
             full)
               make test-full
+              ;;
+            codex-bridge-e2e)
+              make install-engine
+              make test-codex-bridge-e2e
               ;;
             *)
               echo "Unknown suite: ${SUITE}" >&2
