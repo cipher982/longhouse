@@ -28,7 +28,7 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const BASELINE_DIR = path.resolve(TEST_DIR, 'ui_baseline_app.spec.ts-snapshots');
 const CURRENT_DIR = path.resolve(TEST_DIR, '../test-results/visual-compare-current');
 const OUTPUT_DIR = path.resolve(TEST_DIR, '../test-results/visual-compare-results');
-const SCRIPT_PATH = path.resolve(TEST_DIR, '../../../../scripts/visual-compare.ts');
+const SCRIPT_PATH = path.resolve(TEST_DIR, '../../scripts/qa/visual-compare.ts');
 
 async function waitForAppReady(page: Page, mode: PageDef['ready']) {
   if (mode === 'page') {
