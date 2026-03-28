@@ -18,7 +18,7 @@ set -euo pipefail
 # Config
 # ---------------------------------------------------------------------------
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOSTED_INSTANCE_HELPER="$ROOT_DIR/scripts/lib/hosted-instance.sh"
 TEST_SUBDOMAIN="e2e-$(date +%s)-${RANDOM}"
 TEST_EMAIL="${TEST_SUBDOMAIN}@test.longhouse.ai"

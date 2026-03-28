@@ -14,8 +14,8 @@ on:
       - 'e2e/**'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
-      - 'scripts/qa-oss.sh'
-      - 'scripts/run-onboarding-funnel.sh'
+      - 'scripts/qa/qa-oss.sh'
+      - 'scripts/ops/run-onboarding-funnel.sh'
       - 'Makefile'
       - 'README.md'
   pull_request:
@@ -31,8 +31,8 @@ on:
       - 'e2e/**'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
-      - 'scripts/qa-oss.sh'
-      - 'scripts/run-onboarding-funnel.sh'
+      - 'scripts/qa/qa-oss.sh'
+      - 'scripts/ops/run-onboarding-funnel.sh'
       - 'Makefile'
       - 'README.md'
   schedule:

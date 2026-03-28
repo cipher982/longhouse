@@ -19,7 +19,7 @@
 set -e
 
 # Load repo .env if present (local only; no auto-creation)
-ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 if [[ -f "$ROOT_DIR/.env" ]]; then
     set -a
     # shellcheck disable=SC1090

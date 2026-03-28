@@ -122,7 +122,7 @@ class ModernProtocolGenerator:
 // Using AsyncAPI 3.0 + TypeScript Code Generation
 //
 // This file contains strongly-typed WebSocket message definitions.
-// To update, modify the schema file and run: python scripts/generate-ws-types-modern.py
+// To update, modify the schema file and run: python scripts/generate/generate-ws-types-modern.py
 
 '''
 
@@ -352,7 +352,7 @@ export interface Envelope<T = unknown> {
 # Using AsyncAPI 3.0 + Modern Python Code Generation
 #
 # This file contains strongly-typed WebSocket message definitions.
-# To update, modify the schema file and run: python scripts/generate-ws-types-modern.py
+# To update, modify the schema file and run: python scripts/generate/generate-ws-types-modern.py
 
 import time
 import jsonschema

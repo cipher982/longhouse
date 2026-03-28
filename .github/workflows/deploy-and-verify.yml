@@ -142,8 +142,8 @@ jobs:
         env:
           CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
         run: |
-          chmod +x scripts/smoke-prod.sh
-          ./scripts/smoke-prod.sh --no-llm
+          chmod +x scripts/qa/smoke-prod.sh
+          ./scripts/qa/smoke-prod.sh --no-llm
 
       - name: Summary
         if: always()

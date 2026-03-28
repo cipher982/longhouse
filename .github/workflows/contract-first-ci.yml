@@ -223,7 +223,7 @@ jobs:
       run: pip install openai anthropic
 
     - name: Smoke test all models
-      run: python scripts/smoke_models.py --ci
+      run: python scripts/qa/smoke_models.py --ci
 
   oss-qa:
     runs-on: ubuntu-latest
@@ -252,4 +252,4 @@ jobs:
     - name: Run OSS QA (no unit/e2e, UI check only)
       env:
         ONBOARDING_PLAYWRIGHT_PROJECT: onboarding-chromium
-      run: ./scripts/qa-oss.sh --no-unit --no-e2e
+      run: ./scripts/qa/qa-oss.sh --no-unit --no-e2e

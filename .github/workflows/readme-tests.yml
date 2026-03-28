@@ -7,7 +7,7 @@ on:
       - "README.md"
       - "packages/*/README.md"
       - "*/README.md"
-      - "scripts/run-readme-tests.py"
+      - "scripts/qa/run-readme-tests.py"
   schedule:
     # Nightly at 6am UTC — catches silent drift even without README changes
     - cron: "0 6 * * *"

@@ -6,7 +6,7 @@ import sys
 
 
 def _load_script_module():
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / "managed_local_codex_launch_profile.py"
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "managed-local" / "managed_local_codex_launch_profile.py"
     spec = importlib.util.spec_from_file_location("managed_local_codex_launch_profile", script_path)
     assert spec is not None
     assert spec.loader is not None

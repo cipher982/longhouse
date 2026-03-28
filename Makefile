@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-conversations qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-hosted-instance test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine-fast test-shipper-premerge
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-conversations qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-hosted-instance test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine-fast test-shipper-premerge test-codex-bridge-e2e
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +196,7 @@ test: ## Run lite tests by default
 	$(MAKE) test-lite
 
 test-readmes: ## Run README contract tests (MODE=smoke[default] or full)
-	@python3 scripts/run-readme-tests.py --mode $(or $(MODE),smoke) $(FILES)
+	@python3 scripts/qa/run-readme-tests.py --mode $(or $(MODE),smoke) $(FILES)
 
 test-lite: ## Fast SQLite-lite backend tests (no Docker)
 	@echo "🧪 Running lite backend tests (SQLite)..."; \
@@ -238,7 +238,7 @@ test-engine-fast: ## Rust engine unit + golden + adversarial tests (uses repo-lo
 	cd engine && cargo test --bin longhouse-engine --test golden_parser_contract --test adversarial_parser
 
 test-zerg-ops-backup: ## Backup/restore retention contract test for scripts/zerg-ops.sh
-	@bash scripts/test-zerg-ops.sh
+	@bash scripts/qa/test-zerg-ops.sh
 
 test-shipper-e2e: ## Full pipeline E2E: fixture → longhouse-engine ship → API → DB (uses repo-local binary)
 	@echo "🚀 Running shipper E2E tests (Claude/Gemini/Codex + schema-drift)..."
@@ -251,7 +251,7 @@ test-shipper-premerge: ## Full shipper QA: engine fast tests + pipeline E2E (run
 	$(MAKE) test-shipper-e2e
 
 test-codex-bridge-e2e: ## Codex bridge E2E: real user journey (bridge start → send → continue → interrupt)
-	@bash scripts/test-codex-bridge-e2e.sh
+	@bash scripts/qa/test-codex-bridge-e2e.sh
 
 ensure-js-deps: ## @internal Install workspace JS deps when a clean clone needs them
 	@if [ ! -f node_modules/@playwright/test/package.json ]; then \
@@ -330,7 +330,7 @@ qa-ui: ## Quick UI QA (accessibility checks)
 	$(MAKE) test-e2e-a11y
 
 qa-ui-visual: ## Visual UI analysis (screenshots + AI) (usage: make qa-ui-visual ARGS="--pages=dashboard,chat")
-	@./scripts/run-visual-analysis.sh $(ARGS)
+	@./scripts/qa/run-visual-analysis.sh $(ARGS)
 
 qa-ui-smoke: ## Visual smoke snapshots for core app pages (glass)
 	$(MAKE) test-e2e-single TEST="--project=chromium tests/visual_smoke_glass.spec.ts"
@@ -410,7 +410,7 @@ test-hosted-instance: ## @internal Run hosted-instance helper script tests
 
 test-runner-vm-canary: ## Run disposable VM runner canary against a hosted instance
 	@echo "🧪 Running disposable VM runner canary..."
-	bash scripts/runner-vm-canary.sh
+	bash scripts/qa/runner-vm-canary.sh
 
 test-install: ## Test Longhouse installer + first-run onboarding smoke
 	@echo "🧪 Testing Longhouse installer..."
@@ -435,15 +435,15 @@ test-integration: ## @internal Run integration tests (REAL API calls, requires A
 	cd server && EVAL_MODE=live uv run --extra dev pytest tests/integration/ -v -m integration
 
 shipper-e2e-prereqs: ## Shipper E2E prerequisites (migrations + table check)
-	@./scripts/shipper-e2e-prereqs.sh
+	@./scripts/qa/shipper-e2e-prereqs.sh
 
 ## Note: test-shipper-e2e is defined earlier in this file (self-contained, no make dev required)
 
 shipper-smoke-test: ## Run shipper live smoke test script (requires backend running)
-	@./scripts/shipper-smoke-test.sh
+	@./scripts/qa/shipper-smoke-test.sh
 
 test-hooks: ## E2E test for hook outbox pipeline (requires daemon running)
-	@./scripts/test-hooks-e2e.sh
+	@./scripts/qa/test-hooks-e2e.sh
 
 test-prompts: ## @internal Run live prompt quality tests (requires backend running + --live-token)
 	@echo "🧪 Running prompt quality tests (requires backend running)..."
@@ -535,7 +535,7 @@ SCENARIO ?= product-demo
 
 video-audio: ## Generate voiceover audio. Override: SCENARIO=timeline-demo
 	@echo "🎙️  Generating voiceover audio for $(SCENARIO)..."
-	@uv run --with openai --with mutagen --with pyyaml scripts/generate_voiceover.py $(SCENARIO)
+	@uv run --with openai --with mutagen --with pyyaml scripts/generate/generate_voiceover.py $(SCENARIO)
 	@echo "✅ Audio generated. Check videos/$(SCENARIO)/audio/"
 
 video-studio: ## Open Remotion Studio for video editing
@@ -581,7 +581,7 @@ validate-ws: ## Check WebSocket code is in sync (for CI)
 	@cd server && \
 		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml >/dev/null 2>&1
+		uv run --no-project --with pyyaml python ../scripts/generate/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml >/dev/null 2>&1
 	@# Only check for drift in generated files to avoid false positives from unrelated changes
 	@if ! git diff --quiet \
 		server/zerg/generated/ws_messages.py \
@@ -604,14 +604,14 @@ regen-ws: ## Regenerate WebSocket contract code
 	@cd server && \
 		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml
+		uv run --no-project --with pyyaml python ../scripts/generate/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml
 	@echo "✅ WebSocket code regenerated"
 
 validate-sse: ## Check SSE code is in sync (for CI)
 	@cd server && \
 		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate-sse-types.py schemas/sse-events.asyncapi.yml >/dev/null 2>&1
+		uv run --no-project --with pyyaml python ../scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml >/dev/null 2>&1
 	@# Only check for drift in generated files to avoid false positives from unrelated changes
 	@if ! git diff --quiet \
 		server/zerg/generated/sse_events.py \
@@ -632,11 +632,11 @@ regen-sse: ## Regenerate SSE event contract code
 	@cd server && \
 		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate-sse-types.py schemas/sse-events.asyncapi.yml
+		uv run --no-project --with pyyaml python ../scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml
 	@echo "✅ SSE code regenerated"
 
 lint-test-patterns: ## Check for test anti-patterns (window.confirm, alert, waitForTimeout)
-	@bash scripts/lint-test-patterns.sh
+	@bash scripts/qa/lint-test-patterns.sh
 
 # ---------------------------------------------------------------------------
 # Makefile Validation
@@ -675,20 +675,20 @@ validate-makefile: ## Verify .PHONY targets match documented targets
 # ---------------------------------------------------------------------------
 verify-prod: ## Full prod validation: API + browser tests (~80s, requires hosted auth env)
 	@echo "🔍 Verifying production..."
-	@./scripts/smoke-prod.sh --wait --full
+	@./scripts/qa/smoke-prod.sh --wait --full
 	@echo ""
-	@./scripts/run-prod-e2e.sh
+	@./scripts/qa/run-prod-e2e.sh
 	@echo ""
-	@./scripts/check-cp-credentials.sh
+	@./scripts/ops/check-cp-credentials.sh
 	@echo "✅ Production verified"
 
 qa-live: ## Run live QA against hosted instance (~60s, default subdomain david010)
 	@$(MAKE) ensure-js-deps
-	@./scripts/qa-live.sh
+	@./scripts/qa/qa-live.sh
 
 qa-live-conversations: ## Run hosted conversations smoke against default instance
 	@$(MAKE) ensure-js-deps
-	@./scripts/run-prod-e2e.sh tests/live/conversations-live.spec.ts --timeout=60000 --reporter=line
+	@./scripts/qa/run-prod-e2e.sh tests/live/conversations-live.spec.ts --timeout=60000 --reporter=line
 
 test-ci: ## @internal CI-ready tests (unit + build + contracts)
 	@echo "🤖 CI Test Suite Starting..."
@@ -807,16 +807,16 @@ trace-coverage: ## @internal Trace coverage report (usage: make trace-coverage [
 
 test-e2e-onboarding: ## @internal Run onboarding browser ring (Playwright + demo server)
 	@echo "🎭 Running onboarding browser ring..."
-	@ONBOARDING_PLAYWRIGHT_PROJECT="$(PROJECT)" ./scripts/qa-oss.sh --workdir $(CURDIR) --no-unit --no-e2e
+	@ONBOARDING_PLAYWRIGHT_PROJECT="$(PROJECT)" ./scripts/qa/qa-oss.sh --workdir $(CURDIR) --no-unit --no-e2e
 
 # ---------------------------------------------------------------------------
 # Onboarding Funnel (docs-as-source)
 # ---------------------------------------------------------------------------
 onboarding-funnel: ## Run onboarding funnel from README contract (fresh clone)
-	@./scripts/run-onboarding-funnel.sh
+	@./scripts/ops/run-onboarding-funnel.sh
 
 onboarding-smoke: ## Quick onboarding smoke (uses current workspace, Docker)
-	@./scripts/run-onboarding-funnel.sh --workdir $(CURDIR)
+	@./scripts/ops/run-onboarding-funnel.sh --workdir $(CURDIR)
 
 onboarding-sqlite: ## SQLite-only onboarding smoke test (no Docker)
 	@echo "Testing SQLite-only onboarding..."
@@ -825,7 +825,7 @@ onboarding-sqlite: ## SQLite-only onboarding smoke test (no Docker)
 	@echo "SQLite onboarding smoke test passed"
 
 qa-oss: ## Full OSS QA (isolated clone + UI gate)
-	@./scripts/qa-oss.sh $(ARGS)
+	@./scripts/qa/qa-oss.sh $(ARGS)
 
 # ---------------------------------------------------------------------------
 # Vibetest (LLM-powered browser QA — advisory only, never blocks CI)
@@ -833,7 +833,7 @@ qa-oss: ## Full OSS QA (isolated clone + UI gate)
 VIBETEST_AGENTS ?= 3
 
 vibetest: ## Run vibetest against isolated server (advisory, needs GOOGLE_API_KEY)
-	@./scripts/run-vibetest.sh --agents $(VIBETEST_AGENTS)
+	@./scripts/qa/run-vibetest.sh --agents $(VIBETEST_AGENTS)
 
 vibetest-local: ## Run vibetest against running dev server (make dev)
-	@./scripts/run-vibetest.sh --use-running http://localhost:47200 --agents $(VIBETEST_AGENTS)
+	@./scripts/qa/run-vibetest.sh --use-running http://localhost:47200 --agents $(VIBETEST_AGENTS)

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOSTED_INSTANCE_HELPER="${HOSTED_INSTANCE_HELPER:-$ROOT_DIR/scripts/lib/hosted-instance.sh}"
 
 if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
@@ -167,7 +167,7 @@ IFS=$'\t' read -r LH_PROFILE_DEVICE_TOKEN_ID LH_PROFILE_DEVICE_TOKEN <<< \
   "$(lh_hosted_create_device_token "$LH_PROFILE_ACCESS_TOKEN" "$API_URL" "hosted-codex-launch-profile-${INSTANCE_SUBDOMAIN}-${RANDOM}")"
 
 cmd=(
-  uv run --project server python -u scripts/managed_local_codex_launch_profile.py
+  uv run --project server python -u scripts/managed-local/managed_local_codex_launch_profile.py
   --api-url "$API_URL"
   --device-token "$LH_PROFILE_DEVICE_TOKEN"
   --cwd "$TARGET_CWD"
