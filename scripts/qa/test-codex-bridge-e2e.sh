@@ -282,9 +282,11 @@ echo "─── Test 9: CLI entry point (longhouse codex --no-attach) ───"
 
 # This tests the REAL user entry point: longhouse codex
 # It exercises: API session creation, native bridge start, output formatting
+CLI_SESSION_ID=""
+CLI_WS_URL=""
 LONGHOUSE_BIN="${LONGHOUSE_BIN:-$(command -v longhouse 2>/dev/null || echo "")}"
 if [ -z "$LONGHOUSE_BIN" ]; then
-    dim "  (longhouse CLI not found, skipping CLI entry point test)"
+    fail "longhouse CLI not found"
     dim "  Install: cd server && uv tool install -e ."
 else
     CLI_OUTPUT=$("$LONGHOUSE_BIN" codex \
@@ -306,13 +308,6 @@ else
             pass "CLI launched session $CLI_SESSION_ID with ws=$CLI_WS_URL"
 
             # Find and track the bridge daemon PID for cleanup
-            CLI_BRIDGE_PID=$(echo "$CLI_OUTPUT" | python3 -c "
-import sys, re
-for line in sys.stdin:
-    # Bridge start output may include pid info
-    pass
-" 2>/dev/null || echo "")
-            # The bridge daemon is a child of longhouse-engine; find it by state file
             CLI_STATE_FILE=$(find "$HOME/.claude/managed-local/codex-bridge" -name "${CLI_SESSION_ID}.json" 2>/dev/null | head -1)
             if [ -n "$CLI_STATE_FILE" ]; then
                 CLI_BRIDGE_PID=$(python3 -c "import json; print(json.load(open('$CLI_STATE_FILE'))['pid'])" 2>/dev/null || echo "")
@@ -329,11 +324,11 @@ fi
 
 echo "─── Test 10: TUI attach smoke (codex --remote connects) ───"
 
-# Use the WS URL from CLI test (or from earlier bridge tests as fallback)
-TUI_WS_URL="${CLI_WS_URL:-$WS_URL}"
+# Test the exact CLI-created session from test 9.
+TUI_WS_URL="${CLI_WS_URL:-}"
 
 if [ -z "$TUI_WS_URL" ]; then
-    fail "no WebSocket URL available for TUI test"
+    fail "no CLI-created WebSocket URL available for TUI test"
 else
     # Run codex TUI under `script` to provide a pseudo-TTY (codex requires a real terminal).
     # We're not testing interactivity, just that it connects without crashing.
@@ -350,8 +345,11 @@ else
             pass "TUI connected via pseudo-TTY and stayed alive for 5s (pid=$TUI_PID)"
             kill "$TUI_PID" 2>/dev/null || true
         else
-            wait "$TUI_PID" 2>/dev/null
-            TUI_EXIT=$?
+            if wait "$TUI_PID" 2>/dev/null; then
+                TUI_EXIT=0
+            else
+                TUI_EXIT=$?
+            fi
             if [ "$TUI_EXIT" -eq 0 ]; then
                 pass "TUI exited cleanly"
             else
@@ -361,7 +359,7 @@ else
         fi
         rm -f "$TUI_LOG"
     else
-        dim "  (script command not available, skipping TUI attach smoke)"
+        fail "script command not available for TUI attach smoke"
     fi
 fi
 
