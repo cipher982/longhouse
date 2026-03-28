@@ -1548,6 +1548,7 @@ fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> 
             &source_path,
             "claude",
             Some(&result.source_lines),
+            None,
             CompressionAlgo::Gzip,
         )?;
         let compress_elapsed = compress_start.elapsed();
@@ -1560,6 +1561,7 @@ fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> 
             &source_path,
             "claude",
             Some(&result.source_lines),
+            None,
         );
         let uncompressed = serde_json::to_vec(&payload)?;
 

@@ -185,6 +185,14 @@ class SourceLineIngest(BaseModel):
     raw_json: str = Field(..., description="Original source line without trailing newline")
 
 
+class SourceRewindHintIngest(BaseModel):
+    """Explicit rewind/truncation hint emitted by the engine."""
+
+    source_path: str = Field(..., description="Original source file path")
+    source_offset: int = Field(..., description="Byte offset where the rewrite starts")
+    reason: str = Field(..., description="Reason for the rewind, e.g. truncation")
+
+
 class SessionIngest(BaseModel):
     """Schema for ingesting a session with events."""
 
@@ -207,6 +215,10 @@ class SessionIngest(BaseModel):
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (isSidechain:true in JSONL)")
     events: List[EventIngest] = Field(default_factory=list, description="Session events")
     source_lines: List[SourceLineIngest] = Field(default_factory=list, description="Lossless source-line archive")
+    rewind_hints: List[SourceRewindHintIngest] = Field(
+        default_factory=list,
+        description="Explicit rewind/truncation hints from the engine",
+    )
 
 
 class IngestResult(BaseModel):
@@ -1059,12 +1071,10 @@ class AgentsStore:
     ) -> RewindSignal | None:
         """Detect whether incoming lines rewrite prior offsets.
 
+        Whole-file truncation is handled only via explicit engine rewind hints.
         We intentionally do not infer truncation from "incoming max offset is
-        lower than stored max offset". The shipper replays partial historical
-        ranges during retry/recovery, and those batches are indistinguishable
-        from a true file rewind without an explicit whole-file/truncation
-        signal. Treating every smaller historical chunk as truncation causes
-        false branch forks and massive branch-copy amplification.
+        lower than stored max offset" because replayed historical ranges are
+        otherwise indistinguishable from a real rewrite.
         """
         if not source_lines:
             return None
@@ -1087,6 +1097,25 @@ class AgentsStore:
                     reason="rewrite",
                 )
         return None
+
+    def _detect_explicit_rewind_signal(
+        self,
+        rewind_hints: list[SourceRewindHintIngest],
+    ) -> RewindSignal | None:
+        """Honor explicit engine rewind/truncation hints before heuristics."""
+        candidate: RewindSignal | None = None
+        for hint in rewind_hints:
+            signal = RewindSignal(
+                source_path=hint.source_path,
+                source_offset=int(hint.source_offset),
+                reason=hint.reason,
+            )
+            if candidate is None or (signal.source_offset, signal.source_path) < (
+                candidate.source_offset,
+                candidate.source_path,
+            ):
+                candidate = signal
+        return candidate
 
     def _detect_lineage_rewind_signal(
         self,
@@ -1161,8 +1190,12 @@ class AgentsStore:
         head_branch_id: int,
         source_lines: list[SourceLineIngest],
         events: list[EventIngest],
+        rewind_hints: list[SourceRewindHintIngest],
     ) -> RewindSignal | None:
         """Detect rewind from source rewrites/truncation or lineage divergence."""
+        explicit_signal = self._detect_explicit_rewind_signal(rewind_hints)
+        if explicit_signal is not None:
+            return explicit_signal
         source_signal = self._detect_source_rewind_signal(session_id, head_branch_id, source_lines)
         if source_signal is not None:
             return source_signal
@@ -1271,10 +1304,11 @@ class AgentsStore:
         session_id: UUID,
         source_lines: list[SourceLineIngest],
         events: list[EventIngest],
+        rewind_hints: list[SourceRewindHintIngest],
     ) -> tuple[AgentSessionBranch, RewindSignal | None]:
         """Return branch to ingest into, forking when rewind is detected."""
         head = self._ensure_head_branch(session_id)
-        signal = self._detect_rewind_signal(session_id, head.id, source_lines, events)
+        signal = self._detect_rewind_signal(session_id, head.id, source_lines, events, rewind_hints)
         if signal is None:
             return head, None
         return self._fork_head_branch(session_id, head, signal), signal
@@ -1439,7 +1473,12 @@ class AgentsStore:
             session_created = True
 
         source_lines = self._normalize_source_lines_for_ingest(data)
-        ingest_branch, rewind_signal = self._resolve_ingest_branch(session_id, source_lines, data.events)
+        ingest_branch, rewind_signal = self._resolve_ingest_branch(
+            session_id,
+            source_lines,
+            data.events,
+            data.rewind_hints,
+        )
 
         events_inserted = 0
         events_skipped = 0
