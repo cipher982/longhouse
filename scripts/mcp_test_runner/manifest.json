@@ -1,0 +1,29 @@
+{
+  "schema_version": "v1",
+  "name": "local_test_runner",
+  "description": "Expose a single tool that runs the backend pytest suite (or a subset) and returns a structured result.",
+  "tools": [
+    {
+      "name": "run_backend_tests",
+      "description": "Run pytest on the backend repository. Optional 'path' limits execution to a single test file or node.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Optional test file, directory or node (e.g. tests/test_models.py::TestClass::test_ok)."
+          }
+        },
+        "required": []
+      },
+      "response": {
+        "type": "object",
+        "properties": {
+          "passed": { "type": "boolean" },
+          "summary": { "type": "string" }
+        },
+        "required": ["passed"]
+      }
+    }
+  ]
+}
