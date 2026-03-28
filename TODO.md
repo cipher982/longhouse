@@ -11,7 +11,6 @@ Current work only. Completed work → `git log`. Design docs → `docs/specs/` (
 
 ## Active
 
-- [AI ops watchman](docs/tasks/open/ai-ops-watchman.md) — AI-first tenant-local monitoring with raw observation capture, Grok 4.1 analysis, durable incidents, email escalation, and explicit input-token cost tracking.
 - [Hosted ingest bloat cleanup](docs/tasks/open/hosted-ingest-bloat-cleanup.md) — live `david010` tenant is thrashing on giant repeated Codex ingest; diagnose root cause, stop replay, and add guards/repair.
 - [Managed-local Loop tail optimization](docs/tasks/open/managed-local-loop-tail-optimization.md) — `IN PROGRESS (Codex)`; remaining tail is the gap between assistant reply visibility and durable transcript ship, plus a separate cold launch warmup flake after reprovision.
 - [Managed-local session control](docs/tasks/open/managed-local-session-control.md) — tmux isolation, failed pane inspection, readiness hook bridge, e2e dogfood.
