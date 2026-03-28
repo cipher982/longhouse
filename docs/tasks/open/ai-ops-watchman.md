@@ -1,0 +1,34 @@
+# AI Ops Watchman
+
+Status: In progress
+Spec: `docs/specs/ai-ops-watchman.md`
+Last updated: 2026-03-28
+
+## Goal
+
+Ship an AI-first operational watchman for Longhouse that watches raw tenant-local evidence, asks Grok 4.1 whether the recent story looks abnormal, and escalates with durable incidents plus email only when it has concrete evidence.
+
+## Done when
+
+- The watchman has a formal spec and active rollout plan.
+- A real Grok 4.1 smoke script succeeds and records input-token usage.
+- The app persists raw watchman observations and watchman analysis runs.
+- A builtin scheduled job can analyze recent observations and create/update `OperationalIncident` rows.
+- Alert-worthy watchman analyses can send operator email with evidence.
+
+## Checklist
+
+- [x] Write the principles-first spec and rollout plan
+- [ ] Add a real-call Grok 4.1 smoke script for the watchman prompt path
+- [ ] Add watchman observation + run persistence
+- [ ] Add the analyzer service with structured JSON result parsing
+- [ ] Wire incidents + SES email escalation
+- [ ] Register the builtin watchman job
+- [ ] Add focused tests and verification
+- [ ] Ship and verify on a live instance
+
+## Notes
+
+- Keep the observation schema intentionally thin.
+- Input-token accounting is a hard requirement, not a nice-to-have.
+- V1 is tenant-local and read-only; host-wide and auto-remediation work can follow later.
