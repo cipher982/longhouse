@@ -9,11 +9,11 @@
 import { createRequire } from "node:module";
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = join(__dirname, "..");
+const ROOT = resolve(__dirname, "../..");
 
 // Expected pinned version (should match root package.json overrides)
 const EXPECTED_REACT_VERSION = "19.2.1";

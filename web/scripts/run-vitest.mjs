@@ -27,7 +27,7 @@ for (const arg of rawArgs) {
 
 // Preflight: verify single React installation
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const verifyScript = resolve(__dirname, "../../scripts/verify-single-react.mjs");
+const verifyScript = resolve(__dirname, "../../scripts/qa/verify-single-react.mjs");
 const verifyArgs = isSilent ? ["--quiet"] : [];
 const verifyResult = spawnSync(process.execPath, [verifyScript, ...verifyArgs], { stdio: "inherit" });
 if (verifyResult.status !== 0) {
