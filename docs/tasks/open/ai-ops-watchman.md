@@ -20,11 +20,11 @@ Ship an AI-first operational watchman for Longhouse that watches raw tenant-loca
 
 - [x] Write the principles-first spec and rollout plan
 - [x] Add a real-call Grok 4.1 smoke script for the watchman prompt path
-- [ ] Add watchman observation + run persistence
-- [ ] Add the analyzer service with structured JSON result parsing
-- [ ] Wire incidents + SES email escalation
-- [ ] Register the builtin watchman job
-- [ ] Add focused tests and verification
+- [x] Add watchman observation + run persistence
+- [x] Add the analyzer service with structured JSON result parsing
+- [x] Wire incidents + SES email escalation
+- [x] Register the builtin watchman job
+- [x] Add focused tests and verification
 - [ ] Ship and verify on a live instance
 
 ## Notes
@@ -34,3 +34,5 @@ Ship an AI-first operational watchman for Longhouse that watches raw tenant-loca
 - V1 is tenant-local and read-only; host-wide and auto-remediation work can follow later.
 - Real direct-xAI smoke succeeded on `2026-03-28` against `grok-4-1-fast-reasoning` via `https://api.x.ai/v1`.
 - Smoke usage sample: `641` input tokens, `170` output tokens, `651` reasoning tokens, estimated cost `0.0002132` USD.
+- Integrated `run_watchman_cycle()` real-call smoke also succeeded on `2026-03-28` against a temp SQLite DB.
+- Integrated usage sample: `1613` input tokens, `normal` result, estimated cost `0.0003681` USD.
