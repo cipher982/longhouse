@@ -22,8 +22,6 @@ export interface EmailConfigPayload {
   aws_ses_region?: string;
   from_email?: string;
   notify_email?: string;
-  digest_email?: string;
-  alert_email?: string;
 }
 
 export interface EmailTestResult {
