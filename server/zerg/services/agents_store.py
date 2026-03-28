@@ -1057,19 +1057,25 @@ class AgentsStore:
         head_branch_id: int,
         source_lines: list[SourceLineIngest],
     ) -> RewindSignal | None:
-        """Detect whether incoming lines rewrite prior offsets (rewind/truncation)."""
+        """Detect whether incoming lines rewrite prior offsets.
+
+        We intentionally do not infer truncation from "incoming max offset is
+        lower than stored max offset". The shipper replays partial historical
+        ranges during retry/recovery, and those batches are indistinguishable
+        from a true file rewind without an explicit whole-file/truncation
+        signal. Treating every smaller historical chunk as truncation causes
+        false branch forks and massive branch-copy amplification.
+        """
         if not source_lines:
             return None
 
         source_paths = {line.source_path for line in source_lines}
-        latest_by_offset, max_offset_by_path = self._list_branch_source_lines(session_id, head_branch_id, source_paths)
-        if not latest_by_offset and not max_offset_by_path:
+        latest_by_offset, _ = self._list_branch_source_lines(session_id, head_branch_id, source_paths)
+        if not latest_by_offset:
             return None
 
-        lines_by_path: dict[str, list[int]] = defaultdict(list)
         for line in source_lines:
             line_offset = int(line.source_offset)
-            lines_by_path[line.source_path].append(line_offset)
             existing = latest_by_offset.get((line.source_path, line_offset))
             if existing is None:
                 continue
@@ -1080,23 +1086,7 @@ class AgentsStore:
                     source_offset=line_offset,
                     reason="rewrite",
                 )
-
-        rewind_candidate: RewindSignal | None = None
-        for source_path, offsets in lines_by_path.items():
-            if not offsets:
-                continue
-            incoming_max = max(offsets)
-            existing_max = max_offset_by_path.get(source_path)
-            if existing_max is None or incoming_max >= existing_max:
-                continue
-            candidate = RewindSignal(
-                source_path=source_path,
-                source_offset=min(offsets),
-                reason="truncation",
-            )
-            if rewind_candidate is None or candidate.source_offset < rewind_candidate.source_offset:
-                rewind_candidate = candidate
-        return rewind_candidate
+        return None
 
     def _detect_lineage_rewind_signal(
         self,

@@ -5,6 +5,7 @@ from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentsBase
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
@@ -138,6 +139,115 @@ def test_rewind_branch_head_vs_forensic_projection(tmp_path):
             line10_new,
             line30_new,
         ]
+    finally:
+        db.close()
+
+
+def test_partial_historical_replay_does_not_fork_branch(tmp_path):
+    db, store = _make_store(tmp_path)
+    try:
+        source_path = "/tmp/rewind-partial-replay.jsonl"
+        line0 = '{"type":"user","text":"start"}'
+        line10 = '{"type":"assistant","text":"middle"}'
+        line20 = '{"type":"assistant","text":"tail"}'
+
+        first = store.ingest_session(
+            SessionIngest(
+                provider="claude",
+                environment="test",
+                project="zerg",
+                device_id="dev-machine",
+                cwd="/tmp",
+                started_at=_ts(0),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="start",
+                        timestamp=_ts(1),
+                        source_path=source_path,
+                        source_offset=0,
+                        raw_json=line0,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="middle",
+                        timestamp=_ts(2),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json=line10,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="tail",
+                        timestamp=_ts(3),
+                        source_path=source_path,
+                        source_offset=20,
+                        raw_json=line20,
+                    ),
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=0, raw_json=line0),
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=line10),
+                    SourceLineIngest(source_path=source_path, source_offset=20, raw_json=line20),
+                ],
+            )
+        )
+        session_id = first.session_id
+
+        replay = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="claude",
+                environment="test",
+                project="zerg",
+                device_id="dev-machine",
+                cwd="/tmp",
+                started_at=_ts(0),
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="start",
+                        timestamp=_ts(1),
+                        source_path=source_path,
+                        source_offset=0,
+                        raw_json=line0,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="middle",
+                        timestamp=_ts(2),
+                        source_path=source_path,
+                        source_offset=10,
+                        raw_json=line10,
+                    ),
+                ],
+                source_lines=[
+                    SourceLineIngest(source_path=source_path, source_offset=0, raw_json=line0),
+                    SourceLineIngest(source_path=source_path, source_offset=10, raw_json=line10),
+                ],
+            )
+        )
+
+        assert replay.events_inserted == 0
+        assert replay.events_skipped == 2
+
+        branches = (
+            db.query(AgentSessionBranch)
+            .filter(AgentSessionBranch.session_id == session_id)
+            .order_by(AgentSessionBranch.id.asc())
+            .all()
+        )
+        assert len(branches) == 1
+        assert branches[0].branch_reason == "root"
+        assert branches[0].is_head == 1
+
+        head_events = store.get_session_events(session_id, branch_mode="head", limit=100)
+        assert [event.content_text for event in head_events if event.content_text] == [
+            "start",
+            "middle",
+            "tail",
+        ]
+        assert store.count_session_events(session_id, branch_mode="all") == 3
     finally:
         db.close()
 

@@ -79,6 +79,7 @@ pub struct ParsedSourceLine {
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct SessionMetadata {
     pub session_id: String,
+    pub forked_from_session_id: Option<String>,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
     pub git_repo: Option<String>,
@@ -164,6 +165,8 @@ struct CodexPayload {
     content: Option<Vec<CodexContentItem>>,
     /// session_meta: session UUID
     id: Option<String>,
+    /// session_meta: parent provider session UUID for forked subagents
+    forked_from_id: Option<String>,
     /// session_meta: working directory
     cwd: Option<String>,
     /// session_meta: git info (branch + remote URL)
@@ -178,6 +181,12 @@ struct CodexPayload {
     call_id: Option<String>,
     /// function_call_output: result text
     output: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct ScannedCodexSessionMeta {
+    session_id: String,
+    forked_from_session_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -457,12 +466,15 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     };
 
     // Incremental parses can start after the initial session_meta line.
-    // Recover canonical Codex session ID from file header so first incremental
-    // ship doesn't fall back to filename-derived UUIDs.
-    if offset > 0 {
-        if let Some(canonical) = scan_session_meta_id(path) {
-            session_id = canonical;
-        }
+    // Recover canonical Codex session ID (and fork lineage) from the header
+    // so replays do not fall back to filename-derived UUIDs.
+    let scanned_session_meta = if offset > 0 {
+        scan_codex_session_meta(path)
+    } else {
+        None
+    };
+    if let Some(scanned) = scanned_session_meta.as_ref() {
+        session_id = scanned.session_id.clone();
     }
 
     // Gemini: full JSON document, always parse from 0 (file is rewritten in place)
@@ -484,24 +496,47 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
             candidate_records: 0,
             metadata: SessionMetadata {
                 session_id,
+                forked_from_session_id: scanned_session_meta
+                    .and_then(|item| item.forked_from_session_id),
                 ..Default::default()
             },
         });
     }
 
     // JSONL: choose strategy based on file size
-    if file_size > MMAP_THRESHOLD {
-        parse_mmap(path, offset, &session_id)
+    let mut result = if file_size > MMAP_THRESHOLD {
+        parse_mmap(path, offset, &session_id)?
     } else {
-        parse_buffered(path, offset, &session_id)
+        parse_buffered(path, offset, &session_id)?
+    };
+
+    if let Some(scanned) = scanned_session_meta.as_ref() {
+        if result.metadata.forked_from_session_id.is_none() {
+            result.metadata.forked_from_session_id = scanned.forked_from_session_id.clone();
+        }
+        if scanned.forked_from_session_id.is_some() {
+            result.metadata.is_sidechain = true;
+        }
     }
+
+    let canonical_session_id = result.metadata.session_id.clone();
+    if result
+        .events
+        .iter()
+        .any(|event| event.session_id != canonical_session_id)
+    {
+        for event in &mut result.events {
+            event.session_id = canonical_session_id.clone();
+        }
+    }
+
+    Ok(result)
 }
 
-/// Scan the start of a JSONL file for a Codex `session_meta.payload.id`.
+/// Scan the start of a JSONL file for Codex `session_meta` identity fields.
 ///
 /// This is intentionally bounded to avoid large-file overhead on every parse.
-/// Returns a canonical UUID string if found; otherwise None.
-fn scan_session_meta_id(path: &Path) -> Option<String> {
+fn scan_codex_session_meta(path: &Path) -> Option<ScannedCodexSessionMeta> {
     const SESSION_META_SCAN_LIMIT_BYTES: usize = 256 * 1024;
 
     let file = std::fs::File::open(path).ok()?;
@@ -531,12 +566,18 @@ fn scan_session_meta_id(path: &Path) -> Option<String> {
             continue;
         }
 
-        let id = obj
-            .payload
-            .as_ref()
-            .and_then(|payload| payload.id.as_ref())?;
+        let payload = obj.payload.as_ref()?;
+        let id = payload.id.as_ref()?;
         if Uuid::parse_str(id).is_ok() {
-            return Some(id.clone());
+            let forked_from_session_id = payload
+                .forked_from_id
+                .as_ref()
+                .filter(|candidate| Uuid::parse_str(candidate).is_ok())
+                .cloned();
+            return Some(ScannedCodexSessionMeta {
+                session_id: id.clone(),
+                forked_from_session_id,
+            });
         }
     }
 
@@ -1105,6 +1146,14 @@ fn collect_metadata(
             if let Some(ref id) = payload.id {
                 if Uuid::parse_str(id).is_ok() {
                     meta.session_id = id.clone();
+                }
+            }
+            if meta.forked_from_session_id.is_none() {
+                if let Some(ref forked_from_id) = payload.forked_from_id {
+                    if Uuid::parse_str(forked_from_id).is_ok() {
+                        meta.forked_from_session_id = Some(forked_from_id.clone());
+                        meta.is_sidechain = true;
+                    }
                 }
             }
             // Extract git branch and remote URL directly from session_meta.
@@ -2336,6 +2385,10 @@ mod tests {
             result.metadata.session_id,
             "019c638d-ea04-7983-a845-d0b68a77fa62"
         );
+        assert_eq!(
+            result.events[0].session_id,
+            "019c638d-ea04-7983-a845-d0b68a77fa62"
+        );
     }
 
     #[test]
@@ -2359,6 +2412,35 @@ mod tests {
 
         assert_eq!(result.metadata.session_id, canonical_id);
         assert_eq!(result.events.len(), 1);
+    }
+
+    #[test]
+    fn test_codex_offset_recovers_forked_from_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_id = "019c638d-ea04-7983-a845-d0b68a77fa62";
+        let parent_id = "019c638d-ea04-7983-a845-d0b68a77fa63";
+        let session_meta = format!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-02-15T17:06:10Z\",\"payload\":{{\"id\":\"{}\",\"forked_from_id\":\"{}\",\"cwd\":\"/test\"}}}}",
+            child_id, parent_id
+        );
+        let user_line = r#"{"type":"response_item","timestamp":"2026-02-15T17:06:11Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}"#;
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-2026-02-15T17-06-10-suffix.jsonl",
+            &[&session_meta, user_line],
+        );
+
+        let offset = (session_meta.len() + 1) as u64;
+        let result = parse_session_file(&path, offset).unwrap();
+
+        assert_eq!(result.metadata.session_id, child_id);
+        assert_eq!(
+            result.metadata.forked_from_session_id.as_deref(),
+            Some(parent_id)
+        );
+        assert!(result.metadata.is_sidechain);
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].session_id, child_id);
     }
 
     #[test]
