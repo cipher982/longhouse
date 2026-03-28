@@ -557,6 +557,30 @@ fn dead_letter_from_compressed_range(
     }
 }
 
+fn resolve_payload_session_id<'a>(
+    provider: &str,
+    parse_result: &'a ParseResult,
+    session_id_override: Option<&'a str>,
+) -> &'a str {
+    let Some(override_session_id) = session_id_override else {
+        return &parse_result.metadata.session_id;
+    };
+
+    // Managed-local Codex roots deliberately override the ingest UUID so the
+    // transcript binds to the Longhouse-owned session row. Forked subagent
+    // transcripts are different: they carry their own native session_meta id
+    // plus forked_from_id, and forcing them onto the parent Longhouse UUID
+    // collapses every child transcript into the parent session.
+    if provider.eq_ignore_ascii_case("codex")
+        && parse_result.metadata.forked_from_session_id.is_some()
+        && override_session_id != parse_result.metadata.session_id
+    {
+        return &parse_result.metadata.session_id;
+    }
+
+    override_session_id
+}
+
 fn prepare_whole_document_action(
     parse_result: &ParseResult,
     path_str: &str,
@@ -567,7 +591,8 @@ fn prepare_whole_document_action(
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
 ) -> Result<Vec<PreparedAction>> {
-    let payload_session_id = session_id_override.unwrap_or(&parse_result.metadata.session_id);
+    let payload_session_id =
+        resolve_payload_session_id(provider, parse_result, session_id_override);
     let compressed = compressor::build_and_compress_with(
         payload_session_id,
         &parse_result.events,
@@ -613,7 +638,8 @@ fn materialize_ship_range(
     range: ShipRange,
     session_id_override: Option<&str>,
 ) -> Result<Vec<PreparedAction>> {
-    let payload_session_id = session_id_override.unwrap_or(&parse_result.metadata.session_id);
+    let payload_session_id =
+        resolve_payload_session_id(provider, parse_result, session_id_override);
     let compressed = compressor::build_and_compress_with_source_lines(
         payload_session_id,
         &parse_result.events[range.event_range.clone()],
@@ -1627,6 +1653,15 @@ mod tests {
         )
     }
 
+    fn codex_forked_session_lines() -> &'static str {
+        concat!(
+            r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"dddddddd-1111-2222-3333-444455556666","forked_from_id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#,
+            "\n",
+            r#"{"type":"response_item","timestamp":"2026-02-15T10:00:01Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from forked codex child"}]}}"#,
+            "\n",
+        )
+    }
+
     /// Write content to a temp file with a UUID-based name.
     fn write_session_file(content: &str, name: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
@@ -1903,6 +1938,46 @@ mod tests {
 
         // Parser-resolved canonical ID must win over stale file_state.
         assert_eq!(item.session_id, "cccccccc-1111-2222-3333-444455556666");
+    }
+
+    #[test]
+    fn test_prepare_codex_forked_child_ignores_managed_parent_override() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("rollout-2026-02-15T10-00-00-dddd1111-2222-3333-4444-555566667777.jsonl");
+        std::fs::write(&path, codex_forked_session_lines()).unwrap();
+
+        let session_meta = r#"{"type":"session_meta","timestamp":"2026-02-15T10:00:00Z","payload":{"type":"session_meta","id":"dddddddd-1111-2222-3333-444455556666","forked_from_id":"cccccccc-1111-2222-3333-444455556666","cwd":"/tmp/test","cli_version":"0.1.0"}}"#;
+        let offset = (session_meta.len() + 1) as u64;
+        let managed_parent_longhouse_id = "019d2869-1111-7222-8333-aaaaaaaaaaaa";
+
+        let prepared = prepare_path_range(
+            &path,
+            "codex",
+            offset,
+            None,
+            CompressionAlgo::Gzip,
+            10_000,
+            Some(managed_parent_longhouse_id),
+        )
+        .unwrap()
+        .expect("forked codex child should prepare from incremental offset");
+
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::Ship(item) => {
+                assert_eq!(item.session_id, "dddddddd-1111-2222-3333-444455556666");
+                assert_eq!(
+                    decode_payload_session_id(&item.compressed),
+                    "dddddddd-1111-2222-3333-444455556666"
+                );
+            }
+            PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
+                panic!("forked codex child should ship, not ack-only or dead-letter")
+            }
+        }
     }
 
     // ---------------------------------------------------------------
