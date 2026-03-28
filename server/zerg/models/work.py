@@ -75,6 +75,53 @@ class OperationalIncident(AgentsBase):
     resolved_at = Column(DateTime, nullable=True)
 
 
+class OpsWatchObservation(AgentsBase):
+    """Append-only raw operational observation for the AI watchman."""
+
+    __tablename__ = "ops_watch_observations"
+    __table_args__ = (
+        Index("ix_ops_watch_observations_source_observed", "source", "observed_at"),
+        Index("ix_ops_watch_observations_entity_observed", "entity_type", "entity_id", "observed_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    observed_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    window_start_at = Column(DateTime, nullable=True, index=True)
+    window_end_at = Column(DateTime, nullable=True, index=True)
+    entity_type = Column(String(32), nullable=False, index=True)
+    entity_id = Column(String(255), nullable=False, index=True)
+    source = Column(String(64), nullable=False, index=True)
+    payload_json = Column(JSON, nullable=True)
+    payload_text = Column(Text, nullable=True)
+
+
+class OpsWatchRun(AgentsBase):
+    """Durable record of one AI watchman analysis run."""
+
+    __tablename__ = "ops_watch_runs"
+    __table_args__ = (
+        Index("ix_ops_watch_runs_started", "started_at"),
+        Index("ix_ops_watch_runs_status_started", "status", "started_at"),
+        Index("ix_ops_watch_runs_analysis_started", "analysis_status", "started_at"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    started_at = Column(DateTime, server_default=func.now(), nullable=False, index=True)
+    finished_at = Column(DateTime, nullable=True)
+    status = Column(String(20), nullable=False, default="running", index=True)  # running, success, skipped, error
+    analysis_status = Column(String(20), nullable=True, index=True)  # normal, watch, critical, skipped
+    model = Column(String(100), nullable=True)
+    prompt_version = Column(String(64), nullable=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    total_tokens = Column(Integer, nullable=True)
+    reasoning_tokens = Column(Integer, nullable=True)
+    estimated_cost_usd = Column(Float, nullable=True)
+    usage_json = Column(JSON, nullable=True)
+    result_json = Column(JSON, nullable=True)
+    error = Column(Text, nullable=True)
+
+
 class ReflectionRun(AgentsBase):
     """A single reflection run — batch analysis of recent sessions to extract insights."""
 
