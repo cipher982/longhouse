@@ -26,12 +26,6 @@ _EMAIL_SECRET_KEYS = [
     "NOTIFY_EMAIL",
 ]
 
-# Legacy recipient override keys kept only so cleanup paths can remove them.
-_LEGACY_EMAIL_SECRET_KEYS = [
-    "DIGEST_EMAIL",
-    "ALERT_EMAIL",
-]
-
 
 def get_single_tenant_owner_id() -> int:
     """Get the owner ID for single-tenant mode.

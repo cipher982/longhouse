@@ -28,7 +28,6 @@ from zerg.dependencies.auth import get_current_user
 from zerg.models.models import JobSecret
 from zerg.models.models import User
 from zerg.shared.email import _EMAIL_SECRET_KEYS
-from zerg.shared.email import _LEGACY_EMAIL_SECRET_KEYS
 from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
 
@@ -38,9 +37,8 @@ router = APIRouter(prefix="/system/email", tags=["email-config"])
 
 # Keys that are SES credentials (sensitive)
 _SES_CREDENTIAL_KEYS = {"AWS_SES_ACCESS_KEY_ID", "AWS_SES_SECRET_ACCESS_KEY"}
-# All configurable email keys, including legacy recipient overrides that are no
-# longer used but should still be removable from existing tenant DBs.
-_ALL_EMAIL_KEYS = set(_EMAIL_SECRET_KEYS) | set(_LEGACY_EMAIL_SECRET_KEYS)
+# All configurable email keys.
+_ALL_EMAIL_KEYS = set(_EMAIL_SECRET_KEYS)
 
 
 # ---------------------------------------------------------------------------
