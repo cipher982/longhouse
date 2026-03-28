@@ -19,7 +19,7 @@ Ship an AI-first operational watchman for Longhouse that watches raw tenant-loca
 ## Checklist
 
 - [x] Write the principles-first spec and rollout plan
-- [ ] Add a real-call Grok 4.1 smoke script for the watchman prompt path
+- [x] Add a real-call Grok 4.1 smoke script for the watchman prompt path
 - [ ] Add watchman observation + run persistence
 - [ ] Add the analyzer service with structured JSON result parsing
 - [ ] Wire incidents + SES email escalation
@@ -32,3 +32,5 @@ Ship an AI-first operational watchman for Longhouse that watches raw tenant-loca
 - Keep the observation schema intentionally thin.
 - Input-token accounting is a hard requirement, not a nice-to-have.
 - V1 is tenant-local and read-only; host-wide and auto-remediation work can follow later.
+- Real direct-xAI smoke succeeded on `2026-03-28` against `grok-4-1-fast-reasoning` via `https://api.x.ai/v1`.
+- Smoke usage sample: `641` input tokens, `170` output tokens, `651` reasoning tokens, estimated cost `0.0002132` USD.
