@@ -102,6 +102,41 @@ Stop the live `david010` hosted tenant from thrashing on giant repeated Codex in
 - Checkpointed the WAL to zero and restarted the tenant.
 - Recycled host swap after the tenant stabilized.
 
+## Re-Pollution Follow-up (2026-03-28 evening)
+
+- The first offline repair held only briefly because the local launch agent on this laptop was still running an older `longhouse-engine connect` binary.
+  - Engine log `~/.claude/logs/engine.log.2026-03-28` shows the daemon replaying the same March 23/24 Codex files again around `2026-03-28T19:34Z` through `19:43Z`.
+  - That replay recreated two rewrite descendant branches on the parent session:
+    - branch `13023` (`rewrite` off the parent root path at offset `9072675`)
+    - branch `13030` (`rewrite` off child path `019d1d6c-...` at offset `9087650`)
+- Verified the hosted tenant runtime itself was already on the fixed image:
+  - `longhouse-david010` image revision label: `78c317fa44d6de5dd814eba2e0cf55599c1835bd`
+- Prevented further churn before the second repair:
+  - unloaded local launch agent `com.longhouse.shipper`
+  - rebuilt and reinstalled the current engine with `make install-engine`
+  - confirmed the local default spool had `0` pending entries for the March 23/24 problem files before bringing the daemon back
+
+## Backfill + Final Repair (2026-03-28 evening)
+
+- Re-shipped the `3` previously-missing child Codex transcripts with the repo-local fixed engine and an isolated temp shipper DB (`/tmp/lh-codex-backfill-20260328.db`), so the repair did not depend on stale `~/.claude/longhouse-shipper.db` state.
+  - `019d1bb1-15c1-78c0-b4bc-f830965f237b` → `1034` events shipped
+  - `019d1c56-bd09-7062-90a8-d3f765689054` → `1932` events shipped
+  - `019d1d6c-a78d-70b2-875f-d9c500256c54` → `3554` events shipped
+- Verified those `3` child sessions now exist separately on the tenant with their own session ids / provider session ids.
+- Stopped `longhouse-david010` again and repaired the tenant DB offline a second time.
+  - deleted descendant rewrite branches `13023` and `13030`
+  - deleted all descendant-branch events / source lines for those branches
+  - deleted the final `3` embedded child source paths from the parent root branch
+  - cleared parent `session_turn_reviews` and `session_embeddings` again
+  - reset parent summary fields / summary cursor and marked embeddings dirty
+  - checkpointed WAL and restarted the tenant
+- Restarted the local launch agent afterward on the rebuilt engine.
+  - the rebuilt daemon starts cleanly with `connect --log-dir ...`
+  - after the final local metadata repair, startup catch-up reported `0` retry paths
+- Repaired stale local shipper metadata in `~/.claude/longhouse-shipper.db`.
+  - updated `27` Codex `file_state` rows that still pointed child rollout paths at the parent session id
+  - all `27` child ids now match their rollout filename UUIDs locally, and all `27` also exist separately on the hosted tenant
+
 ## Current State
 
 - Host health:
@@ -109,29 +144,21 @@ Stop the live `david010` hosted tenant from thrashing on giant repeated Codex in
   - host has ~`12 GiB` available RAM
 - Tenant health:
   - `https://david010.longhouse.ai/api/health` is healthy
-  - write serializer is back to low queue latency (`avg_queue_wait_ms` in low double digits after restart)
-  - tenant WAL is `0 B`
+  - write serializer is back to low queue latency (`avg_queue_wait_ms` ~`1.4 ms` after restart)
+  - tenant WAL is gone after checkpoint (`longhouse.db-wal` absent)
 - Corrupted parent session now:
-  - single root branch only
-  - counts reduced from `1879 / 8731 / 37155` to `246 / 1379 / 5302` (`user / assistant / tool`)
-  - root branch now has `12,230` events across `4` source paths
-
-## Remaining Cleanup
-
-- The parent still contains `3` child Codex transcripts that do not yet exist as separate sessions on the tenant:
-  - `019d1bb1-15c1-78c0-b4bc-f830965f237b`
-  - `019d1c56-bd09-7062-90a8-d3f765689054`
-  - `019d1d6c-a78d-70b2-875f-d9c500256c54`
-- Those `3` child paths were intentionally left in the parent during prod cleanup to avoid deleting the only tenant copy before a correct re-ship path was verified.
-- Next step:
-  - re-ship those `3` child transcripts under the corrected engine so they land as separate sessions
-  - then prune their remaining root-branch rows from the parent session
+  - single root branch only: `12335`
+  - counts now `99 / 3149 / 2461` (`user / assistant / tool`)
+  - root branch now has `5710` events and exactly `1` `source_path`
+  - remaining root source path is only the true parent transcript:
+    - `/Users/davidrose/.codex/sessions/2026/03/22/rollout-2026-03-22T21-08-20-019d1805-66b6-78f1-aca9-91225867663d.jsonl`
+- Child backfills now exist separately on the tenant:
+  - `019d1bb1-15c1-78c0-b4bc-f830965f237b` → `31 / 87 / 458`
+  - `019d1c56-bd09-7062-90a8-d3f765689054` → `43 / 193 / 848`
+  - `019d1d6c-a78d-70b2-875f-d9c500256c54` → `73 / 411 / 1535`
 
 ## Ops Follow-up
 
-- Deploy the engine/backend fix before touching tenant cleanup, otherwise replay can immediately re-pollute the same session.
-- After deploy, repair `david010`:
-  - remove the false truncation descendant branches for `019d1805-...`
-  - decide whether to split or delete the child source paths already merged into the parent session
-  - checkpoint/truncate WAL and likely restart or reprovision `longhouse-david010`
-- Re-check host memory/swap and tenant write-queue latency after cleanup.
+- Logical data cleanup is complete; the remaining issue is physical SQLite file bloat.
+  - `longhouse.db` is still about `40 GiB` because deletes reclaimed WAL pages but did not rewrite the main DB file.
+  - A deliberate offline `VACUUM` would reclaim disk if/when we want compaction; host free space is still comfortable (`143 GiB` available on `/var/app-data`), so this is not urgent for correctness or runtime stability.
