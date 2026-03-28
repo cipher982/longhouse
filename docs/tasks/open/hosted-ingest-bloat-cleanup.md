@@ -18,10 +18,10 @@ Stop the live `david010` hosted tenant from thrashing on giant repeated Codex in
 
 - [x] Confirm how the giant session inflated: repeated full replay, branch rewrite churn, source-line duplication, or counter bug
 - [x] Identify the active ingest source for the bad session
-- [ ] Apply the minimum safe prod mitigation for `david010`
+- [x] Apply the minimum safe prod mitigation for `david010`
 - [x] Patch the ingest/runtime code to block recurrence
 - [x] Add focused regression coverage
-- [ ] Verify tenant health improves after mitigation
+- [x] Verify tenant health improves after mitigation
 
 ## Notes
 
@@ -65,6 +65,67 @@ Stop the live `david010` hosted tenant from thrashing on giant repeated Codex in
 - Regression coverage:
   - engine parser/shipper tests cover forked Codex child detection and override suppression
   - lite backend tests cover identical partial historical replay without branch churn
+
+## Follow-up Fix (2026-03-28)
+
+- The first engine fix was incomplete for real Codex child transcripts.
+  - Literal child files can contain two top-level `session_meta` lines:
+    1. child session id + `forked_from_id`
+    2. injected parent session context
+  - The parser was letting the later parent `session_meta.id` override the earlier child id, so explicit child re-ships still collapsed into the parent even after the initial fix.
+- Landed parser follow-up:
+  - first valid Codex `session_meta.id` now wins for the file
+  - regression test covers the exact child-then-parent `session_meta` shape from the live bad file
+- Commit: `bc3d3803` (`Fix Codex child session_meta override order`)
+- Local remediation:
+  - rebuilt + reinstalled `longhouse-engine` on this laptop with `make install-engine`
+  - pushed the parser follow-up to `main`
+
+## Prod Mitigation (2026-03-28)
+
+- Stopped `longhouse-david010` and repaired `/var/app-data/longhouse/david010/longhouse.db` offline.
+- Removed all false truncation descendants for session `019d1805-66b6-78f1-aca9-91225867663d`.
+  - deleted `12` descendant branches
+  - deleted `1,114,740` descendant-branch events
+  - deleted `1,999,445` descendant-branch source lines
+- Removed duplicate child transcripts from the parent root branch where those child sessions already existed separately.
+  - first pass removed `42` duplicate child source paths:
+    - `97,440` root-branch events
+    - `175,158` root-branch source lines
+  - second pass removed one remaining separately-present child path that was missed by the first offset-0-only classification:
+    - `2,423` root-branch events
+    - `4,353` root-branch source lines
+- Cleared derived rows tied to the corrupted parent session:
+  - deleted `84` `session_turn_reviews`
+  - deleted `539` `session_embeddings`
+- Reset the parent session head to the root branch and recomputed counts from the remaining root events.
+- Checkpointed the WAL to zero and restarted the tenant.
+- Recycled host swap after the tenant stabilized.
+
+## Current State
+
+- Host health:
+  - swap back to `0 B` used after `swapoff`/`swapon`
+  - host has ~`12 GiB` available RAM
+- Tenant health:
+  - `https://david010.longhouse.ai/api/health` is healthy
+  - write serializer is back to low queue latency (`avg_queue_wait_ms` in low double digits after restart)
+  - tenant WAL is `0 B`
+- Corrupted parent session now:
+  - single root branch only
+  - counts reduced from `1879 / 8731 / 37155` to `246 / 1379 / 5302` (`user / assistant / tool`)
+  - root branch now has `12,230` events across `4` source paths
+
+## Remaining Cleanup
+
+- The parent still contains `3` child Codex transcripts that do not yet exist as separate sessions on the tenant:
+  - `019d1bb1-15c1-78c0-b4bc-f830965f237b`
+  - `019d1c56-bd09-7062-90a8-d3f765689054`
+  - `019d1d6c-a78d-70b2-875f-d9c500256c54`
+- Those `3` child paths were intentionally left in the parent during prod cleanup to avoid deleting the only tenant copy before a correct re-ship path was verified.
+- Next step:
+  - re-ship those `3` child transcripts under the corrected engine so they land as separate sessions
+  - then prune their remaining root-branch rows from the parent session
 
 ## Ops Follow-up
 
