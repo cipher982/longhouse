@@ -91,7 +91,7 @@ repos:
       # -----------------------------------------------------------------------
       - id: asyncapi-validate
         name: AsyncAPI spec validation
-        entry: scripts/validate-asyncapi.sh
+        entry: scripts/qa/validate-asyncapi.sh
         language: system
         files: ^schemas/ws-protocol-asyncapi\.yml$
         pass_filenames: false
@@ -102,7 +102,7 @@ repos:
       # -----------------------------------------------------------------------
       - id: css-rgba-validate
         name: CSS rgba alpha validation
-        entry: scripts/validate-rgba.sh
+        entry: scripts/qa/validate-rgba.sh
         language: system
         files: \.css$
         pass_filenames: false

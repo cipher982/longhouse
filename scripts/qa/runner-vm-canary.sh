@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HOST_SCRIPT="$SCRIPT_DIR/runner-vm-canary-host.sh"
 # shellcheck disable=SC1091
-source "$SCRIPT_DIR/lib/hosted-instance.sh"
+source "$SCRIPT_DIR/../lib/hosted-instance.sh"
 
 log() {
   printf '[runner-vm-canary] %s\n' "$*"

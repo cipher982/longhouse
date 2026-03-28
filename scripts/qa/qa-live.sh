@@ -8,8 +8,8 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUNNER="$ROOT_DIR/scripts/run-prod-e2e.sh"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+RUNNER="$ROOT_DIR/scripts/qa/run-prod-e2e.sh"
 
 if [[ -f "$ROOT_DIR/.env" ]]; then
   set -a

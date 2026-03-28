@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - "schemas/**"
-      - "scripts/generate-ws-types-modern.py"
+      - "scripts/generate/generate-ws-types-modern.py"
       - "Makefile"
       - ".github/workflows/ws-code-drift.yml"
   workflow_dispatch: {}

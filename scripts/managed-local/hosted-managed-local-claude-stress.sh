@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOSTED_INSTANCE_HELPER="${HOSTED_INSTANCE_HELPER:-$ROOT_DIR/scripts/lib/hosted-instance.sh}"
 
 if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
@@ -16,9 +16,9 @@ INSTANCE_SUBDOMAIN="david010"
 TARGET_CWD="$ROOT_DIR"
 TURN_COUNT=4
 DELAY_SECS="0"
-PROMPT_PREFIX="lh-hosted-codex-stress"
-PROJECT_NAME="hosted-managed-local-codex-stress"
-DISPLAY_NAME="Hosted Managed Local Codex Stress"
+PROMPT_PREFIX="lh-hosted-claude-stress"
+PROJECT_NAME="hosted-managed-local-claude-stress"
+DISPLAY_NAME="Hosted Managed Local Claude Stress"
 LOOP_MODE="assist"
 CHAT_TIMEOUT_SECS="30"
 VERIFY_TIMEOUT_SECS="30"
@@ -31,9 +31,9 @@ fi
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/hosted-managed-local-codex-stress.sh [options]
+  scripts/hosted-managed-local-claude-stress.sh [options]
 
-Launch a real hosted managed-local Codex session on this device, then send
+Launch a real hosted managed-local Claude session on this device, then send
 repeated simple one-line prompts through the real `/api/sessions/{id}/chat`
 route and verify each turn against the live tmux pane ground truth.
 
@@ -51,7 +51,7 @@ Options:
   --project <name>          Project label for launch
   --display-name <name>     Display name for launch
   --loop-mode <mode>        manual|assist|autopilot (default: assist)
-  --chat-timeout-secs <n>   Max wait for `/chat` SSE before failing (default: 30)
+  --chat-timeout-secs <n>   Max wait for `/chat` SSE before falling back to tmux truth (default: 30)
   --verify-timeout-secs <n> Poll timeout for tmux-pane verification (default: 30)
   --durability-timeout-secs <n>
                             Max follow-up wait for transcript durability when sync_status=pending (default: 20)
@@ -161,7 +161,7 @@ trap cleanup EXIT
 echo "Target tenant: $INSTANCE_SUBDOMAIN ($INSTANCE_URL)" >&2
 LH_STRESS_ACCESS_TOKEN="$(lh_hosted_exchange_login_token "$(lh_hosted_issue_login_token "$LH_INSTANCE_ID")" "$API_URL")"
 IFS=$'\t' read -r LH_STRESS_DEVICE_TOKEN_ID LH_STRESS_DEVICE_TOKEN <<< \
-  "$(lh_hosted_create_device_token "$LH_STRESS_ACCESS_TOKEN" "$API_URL" "hosted-codex-stress-${INSTANCE_SUBDOMAIN}-${RANDOM}")"
+  "$(lh_hosted_create_device_token "$LH_STRESS_ACCESS_TOKEN" "$API_URL" "hosted-claude-stress-${INSTANCE_SUBDOMAIN}-${RANDOM}")"
 
 export LH_STRESS_API_URL="$API_URL"
 export LH_STRESS_ACCESS_TOKEN
@@ -185,15 +185,15 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import secrets
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
+from dataclasses import dataclass
 from typing import Iterable
 from typing import Iterator
 
@@ -318,7 +318,7 @@ def _has_tmux_session(*, session_name: str, tmux_tmpdir: str | None) -> bool:
     return completed.returncode == 0
 
 
-def _capture_tmux_pane(*, session_name: str, tmux_tmpdir: str | None, lines: int = 220) -> str:
+def _capture_tmux_pane(*, session_name: str, tmux_tmpdir: str | None, lines: int = 200) -> str:
     completed = _run_local_shell(
         build_tmux_capture_command(session_name=session_name, lines=lines, tmux_tmpdir=tmux_tmpdir),
         timeout=15.0,
@@ -326,12 +326,33 @@ def _capture_tmux_pane(*, session_name: str, tmux_tmpdir: str | None, lines: int
     return (completed.stdout or completed.stderr or "").strip()
 
 
+def _handle_known_gate(*, session_name: str, tmux_tmpdir: str | None, pane: str) -> str | None:
+    if "Choose the text style" in pane:
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "Enter"])
+        return "theme"
+    if "Press Enter to continue" in pane:
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "Enter"])
+        return "security_notes"
+    if "Yes, I trust this folder" in pane:
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "Enter"])
+        return "trust_workspace"
+    if "Bypass Permissions mode" in pane and "Yes, I accept" in pane:
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "2"])
+        _run_tmux_action(session_name=session_name, tmux_tmpdir=tmux_tmpdir, args=["send-keys", "-t", session_name, "Enter"])
+        return "bypass_permissions"
+    return None
+
+
 def _pane_is_ready(pane: str) -> bool:
+    if "❯" not in pane:
+        return False
     blocked_markers = (
-        "Starting MCP servers",
-        "Loading conversation history",
+        "Choose the text style",
+        "Press Enter to continue",
+        "Yes, I trust this folder",
+        "Bypass Permissions mode",
     )
-    return "OpenAI Codex" in pane and not any(marker in pane for marker in blocked_markers)
+    return not any(marker in pane for marker in blocked_markers)
 
 
 def _pane_contains_exact_token_line(pane: str, token: str) -> bool:
@@ -349,17 +370,24 @@ def _text_contains_exact_token_line(text: str, token: str) -> bool:
     return False
 
 
-def _wait_for_ready_prompt(*, session_name: str, tmux_tmpdir: str | None, timeout_secs: float) -> str:
+def _wait_for_ready_prompt(*, session_name: str, tmux_tmpdir: str | None, timeout_secs: float) -> tuple[str, list[str]]:
     deadline = time.monotonic() + timeout_secs
+    handled: list[str] = []
     last_pane = ""
     while time.monotonic() < deadline:
         pane = _capture_tmux_pane(session_name=session_name, tmux_tmpdir=tmux_tmpdir)
         last_pane = pane
+        action = _handle_known_gate(session_name=session_name, tmux_tmpdir=tmux_tmpdir, pane=pane)
+        if action is not None:
+            handled.append(action)
+            time.sleep(2.0)
+            continue
         if _pane_is_ready(pane):
-            return pane
+            return pane, handled
         time.sleep(1.0)
     raise RuntimeError(
-        "Codex never reached a usable idle prompt.\n"
+        "Claude never reached a usable idle prompt.\n"
+        f"Handled gates: {handled}\n"
         f"Last pane:\n{last_pane[-4000:]}"
     )
 
@@ -383,7 +411,7 @@ def _wait_for_turn_in_tmux(
             return pane, prompt_seen, token_seen
         time.sleep(1.0)
     raise RuntimeError(
-        f"Timed out waiting for Codex tmux confirmation for token {token}.\n"
+        f"Timed out waiting for Claude tmux confirmation for token {token}.\n"
         f"Last pane:\n{last_pane[-4000:]}"
     )
 
@@ -684,7 +712,7 @@ def main() -> int:
     machine_name = os.environ.get("LH_STRESS_MACHINE_NAME", "").strip()
 
     if shutil.which("tmux") is None:
-        raise RuntimeError("tmux is required for hosted managed-local Codex tmux verification")
+        raise RuntimeError("tmux is required for hosted managed-local Claude tmux verification")
 
     timeout = httpx.Timeout(connect=20.0, read=chat_timeout_secs, write=20.0, pool=20.0)
     with httpx.Client(timeout=timeout) as client:
@@ -694,7 +722,7 @@ def main() -> int:
 
         launch_body: dict[str, object] = {
             "cwd": cwd,
-            "provider": "codex",
+            "provider": "claude",
             "project": project_name,
             "display_name": display_name,
             "loop_mode": loop_mode,
@@ -729,12 +757,12 @@ def main() -> int:
         else:
             raise RuntimeError(f"tmux session {session_name!r} never appeared")
 
-        ready_pane = _wait_for_ready_prompt(
+        ready_pane, handled_gates = _wait_for_ready_prompt(
             session_name=session_name,
             tmux_tmpdir=tmux_tmpdir,
             timeout_secs=verify_timeout_secs,
         )
-        print("Ready: yes")
+        print(f"Ready: yes handled_gates={','.join(handled_gates) if handled_gates else 'none'}")
         if ready_pane:
             print(f"Initial pane tail:\n{ready_pane[-600:]}")
 
@@ -833,7 +861,7 @@ def main() -> int:
             if delay_secs:
                 time.sleep(delay_secs)
 
-    print("Hosted managed-local Codex stress run passed.")
+    print("Hosted managed-local Claude stress run passed.")
     return 0
 
 

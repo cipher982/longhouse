@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OPS_SCRIPT="$ROOT_DIR/scripts/zerg-ops.sh"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+OPS_SCRIPT="$ROOT_DIR/scripts/ops/zerg-ops.sh"
 
 fail() {
   echo "FAIL: $*" >&2

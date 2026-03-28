@@ -64,8 +64,8 @@ jobs:
         env:
           CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
         run: |
-          chmod +x scripts/smoke-prod.sh
-          ./scripts/smoke-prod.sh
+          chmod +x scripts/qa/smoke-prod.sh
+          ./scripts/qa/smoke-prod.sh
 
       - name: Check control plane credentials
         env:
@@ -74,8 +74,8 @@ jobs:
           CONTROL_PLANE_INSTANCE_AWS_SES_SECRET_ACCESS_KEY: ${{ secrets.CONTROL_PLANE_SES_SECRET_KEY }}
           CONTROL_PLANE_INSTANCE_AWS_SES_REGION: us-east-1
         run: |
-          chmod +x scripts/check-cp-credentials.sh
-          ./scripts/check-cp-credentials.sh
+          chmod +x scripts/ops/check-cp-credentials.sh
+          ./scripts/ops/check-cp-credentials.sh
 
       - name: Summary
         if: always()
@@ -106,8 +106,8 @@ jobs:
         env:
           CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN || secrets.CF_API_TOKEN }}
         run: |
-          chmod +x scripts/check-email-routing.sh
-          ./scripts/check-email-routing.sh
+          chmod +x scripts/ops/check-email-routing.sh
+          ./scripts/ops/check-email-routing.sh
 
       - name: Summary
         if: always()

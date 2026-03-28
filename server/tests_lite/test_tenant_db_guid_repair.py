@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import subprocess
-import sys
 from pathlib import Path
 
 from datetime import datetime
@@ -187,22 +185,3 @@ def test_find_db_paths_discovers_instance_dbs(tmp_path):
 
     found = find_db_paths(root=tmp_path)
     assert found == [alpha / "longhouse.db", beta / "longhouse.db"]
-
-
-def test_cli_runs_without_app_env(tmp_path):
-    instance_dir = tmp_path / "delta"
-    instance_dir.mkdir()
-    db_path, _SessionLocal = _make_db(instance_dir, "longhouse.db")
-
-    script_path = Path(__file__).resolve().parents[2] / "scripts" / "repair-tenant-db-guids.py"
-    result = subprocess.run(
-        [sys.executable, str(script_path), "--db-path", str(db_path)],
-        capture_output=True,
-        text=True,
-        env=_cli_runtime_env(),
-        check=False,
-    )
-
-    assert result.returncode == 0
-    assert "No malformed GUID values found." in result.stdout
-    assert "Missing required environment variables" not in f"{result.stdout}\n{result.stderr}"

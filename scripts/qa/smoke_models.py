@@ -28,7 +28,7 @@ from pathlib import Path
 # Config loading (standalone — no app imports needed)
 # ---------------------------------------------------------------------------
 
-CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "models.json"
+CONFIG_PATH = Path(__file__).resolve().parent.parent.parent / "config" / "models.json"
 
 PROVIDER_DEFAULT_KEYS = {
     "openai": "OPENAI_API_KEY",

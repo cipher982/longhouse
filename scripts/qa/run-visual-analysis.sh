@@ -10,7 +10,7 @@ echo "════════════════════════�
 echo ""
 
 # Ensure we're in project root
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 
 # Configuration
 BACKEND_PORT=47300
