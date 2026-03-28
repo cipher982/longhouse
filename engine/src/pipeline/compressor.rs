@@ -75,6 +75,8 @@ pub struct IngestPayload<'a> {
     pub events: Vec<EventIngest<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub source_lines: Vec<SourceLineIngest<'a>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub rewind_hints: Vec<SourceRewindHint>,
 }
 
 #[derive(Serialize)]
@@ -104,6 +106,13 @@ pub struct SourceLineIngest<'a> {
     pub raw_json: &'a str,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SourceRewindHint {
+    pub source_path: String,
+    pub source_offset: u64,
+    pub reason: String,
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -117,7 +126,15 @@ pub fn build_payload<'a>(
     source_path: &'a str,
     provider: &'a str,
 ) -> IngestPayload<'a> {
-    build_payload_with_source_lines(session_id, events, metadata, source_path, provider, None)
+    build_payload_with_source_lines(
+        session_id,
+        events,
+        metadata,
+        source_path,
+        provider,
+        None,
+        None,
+    )
 }
 
 /// Build an IngestPayload and include optional full source-line archive.
@@ -128,6 +145,7 @@ pub fn build_payload_with_source_lines<'a>(
     source_path: &'a str,
     provider: &'a str,
     source_lines: Option<&'a [ParsedSourceLine]>,
+    rewind_hints: Option<&[SourceRewindHint]>,
 ) -> IngestPayload<'a> {
     let hostname = cached_hostname();
 
@@ -225,6 +243,7 @@ pub fn build_payload_with_source_lines<'a>(
             || std::env::var("LONGHOUSE_IS_SIDECHAIN").as_deref() == Ok("1"),
         events: event_ingests,
         source_lines: source_line_ingests,
+        rewind_hints: rewind_hints.unwrap_or(&[]).to_vec(),
     }
 }
 
@@ -248,6 +267,7 @@ pub fn build_and_compress(
         source_path,
         provider,
         None,
+        None,
         CompressionAlgo::Gzip,
     )
 }
@@ -259,6 +279,7 @@ pub fn build_and_compress_with(
     metadata: &SessionMetadata,
     source_path: &str,
     provider: &str,
+    rewind_hints: Option<&[SourceRewindHint]>,
     algo: CompressionAlgo,
 ) -> anyhow::Result<Vec<u8>> {
     build_and_compress_with_source_lines(
@@ -268,6 +289,7 @@ pub fn build_and_compress_with(
         source_path,
         provider,
         None,
+        rewind_hints,
         algo,
     )
 }
@@ -280,6 +302,7 @@ pub fn build_and_compress_with_source_lines(
     source_path: &str,
     provider: &str,
     source_lines: Option<&[ParsedSourceLine]>,
+    rewind_hints: Option<&[SourceRewindHint]>,
     algo: CompressionAlgo,
 ) -> anyhow::Result<Vec<u8>> {
     let payload = build_payload_with_source_lines(
@@ -289,6 +312,7 @@ pub fn build_and_compress_with_source_lines(
         source_path,
         provider,
         source_lines,
+        rewind_hints,
     );
     compress_payload_with(&payload, algo)
 }
@@ -611,6 +635,7 @@ mod tests {
             &source_path,
             provider,
             Some(&parsed.source_lines),
+            None,
             CompressionAlgo::Gzip,
         )
         .expect("build and compress payload with source lines");

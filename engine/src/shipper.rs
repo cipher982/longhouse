@@ -212,7 +212,7 @@ pub fn prepare_file(
     };
 
     // Detect truncation before parse dispatch.
-    let offset = if file_size < current_offset {
+    let rewind_hint = if file_size < current_offset {
         tracing::warn!(
             "File truncated: {} (was {}, now {}), resetting",
             path_str,
@@ -220,6 +220,12 @@ pub fn prepare_file(
             file_size
         );
         file_state.reset_offsets(&path_str)?;
+        Some(truncation_rewind_hint(&path_str))
+    } else {
+        None
+    };
+
+    let offset = if rewind_hint.is_some() {
         0
     } else if file_size == current_offset {
         // No new content
@@ -261,6 +267,7 @@ pub fn prepare_file(
         &path_str,
         provider,
         Some(&parse_result.source_lines),
+        rewind_hint.as_ref().map(std::slice::from_ref),
         algo,
     )?;
 
@@ -535,6 +542,14 @@ fn ack_only_from_raw_range(
     }
 }
 
+fn truncation_rewind_hint(path_str: &str) -> compressor::SourceRewindHint {
+    compressor::SourceRewindHint {
+        source_path: path_str.to_string(),
+        source_offset: 0,
+        reason: "truncation".to_string(),
+    }
+}
+
 fn dead_letter_from_compressed_range(
     path_str: &str,
     provider: &str,
@@ -590,6 +605,7 @@ fn prepare_whole_document_action(
     algo: CompressionAlgo,
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
+    rewind_hint: Option<&compressor::SourceRewindHint>,
 ) -> Result<Vec<PreparedAction>> {
     let payload_session_id =
         resolve_payload_session_id(provider, parse_result, session_id_override);
@@ -599,6 +615,7 @@ fn prepare_whole_document_action(
         &parse_result.metadata,
         path_str,
         provider,
+        rewind_hint.map(std::slice::from_ref),
         algo,
     )?;
 
@@ -637,7 +654,8 @@ fn materialize_ship_range(
     max_batch_bytes: u64,
     range: ShipRange,
     session_id_override: Option<&str>,
-) -> Result<Vec<PreparedAction>> {
+    rewind_hint: Option<&compressor::SourceRewindHint>,
+) -> Result<(Vec<PreparedAction>, bool)> {
     let payload_session_id =
         resolve_payload_session_id(provider, parse_result, session_id_override);
     let compressed = compressor::build_and_compress_with_source_lines(
@@ -647,22 +665,26 @@ fn materialize_ship_range(
         path_str,
         provider,
         Some(&parse_result.source_lines[range.source_line_range.clone()]),
+        rewind_hint.map(std::slice::from_ref),
         algo,
     )?;
 
     if compressed.len() as u64 <= max_batch_bytes {
-        return Ok(vec![PreparedAction::Ship(ShipItem {
-            path_str: path_str.to_string(),
-            provider: provider.to_string(),
-            offset: range.start_offset,
-            new_offset: range.end_offset,
-            event_count: range
-                .event_range
-                .end
-                .saturating_sub(range.event_range.start),
-            session_id: payload_session_id.to_string(),
-            compressed,
-        })]);
+        return Ok((
+            vec![PreparedAction::Ship(ShipItem {
+                path_str: path_str.to_string(),
+                provider: provider.to_string(),
+                offset: range.start_offset,
+                new_offset: range.end_offset,
+                event_count: range
+                    .event_range
+                    .end
+                    .saturating_sub(range.event_range.start),
+                session_id: payload_session_id.to_string(),
+                compressed,
+            })],
+            rewind_hint.is_some(),
+        ));
     }
 
     let line_count = range
@@ -670,16 +692,19 @@ fn materialize_ship_range(
         .end
         .saturating_sub(range.source_line_range.start);
     if line_count <= 1 {
-        return Ok(vec![PreparedAction::DeadLetter(
-            dead_letter_from_compressed_range(
-                path_str,
-                provider,
-                &parse_result.metadata.session_id,
-                &range,
-                max_batch_bytes,
-                compressed.len(),
-            ),
-        )]);
+        return Ok((
+            vec![PreparedAction::DeadLetter(
+                dead_letter_from_compressed_range(
+                    path_str,
+                    provider,
+                    &parse_result.metadata.session_id,
+                    &range,
+                    max_batch_bytes,
+                    compressed.len(),
+                ),
+            )],
+            false,
+        ));
     }
 
     let mid_line_idx = range.source_line_range.start + line_count / 2;
@@ -697,7 +722,7 @@ fn materialize_ship_range(
         event_range: event_range_for_offsets(&parse_result.events, mid_offset, range.end_offset),
     };
 
-    let mut actions = materialize_ship_range(
+    let (mut actions, left_used_hint) = materialize_ship_range(
         parse_result,
         path_str,
         provider,
@@ -705,8 +730,9 @@ fn materialize_ship_range(
         max_batch_bytes,
         left,
         session_id_override,
+        rewind_hint,
     )?;
-    actions.extend(materialize_ship_range(
+    let (right_actions, right_used_hint) = materialize_ship_range(
         parse_result,
         path_str,
         provider,
@@ -714,8 +740,10 @@ fn materialize_ship_range(
         max_batch_bytes,
         right,
         session_id_override,
-    )?);
-    Ok(actions)
+        if left_used_hint { None } else { rewind_hint },
+    )?;
+    actions.extend(right_actions);
+    Ok((actions, left_used_hint || right_used_hint))
 }
 
 fn build_prepared_actions(
@@ -727,6 +755,7 @@ fn build_prepared_actions(
     algo: CompressionAlgo,
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
+    rewind_hint: Option<&compressor::SourceRewindHint>,
 ) -> Result<Vec<PreparedAction>> {
     if parse_result.source_lines.is_empty() {
         if parse_result.events.is_empty() {
@@ -742,10 +771,12 @@ fn build_prepared_actions(
             algo,
             max_batch_bytes,
             session_id_override,
+            rewind_hint,
         );
     }
 
     let mut actions = Vec::new();
+    let mut pending_rewind_hint = rewind_hint;
     for planned in batcher::plan_range_actions(
         &parse_result.source_lines,
         &parse_result.events,
@@ -754,15 +785,22 @@ fn build_prepared_actions(
         max_batch_bytes,
     )? {
         match planned {
-            PlannedRangeAction::Ship(range) => actions.extend(materialize_ship_range(
-                parse_result,
-                path_str,
-                provider,
-                algo,
-                max_batch_bytes,
-                range,
-                session_id_override,
-            )?),
+            PlannedRangeAction::Ship(range) => {
+                let (range_actions, used_hint) = materialize_ship_range(
+                    parse_result,
+                    path_str,
+                    provider,
+                    algo,
+                    max_batch_bytes,
+                    range,
+                    session_id_override,
+                    pending_rewind_hint,
+                )?;
+                actions.extend(range_actions);
+                if used_hint {
+                    pending_rewind_hint = None;
+                }
+            }
             PlannedRangeAction::DeadLetter(range) => {
                 if range.event_range.is_empty() {
                     actions.push(PreparedAction::AckOnly(ack_only_from_raw_range(
@@ -805,6 +843,7 @@ pub fn prepare_path_range(
         max_batch_bytes,
         session_id_override,
         None,
+        None,
     )
 }
 
@@ -817,6 +856,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
     max_batch_bytes: u64,
     session_id_override: Option<&str>,
     parse_tracker: Option<&RecentIssueTracker>,
+    rewind_hint: Option<&compressor::SourceRewindHint>,
 ) -> Result<Option<PreparedFile>> {
     let path_str = path.to_string_lossy().to_string();
     let file_size = match std::fs::metadata(path) {
@@ -881,6 +921,7 @@ pub(crate) fn prepare_path_range_with_parse_tracker(
         algo,
         max_batch_bytes,
         session_id_override,
+        rewind_hint,
     )?;
 
     if actions.is_empty() {
@@ -947,7 +988,7 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
         }
     };
 
-    let offset = if file_size < current_offset {
+    let rewind_hint = if file_size < current_offset {
         tracing::warn!(
             "File truncated: {} (was {}, now {}), resetting",
             path_str,
@@ -955,6 +996,12 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
             file_size
         );
         file_state.reset_offsets(&path_str)?;
+        Some(truncation_rewind_hint(&path_str))
+    } else {
+        None
+    };
+
+    let offset = if rewind_hint.is_some() {
         0
     } else if queued_offset > current_offset {
         tracing::debug!(
@@ -979,6 +1026,7 @@ pub(crate) fn prepare_file_batches_with_parse_tracker(
         max_batch_bytes,
         session_id_override,
         parse_tracker,
+        rewind_hint.as_ref(),
     )
 }
 
@@ -1357,6 +1405,7 @@ async fn prepare_spool_entry_for_replay(
             max_batch_bytes,
             entry.session_id.as_deref(),
             parse_tracker.as_ref(),
+            None,
         )
     })
     .await?
@@ -1794,6 +1843,28 @@ mod tests {
         payload["id"].as_str().unwrap().to_string()
     }
 
+    fn decode_payload_rewind_hints(compressed: &[u8]) -> Vec<(String, u64, String)> {
+        let mut decoder = GzDecoder::new(compressed);
+        let mut json_str = String::new();
+        decoder.read_to_string(&mut json_str).unwrap();
+        let payload: serde_json::Value = serde_json::from_str(&json_str).unwrap();
+        payload["rewind_hints"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| {
+                        (
+                            item["source_path"].as_str().unwrap().to_string(),
+                            item["source_offset"].as_u64().unwrap(),
+                            item["reason"].as_str().unwrap().to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn make_line(uuid: &str, text: &str) -> String {
         format!(
             r#"{{"type":"user","uuid":"{}","timestamp":"2026-02-15T10:00:00Z","message":{{"content":"{}"}}}}"#,
@@ -1942,7 +2013,7 @@ mod tests {
 
     #[test]
     fn test_prepare_codex_forked_child_ignores_managed_parent_override() {
-        let (_tmp, conn) = make_db();
+        let (_tmp, _conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
         let path = dir
             .path()
@@ -1972,6 +2043,53 @@ mod tests {
                 assert_eq!(
                     decode_payload_session_id(&item.compressed),
                     "dddddddd-1111-2222-3333-444455556666"
+                );
+            }
+            PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
+                panic!("forked codex child should ship, not ack-only or dead-letter")
+            }
+        }
+    }
+
+    #[test]
+    fn test_prepare_codex_injected_parent_context_keeps_child_session_id_with_override() {
+        let (_tmp, _conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-2026-03-23T17-14-43-child.jsonl");
+        let child_session_meta = r#"{"type":"session_meta","timestamp":"2026-03-23T17:14:43.614Z","payload":{"type":"session_meta","id":"019d1bb1-15c1-78c0-b4bc-f830965f237b","forked_from_id":"019d1805-66b6-78f1-aca9-91225867663d","cwd":"/Users/test/project"}}"#;
+        let parent_session_meta = r#"{"type":"session_meta","timestamp":"2026-03-23T17:14:43.615Z","payload":{"type":"session_meta","id":"019d1805-66b6-78f1-aca9-91225867663d","cwd":"/Users/test/project"}}"#;
+        let user_line = r#"{"type":"response_item","timestamp":"2026-03-23T17:14:44.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from child"}]}}"#;
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n{}\n{}\n",
+                child_session_meta, parent_session_meta, user_line
+            ),
+        )
+        .unwrap();
+
+        let offset = (child_session_meta.len() + 1) as u64;
+        let managed_parent_longhouse_id = "019d2869-1111-7222-8333-aaaaaaaaaaaa";
+
+        let prepared = prepare_path_range(
+            &path,
+            "codex",
+            offset,
+            None,
+            CompressionAlgo::Gzip,
+            10_000,
+            Some(managed_parent_longhouse_id),
+        )
+        .unwrap()
+        .expect("forked codex child should prepare from incremental offset");
+
+        assert_eq!(prepared.actions.len(), 1);
+        match prepared.actions.into_iter().next().unwrap() {
+            PreparedAction::Ship(item) => {
+                assert_eq!(item.session_id, "019d1bb1-15c1-78c0-b4bc-f830965f237b");
+                assert_eq!(
+                    decode_payload_session_id(&item.compressed),
+                    "019d1bb1-15c1-78c0-b4bc-f830965f237b"
                 );
             }
             PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => {
@@ -2195,6 +2313,68 @@ mod tests {
             assert_eq!(
                 pair[0].1, pair[1].0,
                 "prepared batches must be contiguous with no gaps or overlap"
+            );
+        }
+    }
+
+    #[test]
+    fn test_prepare_file_batches_truncation_hint_only_on_first_ship_batch() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("truncated-batch1111-2222-3333-4444-555566667777.jsonl");
+        let lines = vec![
+            make_line("batch-1", &"a".repeat(64)),
+            make_line("batch-2", &"b".repeat(64)),
+            make_line("batch-3", &"c".repeat(64)),
+            make_line("batch-4", &"d".repeat(64)),
+        ];
+        std::fs::write(
+            &path,
+            format!("{}\n{}\n{}\n{}\n", lines[0], lines[1], lines[2], lines[3]),
+        )
+        .unwrap();
+
+        let fs = FileState::new(&conn);
+        fs.set_offset(
+            &path.to_string_lossy(),
+            999999,
+            "truncated-batch1111-2222-3333-4444-555566667777",
+            "truncated-batch1111-2222-3333-4444-555566667777",
+            "claude",
+        )
+        .unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 550, None).unwrap();
+        let prepared = prepared.expect("truncated file should prepare into ship batches");
+
+        let ship_items: Vec<ShipItem> = prepared
+            .actions
+            .into_iter()
+            .filter_map(|action| match action {
+                PreparedAction::Ship(item) => Some(item),
+                PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_) => None,
+            })
+            .collect();
+        assert!(
+            ship_items.len() >= 2,
+            "small batch limit should split the truncated file into multiple ship payloads"
+        );
+
+        assert_eq!(
+            decode_payload_rewind_hints(&ship_items[0].compressed),
+            vec![(
+                path.to_string_lossy().to_string(),
+                0,
+                "truncation".to_string(),
+            )]
+        );
+        for item in ship_items.iter().skip(1) {
+            assert!(
+                decode_payload_rewind_hints(&item.compressed).is_empty(),
+                "only the first ship batch after truncation should carry the explicit rewind hint"
             );
         }
     }

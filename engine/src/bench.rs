@@ -98,6 +98,7 @@ pub fn run_benchmark_with(files: &[PathBuf], compress: bool, algo: CompressionAl
                 &result.metadata,
                 &source_path,
                 "claude",
+                None,
                 algo,
             );
             compress_time += compress_start.elapsed().as_secs_f64();
@@ -182,6 +183,7 @@ pub fn run_benchmark_parallel_with(
                     &result.metadata,
                     &source_path,
                     "claude",
+                    None,
                     algo,
                 );
                 compress_start.elapsed().as_secs_f64()

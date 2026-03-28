@@ -511,6 +511,7 @@ pub fn parse_session_file(path: &Path, offset: u64) -> Result<ParseResult> {
     };
 
     if let Some(scanned) = scanned_session_meta.as_ref() {
+        result.metadata.session_id = scanned.session_id.clone();
         if result.metadata.forked_from_session_id.is_none() {
             result.metadata.forked_from_session_id = scanned.forked_from_session_id.clone();
         }
@@ -2466,6 +2467,39 @@ mod tests {
         );
 
         let result = parse_session_file(&path, 0).unwrap();
+
+        assert_eq!(result.metadata.session_id, child_id);
+        assert_eq!(
+            result.metadata.forked_from_session_id.as_deref(),
+            Some(parent_id)
+        );
+        assert!(result.metadata.is_sidechain);
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].session_id, child_id);
+    }
+
+    #[test]
+    fn test_codex_offset_keeps_child_session_meta_when_parent_context_is_injected() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_id = "019d1bb1-15c1-78c0-b4bc-f830965f237b";
+        let parent_id = "019d1805-66b6-78f1-aca9-91225867663d";
+        let child_session_meta = format!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-03-23T17:14:43.614Z\",\"payload\":{{\"id\":\"{}\",\"forked_from_id\":\"{}\",\"cwd\":\"/Users/test/project\"}}}}",
+            child_id, parent_id
+        );
+        let parent_session_meta = format!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-03-23T17:14:43.615Z\",\"payload\":{{\"id\":\"{}\",\"cwd\":\"/Users/test/project\"}}}}",
+            parent_id
+        );
+        let user_line = r#"{"type":"response_item","timestamp":"2026-03-23T17:14:44.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from child"}]}}"#;
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-2026-03-23T17-14-43-child.jsonl",
+            &[&child_session_meta, &parent_session_meta, user_line],
+        );
+
+        let offset = (child_session_meta.len() + 1) as u64;
+        let result = parse_session_file(&path, offset).unwrap();
 
         assert_eq!(result.metadata.session_id, child_id);
         assert_eq!(
