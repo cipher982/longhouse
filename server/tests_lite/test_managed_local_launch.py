@@ -456,12 +456,9 @@ def test_launch_managed_local_session_creates_native_codex_session_without_tmux(
             assert presence.state == "idle"
             assert presence.provider == "codex"
 
-            assert len(dispatcher.calls) == 2
-            preflight_inner = _inner_command(dispatcher.calls[0]["command"])
-            hooks_inner = _inner_command(dispatcher.calls[1]["command"])
-            assert "command -v codex" in preflight_inner
-            assert "command -v tmux" not in preflight_inner
-            assert "longhouse connect --hooks-only" in hooks_inner
+            # Native bridge (codex_app_server) skips runner-dispatched preflight
+            # and hooks-ensure — the client starts the bridge locally
+            assert len(dispatcher.calls) == 0
         finally:
             api_app_ref.dependency_overrides = {}
 

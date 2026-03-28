@@ -8,13 +8,13 @@
 #   API_URL=https://foo.longhouse.ai ./scripts/...   # against remote
 #
 # What it tests (the actual user journey):
-#   1. Bridge start  — codex app-server spawns, WebSocket announced, thread created
-#   2. Rollout seed  — JSONL file created before TUI attach would run
-#   3. Turn submit   — send prompt, verify turn completes
-#   4. Transcript     — events shipped to backend
-#   5. Loop continue — second prompt on same thread, context preserved
-#   6. Interrupt     — cancel active turn mid-flight
-#   7. Cleanup       — bridge process killed, state cleaned up
+#   1-3. Bridge start — codex app-server spawns, rollout seeded, state ready
+#   4-5. Turn submit  — send prompt, verify turn completes
+#   6.   Transcript   — events shipped to backend
+#   7.   Loop continue — second prompt on same thread
+#   8.   Interrupt    — cancel active turn mid-flight
+#   9.   CLI entry    — `longhouse codex --no-attach` (the real user command)
+#   10.  TUI attach   — `codex --remote` connects without crashing
 
 set -euo pipefail
 
@@ -271,6 +271,97 @@ else
         pass "interrupt attempted (turn completed before it landed)"
     else
         fail "unexpected turn status after interrupt: $TURN_STATUS"
+    fi
+fi
+
+# Kill bridge from tests 1-8 before CLI entry point test
+kill "$BRIDGE_PID" 2>/dev/null || true
+sleep 1
+
+echo "─── Test 9: CLI entry point (longhouse codex --no-attach) ───"
+
+# This tests the REAL user entry point: longhouse codex
+# It exercises: API session creation, native bridge start, output formatting
+LONGHOUSE_BIN="${LONGHOUSE_BIN:-$(command -v longhouse 2>/dev/null || echo "")}"
+if [ -z "$LONGHOUSE_BIN" ]; then
+    dim "  (longhouse CLI not found, skipping CLI entry point test)"
+    dim "  Install: cd server && uv tool install -e ."
+else
+    CLI_OUTPUT=$("$LONGHOUSE_BIN" codex \
+        --no-attach \
+        --cwd "$CWD" \
+        --url "$API_URL" \
+        --token "$DEVICE_TOKEN" \
+        2>&1) || {
+        fail "longhouse codex --no-attach failed"
+        CLI_OUTPUT=""
+    }
+    if [ -n "$CLI_OUTPUT" ]; then
+        # Verify expected output fields
+        CLI_SESSION_ID=$(echo "$CLI_OUTPUT" | grep "Session ID:" | head -1 | awk '{print $NF}')
+        CLI_WS_URL=$(echo "$CLI_OUTPUT" | grep "Remote target:" | awk '{print $NF}')
+        CLI_ATTACH_CMD=$(echo "$CLI_OUTPUT" | grep "Attach:")
+
+        if [ -n "$CLI_SESSION_ID" ] && [ -n "$CLI_WS_URL" ] && [ -n "$CLI_ATTACH_CMD" ]; then
+            pass "CLI launched session $CLI_SESSION_ID with ws=$CLI_WS_URL"
+
+            # Find and track the bridge daemon PID for cleanup
+            CLI_BRIDGE_PID=$(echo "$CLI_OUTPUT" | python3 -c "
+import sys, re
+for line in sys.stdin:
+    # Bridge start output may include pid info
+    pass
+" 2>/dev/null || echo "")
+            # The bridge daemon is a child of longhouse-engine; find it by state file
+            CLI_STATE_FILE=$(find "$HOME/.claude/managed-local/codex-bridge" -name "${CLI_SESSION_ID}.json" 2>/dev/null | head -1)
+            if [ -n "$CLI_STATE_FILE" ]; then
+                CLI_BRIDGE_PID=$(python3 -c "import json; print(json.load(open('$CLI_STATE_FILE'))['pid'])" 2>/dev/null || echo "")
+                if [ -n "$CLI_BRIDGE_PID" ]; then
+                    CLEANUP_PIDS+=("$CLI_BRIDGE_PID")
+                fi
+            fi
+        else
+            fail "CLI output missing expected fields"
+            dim "$CLI_OUTPUT"
+        fi
+    fi
+fi
+
+echo "─── Test 10: TUI attach smoke (codex --remote connects) ───"
+
+# Use the WS URL from CLI test (or from earlier bridge tests as fallback)
+TUI_WS_URL="${CLI_WS_URL:-$WS_URL}"
+
+if [ -z "$TUI_WS_URL" ]; then
+    fail "no WebSocket URL available for TUI test"
+else
+    # Run codex TUI under `script` to provide a pseudo-TTY (codex requires a real terminal).
+    # We're not testing interactivity, just that it connects without crashing.
+    TUI_LOG="/tmp/bridge-e2e-tui.log"
+    if command -v script &>/dev/null; then
+        # macOS `script` syntax: script -q output_file command...
+        script -q "$TUI_LOG" "$CODEX_BIN" --enable tui_app_server --remote "$TUI_WS_URL" &
+        TUI_PID=$!
+        CLEANUP_PIDS+=("$TUI_PID")
+
+        # Wait 5 seconds — if TUI is still running, the connection succeeded
+        sleep 5
+        if kill -0 "$TUI_PID" 2>/dev/null; then
+            pass "TUI connected via pseudo-TTY and stayed alive for 5s (pid=$TUI_PID)"
+            kill "$TUI_PID" 2>/dev/null || true
+        else
+            wait "$TUI_PID" 2>/dev/null
+            TUI_EXIT=$?
+            if [ "$TUI_EXIT" -eq 0 ]; then
+                pass "TUI exited cleanly"
+            else
+                fail "TUI crashed with exit code $TUI_EXIT"
+                dim "  log: $(tail -5 "$TUI_LOG" 2>/dev/null || echo '(empty)')"
+            fi
+        fi
+        rm -f "$TUI_LOG"
+    else
+        dim "  (script command not available, skipping TUI attach smoke)"
     fi
 fi
 

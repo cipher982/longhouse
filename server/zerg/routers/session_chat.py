@@ -1877,6 +1877,7 @@ async def launch_managed_local_this_device(
                 loop_mode=body.loop_mode.value,
                 managed_transport=body.managed_transport.value,
                 hook_url=hook_url,
+                machine_name=machine_name,
             ),
         )
     except ManagedLocalLaunchError as exc:

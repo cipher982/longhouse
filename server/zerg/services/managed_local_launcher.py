@@ -58,6 +58,7 @@ class ManagedLocalLaunchParams:
     managed_transport: str = ManagedSessionTransport.TMUX.value
     hook_url: str | None = None
     hook_token: str | None = None
+    machine_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -323,67 +324,81 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     if not cwd:
         raise ManagedLocalLaunchError("cwd is required", status_code=400)
 
-    runner = _resolve_runner(db, params.owner_id, params.runner_target)
-    _require_runner_ready(runner, owner_id=params.owner_id)
-    dispatcher = get_runner_job_dispatcher()
+    # Native bridge (codex_app_server) starts locally — no runner needed.
+    # Only tmux transport dispatches commands via the runner.
+    runner = None
+    managed_tmux_tmpdir = None
+    if transport == ManagedSessionTransport.TMUX:
+        runner = _resolve_runner(db, params.owner_id, params.runner_target)
+        _require_runner_ready(runner, owner_id=params.owner_id)
+        dispatcher = get_runner_job_dispatcher()
 
-    preflight_result = await dispatcher.dispatch_job(
-        db=db,
-        owner_id=params.owner_id,
-        runner_id=runner.id,
-        command=_build_preflight_command(
-            provider=provider,
-            cwd=cwd,
-            require_tmux=(transport == ManagedSessionTransport.TMUX),
-        ),
-        timeout_secs=10,
-        commis_id=None,
-        run_id=None,
-    )
-    if not preflight_result.get("ok"):
-        detail = preflight_result.get("error", {}).get("message", "Managed local preflight failed")
-        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
+        preflight_result = await dispatcher.dispatch_job(
+            db=db,
+            owner_id=params.owner_id,
+            runner_id=runner.id,
+            command=_build_preflight_command(
+                provider=provider,
+                cwd=cwd,
+                require_tmux=True,
+            ),
+            timeout_secs=10,
+            commis_id=None,
+            run_id=None,
+        )
+        if not preflight_result.get("ok"):
+            detail = preflight_result.get("error", {}).get("message", "Managed local preflight failed")
+            raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
-    preflight_data = preflight_result.get("data", {})
-    if int(preflight_data.get("exit_code", 1)) != 0:
-        stderr = (preflight_data.get("stderr") or "").strip()
-        stdout = (preflight_data.get("stdout") or "").strip()
-        detail = stderr or stdout or "Managed local preflight failed"
-        raise ManagedLocalLaunchError(detail, status_code=400)
-    managed_tmux_tmpdir = _extract_tmux_tmpdir(preflight_data.get("stdout")) if transport == ManagedSessionTransport.TMUX else None
+        preflight_data = preflight_result.get("data", {})
+        if int(preflight_data.get("exit_code", 1)) != 0:
+            stderr = (preflight_data.get("stderr") or "").strip()
+            stdout = (preflight_data.get("stdout") or "").strip()
+            detail = stderr or stdout or "Managed local preflight failed"
+            raise ManagedLocalLaunchError(detail, status_code=400)
+        managed_tmux_tmpdir = _extract_tmux_tmpdir(preflight_data.get("stdout"))
 
-    hooks_ensure_result = await dispatcher.dispatch_job(
-        db=db,
-        owner_id=params.owner_id,
-        runner_id=runner.id,
-        command=_build_hooks_ensure_command(provider=provider),
-        timeout_secs=30,
-        commis_id=None,
-        run_id=None,
-    )
-    if not hooks_ensure_result.get("ok"):
-        detail = hooks_ensure_result.get("error", {}).get("message", "Managed local hook installation failed")
-        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
+        hooks_ensure_result = await dispatcher.dispatch_job(
+            db=db,
+            owner_id=params.owner_id,
+            runner_id=runner.id,
+            command=_build_hooks_ensure_command(provider=provider),
+            timeout_secs=30,
+            commis_id=None,
+            run_id=None,
+        )
+        if not hooks_ensure_result.get("ok"):
+            detail = hooks_ensure_result.get("error", {}).get("message", "Managed local hook installation failed")
+            raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
 
-    hooks_ensure_data = hooks_ensure_result.get("data", {})
-    if int(hooks_ensure_data.get("exit_code", 1)) != 0:
-        stderr = (hooks_ensure_data.get("stderr") or "").strip()
-        stdout = (hooks_ensure_data.get("stdout") or "").strip()
-        detail = stderr or stdout or "Managed local hook installation failed"
-        raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
+        hooks_ensure_data = hooks_ensure_result.get("data", {})
+        if int(hooks_ensure_data.get("exit_code", 1)) != 0:
+            stderr = (hooks_ensure_data.get("stderr") or "").strip()
+            stdout = (hooks_ensure_data.get("stdout") or "").strip()
+            detail = stderr or stdout or "Managed local hook installation failed"
+            raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
+    else:
+        # For codex_app_server: still resolve runner if available (for device_id label),
+        # but don't require it to be online
+        try:
+            runner = _resolve_runner(db, params.owner_id, params.runner_target)
+        except ManagedLocalLaunchError:
+            pass
 
     session_uuid = uuid4()
     provider_session_id = str(session_uuid)
     project = _derive_project(cwd, params.project)
     display_name = (params.display_name or project).strip() or project
     managed_session_name = normalize_tmux_session_name(f"{display_name}-{session_uuid.hex[:8]}")
+    runner_name = runner.name if runner else (params.machine_name or "unknown")
+    runner_id = runner.id if runner else None
     hook_token = params.hook_token
     if not hook_token and params.hook_url:
         hook_token = issue_managed_local_hook_token(
             owner_id=params.owner_id,
             session_id=provider_session_id,
             project=project,
-            device_id=runner.name,
+            device_id=runner_name,
         )
 
     entry_command = _build_entry_command(
@@ -399,7 +414,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         provider=provider,
         environment="development",
         project=project,
-        device_id=runner.name,
+        device_id=runner_name,
         cwd=cwd,
         git_repo=params.git_repo,
         git_branch=params.git_branch,
@@ -409,7 +424,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         thread_root_session_id=session_uuid,
         continued_from_session_id=None,
         continuation_kind="local",
-        origin_label=runner.name,
+        origin_label=runner_name,
         user_messages=0,
         assistant_messages=0,
         tool_calls=0,
@@ -418,8 +433,8 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         loop_mode=params.loop_mode,
         execution_home=SessionExecutionHome.MANAGED_LOCAL.value,
         managed_transport=transport.value,
-        source_runner_id=runner.id,
-        source_runner_name=runner.name,
+        source_runner_id=runner_id,
+        source_runner_name=runner_name,
         managed_session_name=managed_session_name,
         managed_tmux_tmpdir=managed_tmux_tmpdir,
     )
