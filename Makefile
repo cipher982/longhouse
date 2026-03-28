@@ -250,6 +250,9 @@ test-shipper-premerge: ## Full shipper QA: engine fast tests + pipeline E2E (run
 	$(MAKE) test-engine-fast
 	$(MAKE) test-shipper-e2e
 
+test-codex-bridge-e2e: ## Codex bridge E2E: real user journey (bridge start → send → continue → interrupt)
+	@bash scripts/test-codex-bridge-e2e.sh
+
 ensure-js-deps: ## @internal Install workspace JS deps when a clean clone needs them
 	@if [ ! -f node_modules/@playwright/test/package.json ]; then \
 		echo "📦 Installing JS workspace dependencies..."; \
