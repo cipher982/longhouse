@@ -915,10 +915,7 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
 
     let mut events = Vec::new();
     let mut source_lines = Vec::new();
-    let mut metadata = SessionMetadata {
-        session_id: session_id.to_string(),
-        ..Default::default()
-    };
+    let mut metadata = SessionMetadata::default();
     let mut min_ts: Option<DateTime<Utc>> = None;
     let mut max_ts: Option<DateTime<Utc>> = None;
     let mut last_good_offset = offset;
@@ -982,6 +979,9 @@ fn parse_mmap(path: &Path, offset: u64, session_id: &str) -> Result<ParseResult>
     // Finalize metadata
     metadata.started_at = min_ts;
     metadata.ended_at = max_ts;
+    if metadata.session_id.is_empty() {
+        metadata.session_id = session_id.to_string();
+    }
     if let Some(ref cwd) = metadata.cwd {
         let (project, git_repo) = resolve_git_info(Path::new(cwd));
         metadata.project = project;
@@ -1018,10 +1018,7 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
 
     let mut events = Vec::new();
     let mut source_lines = Vec::new();
-    let mut metadata = SessionMetadata {
-        session_id: session_id.to_string(),
-        ..Default::default()
-    };
+    let mut metadata = SessionMetadata::default();
     let mut min_ts: Option<DateTime<Utc>> = None;
     let mut max_ts: Option<DateTime<Utc>> = None;
     let mut current_offset = offset;
@@ -1083,6 +1080,9 @@ fn parse_buffered(path: &Path, offset: u64, session_id: &str) -> Result<ParseRes
 
     metadata.started_at = min_ts;
     metadata.ended_at = max_ts;
+    if metadata.session_id.is_empty() {
+        metadata.session_id = session_id.to_string();
+    }
     if let Some(ref cwd) = metadata.cwd {
         let (project, git_repo) = resolve_git_info(Path::new(cwd));
         metadata.project = project;
@@ -1143,9 +1143,11 @@ fn collect_metadata(
                 }
             }
             // Override session_id with the canonical one from session_meta
-            if let Some(ref id) = payload.id {
-                if Uuid::parse_str(id).is_ok() {
-                    meta.session_id = id.clone();
+            if meta.session_id.is_empty() {
+                if let Some(ref id) = payload.id {
+                    if Uuid::parse_str(id).is_ok() {
+                        meta.session_id = id.clone();
+                    }
                 }
             }
             if meta.forked_from_session_id.is_none() {
@@ -2432,6 +2434,38 @@ mod tests {
 
         let offset = (session_meta.len() + 1) as u64;
         let result = parse_session_file(&path, offset).unwrap();
+
+        assert_eq!(result.metadata.session_id, child_id);
+        assert_eq!(
+            result.metadata.forked_from_session_id.as_deref(),
+            Some(parent_id)
+        );
+        assert!(result.metadata.is_sidechain);
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].session_id, child_id);
+    }
+
+    #[test]
+    fn test_codex_first_session_meta_wins_when_parent_context_is_injected() {
+        let dir = tempfile::tempdir().unwrap();
+        let child_id = "019d1bb1-15c1-78c0-b4bc-f830965f237b";
+        let parent_id = "019d1805-66b6-78f1-aca9-91225867663d";
+        let child_session_meta = format!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-03-23T17:14:43.614Z\",\"payload\":{{\"id\":\"{}\",\"forked_from_id\":\"{}\",\"cwd\":\"/Users/test/project\"}}}}",
+            child_id, parent_id
+        );
+        let parent_session_meta = format!(
+            "{{\"type\":\"session_meta\",\"timestamp\":\"2026-03-23T17:14:43.615Z\",\"payload\":{{\"id\":\"{}\",\"cwd\":\"/Users/test/project\"}}}}",
+            parent_id
+        );
+        let user_line = r#"{"type":"response_item","timestamp":"2026-03-23T17:14:44.000Z","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello from child"}]}}"#;
+        let path = make_jsonl_file(
+            dir.path(),
+            "rollout-2026-03-23T17-14-43-child.jsonl",
+            &[&child_session_meta, &parent_session_meta, user_line],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
 
         assert_eq!(result.metadata.session_id, child_id);
         assert_eq!(
