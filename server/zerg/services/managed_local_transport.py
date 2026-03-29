@@ -1,7 +1,7 @@
 """Managed-local transport seam.
 
-Transport is auto-determined by provider (codex → native bridge, claude → tmux).
-Command builders read the stored transport from existing sessions.
+Launch resolution decides the transport per session. Command builders read the
+stored transport from existing sessions.
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ import shlex
 from dataclasses import dataclass
 
 from zerg.models.agents import AgentSession
+from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import build_tmux_attach_command
 from zerg.services.managed_local_tmux import build_tmux_capture_command
@@ -67,6 +68,30 @@ def _build_engine_bridge_shell_command(
     return f"zsh -lc {shlex.quote('; '.join(inner_parts))}"
 
 
+def _build_longhouse_cli_shell_command(
+    *,
+    subcommand: str,
+    args: tuple[str, ...] = (),
+    required_commands: tuple[str, ...] = ("longhouse",),
+) -> str:
+    invocation = " ".join(
+        [
+            "longhouse",
+            "claude-channel",
+            subcommand,
+            *args,
+        ]
+    )
+    inner_parts = [
+        build_managed_local_shell_prelude(
+            require_tmux=False,
+            required_commands=required_commands,
+        ),
+        f"exec {invocation}",
+    ]
+    return f"zsh -lc {shlex.quote('; '.join(inner_parts))}"
+
+
 def _resolve_transport(value: str | ManagedSessionTransport | None) -> ManagedSessionTransport:
     """Resolve a stored transport value to an enum. Internal use only."""
     if isinstance(value, ManagedSessionTransport):
@@ -84,7 +109,7 @@ def build_managed_local_launch_transport_plan(
     entry_command: str,
     tmux_tmpdir: str | None = None,
 ) -> ManagedLocalLaunchTransportPlan:
-    """Build a tmux launch plan. Only used for Claude (tmux) transport."""
+    """Build a tmux launch plan for tmux-backed managed-local sessions."""
     return ManagedLocalLaunchTransportPlan(
         transport=ManagedSessionTransport.TMUX,
         launch_command=build_tmux_launch_command(
@@ -129,6 +154,18 @@ def build_managed_local_attach_command(*, session: AgentSession) -> str | None:
             required_commands=("longhouse-engine", "codex"),
             exec_engine=True,
         )
+    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
+        provider_session_id = str(getattr(session, "provider_session_id", "") or "").strip()
+        session_id = str(getattr(session, "id", "") or "").strip()
+        cwd = str(getattr(session, "cwd", "") or "").strip()
+        if not provider_session_id or not session_id or not cwd:
+            return None
+        return build_claude_channel_exec_command(
+            provider_session_id=provider_session_id,
+            longhouse_session_id=session_id,
+            cwd=cwd,
+            resume=True,
+        )
     session_name = str(getattr(session, "managed_session_name", "") or "").strip()
     if not session_name:
         return None
@@ -148,6 +185,14 @@ def build_managed_local_interrupt_command(*, session: AgentSession) -> str:
         return _build_engine_bridge_shell_command(
             session_id=session_id,
             subcommand="interrupt",
+        )
+    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
+        session_id = str(getattr(session, "id", "") or "").strip()
+        if not session_id:
+            raise ManagedLocalTransportError("Managed local session is missing session ID")
+        return _build_longhouse_cli_shell_command(
+            subcommand="interrupt",
+            args=("--session-id", shlex.quote(session_id)),
         )
     if transport == ManagedSessionTransport.TMUX:
         session_name = str(getattr(session, "managed_session_name", "") or "").strip()
@@ -177,6 +222,14 @@ def build_managed_local_send_text_command(*, session: AgentSession, text: str) -
             session_id=session_id,
             subcommand="send",
             args=("--text", shlex.quote(text)),
+        )
+    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
+        session_id = str(getattr(session, "id", "") or "").strip()
+        if not session_id:
+            raise ManagedLocalTransportError("Managed local session is missing session ID")
+        return _build_longhouse_cli_shell_command(
+            subcommand="send",
+            args=("--session-id", shlex.quote(session_id), "--text", shlex.quote(text)),
         )
     # tmux transport (Claude)
     session_name = str(getattr(session, "managed_session_name", "") or "").strip()

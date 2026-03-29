@@ -27,6 +27,7 @@ from zerg.models.agents import AgentSession
 from zerg.services.managed_local_runtime import mark_managed_local_session_launched
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
+from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.managed_local_transport import build_managed_local_launch_transport_plan
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
@@ -294,15 +295,15 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     provider = params.provider or "claude"
     if provider not in _VALID_PROVIDERS:
         raise ManagedLocalLaunchError(f"Unsupported provider '{provider}' for managed local", status_code=400)
-    transport = ManagedSessionTransport.for_provider(provider)
+    transport = ManagedSessionTransport.for_provider(provider, machine_name=params.machine_name)
     provider_name = _PROVIDER_DISPLAY_NAMES.get(provider, provider)
 
     cwd = params.cwd.strip()
     if not cwd:
         raise ManagedLocalLaunchError("cwd is required", status_code=400)
 
-    # Native bridge (codex_app_server) starts locally — no runner needed.
-    # Only tmux transport dispatches commands via the runner.
+    # Native local transports start on the caller's device — no runner
+    # dispatch needed up front. Only tmux transport launches via the runner.
     runner = None
     managed_tmux_tmpdir = None
     if transport == ManagedSessionTransport.TMUX:
@@ -355,10 +356,11 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             detail = stderr or stdout or "Managed local hook installation failed"
             raise ManagedLocalLaunchError(detail, status_code=_MANAGED_LOCAL_RUNTIME_FAILURE_STATUS)
     else:
-        # Native Codex bridge launches on the caller's device, so `/this-device`
-        # can continue even before that device has a persisted Runner row.
-        # The generic `/managed-local` route still takes an explicit runner target
-        # and should keep failing if it cannot be resolved.
+        # Native local transports launch on the caller's device, so
+        # `/this-device` can continue even before that device has a persisted
+        # Runner row. The generic `/managed-local` route still takes an
+        # explicit runner target and should keep failing if it cannot be
+        # resolved.
         if params.machine_name:
             try:
                 runner = _resolve_runner(db, params.owner_id, params.runner_target)
@@ -429,6 +431,15 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         db.commit()
         db.refresh(session)
         return ManagedLocalLaunchResult(session=session, attach_command="")
+
+    if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE:
+        mark_managed_local_session_launched(db, session=session)
+        db.commit()
+        db.refresh(session)
+        return ManagedLocalLaunchResult(
+            session=session,
+            attach_command=str(build_managed_local_attach_command(session=session) or ""),
+        )
 
     transport_plan = build_managed_local_launch_transport_plan(
         session_name=managed_session_name,

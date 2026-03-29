@@ -12,9 +12,13 @@ from pathlib import Path
 import httpx
 import typer
 
+from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
+from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
+from zerg.services.shipper.hooks import install_hooks
+from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 
 
@@ -24,6 +28,11 @@ class ManagedLocalLaunchResponse:
     provider_session_id: str
     attach_command: str
     source_runner_name: str
+    managed_transport: str | None = None
+
+
+class _NativeClaudeError(Exception):
+    """Raised when native Claude launch preparation fails."""
 
 
 def _interactive_stdio() -> bool:
@@ -64,6 +73,10 @@ def _load_api_credentials(
         raise typer.Exit(code=1)
 
     return resolved_url, resolved_token
+
+
+def _resolve_claude_dir(config_dir: Path | None) -> Path:
+    return config_dir or (Path.home() / ".claude")
 
 
 def _git_output(cwd: Path, *args: str) -> str | None:
@@ -145,6 +158,7 @@ def _launch_managed_local_from_api(
         provider_session_id=str(body["provider_session_id"]),
         attach_command=str(body["attach_command"]),
         source_runner_name=str(body.get("source_runner_name") or machine_name),
+        managed_transport=str(body.get("managed_transport") or "") or None,
     )
 
 
@@ -179,6 +193,98 @@ def _finalize_managed_local_launch(
     if exit_code != 0:
         typer.secho(
             f"Auto-attach exited with code {exit_code}. Run the printed attach command manually.",
+            fg=typer.colors.YELLOW,
+        )
+
+
+def _ensure_native_claude_prereqs(
+    *,
+    base_url: str,
+    token: str,
+    workspace_path: Path,
+    config_dir: Path | None,
+) -> None:
+    try:
+        resolved_claude_dir = _resolve_claude_dir(config_dir)
+        install_hooks(base_url, token=token, claude_dir=str(resolved_claude_dir))
+        install_claude_channel_mcp_server(
+            workspace_path=workspace_path,
+            claude_dir=resolved_claude_dir,
+        )
+    except Exception as exc:  # pragma: no cover - exercised through CLI wrappers
+        raise _NativeClaudeError(str(exc)) from exc
+
+
+def _run_native_claude_tui(
+    *,
+    session_id: str,
+    provider_session_id: str,
+    cwd: Path,
+    base_url: str,
+    token: str,
+) -> int:
+    command = build_claude_channel_exec_command(
+        provider_session_id=provider_session_id,
+        longhouse_session_id=session_id,
+        cwd=str(cwd),
+        resume=False,
+        hook_url=base_url,
+        hook_token=token,
+    )
+    completed = subprocess.run(shlex.split(command), check=False, cwd=str(cwd))
+    return int(completed.returncode)
+
+
+def _finalize_native_claude_launch(
+    *,
+    base_url: str,
+    token: str,
+    cwd: Path,
+    result: ManagedLocalLaunchResponse,
+    config_dir: Path | None,
+    open_browser: bool,
+    attach: bool,
+) -> None:
+    session_url = _build_session_url(base_url, result.session_id)
+    typer.secho("Managed local Claude session launched on this device.", fg=typer.colors.GREEN)
+    typer.echo(f"Session ID: {result.session_id}")
+    typer.echo(f"Provider session ID: {result.provider_session_id}")
+    typer.echo(f"Session URL: {session_url}")
+    typer.echo(f"Attach: {result.attach_command}")
+    typer.echo("Preparing native Claude bridge...")
+    try:
+        _ensure_native_claude_prereqs(
+            base_url=base_url,
+            token=token,
+            workspace_path=cwd,
+            config_dir=config_dir,
+        )
+    except _NativeClaudeError as exc:
+        typer.secho(f"Claude bridge setup failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if open_browser:
+        typer.echo("Opening session in browser...")
+        if not _open_session_url(session_url):
+            typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
+
+    if not attach:
+        return
+    if not _interactive_stdio():
+        typer.secho("Skipping native launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
+        return
+
+    typer.echo("Launching native Claude...")
+    exit_code = _run_native_claude_tui(
+        session_id=result.session_id,
+        provider_session_id=result.provider_session_id,
+        cwd=cwd,
+        base_url=base_url,
+        token=token,
+    )
+    if exit_code != 0:
+        typer.secho(
+            f"Native Claude exited with code {exit_code}. Run the printed attach command manually.",
             fg=typer.colors.YELLOW,
         )
 
@@ -245,6 +351,18 @@ def claude(
         machine_name=machine_name,
         provider="claude",
     )
+    resolved_claude_dir = Path(config_dir) if config_dir else None
+    if result.managed_transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
+        _finalize_native_claude_launch(
+            base_url=resolved_url,
+            token=resolved_token,
+            cwd=cwd,
+            result=result,
+            config_dir=resolved_claude_dir,
+            open_browser=open_browser,
+            attach=attach,
+        )
+        return
     _finalize_managed_local_launch(
         provider_label="Claude",
         base_url=resolved_url,
