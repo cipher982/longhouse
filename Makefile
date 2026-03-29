@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-conversations qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend-unit test-hatch-agent test-runner-unit test-install-runner test-hosted-instance test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine-fast test-shipper-premerge test-codex-bridge-e2e
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-conversations qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-frontend-unit test-hatch-agent test-runner test-runner-unit test-install-runner test-hosted-instance test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
 
 
 # ---------------------------------------------------------------------------
@@ -176,14 +176,22 @@ reset: ## Reset database (destroys all data)
 	@echo "✅ Database reset. Run 'make seed-agents' to populate."
 
 # ---------------------------------------------------------------------------
-# Testing targets
+# Testing
 # ---------------------------------------------------------------------------
-
-# =============================================================================
-# EXPLICIT TEST TIERS (long names for agents; keep legacy targets for scripts)
-# =============================================================================
-
-# =============================================================================
+#  Run the tier that matches your change — don't run more than needed.
+#
+#  Tier           Target                       Changed what?              Time
+#  ─────────────────────────────────────────────────────────────────────────────
+#  backend        make test                    server/zerg/, tests_lite/  ~10s
+#  engine         make test-engine             engine/                    ~20s
+#  frontend       make test-frontend           web/                       ~15s
+#  control-plane  make test-control-plane      control-plane/             ~10s
+#  runner         make test-runner             runner/                    ~5s
+#  e2e            make test-e2e                UI changes, before PR      ~2min
+#  pre-PR CI      make test-ci                 before pushing             ~3min
+#  full suite     make test-full               pre-deploy, full verify    ~8min
+#  post-deploy    make qa-live                 after deploy               ~60s
+# ---------------------------------------------------------------------------
 
 # Playwright E2E should run against an isolated frontend/backend pair by default.
 # Ports are randomized unless explicitly pinned:
@@ -192,17 +200,16 @@ E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 SHIPPER_E2E_URL ?= http://localhost:47300
 
-test: ## Run lite tests by default
-	$(MAKE) test-lite
+test: ## ⭐ Python backend unit tests (tests_lite/, SQLite in-memory, ~10s)
+	@echo "🐍 Running Python backend tests..."
+	@cd server && ./run_backend_tests_lite.sh
 
 test-readmes: ## Run README contract tests (MODE=smoke[default] or full)
 	@python3 scripts/qa/run-readme-tests.py --mode $(or $(MODE),smoke) $(FILES)
 
-test-lite: ## Fast SQLite-lite backend tests (no Docker)
-	@echo "🧪 Running lite backend tests (SQLite)..."; \
-	(cd server && ./run_backend_tests_lite.sh)
-	@$(MAKE) test-control-plane
-	@$(MAKE) test-engine-fast
+test-lite: ## Deprecated — use `make test` instead
+	@echo "⚠️  test-lite is deprecated, use \`make test\` instead"
+	@$(MAKE) test
 
 test-autonomy-journeys: ## Run deterministic Oikos autonomy journey harness tests
 	@echo "🧪 Running Oikos autonomy journey harness tests..."
@@ -232,9 +239,8 @@ install-engine: ## Build + sign the Rust engine binary (run after any engine sou
 	@ln -sf "$(CURDIR)/engine/target/release/longhouse-engine" "$$HOME/.local/bin/longhouse-engine"
 	@echo "longhouse-engine installed (~/.local/bin/longhouse-engine -> $(CURDIR)/engine/target/release/longhouse-engine)"
 
-test-engine-fast: ## Rust engine unit + golden + adversarial tests (uses repo-local binary, included in make test)
+test-engine: ## Rust engine unit + golden + adversarial tests (use when changing engine/)
 	@echo "🦀 Running engine unit + golden + adversarial tests..."
-	cd engine && cargo build --release
 	cd engine && cargo test --bin longhouse-engine --test golden_parser_contract --test adversarial_parser
 
 test-zerg-ops-backup: ## Backup/restore retention contract test for scripts/zerg-ops.sh
@@ -246,8 +252,8 @@ test-shipper-e2e: ## Full pipeline E2E: fixture → longhouse-engine ship → AP
 	cd engine && cargo build --release
 	cd server && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
-test-shipper-premerge: ## Full shipper QA: engine fast tests + pipeline E2E (run before merging engine changes)
-	$(MAKE) test-engine-fast
+test-shipper-premerge: ## Full shipper QA: engine tests + pipeline E2E (run before merging engine changes)
+	$(MAKE) test-engine
 	$(MAKE) test-shipper-e2e
 
 test-codex-bridge-e2e: ## Codex bridge E2E: real user journey (bridge start → send → continue → interrupt)
@@ -264,15 +270,20 @@ test-e2e: ## Run E2E tests (core + a11y)
 	$(MAKE) test-e2e-core
 	$(MAKE) test-e2e-a11y
 
-test-e2e-core: ## @internal Run core E2E tests only (no retries, must pass 100%)
+test-e2e-core: ## Run core E2E tests only — no retries, must pass 100% (called by test-e2e)
 	@$(MAKE) ensure-js-deps
 	@echo "🔴 Running CORE E2E tests (no retries, must pass 100%)..."
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=core --retries=0 --workers=1
 
-test-full: ## Full local suite (unit + full E2E + visual baselines + visual compare)
-	@echo "🧪 Running full local suite (unit + full E2E + visual baselines + visual compare)..."
+test-full: ## Full suite: all tiers — backend + engine + frontend + runner + control-plane + shipper + e2e + visual (~8min)
+	@echo "🧪 Running full test suite (all tiers)..."
 	$(MAKE) test
+	$(MAKE) test-control-plane
+	$(MAKE) test-frontend
+	$(MAKE) test-runner
+	$(MAKE) test-engine
+	$(MAKE) test-shipper-e2e
 	$(MAKE) test-e2e-core
 	$(MAKE) test-e2e-a11y
 	$(MAKE) qa-ui-baseline
@@ -321,7 +332,7 @@ test-e2e-grep: ## @internal Run E2E tests by name (usage: make test-e2e-grep GRE
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --grep "$(GREP)"
 
-test-e2e-a11y: ## @internal Run accessibility UI/UX checks (axe + heuristics)
+test-e2e-a11y: ## Accessibility UI/UX checks — axe + heuristics (called by test-e2e)
 	@$(MAKE) ensure-js-deps
 	@echo "🧪 Running accessibility UI/UX checks..."
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
@@ -372,14 +383,12 @@ test-perf: ## Run performance evaluation tests (chat latency profiling)
 	cd e2e && RUN_PERF=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
 	@echo "✅ Performance tests complete. Metrics exported to e2e/metrics/"
 
-test-frontend-unit: ## @internal Run frontend unit tests only
-	@if [ "$(MINIMAL)" = "1" ]; then \
-		echo "🧪 Running frontend unit tests (minimal)..."; \
-		cd web && bun run test -- --reporter=dot --silent; \
-	else \
-		echo "🧪 Running frontend unit tests..."; \
-		cd web && bun run test; \
-	fi
+test-frontend: ## Frontend unit tests + TypeScript type-check (use when changing web/)
+	@echo "⚛️  Running frontend unit + type-check..."
+	cd web && bun run validate:types && bun run test -- --run
+
+test-frontend-unit: ## @internal Deprecated — use `make test-frontend` instead
+	@$(MAKE) test-frontend
 
 test-hatch-agent: ## @internal Run hatch-agent package tests from sibling repo
 	@if [ ! -d ../hatch ]; then \
@@ -395,9 +404,12 @@ test-hatch-agent: ## @internal Run hatch-agent package tests from sibling repo
 		cd ../hatch && uv run --extra dev pytest tests/ --ignore=tests/test_integration.py; \
 	fi
 
-test-runner-unit: ## @internal Run runner unit tests
-	@echo "🧪 Running runner unit tests..."
+test-runner: ## Runner unit tests — Bun (use when changing runner/)
+	@echo "🏃 Running runner unit tests..."
 	cd runner && bun test
+
+test-runner-unit: ## @internal Deprecated — use `make test-runner` instead
+	@$(MAKE) test-runner
 
 test-install-runner: ## @internal Run install-runner script tests
 	@echo "🧪 Running install-runner script tests..."
@@ -690,34 +702,15 @@ qa-live-conversations: ## Run hosted conversations smoke against default instanc
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/run-prod-e2e.sh tests/live/conversations-live.spec.ts --timeout=60000 --reporter=line
 
-test-ci: ## @internal CI-ready tests (unit + build + contracts)
-	@echo "🤖 CI Test Suite Starting..."
-	@echo "═══════════════════════════════════════════════════════════════════════════════"
-	@echo "🧪 Running React Unit Tests..."
-	@cd web && bun run test -- --run --reporter=basic
-	@echo "  ✅ React unit tests passed"
-	@echo ""
-	@echo "🏗️  Testing React Build..."
-	@cd web && bun run build >/dev/null 2>&1
-	@echo "  ✅ React build successful"
-	@echo ""
-	@echo "🧪 Running Backend Lite Tests..."
-	@cd server && ./run_backend_tests_lite.sh >/dev/null
-	@echo "  ✅ Backend lite tests passed"
-	@echo ""
-	@echo "🔍 Running Contract Validation..."
-	@cd web && bun run validate:contracts >/dev/null
-	@echo "  ✅ API contracts valid"
-	@echo ""
-	@echo "═══════════════════════════════════════════════════════════════════════════════"
-	@echo "🎯 CI Test Summary:"
-	@echo "  ✓ React unit tests"
-	@echo "  ✓ React build process"
-	@echo "  ✓ Backend lite tests"
-	@echo "  ✓ API contract validation"
-	@echo ""
-	@echo "✨ All CI checks passed! Ready for deployment."
-	@echo "═══════════════════════════════════════════════════════════════════════════════"
+test-ci: ## Simulate push/PR CI locally — run this before pushing (~3min)
+	@echo "🤖 Simulating push/PR CI (matches contract-first-ci.yml)..."
+	$(MAKE) validate
+	$(MAKE) test
+	$(MAKE) test-control-plane
+	$(MAKE) test-frontend
+	$(MAKE) test-runner
+	$(MAKE) test-engine
+	$(MAKE) test-shipper-e2e
 
 # ---------------------------------------------------------------------------
 # Performance Profiling

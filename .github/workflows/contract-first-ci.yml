@@ -66,10 +66,13 @@ jobs:
     - name: Install build tools
       run: sudo apt-get update && sudo apt-get install -y make
 
-    - name: Run SQLite Lite Tests
+    - name: Run Python Backend Tests
       run: make test
 
-    - name: Run Shipper E2E (fixture -> engine ship -> API -> DB)
+    - name: Run Rust Engine Tests (unit + golden + adversarial)
+      run: make test-engine
+
+    - name: Run Shipper Pipeline E2E (fixture → engine ship → API → DB)
       run: make test-shipper-e2e
 
     - name: Run Install-Runner Tests
@@ -103,13 +106,10 @@ jobs:
       run: sudo apt-get update && sudo apt-get install -y make
 
     - name: Run Frontend Tests
-      run: |
-        cd web
-        bun run validate:types
-        bun run test -- --run
+      run: make test-frontend
 
     - name: Run Runner Unit Tests
-      run: make test-runner-unit
+      run: make test-runner
 
   e2e:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
@@ -214,16 +214,11 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
-
-    - name: Install deps
-      run: pip install openai anthropic
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v7
 
     - name: Smoke test all models
-      run: python scripts/qa/smoke_models.py --ci
+      run: uv run --with openai --with anthropic python scripts/qa/smoke_models.py --ci
 
   oss-qa:
     runs-on: ubuntu-latest

@@ -9,8 +9,11 @@ usage() {
 Usage:
   scripts/ci/run-on-ci.sh <suite> [ref] [--test <path>] [--no-watch]
 
+Suites: validate | unit | frontend | runner | engine | e2e-core | e2e-a11y | e2e-single | full | codex-bridge-e2e
+
 Examples:
   scripts/ci/run-on-ci.sh unit main
+  scripts/ci/run-on-ci.sh engine HEAD
   scripts/ci/run-on-ci.sh e2e-core HEAD
   scripts/ci/run-on-ci.sh e2e-single main --test tests/core/sessions.spec.ts
 USAGE
