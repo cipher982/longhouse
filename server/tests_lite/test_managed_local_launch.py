@@ -680,7 +680,7 @@ def test_launch_managed_local_this_device_allows_native_codex_without_runner_row
             assert response.status_code == 200, response.text
             payload = response.json()
             assert payload["managed_transport"] == "codex_app_server"
-            assert payload["source_runner_id"] == 0
+            assert payload["source_runner_id"] is None
             assert payload["source_runner_name"] == "work-laptop"
             assert payload["attach_command"] == ""
 

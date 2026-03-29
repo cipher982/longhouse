@@ -519,7 +519,8 @@ async def send_text_to_managed_local_session(
 
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalSendResult(ok=False, error="Session is not managed_local")
-    if not getattr(session, "source_runner_id", None):
+    runner_id = getattr(session, "source_runner_id", None)
+    if runner_id is None:
         return ManagedLocalSendResult(ok=False, error="Managed local session is missing source runner metadata")
 
     baseline_event_id = get_managed_local_latest_event_id(db=db, session_id=session.id)
@@ -537,7 +538,7 @@ async def send_text_to_managed_local_session(
     result = await dispatcher.dispatch_job(
         db=db,
         owner_id=owner_id,
-        runner_id=int(session.source_runner_id),
+        runner_id=int(runner_id),
         command=command,
         timeout_secs=timeout_secs,
         commis_id=commis_id,
@@ -608,7 +609,8 @@ async def ship_managed_local_claude_transcript(
         return ManagedLocalShipResult(ok=False, error="Managed local direct ship only supports Claude")
     if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
         return ManagedLocalShipResult(ok=False, error="Session is not managed_local")
-    if not getattr(session, "source_runner_id", None):
+    runner_id = getattr(session, "source_runner_id", None)
+    if runner_id is None:
         return ManagedLocalShipResult(ok=False, error="Managed local session is missing source runner metadata")
 
     try:
@@ -617,7 +619,7 @@ async def ship_managed_local_claude_transcript(
         return ManagedLocalShipResult(ok=False, error=str(exc))
 
     dispatcher = get_runner_job_dispatcher()
-    runner_id = int(session.source_runner_id)
+    runner_id = int(runner_id)
     reconnect_budget_secs = max(0.0, float(MANAGED_LOCAL_RUNNER_RECONNECT_GRACE_SECS))
     attempt = 0
     max_attempts = 3

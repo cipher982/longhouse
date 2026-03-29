@@ -4191,8 +4191,7 @@ export interface paths {
          * Launch Managed Local
          * @description Start a managed local AI agent session on a connected runner.
          *
-         *     Supports both Claude and Codex providers. tmux is the current implementation;
-         *     other managed transports can slot in behind the same API contract.
+         *     Supports both Claude and Codex providers under a transport-aware contract.
          */
         post: operations["launch_managed_local_sessions_managed_local_post"];
         delete?: never;
@@ -4527,6 +4526,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Session Workspace */
+        get: operations["get_timeline_session_workspace_timeline_sessions__session_id__workspace_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}/export": {
         parameters: {
             query?: never;
@@ -4826,6 +4842,26 @@ export interface paths {
          * @description Get the stitched lineage-path projection for a focused session.
          */
         get: operations["get_session_projection_agents_sessions__session_id__projection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Workspace
+         * @description Get the focused session, its thread, and the first projection page in one round trip.
+         */
+        get: operations["get_session_workspace_agents_sessions__session_id__workspace_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8153,7 +8189,7 @@ export interface components {
             managed_transport: components["schemas"]["ManagedSessionTransport"];
             loop_mode: components["schemas"]["SessionLoopMode"];
             /** Source Runner Id */
-            source_runner_id: number;
+            source_runner_id?: number | null;
             /** Source Runner Name */
             source_runner_name: string;
             /** Managed Session Name */
@@ -10258,6 +10294,18 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+        };
+        /**
+         * SessionWorkspaceResponse
+         * @description Response for the primary session workspace bootstrap payload.
+         */
+        SessionWorkspaceResponse: {
+            /** @description Focused session metadata */
+            session: components["schemas"]["SessionResponse"];
+            /** @description Logical thread continuations for the focused session */
+            thread: components["schemas"]["SessionThreadResponse"];
+            /** @description First page of the stitched lineage projection */
+            projection: components["schemas"]["SessionProjectionResponse"];
         };
         /**
          * SessionsListResponse
@@ -19504,6 +19552,43 @@ export interface operations {
             };
         };
     };
+    get_timeline_session_workspace_timeline_sessions__session_id__workspace_get: {
+        parameters: {
+            query?: {
+                /** @description Branch projection mode: head|all */
+                branch_mode?: string;
+                /** @description Max projected items */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionWorkspaceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     export_timeline_session_timeline_sessions__session_id__export_get: {
         parameters: {
             query?: {
@@ -20088,6 +20173,43 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionProjectionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_workspace_agents_sessions__session_id__workspace_get: {
+        parameters: {
+            query?: {
+                /** @description Branch projection mode: head|all */
+                branch_mode?: string;
+                /** @description Max projected items */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionWorkspaceResponse"];
                 };
             };
             /** @description Validation Error */
