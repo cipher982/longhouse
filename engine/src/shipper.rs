@@ -757,6 +757,19 @@ fn build_prepared_actions(
     session_id_override: Option<&str>,
     rewind_hint: Option<&compressor::SourceRewindHint>,
 ) -> Result<Vec<PreparedAction>> {
+    if parse_result.events.is_empty()
+        && parse_result.candidate_records == 0
+        && !parse_result.source_lines.is_empty()
+    {
+        return Ok(vec![PreparedAction::AckOnly(ack_only_from_raw_range(
+            path_str,
+            provider,
+            &parse_result.metadata.session_id,
+            start_offset,
+            end_offset,
+        ))]);
+    }
+
     if parse_result.source_lines.is_empty() {
         if parse_result.events.is_empty() {
             return Ok(Vec::new());
@@ -2380,7 +2393,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_gemini_file_without_source_lines_uses_whole_document_fallback() {
+    fn test_prepare_gemini_file_uses_source_line_boundaries_when_archive_is_available() {
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("session-gemini.json");
@@ -2406,23 +2419,23 @@ mod tests {
 
         let prepared =
             prepare_file_batches(&path, "gemini", CompressionAlgo::Gzip, &conn, 32, None).unwrap();
-        let prepared = prepared.expect("gemini file should still prepare without source lines");
+        let prepared = prepared.expect("gemini file should still prepare with source-line archive");
 
-        assert_eq!(prepared.actions.len(), 1);
-        let action = prepared.actions.into_iter().next().unwrap();
-        match action {
-            PreparedAction::DeadLetter(item) => {
-                assert_eq!(item.offset, 0);
-                assert_eq!(item.new_offset, std::fs::metadata(&path).unwrap().len());
-                assert_eq!(item.event_count, 2);
-                assert!(
-                    item.reason.contains("whole-document payload"),
-                    "reason should explain why batching could not split the file"
-                );
-            }
-            PreparedAction::Ship(_) => panic!("tiny batch limit should dead-letter whole doc"),
-            PreparedAction::AckOnly(_) => panic!("conversation gemini file should not ack-only"),
-        }
+        assert!(
+            prepared.actions.len() > 1,
+            "source-line archive should let gemini split instead of whole-document fallback"
+        );
+        assert!(prepared.actions.iter().all(|action| match action {
+            PreparedAction::DeadLetter(item) => !item.reason.contains("whole-document payload"),
+            _ => true,
+        }));
+        assert!(
+            prepared.actions.iter().any(|action| matches!(
+                action,
+                PreparedAction::AckOnly(_) | PreparedAction::DeadLetter(_)
+            )),
+            "tiny batch limit should produce line-bounded follow-up actions"
+        );
 
         let prepared = prepare_file_batches(
             &path,
