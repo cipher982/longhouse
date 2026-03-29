@@ -254,15 +254,24 @@ describe("SessionsPage", () => {
 
   it("prefetches the session workspace queries when a session card gets hover intent", async () => {
     const queryClient = createQueryClient();
-    const prefetchSpy = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
-    const setQueryDataSpy = vi.spyOn(queryClient, "setQueryData");
-    const projectionSpy = vi.spyOn(agentsApi, "fetchAgentSessionProjection").mockResolvedValue({
-      root_session_id: "session-1",
-      focus_session_id: "session-1",
-      head_session_id: "session-1",
-      path_session_ids: ["session-1"],
-      items: [],
-      total: 0,
+    const prefetchSpy = vi.spyOn(queryClient, "prefetchQuery").mockImplementation(async (options) => {
+      await options.queryFn?.();
+    });
+    const workspaceSpy = vi.spyOn(agentsApi, "fetchAgentSessionWorkspace").mockResolvedValue({
+      session: makeSession(),
+      thread: {
+        root_session_id: "session-1",
+        head_session_id: "session-1",
+        sessions: [makeSession()],
+      },
+      projection: {
+        root_session_id: "session-1",
+        focus_session_id: "session-1",
+        head_session_id: "session-1",
+        path_session_ids: ["session-1"],
+        items: [],
+        total: 0,
+      },
     });
 
     renderSessionsPage("/timeline", queryClient);
@@ -270,18 +279,17 @@ describe("SessionsPage", () => {
     fireEvent.mouseEnter(await screen.findByTestId("session-card"));
 
     await waitFor(() => {
-      expect(prefetchSpy).toHaveBeenCalledTimes(2);
-      expect(projectionSpy).toHaveBeenCalledWith("session-1", {
+      expect(prefetchSpy).toHaveBeenCalledTimes(1);
+      expect(prefetchSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryKey: ["agent-session-workspace", "session-1", { limit: 200, branch_mode: "head" }],
+          staleTime: 10_000,
+        }),
+      );
+      expect(workspaceSpy).toHaveBeenCalledWith("session-1", {
         limit: 200,
         branch_mode: "head",
       });
-      expect(setQueryDataSpy).toHaveBeenCalledWith(
-        ["agent-session-projection-infinite", "session-1", { limit: 200, branch_mode: "head" }],
-        expect.objectContaining({
-          pages: expect.any(Array),
-          pageParams: [0],
-        }),
-      );
     });
   });
 
@@ -473,6 +481,21 @@ describe("SessionsPage", () => {
 
     await waitFor(() => {
       expect(latestSessionOptions?.refetchInterval).toBe(120000);
+    });
+  });
+
+  it("waits for the initial timeline data before opening the SSE stream", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(false);
     });
   });
 

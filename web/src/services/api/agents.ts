@@ -123,6 +123,12 @@ export interface AgentSessionProjectionResponse {
   abandoned_events?: number;
 }
 
+export interface AgentSessionWorkspaceResponse {
+  session: AgentSession;
+  thread: AgentSessionThreadResponse;
+  projection: AgentSessionProjectionResponse;
+}
+
 export interface AgentSessionSummary {
   id: string;
   project: string | null;
@@ -515,6 +521,24 @@ export async function fetchAgentSessionProjection(
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/projection${queryString ? `?${queryString}` : ""}`;
 
   return request<AgentSessionProjectionResponse>(path, { method: "GET" });
+}
+
+export async function fetchAgentSessionWorkspace(
+  sessionId: string,
+  options: {
+    limit?: number;
+    branch_mode?: "head" | "all";
+  } = {},
+): Promise<AgentSessionWorkspaceResponse> {
+  const params = new URLSearchParams();
+
+  if (options.limit) params.set("limit", String(options.limit));
+  if (options.branch_mode) params.set("branch_mode", options.branch_mode);
+
+  const queryString = params.toString();
+  const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workspace${queryString ? `?${queryString}` : ""}`;
+
+  return request<AgentSessionWorkspaceResponse>(path, { method: "GET" });
 }
 
 /**

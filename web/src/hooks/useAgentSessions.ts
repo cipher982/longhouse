@@ -10,6 +10,7 @@ import {
   fetchAgentSession,
   fetchAgentSessionThread,
   fetchAgentSessionProjection,
+  fetchAgentSessionWorkspace,
   fetchAgentSessionEvents,
   fetchAgentSessionSummaries,
   fetchAgentSessionPreview,
@@ -22,6 +23,7 @@ import {
   type AgentSession,
   type AgentSessionThreadResponse,
   type AgentSessionProjectionResponse,
+  type AgentSessionWorkspaceResponse,
   type AgentEventsListResponse,
   type AgentSessionSummaryFilters,
   type AgentSessionSummaryListResponse,
@@ -104,11 +106,49 @@ export function useAgentSessionThreadWithOptions(
   });
 }
 
+type AgentSessionWorkspaceQueryOptions = Pick<
+  UseQueryOptions<AgentSessionWorkspaceResponse>,
+  "enabled" | "refetchInterval"
+>;
+
+export function useAgentSessionWorkspace(
+  sessionId: string | null,
+  options: AgentSessionWorkspaceQueryOptions & {
+    limit?: number;
+    branch_mode?: "head" | "all";
+  } = {},
+) {
+  const {
+    limit = 200,
+    branch_mode = "head",
+    enabled,
+    refetchInterval,
+  } = options;
+
+  return useQuery<AgentSessionWorkspaceResponse>({
+    queryKey: ["agent-session-workspace", sessionId, { limit, branch_mode }],
+    queryFn: () =>
+      fetchAgentSessionWorkspace(sessionId!, {
+        limit,
+        branch_mode,
+      }),
+    enabled: enabled ?? !!sessionId,
+    refetchInterval,
+    staleTime: 10_000,
+    gcTime: 5 * 60_000,
+  });
+}
+
 export function useAgentSessionProjectionInfinite(
   sessionId: string | null,
-  options: { limit?: number; enabled?: boolean; branch_mode?: "head" | "all" } = {}
+  options: {
+    limit?: number;
+    enabled?: boolean;
+    branch_mode?: "head" | "all";
+    initialPage?: AgentSessionProjectionResponse | null;
+  } = {}
 ) {
-  const { limit = 1000, enabled = true, branch_mode = "head" } = options;
+  const { limit = 1000, enabled = true, branch_mode = "head", initialPage = null } = options;
 
   return useInfiniteQuery<AgentSessionProjectionResponse>({
     queryKey: ["agent-session-projection-infinite", sessionId, { limit, branch_mode }],
@@ -124,6 +164,7 @@ export function useAgentSessionProjectionInfinite(
       return loaded < lastPage.total ? loaded : undefined;
     },
     enabled: !!sessionId && enabled,
+    initialData: initialPage ? { pages: [initialPage], pageParams: [0] } : undefined,
     staleTime: 10_000,
     gcTime: 5 * 60_000,
   });

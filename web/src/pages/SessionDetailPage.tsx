@@ -22,7 +22,7 @@ import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
-import type { AgentSession, AgentSessionThreadResponse } from "../services/api";
+import type { AgentSession, AgentSessionThreadResponse, AgentSessionWorkspaceResponse } from "../services/api";
 import {
   fetchSessionTurnTelemetry,
   type SessionTurnReview,
@@ -294,6 +294,30 @@ function SessionDetailWorkspaceRoute({
           ),
         };
       });
+      queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
+        { queryKey: ["agent-session-workspace", session.id] },
+        (current) => {
+          if (!current) {
+            return current;
+          }
+
+          return {
+            ...current,
+            session:
+              current.session.id === session.id
+                ? { ...current.session, loop_mode: updatedSession.loop_mode }
+                : current.session,
+            thread: {
+              ...current.thread,
+              sessions: current.thread.sessions.map((threadSession) =>
+                threadSession.id === session.id
+                  ? { ...threadSession, loop_mode: updatedSession.loop_mode }
+                  : threadSession,
+              ),
+            },
+          };
+        },
+      );
       setLoopModeOverride(null);
       toast.success(`Loop mode set to ${nextMode}.`);
     } catch (error) {

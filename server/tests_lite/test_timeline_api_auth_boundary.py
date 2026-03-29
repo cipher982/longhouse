@@ -196,6 +196,35 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
         api_app.dependency_overrides.clear()
 
 
+def test_timeline_session_workspace_bootstraps_session_thread_and_projection(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = _seed_session(db)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/workspace?limit=50")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert response.headers["cache-control"] == "private, max-age=5"
+        assert payload["session"]["id"] == session_id
+        assert payload["thread"]["head_session_id"] == session_id
+        assert payload["thread"]["sessions"][0]["id"] == session_id
+        assert payload["projection"]["focus_session_id"] == session_id
+        assert payload["projection"]["total"] == 0
+        assert "load_thread;dur=" in response.headers["server-timing"]
+        assert "load_projection;dur=" in response.headers["server-timing"]
+        assert "build_projection;dur=" in response.headers["server-timing"]
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
 def test_timeline_session_detail_includes_attach_command_for_native_managed_local_codex(tmp_path):
     session_local = _make_db(tmp_path)
     with session_local() as db:
