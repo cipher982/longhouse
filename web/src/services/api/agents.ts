@@ -256,6 +256,10 @@ export interface TimelineSessionStreamHandlers {
   onError?: (error: Event) => void;
 }
 
+export interface TimelineSessionStreamOptions {
+  skipInitialReplay?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // API Functions
 // ---------------------------------------------------------------------------
@@ -406,8 +410,12 @@ function parseStreamEventData<T>(event: MessageEvent): T | null {
 export function connectTimelineSessionsStream(
   filters: AgentSessionFilters = {},
   handlers: TimelineSessionStreamHandlers = {},
+  options: TimelineSessionStreamOptions = {},
 ): () => void {
   const params = buildTimelineSessionsParams(filters);
+  if (options.skipInitialReplay) {
+    params.set("skip_initial_replay", "true");
+  }
   const commisId = typeof window !== "undefined" ? window.__TEST_COMMIS_ID__ : undefined;
   if (commisId !== undefined) {
     params.set("commis", String(commisId));

@@ -178,7 +178,7 @@ function setDocumentVisibility(state: "visible" | "hidden") {
 describe("SessionsPage", () => {
   let latestFilters: AgentSessionFilters | undefined;
   let latestSessionOptions: { refetchInterval?: unknown } | undefined;
-  let latestTimelineStreamOptions: { enabled?: boolean } | undefined;
+  let latestTimelineStreamOptions: { enabled?: boolean; skipInitialReplay?: boolean } | undefined;
 
   beforeEach(() => {
     vi.useRealTimers();
@@ -209,9 +209,11 @@ describe("SessionsPage", () => {
       isLoading: false,
     });
 
-    mockUseTimelineSessionStream.mockImplementation((_filters: AgentSessionFilters, options?: { enabled?: boolean }) => {
+    mockUseTimelineSessionStream.mockImplementation(
+      (_filters: AgentSessionFilters, options?: { enabled?: boolean; skipInitialReplay?: boolean }) => {
       latestTimelineStreamOptions = options;
-    });
+      }
+    );
   });
 
   afterEach(() => {
@@ -496,6 +498,33 @@ describe("SessionsPage", () => {
 
     await waitFor(() => {
       expect(latestTimelineStreamOptions?.enabled).toBe(false);
+    });
+  });
+
+  it("does not re-skip timeline replay when reconnecting the same filter set", async () => {
+    renderSessionsPage("/timeline");
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(true);
+    });
+
+    act(() => {
+      setDocumentVisibility("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(false);
+    });
+
+    act(() => {
+      setDocumentVisibility("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => {
+      expect(latestTimelineStreamOptions?.enabled).toBe(true);
+      expect(latestTimelineStreamOptions?.skipInitialReplay).toBe(false);
     });
   });
 

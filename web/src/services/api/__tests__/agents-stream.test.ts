@@ -55,6 +55,7 @@ describe("Timeline session stream", () => {
         hide_autonomous: false,
       },
       { onSessionUpsert },
+      { skipInitialReplay: true },
     );
 
     expect(MockEventSource.instances).toHaveLength(1);
@@ -63,6 +64,7 @@ describe("Timeline session stream", () => {
     expect(MockEventSource.instances[0].url).toContain("days_back=14");
     expect(MockEventSource.instances[0].url).toContain("limit=50");
     expect(MockEventSource.instances[0].url).toContain("hide_autonomous=false");
+    expect(MockEventSource.instances[0].url).toContain("skip_initial_replay=true");
     expect(MockEventSource.instances[0].url).toContain("commis=17");
     expect(MockEventSource.instances[0].options).toEqual({ withCredentials: true });
 

@@ -832,6 +832,8 @@ export default function SessionsPage() {
   );
 
   const timelineStreamEligible = !debouncedQuery && !aiSearch && typeof EventSource !== "undefined";
+  const timelineStreamBootstrapKeysRef = useRef<Set<string>>(new Set());
+  const timelineStreamBootstrapKey = useMemo(() => JSON.stringify(filters), [filters]);
 
   // Single unified query — use SSE for live rows and keep a slow polling backstop.
   const timelineResult = useAgentSessions(filters, {
@@ -849,6 +851,15 @@ export default function SessionsPage() {
   const error = timelineResult.error;
   const refetch = timelineResult.refetch;
   const timelineStreamEnabled = timelineStreamEligible && documentVisible && !isLoading && !!data;
+  const skipInitialTimelineReplay =
+    timelineStreamEnabled && !timelineStreamBootstrapKeysRef.current.has(timelineStreamBootstrapKey);
+
+  useEffect(() => {
+    if (!timelineStreamEnabled) {
+      return;
+    }
+    timelineStreamBootstrapKeysRef.current.add(timelineStreamBootstrapKey);
+  }, [timelineStreamBootstrapKey, timelineStreamEnabled]);
 
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
   const total = data?.total || 0;
@@ -856,7 +867,10 @@ export default function SessionsPage() {
   const compatibilityMode = data?.compatibility_mode === "query_grouped";
   const hasMore = compatibilityMode ? (data?.compatibility_has_more ?? false) : sessions.length < total;
 
-  useTimelineSessionStream(filters, { enabled: timelineStreamEnabled });
+  useTimelineSessionStream(filters, {
+    enabled: timelineStreamEnabled,
+    skipInitialReplay: skipInitialTimelineReplay,
+  });
 
   const threadCards = sessions;
   const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards, relativeNowMs), [threadCards, relativeNowMs]);
