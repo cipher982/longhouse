@@ -42,7 +42,7 @@ COPY longhouse_shared /app/longhouse_shared
 COPY sitecustomize.py /app/sitecustomize.py
 RUN uv sync --frozen --no-dev \
     && /app/.venv/bin/python -m ensurepip --default-pip \
-    && /app/.venv/bin/pip install --no-cache-dir pysqlite3==0.6.0
+    && /app/.venv/bin/pip install --no-cache-dir --no-binary pysqlite3 pysqlite3==0.6.0
 
 ENV PATH="/app/.venv/bin:${PATH}"
 
