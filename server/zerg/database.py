@@ -798,6 +798,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE events ADD COLUMN event_uuid VARCHAR(255)"))
             if columns and "parent_event_uuid" not in columns:
                 conn.execute(text("ALTER TABLE events ADD COLUMN parent_event_uuid VARCHAR(255)"))
+            if columns and "raw_json_z" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN raw_json_z BLOB"))
+            if columns and "raw_json_codec" not in columns:
+                conn.execute(text("ALTER TABLE events ADD COLUMN raw_json_codec INTEGER NOT NULL DEFAULT 0"))
             dedup_idx_sql_row = conn.execute(
                 text(
                     """
@@ -866,6 +870,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
                             revision INTEGER NOT NULL DEFAULT 1,
                             is_branch_copy INTEGER NOT NULL DEFAULT 0,
                             raw_json TEXT NOT NULL,
+                            raw_json_z BLOB,
+                            raw_json_codec INTEGER NOT NULL DEFAULT 0,
                             line_hash VARCHAR(64) NOT NULL,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
@@ -882,6 +888,10 @@ def _migrate_agents_columns(engine: Engine) -> None:
                     conn.execute(text("ALTER TABLE source_lines ADD COLUMN revision INTEGER NOT NULL DEFAULT 1"))
                 if source_line_columns and "is_branch_copy" not in source_line_columns:
                     conn.execute(text("ALTER TABLE source_lines ADD COLUMN is_branch_copy INTEGER NOT NULL DEFAULT 0"))
+                if source_line_columns and "raw_json_z" not in source_line_columns:
+                    conn.execute(text("ALTER TABLE source_lines ADD COLUMN raw_json_z BLOB"))
+                if source_line_columns and "raw_json_codec" not in source_line_columns:
+                    conn.execute(text("ALTER TABLE source_lines ADD COLUMN raw_json_codec INTEGER NOT NULL DEFAULT 0"))
 
             conn.execute(
                 text(

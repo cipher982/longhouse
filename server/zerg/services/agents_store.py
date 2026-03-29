@@ -37,6 +37,10 @@ from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.raw_json_compression import CODEC_PLAIN
+from zerg.services.raw_json_compression import CODEC_ZSTD
+from zerg.services.raw_json_compression import compress_raw_json
+from zerg.services.raw_json_compression import decode_raw_json
 from zerg.session_execution_home import SessionExecutionHome
 
 logger = logging.getLogger(__name__)
@@ -1289,6 +1293,8 @@ class AgentsStore:
                     revision=1,
                     is_branch_copy=1,
                     raw_json=row.raw_json,
+                    raw_json_z=row.raw_json_z,
+                    raw_json_codec=row.raw_json_codec,
                     line_hash=row.line_hash,
                 )
             )
@@ -1323,6 +1329,8 @@ class AgentsStore:
                     event_hash=event.event_hash,
                     schema_version=event.schema_version,
                     raw_json=event.raw_json,
+                    raw_json_z=event.raw_json_z,
+                    raw_json_codec=event.raw_json_codec,
                     event_uuid=event.event_uuid,
                     parent_event_uuid=event.parent_event_uuid,
                 )
@@ -1537,6 +1545,8 @@ class AgentsStore:
                 if event_leaf_uuid:
                     leaf_uuid_hint = event_leaf_uuid
 
+                _ev_raw = event_data.raw_json
+                _ev_raw_z = compress_raw_json(_ev_raw) if _ev_raw else None
                 stmt = sqlite_insert(AgentEvent).values(
                     session_id=session_id,
                     branch_id=ingest_branch.id,
@@ -1550,7 +1560,9 @@ class AgentsStore:
                     source_path=event_data.source_path,
                     source_offset=event_data.source_offset,
                     event_hash=event_hash,
-                    raw_json=event_data.raw_json,
+                    raw_json=None,
+                    raw_json_z=_ev_raw_z,
+                    raw_json_codec=CODEC_ZSTD if _ev_raw_z else CODEC_PLAIN,
                     schema_version=1,
                     event_uuid=event_uuid,
                     parent_event_uuid=parent_event_uuid,
@@ -1616,6 +1628,8 @@ class AgentsStore:
                 continue
 
             revision = prev_revision + 1
+            _sl_raw = line_data.raw_json
+            _sl_raw_z = compress_raw_json(_sl_raw) if _sl_raw else None
             stmt = sqlite_insert(AgentSourceLine).values(
                 session_id=session_id,
                 source_path=line_data.source_path,
@@ -1623,7 +1637,9 @@ class AgentsStore:
                 branch_id=ingest_branch.id,
                 revision=revision,
                 is_branch_copy=0,
-                raw_json=line_data.raw_json,
+                raw_json="" if _sl_raw_z else (_sl_raw or ""),
+                raw_json_z=_sl_raw_z,
+                raw_json_codec=CODEC_ZSTD if _sl_raw_z else CODEC_PLAIN,
                 line_hash=line_hash,
             )
             stmt = stmt.on_conflict_do_nothing(
@@ -2416,13 +2432,13 @@ class AgentsStore:
             select(AgentEvent)
             .where(AgentEvent.session_id == session_id)
             .where(AgentEvent.role == "system")
-            .where(AgentEvent.raw_json.isnot(None))
+            .where(or_(AgentEvent.raw_json.isnot(None), AgentEvent.raw_json_z.isnot(None)))
             .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
         )
         stmt = self._apply_branch_mode_filter(stmt, session_id, branch_mode)
         rows = list(self.db.execute(stmt).scalars().all())
         for event in rows:
-            if not self._is_compaction_boundary_raw_json(event.raw_json):
+            if not self._is_compaction_boundary_raw_json(decode_raw_json(event)):
                 continue
             source_offset = int(event.source_offset) if event.source_offset is not None else None
             return CompactionBoundary(
@@ -2653,7 +2669,8 @@ class AgentsStore:
             ).all()
         if source_lines:
             if branch_mode == "all":
-                lines = [row.raw_json for row in source_lines]
+                lines = [decode_raw_json(row) for row in source_lines]
+                lines = [line for line in lines if line is not None]
             else:
                 latest_by_offset: dict[tuple[str, int], AgentSourceLine] = {}
                 for row in source_lines:
@@ -2679,7 +2696,8 @@ class AgentsStore:
                         len(path_counts),
                         primary_path,
                     )
-                lines = [row.raw_json for row in normalized_source_lines if row.source_path == primary_path]
+                lines = [decode_raw_json(row) for row in normalized_source_lines if row.source_path == primary_path]
+                lines = [line for line in lines if line is not None]
             content = "\n".join(lines) + "\n" if lines else ""
             return content.encode("utf-8"), session
 
@@ -2694,7 +2712,7 @@ class AgentsStore:
         events = list(self.db.execute(events_stmt).scalars().all())
 
         # Check if we have raw_json available (lossless path)
-        has_raw_json = any(event.raw_json for event in events)
+        has_raw_json = any(decode_raw_json(event) for event in events)
 
         lines = []
         if has_raw_json:
@@ -2702,11 +2720,12 @@ class AgentsStore:
             # Multiple events from the same JSONL line share the same offset
             seen_offsets: set[tuple[str | None, int | None]] = set()
             for event in events:
-                if event.raw_json:
+                _raw = decode_raw_json(event)
+                if _raw:
                     key = (event.source_path, event.source_offset)
                     if key not in seen_offsets:
                         seen_offsets.add(key)
-                        lines.append(event.raw_json)
+                        lines.append(_raw)
                 else:
                     # Mixed case: some events have raw_json, some don't
                     # Fall back to synthesized for this event
