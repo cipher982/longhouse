@@ -5,6 +5,10 @@ single run, converting codec=0 (plain text) rows to codec=1 (zstd-compressed).
 Work is chunked only to bound transaction size and memory use; the job keeps
 looping until nothing compressible remains.
 
+This scheduled job is the live-instance safety net. For large one-time backlog
+clearance, use ``scripts/ops/backfill_raw_json.py`` to run an aggressive
+operator-managed pass to completion.
+
 Legacy ``events`` rows with ``raw_json IS NULL`` are intentionally ignored:
 there is no original payload to compress, so they are not part of this
 backfill's completion criteria.

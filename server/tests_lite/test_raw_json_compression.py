@@ -8,12 +8,17 @@ Covers:
 - export of compressed rows produces original bytes
 - mixed legacy (codec=0) + new (codec=1) rows export correctly
 - branch copy preserves codec fields
+- standalone backfill script drains legacy rows end-to-end
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
+import os
+from pathlib import Path
+import subprocess
+import sys
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
@@ -438,3 +443,60 @@ def test_compress_raw_json_job_leaves_event_rows_without_raw_payload_uncompresse
     assert rows[1].raw_json is None
     assert rows[1].raw_json_codec == CODEC_ZSTD
     assert rows[1].raw_json_z is not None
+
+
+def test_backfill_raw_json_script_drains_legacy_rows(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    engine = SessionLocal.kw["bind"]
+    db_path = Path(engine.url.database)
+    _seed_legacy_rows(
+        SessionLocal,
+        source_lines=[
+            '{"type":"system","content":"first legacy line"}',
+            "",
+        ],
+        events=[
+            None,
+            '{"type":"assistant","content":"compress me"}',
+        ],
+    )
+
+    repo_root = Path(__file__).resolve().parents[2]
+    script_path = repo_root / "scripts" / "ops" / "backfill_raw_json.py"
+    env = os.environ.copy()
+    env["DATABASE_URL"] = f"sqlite:///{db_path}"
+    env["RAW_JSON_BACKFILL_ROWS_PER_TX"] = "2"
+    env["RAW_JSON_BACKFILL_WORKERS"] = "1"
+
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        f"script exited {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert "backfill complete" in result.stdout
+
+    with SessionLocal() as db:
+        source_lines = db.query(AgentSourceLine).order_by(AgentSourceLine.source_offset.asc()).all()
+        events = db.query(AgentEvent).order_by(AgentEvent.source_offset.asc()).all()
+
+    assert [row.raw_json_codec for row in source_lines] == [CODEC_ZSTD, CODEC_ZSTD]
+    assert [row.raw_json for row in source_lines] == ["", ""]
+    assert [decode_raw_json(row) for row in source_lines] == [
+        '{"type":"system","content":"first legacy line"}',
+        "",
+    ]
+
+    assert events[0].raw_json_codec == CODEC_PLAIN
+    assert events[0].raw_json is None
+    assert events[0].raw_json_z is None
+
+    assert events[1].raw_json_codec == CODEC_ZSTD
+    assert events[1].raw_json is None
+    assert events[1].raw_json_z is not None
