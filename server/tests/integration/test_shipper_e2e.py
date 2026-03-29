@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import base64
 import os
+import sqlite3
 import socket
 import subprocess
 import time
@@ -171,6 +172,22 @@ def _get_events(server: str | dict[str, str], session_id: str) -> list[dict]:
     return data.get("events", data) if isinstance(data, dict) else data
 
 
+def _export_session(server: str | dict[str, str], session_id: str) -> bytes:
+    r = requests.get(
+        f"{_server_url(server)}/api/agents/sessions/{session_id}/export",
+        headers={"X-Agents-Token": _server_token(server)},
+        timeout=10,
+    )
+    r.raise_for_status()
+    return r.content
+
+
+def _sqlite_rows(server: dict[str, str], query: str, params: tuple[object, ...] = ()) -> list[sqlite3.Row]:
+    with sqlite3.connect(server["db_path"]) as conn:
+        conn.row_factory = sqlite3.Row
+        return conn.execute(query, params).fetchall()
+
+
 # ---------------------------------------------------------------------------
 # Server fixture (module-scoped — started once, shared across all tests)
 # ---------------------------------------------------------------------------
@@ -219,7 +236,7 @@ def server(tmp_path_factory):
 
     try:
         _wait_ready(base_url, proc)
-        yield {"url": base_url, "token": _mint_device_token(base_url)}
+        yield {"url": base_url, "token": _mint_device_token(base_url), "db_path": str(db_path)}
     finally:
         proc.terminate()
         try:
@@ -472,3 +489,70 @@ class TestCodexShipping:
         assert len(events_after) == len(events_before), (
             f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
         )
+
+
+@pytest.mark.parametrize(
+    ("fixture", "provider", "session_id", "expect_event_raw_payload"),
+    [
+        (CLAUDE_FIXTURE, "claude", CLAUDE_SESSION_ID, True),
+        (GEMINI_FIXTURE, "gemini", GEMINI_SESSION_ID, False),
+        (CODEX_FIXTURE, "codex", CODEX_SESSION_ID, True),
+    ],
+)
+def test_archival_rows_are_stored_compressed_on_real_ingest(
+    server,
+    tmp_path,
+    fixture: str,
+    provider: str,
+    session_id: str,
+    expect_event_raw_payload: bool,
+):
+    """Full shipper path must persist archival payloads in codec=1 form."""
+
+    _ship(fixture, server, provider, tmp_path / f"{provider}-storage.db")
+
+    event_rows = _sqlite_rows(
+        server,
+        "SELECT raw_json, raw_json_z, raw_json_codec FROM events WHERE session_id = ? ORDER BY id",
+        (session_id,),
+    )
+    source_line_rows = _sqlite_rows(
+        server,
+        "SELECT raw_json, raw_json_z, raw_json_codec FROM source_lines WHERE session_id = ? ORDER BY id",
+        (session_id,),
+    )
+
+    assert event_rows, f"{provider} ingest produced no event rows"
+    assert source_line_rows, f"{provider} ingest produced no source_line rows"
+    assert all(row["raw_json_codec"] == 1 for row in source_line_rows)
+    assert all(row["raw_json_z"] is not None for row in source_line_rows)
+    assert all(row["raw_json"] == "" for row in source_line_rows)
+
+    compressed_event_rows = [row for row in event_rows if row["raw_json_z"] is not None]
+    legacy_null_event_rows = [row for row in event_rows if row["raw_json_z"] is None]
+
+    assert all(row["raw_json"] is None for row in event_rows)
+    assert all(row["raw_json_codec"] == 1 for row in compressed_event_rows)
+    assert all(row["raw_json_codec"] == 0 for row in legacy_null_event_rows)
+    if expect_event_raw_payload:
+        assert len(compressed_event_rows) == len(event_rows), (
+            f"{provider} ingest should preserve raw payloads on every event row"
+        )
+
+
+@pytest.mark.parametrize(
+    ("fixture", "provider", "session_id"),
+    [
+        (CLAUDE_FIXTURE, "claude", CLAUDE_SESSION_ID),
+        (GEMINI_FIXTURE, "gemini", GEMINI_SESSION_ID),
+        (CODEX_FIXTURE, "codex", CODEX_SESSION_ID),
+    ],
+)
+def test_export_roundtrip_matches_original_fixture_bytes(server, tmp_path, fixture: str, provider: str, session_id: str):
+    """The exact shipped transcript must remain exportable after compressed ingest."""
+
+    _ship(fixture, server, provider, tmp_path / f"{provider}-export.db")
+
+    exported = _export_session(server, session_id)
+    expected = (FIXTURES_DIR / fixture).read_bytes()
+    assert exported == expected

@@ -598,10 +598,30 @@ fn scan_codex_session_meta(path: &Path) -> Option<ScannedCodexSessionMeta> {
 /// therefore always parse from offset 0 and return `file_size` as
 /// `last_good_offset`.  The ingest backend deduplicates events by hash,
 /// so re-shipping an unchanged session is harmless.
+fn capture_text_source_lines(content: &str) -> Vec<ParsedSourceLine> {
+    if content.is_empty() {
+        return Vec::new();
+    }
+
+    let mut source_lines = Vec::new();
+    let mut offset = 0u64;
+    for chunk in content.split_inclusive('\n') {
+        let trimmed = chunk.strip_suffix('\n').unwrap_or(chunk);
+        let raw_line = trimmed.strip_suffix('\r').unwrap_or(trimmed).to_string();
+        source_lines.push(ParsedSourceLine {
+            source_offset: offset,
+            raw_line,
+        });
+        offset += chunk.as_bytes().len() as u64;
+    }
+    source_lines
+}
+
 fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
     let file_size = content.len() as u64;
+    let source_lines = capture_text_source_lines(&content);
 
     let session: GeminiSession = match serde_json::from_str(&content) {
         Ok(s) => s,
@@ -670,7 +690,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
     }
 
     let messages = session.messages.unwrap_or_default();
-    let candidate_records = messages.len();
+    let mut candidate_records = 0;
 
     for msg in messages {
         let msg_type = msg.r#type.as_deref().unwrap_or("");
@@ -696,6 +716,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
 
         match msg_type {
             "user" => {
+                candidate_records += 1;
                 let text = msg.content.as_ref().and_then(extract_gemini_text);
                 if let Some(text) = text {
                     events.push(ParsedEvent {
@@ -715,6 +736,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
                 }
             }
             "gemini" => {
+                candidate_records += 1;
                 // Assistant text response
                 let text = msg.content.as_ref().and_then(extract_gemini_text);
                 if let Some(text) = text {
@@ -813,7 +835,7 @@ fn parse_gemini_json(path: &Path, session_id: &str) -> Result<ParseResult> {
 
     Ok(ParseResult {
         events,
-        source_lines: Vec::new(),
+        source_lines,
         last_good_offset: file_size,
         candidate_records,
         metadata,
@@ -2623,6 +2645,30 @@ mod tests {
             "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
         );
         assert!(result.metadata.started_at.is_some());
+    }
+
+    #[test]
+    fn test_gemini_preserves_full_source_lines_for_lossless_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_json = "{\n  \"sessionId\": \"a1b2c3d4-e5f6-7890-abcd-ef1234567890\",\n  \"messages\": [\n    {\n      \"id\": \"11111111-1111-1111-1111-111111111111\",\n      \"timestamp\": \"2026-01-10T10:00:00Z\",\n      \"type\": \"user\",\n      \"content\": \"What is 2+2?\"\n    }\n  ]\n}\n";
+        let path = make_json_file(
+            dir.path(),
+            "session-2026-01-10T10-00-00-a1b2c3d4.json",
+            session_json,
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert!(!result.source_lines.is_empty());
+        assert_eq!(result.source_lines[0].source_offset, 0);
+
+        let rebuilt = result
+            .source_lines
+            .iter()
+            .map(|line| line.raw_line.as_str())
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        assert_eq!(rebuilt, session_json);
     }
 
     #[test]
