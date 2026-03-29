@@ -3,13 +3,13 @@ from __future__ import annotations
 import time
 from datetime import datetime
 from datetime import timezone
-from uuid import uuid4
 from unittest.mock import patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-import zerg.dependencies.auth as auth_deps
 import zerg.dependencies.agents_auth as agents_auth_deps
+import zerg.dependencies.auth as auth_deps
 from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.auth.session_tokens import _encode_jwt
@@ -20,10 +20,10 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.main import api_app
 from zerg.models import User
-from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
-from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.models.agents import AgentSession
 from zerg.services.managed_local_tmux import build_tmux_attach_command
+from zerg.services.managed_local_transport import build_managed_local_attach_command
 
 
 def _make_db(tmp_path):
@@ -191,6 +191,51 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
         assert payload["attach_command"] == build_tmux_attach_command(session_name="lh-codex-managed-local")
         assert "load_session;dur=" in response.headers["server-timing"]
         assert "build_response;dur=" in response.headers["server-timing"]
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_detail_includes_attach_command_for_native_claude_bridge(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        session = AgentSession(
+            id=uuid4(),
+            provider="claude",
+            environment="development",
+            project="timeline-auth",
+            device_id="work-laptop",
+            cwd="/tmp/timeline-auth",
+            git_repo=None,
+            git_branch="main",
+            started_at=datetime.now(timezone.utc),
+            ended_at=None,
+            provider_session_id="provider-123",
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+            execution_home="managed_local",
+            managed_transport="claude_channel_bridge",
+            source_runner_id=9,
+            source_runner_name="work-laptop",
+        )
+        db.add(session)
+        db.commit()
+        session_id = str(session.id)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["execution_home"] == "managed_local"
+        assert payload["source_runner_name"] == "work-laptop"
+        assert payload["attach_command"] == build_managed_local_attach_command(session=session)
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

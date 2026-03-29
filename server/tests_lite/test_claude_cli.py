@@ -62,6 +62,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
                 "provider_session_id": "provider-123",
                 "attach_command": "zsh -lc 'exec tmux attach -t lh-demo'",
                 "source_runner_name": "work-laptop",
+                "managed_transport": "tmux",
             },
         )
     )
@@ -82,6 +83,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
     assert result.session_id == "session-123"
     assert result.provider_session_id == "provider-123"
     assert result.attach_command == "zsh -lc 'exec tmux attach -t lh-demo'"
+    assert result.managed_transport == "tmux"
     assert fake_client.calls == [
         {
             "url": "https://longhouse.test/api/sessions/managed-local/this-device",
@@ -152,3 +154,79 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
     assert "Attaching..." in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert attach_calls == ["zsh -lc 'exec tmux attach -t lh-demo'"]
+
+
+def test_claude_command_starts_native_channel_bridge_when_api_returns_native_transport(monkeypatch, tmp_path):
+    runner = CliRunner()
+    open_calls: list[str] = []
+    prepare_calls: list[tuple[str, str, str, str | None]] = []
+    native_launch_calls: list[tuple[str, str, str, str, str]] = []
+
+    monkeypatch.setattr(
+        claude_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        claude_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: claude_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command=(
+                "zsh -lc 'exec claude-code --resume provider-123 "
+                "--dangerously-load-development-channels server:longhouse-channel'"
+            ),
+            source_runner_name="work-laptop",
+            managed_transport="claude_channel_bridge",
+        ),
+    )
+    monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: True)
+    monkeypatch.setattr(
+        claude_cli,
+        "_ensure_native_claude_prereqs",
+        lambda *, base_url, token, workspace_path, config_dir: prepare_calls.append(
+            (base_url, token, str(workspace_path), str(config_dir) if config_dir else None)
+        ),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_run_native_claude_tui",
+        lambda *, session_id, provider_session_id, cwd, base_url, token: native_launch_calls.append(
+            (session_id, provider_session_id, str(cwd), base_url, token)
+        )
+        or 0,
+    )
+    monkeypatch.setattr(claude_cli, "_open_session_url", lambda url: open_calls.append(url) or True)
+
+    result = runner.invoke(
+        app,
+        [
+            "claude",
+            "--cwd",
+            str(tmp_path),
+            "--project",
+            "demo",
+            "--loop-mode",
+            "assist",
+            "--name",
+            "Demo session",
+            "--open",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Managed local Claude session launched on this device." in result.output
+    assert (
+        "Attach: zsh -lc 'exec claude-code --resume provider-123 "
+        "--dangerously-load-development-channels server:longhouse-channel'" in result.output
+    )
+    assert "Preparing native Claude bridge..." in result.output
+    assert "Opening session in browser..." in result.output
+    assert "Launching native Claude..." in result.output
+    assert prepare_calls == [("https://longhouse.test", "zdt_test_token", str(tmp_path), None)]
+    assert native_launch_calls == [
+        ("session-123", "provider-123", str(tmp_path), "https://longhouse.test", "zdt_test_token")
+    ]
+    assert open_calls == ["https://longhouse.test/timeline/session-123"]

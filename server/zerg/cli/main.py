@@ -21,6 +21,7 @@ import typer
 
 import zerg.bootstrap_sqlite  # noqa: F401
 from zerg.cli.claude import claude
+from zerg.cli.claude_channel import app as claude_channel_app
 from zerg.cli.codex import codex
 from zerg.cli.connect import app as connect_app
 from zerg.cli.doctor import doctor
@@ -75,6 +76,7 @@ def config_show() -> None:
 app.add_typer(connect_app, name="session", help="Session shipping commands")
 app.add_typer(serve_app, name="server", help="Server management commands")
 app.add_typer(config_app, name="config", help="Configuration management")
+app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
 
 # Top-level commands for quick access
 # Server commands (primary use case)

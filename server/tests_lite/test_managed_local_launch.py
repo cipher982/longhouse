@@ -488,7 +488,6 @@ def test_launch_managed_local_session_rejects_unknown_runner_for_native_codex_tr
             api_app_ref.dependency_overrides = {}
 
 
-
 def test_launch_managed_local_session_accepts_shell_wrapper_when_capture_has_output(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 
@@ -626,23 +625,17 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             )
             assert response.status_code == 200, response.text
             payload = response.json()
+            assert payload["managed_transport"] == "claude_channel_bridge"
             assert payload["source_runner_name"] == "work-laptop"
+            assert "claude-code --resume" in payload["attach_command"]
+            assert "server:longhouse-channel" in payload["attach_command"]
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.source_runner_id == runner.id
             assert session.source_runner_name == "work-laptop"
-            assert dispatcher.calls[0]["owner_id"] == user.id
-            assert dispatcher.calls[0]["runner_id"] == runner.id
-            launch_inner = _inner_command(dispatcher.calls[2]["command"])
-            assert "export LONGHOUSE_HOOK_URL=http://testserver" in launch_inner
-            token_fragment = launch_inner.split("export LONGHOUSE_HOOK_TOKEN=", 1)[1].split(";", 1)[0].strip()
-            hook_token = shlex.split(token_fragment)[0]
-            auth = validate_managed_local_hook_token(hook_token)
-            assert auth is not None
-            assert auth.owner_id == user.id
-            assert auth.session_id == payload["session_id"]
-            assert auth.project == "hiring"
-            assert auth.device_id == "work-laptop"
+            assert session.managed_transport == "claude_channel_bridge"
+            assert session.managed_tmux_tmpdir is None
+            assert dispatcher.calls == []
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -738,8 +731,10 @@ def test_launch_managed_local_this_device_prefers_forwarded_https_hook_url(monke
                 },
             )
             assert response.status_code == 200, response.text
-            launch_inner = _inner_command(dispatcher.calls[2]["command"])
-            assert "export LONGHOUSE_HOOK_URL=https://david010.longhouse.ai" in launch_inner
+            payload = response.json()
+            assert payload["managed_transport"] == "claude_channel_bridge"
+            assert "server:longhouse-channel" in payload["attach_command"]
+            assert dispatcher.calls == []
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -796,7 +791,6 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
-
 def test_launch_managed_local_rejects_invalid_provider(monkeypatch, tmp_path):
     """Launching with an unsupported provider returns 400."""
     session_local = _make_db(tmp_path)
@@ -828,7 +822,6 @@ def test_launch_managed_local_rejects_invalid_provider(monkeypatch, tmp_path):
             assert "Unsupported provider" in response.json()["detail"]
         finally:
             api_app_ref.dependency_overrides = {}
-
 
 
 def test_launch_managed_local_this_device_falls_back_from_stale_token_owner(monkeypatch, tmp_path):
@@ -863,11 +856,12 @@ def test_launch_managed_local_this_device_falls_back_from_stale_token_owner(monk
             )
             assert response.status_code == 200, response.text
             payload = response.json()
+            assert payload["managed_transport"] == "claude_channel_bridge"
             assert payload["source_runner_name"] == "cinder"
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.source_runner_id == runner.id
-            assert dispatcher.calls[0]["owner_id"] == user.id
-            assert dispatcher.calls[0]["runner_id"] == runner.id
+            assert session.managed_transport == "claude_channel_bridge"
+            assert dispatcher.calls == []
         finally:
             api_app_ref.dependency_overrides = {}

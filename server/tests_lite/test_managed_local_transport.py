@@ -55,6 +55,26 @@ def test_build_managed_local_attach_command_uses_engine_bridge_for_codex_app_ser
     assert 'exec "$engine" codex-bridge attach --session-id session-123' in inner
 
 
+def test_build_managed_local_attach_command_uses_native_claude_resume_for_channel_bridge():
+    session = SimpleNamespace(
+        id="session-123",
+        provider_session_id="provider-123",
+        cwd="/tmp/demo",
+        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+    )
+
+    command = build_managed_local_attach_command(session=session)
+    assert command is not None
+    inner = _wrapped_inner(command)
+    assert "export LONGHOUSE_SESSION_ID=session-123" in inner
+    assert "export LONGHOUSE_CHANNEL_SESSION_ID=session-123" in inner
+    assert "export LONGHOUSE_PROVIDER_SESSION_ID=provider-123" in inner
+    assert (
+        "exec claude-code --resume provider-123 --dangerously-load-development-channels server:longhouse-channel"
+        in inner
+    )
+
+
 def test_build_managed_local_send_text_command_uses_engine_bridge_for_codex_app_server():
     session = SimpleNamespace(
         id="session-123",
@@ -66,6 +86,18 @@ def test_build_managed_local_send_text_command_uses_engine_bridge_for_codex_app_
     inner = _wrapped_inner(command)
     assert 'engine="$(command -v longhouse-engine || true)"' in inner
     assert '"$engine" codex-bridge send --session-id session-123 --text continue' in inner
+
+
+def test_build_managed_local_send_text_command_uses_local_bridge_for_claude_channel_transport():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+        provider="claude",
+    )
+
+    command = build_managed_local_send_text_command(session=session, text="continue")
+    inner = _wrapped_inner(command)
+    assert "exec longhouse claude-channel send --session-id session-123 --text continue" in inner
 
 
 def test_build_managed_local_send_text_command_uses_codex_bracketed_paste_for_tmux():
@@ -94,6 +126,17 @@ def test_build_managed_local_interrupt_command_uses_engine_bridge_for_codex_app_
     assert '"$engine" codex-bridge interrupt --session-id session-123' in inner
 
 
+def test_build_managed_local_interrupt_command_uses_local_bridge_for_claude_channel_transport():
+    session = SimpleNamespace(
+        id="session-123",
+        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
+    )
+
+    command = build_managed_local_interrupt_command(session=session)
+    inner = _wrapped_inner(command)
+    assert "exec longhouse claude-channel interrupt --session-id session-123" in inner
+
+
 def test_build_managed_local_interrupt_command_uses_tmux_c_c_for_tmux():
     session = SimpleNamespace(
         managed_transport=ManagedSessionTransport.TMUX.value,
@@ -109,3 +152,7 @@ def test_build_managed_local_interrupt_command_uses_tmux_c_c_for_tmux():
 def test_transport_for_provider():
     assert ManagedSessionTransport.for_provider("codex") == ManagedSessionTransport.CODEX_APP_SERVER
     assert ManagedSessionTransport.for_provider("claude") == ManagedSessionTransport.TMUX
+    assert (
+        ManagedSessionTransport.for_provider("claude", machine_name="work-laptop")
+        == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
+    )

@@ -265,6 +265,37 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
         assert "status? [ok]" in second_command
 
 
+def test_send_text_to_managed_local_session_uses_claude_channel_bridge_command(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    with SessionLocal() as db:
+        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        session.managed_transport = "claude_channel_bridge"
+        session.managed_tmux_tmpdir = None
+        db.commit()
+
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="continue from loop",
+                commis_id="managed-local-claude-channel",
+            )
+        )
+
+        assert result.ok is True
+        assert len(dispatcher.calls) == 1
+        assert dispatcher.calls[0]["runner_id"] == runner.id
+        assert dispatcher.calls[0]["commis_id"] == "managed-local-claude-channel"
+        command = str(dispatcher.calls[0]["command"])
+        assert "exec longhouse claude-channel send --session-id" in command
+        assert "--text" in command
+        assert "continue from loop" in command
+
+
 def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_path):
     SessionLocal = _make_db(tmp_path)
 
@@ -275,8 +306,15 @@ def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_pa
 
         command = build_managed_local_claude_ship_command(session=session)
 
-        assert 'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:$PATH"' in command
-        assert "if ! command -v longhouse-engine >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in command
+        assert (
+            'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:'
+            "/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:"
+            '/home/linuxbrew/.linuxbrew/sbin:$PATH"' in command
+        )
+        assert (
+            "if ! command -v longhouse-engine >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi"
+            in command
+        )
         assert "command -v longhouse-engine" in command
         assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
         assert f"--session-id {session.id}" in command
@@ -320,7 +358,10 @@ def test_managed_local_claude_ship_retry_schedule_is_dense_in_first_second():
         2.0,
         2.0,
     )
-    assert MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL == "0 0.05 0.05 0.05 0.05 0.05 0.25 0.25 0.25 0.25 0.25 0.5 1 1 2 2"
+    assert (
+        MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
+        == "0 0.05 0.05 0.05 0.05 0.05 0.25 0.25 0.25 0.25 0.25 0.5 1 1 2 2"
+    )
     post_one_second_attempts = [
         attempt for attempt in MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS if attempt >= 1.0
     ]
