@@ -49,6 +49,7 @@ from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import resolve_execution_home
 from zerg.services.session_views import resolve_runtime_overlay
+from zerg.utils.server_timing import ServerTimingRecorder
 
 logger = logging.getLogger(__name__)
 
@@ -597,6 +598,7 @@ async def preview_session(
 
 @router.get("/filters", response_model=FiltersResponse)
 async def get_filters(
+    response: Response,
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
@@ -605,7 +607,10 @@ async def get_filters(
     """Get distinct filter values for UI dropdowns."""
     try:
         store = AgentsStore(db)
-        filters = store.get_distinct_filters(days_back=days_back)
+        timing = ServerTimingRecorder()
+        with timing.span("distinct_filters"):
+            filters = store.get_distinct_filters(days_back=days_back)
+        timing.apply(response)
         return FiltersResponse(
             projects=filters["projects"],
             providers=filters["providers"],
@@ -669,13 +674,17 @@ async def set_session_loop_mode(
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: UUID,
+    response: Response,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionResponse:
     """Get a single session by ID."""
     store = AgentsStore(db)
-    session = store.get_session(session_id)
+    timing = ServerTimingRecorder()
+
+    with timing.span("load_session"):
+        session = store.get_session(session_id)
 
     if not session:
         raise HTTPException(
@@ -683,72 +692,93 @@ async def get_session(
             detail=f"Session {session_id} not found",
         )
 
-    activity_map = store.get_last_activity_map([session.id])
-    presence_map = load_presence_map(db, [session.id])
-    runtime_state_map = load_runtime_state_map(db, [session.id])
-    first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
+    with timing.span("load_activity"):
+        activity_map = store.get_last_activity_map([session.id])
+    with timing.span("load_presence"):
+        presence_map = load_presence_map(db, [session.id])
+    with timing.span("load_runtime"):
+        runtime_state_map = load_runtime_state_map(db, [session.id])
+    with timing.span("load_first_user"):
+        first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
     now = datetime.now(timezone.utc)
-    return build_session_response(
-        store,
-        session,
-        last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-        runtime_overlay=resolve_runtime_overlay(
+    with timing.span("build_response"):
+        result = build_session_response(
+            store,
             session,
             last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-            presence_map=presence_map,
-            runtime_state_map=runtime_state_map,
-            now=now,
-        ),
-        first_user_message=first_user_map.get(session.id),
-    )
+            runtime_overlay=resolve_runtime_overlay(
+                session,
+                last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
+                presence_map=presence_map,
+                runtime_state_map=runtime_state_map,
+                now=now,
+            ),
+            first_user_message=first_user_map.get(session.id),
+        )
+    timing.apply(response)
+    return result
 
 
 @router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)
 async def get_session_thread(
     session_id: UUID,
+    response: Response,
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionThreadResponse:
     """Get all concrete continuations in a logical thread."""
     store = AgentsStore(db)
-    session = store.get_session(session_id)
+    timing = ServerTimingRecorder()
+
+    with timing.span("load_session"):
+        session = store.get_session(session_id)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Session {session_id} not found",
         )
 
-    thread_sessions = store.list_thread_sessions(session)
-    head = store.get_thread_head(session)
-    activity_map = store.get_last_activity_map([item.id for item in thread_sessions])
-    presence_map = load_presence_map(db, [item.id for item in thread_sessions])
-    runtime_state_map = load_runtime_state_map(db, [item.id for item in thread_sessions])
-    first_user_map = store.get_first_message_map([item.id for item in thread_sessions], role="user", max_len=80)
+    with timing.span("load_thread"):
+        thread_sessions = store.list_thread_sessions(session)
+    with timing.span("load_head"):
+        head = store.get_thread_head(session)
+    thread_session_ids = [item.id for item in thread_sessions]
+    with timing.span("load_activity"):
+        activity_map = store.get_last_activity_map(thread_session_ids)
+    with timing.span("load_presence"):
+        presence_map = load_presence_map(db, thread_session_ids)
+    with timing.span("load_runtime"):
+        runtime_state_map = load_runtime_state_map(db, thread_session_ids)
+    with timing.span("load_first_user"):
+        first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = {}
     now = datetime.now(timezone.utc)
 
-    return SessionThreadResponse(
-        root_session_id=str(session.thread_root_session_id or session.id),
-        head_session_id=str(head.id if head else session.id),
-        sessions=[
-            build_session_response(
-                store,
-                item,
-                thread_cache=thread_cache,
-                last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
-                runtime_overlay=resolve_runtime_overlay(
+    with timing.span("build_response"):
+        result = SessionThreadResponse(
+            root_session_id=str(session.thread_root_session_id or session.id),
+            head_session_id=str(head.id if head else session.id),
+            sessions=[
+                build_session_response(
+                    store,
                     item,
+                    thread_cache=thread_cache,
                     last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
-                    presence_map=presence_map,
-                    runtime_state_map=runtime_state_map,
-                    now=now,
-                ),
-                first_user_message=first_user_map.get(item.id),
-            )
-            for item in thread_sessions
-        ],
-    )
+                    runtime_overlay=resolve_runtime_overlay(
+                        item,
+                        last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
+                        presence_map=presence_map,
+                        runtime_state_map=runtime_state_map,
+                        now=now,
+                    ),
+                    first_user_message=first_user_map.get(item.id),
+                )
+                for item in thread_sessions
+            ],
+        )
+    timing.apply(response)
+    return result
 
 
 @router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
@@ -839,6 +869,7 @@ async def get_session_events(
 @router.get("/sessions/{session_id}/projection", response_model=SessionProjectionResponse)
 async def get_session_projection(
     session_id: UUID,
+    response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
@@ -848,8 +879,10 @@ async def get_session_projection(
 ) -> SessionProjectionResponse:
     """Get the stitched lineage-path projection for a focused session."""
     store = AgentsStore(db)
+    timing = ServerTimingRecorder()
 
-    session = store.get_session(session_id)
+    with timing.span("load_session"):
+        session = store.get_session(session_id)
     if not session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -862,13 +895,15 @@ async def get_session_projection(
             detail="branch_mode must be one of: head, all",
         )
 
-    projection = store.get_session_projection_page(
-        session,
-        branch_mode=branch_mode,
-        limit=limit,
-        offset=offset,
-    )
-    head = store.get_thread_head(session)
+    with timing.span("load_projection"):
+        projection = store.get_session_projection_page(
+            session,
+            branch_mode=branch_mode,
+            limit=limit,
+            offset=offset,
+        )
+    with timing.span("load_head"):
+        head = store.get_thread_head(session)
     active_context_boundary_cache: dict[UUID, int | None] = {}
     head_branch_id_cache: dict[UUID, int | None] = {}
 
@@ -885,48 +920,53 @@ async def get_session_projection(
             head_branch_id_cache[current_session_id] = store.get_head_branch_id(current_session_id)
         return head_branch_id_cache[current_session_id]
 
-    items: list[SessionProjectionItemResponse] = []
-    for item in projection.items:
-        if item.kind == "event" and item.event is not None:
+    with timing.span("build_response"):
+        items: list[SessionProjectionItemResponse] = []
+        for item in projection.items:
+            if item.kind == "event" and item.event is not None:
+                items.append(
+                    SessionProjectionItemResponse(
+                        kind="event",
+                        session_id=str(item.session.id),
+                        timestamp=item.event.timestamp,
+                        event=build_event_response(
+                            store,
+                            item.event,
+                            boundary=get_boundary(item.session.id),
+                            head_branch_id=get_head_branch_id(item.session.id),
+                        ),
+                    )
+                )
+                continue
+
             items.append(
                 SessionProjectionItemResponse(
-                    kind="event",
+                    kind="seam",
                     session_id=str(item.session.id),
-                    timestamp=item.event.timestamp,
-                    event=build_event_response(
-                        store,
-                        item.event,
-                        boundary=get_boundary(item.session.id),
-                        head_branch_id=get_head_branch_id(item.session.id),
+                    timestamp=item.session.started_at,
+                    continued_from_session_id=(
+                        str(item.session.continued_from_session_id) if item.session.continued_from_session_id else None
                     ),
+                    continuation_kind=item.session.continuation_kind,
+                    origin_label=item.session.origin_label,
+                    parent_origin_label=(item.parent_session.origin_label if item.parent_session else None),
+                    parent_continuation_kind=(item.parent_session.continuation_kind if item.parent_session else None),
+                    branched_from_event_id=item.session.branched_from_event_id,
                 )
             )
-            continue
 
-        items.append(
-            SessionProjectionItemResponse(
-                kind="seam",
-                session_id=str(item.session.id),
-                timestamp=item.session.started_at,
-                continued_from_session_id=(str(item.session.continued_from_session_id) if item.session.continued_from_session_id else None),
-                continuation_kind=item.session.continuation_kind,
-                origin_label=item.session.origin_label,
-                parent_origin_label=(item.parent_session.origin_label if item.parent_session else None),
-                parent_continuation_kind=(item.parent_session.continuation_kind if item.parent_session else None),
-                branched_from_event_id=item.session.branched_from_event_id,
-            )
+        result = SessionProjectionResponse(
+            root_session_id=str(session.thread_root_session_id or session.id),
+            focus_session_id=str(session.id),
+            head_session_id=str(head.id if head else session.id),
+            path_session_ids=[str(path_session.id) for path_session in projection.path_sessions],
+            items=items,
+            total=projection.total,
+            branch_mode=projection.branch_mode,
+            abandoned_events=projection.abandoned_events,
         )
-
-    return SessionProjectionResponse(
-        root_session_id=str(session.thread_root_session_id or session.id),
-        focus_session_id=str(session.id),
-        head_session_id=str(head.id if head else session.id),
-        path_session_ids=[str(path_session.id) for path_session in projection.path_sessions],
-        items=items,
-        total=projection.total,
-        branch_mode=projection.branch_mode,
-        abandoned_events=projection.abandoned_events,
-    )
+    timing.apply(response)
+    return result
 
 
 @router.get("/sessions/{session_id}/export")

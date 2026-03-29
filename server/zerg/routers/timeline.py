@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
+from threading import Lock
 from time import monotonic
 from typing import Optional
 from uuid import UUID
@@ -20,6 +22,7 @@ from fastapi import Request
 from fastapi import Response
 from fastapi.responses import JSONResponse
 from pydantic import Field
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 from sse_starlette.sse import EventSourceResponse
@@ -54,6 +57,7 @@ from zerg.services.session_views import build_session_response
 from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import resolve_runtime_overlay
+from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -66,6 +70,17 @@ router = APIRouter(
 
 TIMELINE_STREAM_CHANGE_WAIT_SECONDS = 5.0
 TIMELINE_STREAM_HEARTBEAT_SECONDS = 30.0
+TIMELINE_FILTERS_CACHE_TTL_SECONDS = 60.0
+
+
+@dataclass(frozen=True)
+class _TimelineFiltersCacheEntry:
+    expires_at: float
+    response: FiltersResponse
+
+
+_timeline_filters_cache: dict[tuple[str, int, str | None], _TimelineFiltersCacheEntry] = {}
+_timeline_filters_cache_lock = Lock()
 
 
 class TimelineSessionCardResponse(UTCBaseModel):
@@ -197,6 +212,15 @@ def _stream_supports_preflight(*, query: str | None, sort: str | None, mode: str
     return query is None and mode in (None, "lexical") and effective_sort == "recency"
 
 
+def _timeline_filters_cache_key(db: Session, *, days_back: int) -> tuple[str, int, str | None]:
+    bind = db.get_bind()
+    bind_url = getattr(bind, "url", None)
+    bind_key = str(bind_url) if bind_url is not None else f"bind:{id(bind)}"
+    latest_session_update = db.query(func.max(AgentSession.updated_at)).scalar()
+    latest_update_key = latest_session_update.isoformat() if latest_session_update is not None else None
+    return bind_key, days_back, latest_update_key
+
+
 def _validate_timeline_stream_contract(*, query: str | None, sort: str | None, mode: str | None) -> None:
     if _stream_supports_preflight(query=query, sort=sort, mode=mode):
         return
@@ -305,6 +329,7 @@ async def _timeline_sessions_stream(
 
         with session_factory() as db:
             response = await list_timeline_sessions(
+                response=Response(),
                 project=project,
                 provider=provider,
                 environment=environment,
@@ -440,6 +465,7 @@ async def recall_timeline_sessions(
 
 @router.get("/sessions", response_model=TimelineSessionsListResponse)
 async def list_timeline_sessions(
+    response: Response,
     project: Optional[str] = Query(None, description="Filter by project"),
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
@@ -458,6 +484,7 @@ async def list_timeline_sessions(
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
     db: Session = Depends(get_db),
 ):
+    timing = ServerTimingRecorder()
     effective_mode = mode or "lexical"
     if query is not None or effective_mode != "lexical":
         # COMPATIBILITY: Query-driven and hybrid search return raw SessionResponse[]
@@ -465,47 +492,57 @@ async def list_timeline_sessions(
         # The frontend reshapes these into TimelineSessionCards client-side via
         # buildCompatibilityTimelineCards(). This is the only remaining non-thread
         # path on the timeline read surface.
-        raw_response = await _sessions_router.list_sessions(
+        with timing.span("compat_delegate"):
+            raw_response = await _sessions_router.list_sessions(
+                project=project,
+                provider=provider,
+                environment=environment,
+                include_test=include_test,
+                hide_autonomous=hide_autonomous,
+                device_id=device_id,
+                days_back=days_back,
+                query=query,
+                limit=limit,
+                offset=offset,
+                sort=sort,
+                mode=mode,
+                context_mode=context_mode,
+                db=db,
+                _auth=None,
+                _single=None,
+            )
+        if isinstance(raw_response, Response):
+            timing.apply(raw_response)
+            return raw_response
+        compat_response = JSONResponse(content=raw_response.model_dump(mode="json"))
+        timing.apply(compat_response)
+        return compat_response
+
+    store = AgentsStore(db)
+    since = datetime.now(timezone.utc) - timedelta(days=days_back)
+    with timing.span("list_threads"):
+        total, thread_rows = store.list_timeline_thread_page(
             project=project,
             provider=provider,
             environment=environment,
             include_test=include_test,
-            hide_autonomous=hide_autonomous,
             device_id=device_id,
-            days_back=days_back,
+            since=since,
             query=query,
             limit=limit,
             offset=offset,
-            sort=sort,
-            mode=mode,
+            hide_autonomous=hide_autonomous,
             context_mode=context_mode,
-            db=db,
-            _auth=None,
-            _single=None,
         )
-        if isinstance(raw_response, Response):
-            return raw_response
-        return JSONResponse(content=raw_response.model_dump(mode="json"))
-
-    store = AgentsStore(db)
-    since = datetime.now(timezone.utc) - timedelta(days=days_back)
-    total, thread_rows = store.list_timeline_thread_page(
-        project=project,
-        provider=provider,
-        environment=environment,
-        include_test=include_test,
-        device_id=device_id,
-        since=since,
-        query=query,
-        limit=limit,
-        offset=offset,
-        hide_autonomous=hide_autonomous,
-        context_mode=context_mode,
-    )
+    with timing.span("build_cards"):
+        sessions = _build_timeline_cards_from_thread_rows(db=db, thread_rows=thread_rows)
+    with timing.span("has_real"):
+        has_real_sessions = _has_real_sessions(db, total=total)
+    timing.apply(response)
     return TimelineSessionsListResponse(
-        sessions=_build_timeline_cards_from_thread_rows(db=db, thread_rows=thread_rows),
+        sessions=sessions,
         total=total,
-        has_real_sessions=_has_real_sessions(db, total=total),
+        has_real_sessions=has_real_sessions,
     )
 
 
@@ -603,10 +640,33 @@ async def preview_timeline_session(
 
 @router.get("/filters", response_model=FiltersResponse)
 async def get_timeline_filters(
+    response: Response,
     days_back: int = Query(90, ge=1, le=365, description="Days to look back for distinct values"),
     db: Session = Depends(get_db),
 ):
-    return await _sessions_router.get_filters(days_back=days_back, db=db, _auth=None, _single=None)
+    timing = ServerTimingRecorder()
+    response.headers["Cache-Control"] = "private, max-age=60"
+
+    cache_key = _timeline_filters_cache_key(db, days_back=days_back)
+    now = monotonic()
+    with _timeline_filters_cache_lock:
+        cached = _timeline_filters_cache.get(cache_key)
+        if cached is not None and cached.expires_at > now:
+            timing.record("cache_hit", 0.1)
+            timing.apply(response)
+            return cached.response
+
+    with timing.span("distinct_filters"):
+        filters = await _sessions_router.get_filters(days_back=days_back, response=response, db=db, _auth=None, _single=None)
+
+    with _timeline_filters_cache_lock:
+        _timeline_filters_cache[cache_key] = _TimelineFiltersCacheEntry(
+            expires_at=now + TIMELINE_FILTERS_CACHE_TTL_SECONDS,
+            response=filters,
+        )
+
+    timing.apply(response)
+    return filters
 
 
 @router.post("/demo", response_model=DemoSeedResponse)
@@ -650,17 +710,19 @@ async def set_timeline_session_loop_mode(
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_timeline_session(
     session_id: UUID,
+    response: Response,
     db: Session = Depends(get_db),
 ):
-    return await _sessions_router.get_session(session_id=session_id, db=db, _auth=None, _single=None)
+    return await _sessions_router.get_session(session_id=session_id, response=response, db=db, _auth=None, _single=None)
 
 
 @router.get("/sessions/{session_id}/thread", response_model=SessionThreadResponse)
 async def get_timeline_session_thread(
     session_id: UUID,
+    response: Response,
     db: Session = Depends(get_db),
 ):
-    return await _sessions_router.get_session_thread(session_id=session_id, db=db, _auth=None, _single=None)
+    return await _sessions_router.get_session_thread(session_id=session_id, response=response, db=db, _auth=None, _single=None)
 
 
 @router.get("/sessions/{session_id}/events", response_model=EventsListResponse)
@@ -693,6 +755,7 @@ async def get_timeline_session_events(
 @router.get("/sessions/{session_id}/projection", response_model=SessionProjectionResponse)
 async def get_timeline_session_projection(
     session_id: UUID,
+    response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
@@ -703,6 +766,7 @@ async def get_timeline_session_projection(
         branch_mode=branch_mode,
         limit=limit,
         offset=offset,
+        response=response,
         db=db,
         _auth=None,
         _single=None,

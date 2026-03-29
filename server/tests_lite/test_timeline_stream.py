@@ -11,6 +11,7 @@ import pytest
 import zerg.dependencies.auth as _auth_deps  # noqa: F401
 import zerg.routers.timeline as timeline_router
 from fastapi import HTTPException
+from fastapi import Response
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
@@ -357,6 +358,7 @@ def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread
 
         response = asyncio.run(
             timeline_router.list_timeline_sessions(
+                response=Response(),
                 project=None,
                 provider=None,
                 environment=None,
@@ -441,6 +443,7 @@ def test_list_timeline_sessions_query_path_stays_raw_session_compatibility(tmp_p
         with patch.object(AgentsStore, "_fts_session_ids", return_value=[root.id]):
             payload = asyncio.run(
                 timeline_router.list_timeline_sessions(
+                    response=Response(),
                     project="threaded-search",
                     provider=None,
                     environment=None,

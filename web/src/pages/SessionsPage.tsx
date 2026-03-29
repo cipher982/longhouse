@@ -24,6 +24,9 @@ import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSession,
   type AgentSessionFilters,
+  fetchAgentSession,
+  fetchAgentSessionProjection,
+  fetchAgentSessionThread,
   getTimelineCardAnchor,
   type TimelineSessionCard,
   seedDemoSessions,
@@ -55,6 +58,7 @@ const PAGE_SIZE = 50;
 const DEFAULT_DAYS_BACK = 14;
 const TIMELINE_RECONCILIATION_MS = 120_000;
 const DEFAULT_SORT_ORDER = "relevant";
+const SESSION_WORKSPACE_PREFETCH_LIMIT = 200;
 
 type SortOrder = "relevant" | "recent";
 
@@ -483,6 +487,7 @@ function FilterPopover({
 interface SessionCardProps {
   thread: TimelineSessionCard;
   onClick: () => void;
+  onPrefetch?: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
   compatibilityMode?: boolean;
@@ -492,6 +497,7 @@ interface SessionCardProps {
 function SessionCard({
   thread,
   onClick,
+  onPrefetch,
   highlightQuery,
   isSemanticResult,
   compatibilityMode = false,
@@ -532,6 +538,9 @@ function SessionCard({
     <Card
       className={cardClassName}
       onClick={onClick}
+      onMouseEnter={onPrefetch}
+      onFocus={onPrefetch}
+      onPointerDown={onPrefetch}
       style={{ borderLeftColor: getProviderColor(session.provider) }}
       data-testid="session-card"
       data-session-id={detailSession.id}
@@ -656,6 +665,7 @@ interface SessionGroupProps {
   title: string;
   sessions: TimelineSessionCard[];
   onSessionClick: (thread: TimelineSessionCard) => void;
+  onSessionPrefetch: (thread: TimelineSessionCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
   compatibilityMode?: boolean;
@@ -666,6 +676,7 @@ function SessionGroup({
   title,
   sessions,
   onSessionClick,
+  onSessionPrefetch,
   highlightQuery,
   isSemanticResult,
   compatibilityMode,
@@ -683,6 +694,7 @@ function SessionGroup({
             key={thread.thread_id}
             thread={thread}
             onClick={() => onSessionClick(thread)}
+            onPrefetch={() => onSessionPrefetch(thread)}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
             compatibilityMode={compatibilityMode}
@@ -752,9 +764,11 @@ export default function SessionsPage() {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const filterBtnRef = useRef<HTMLButtonElement>(null);
   const [recallOpen, setRecallOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
 
   // Fetch dynamic filter options
-  const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack);
+  const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack, popoverOpen);
   const projectOptions = filtersData?.projects || [];
   const providerOptions = filtersData?.providers || [];
   const machineOptions = filtersData?.machines || [];
@@ -849,6 +863,49 @@ export default function SessionsPage() {
   const threadCards = sessions;
   const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards, relativeNowMs), [threadCards, relativeNowMs]);
 
+  const prefetchSessionWorkspace = useCallback((sessionId: string | null) => {
+    if (!sessionId || prefetchedSessionIdsRef.current.has(sessionId)) {
+      return;
+    }
+
+    prefetchedSessionIdsRef.current.add(sessionId);
+    const projectionQueryKey = [
+      "agent-session-projection-infinite",
+      sessionId,
+      { limit: SESSION_WORKSPACE_PREFETCH_LIMIT, branch_mode: "head" as const },
+    ] as const;
+
+    void Promise.allSettled([
+      queryClient.prefetchQuery({
+        queryKey: ["agent-session", sessionId],
+        queryFn: () => fetchAgentSession(sessionId),
+        staleTime: 30_000,
+      }),
+      queryClient.prefetchQuery({
+        queryKey: ["agent-session-thread", sessionId],
+        queryFn: () => fetchAgentSessionThread(sessionId),
+        staleTime: 30_000,
+      }),
+      fetchAgentSessionProjection(sessionId, {
+        limit: SESSION_WORKSPACE_PREFETCH_LIMIT,
+        branch_mode: "head",
+      }).then((page) => {
+        queryClient.setQueryData(projectionQueryKey, {
+          pages: [page],
+          pageParams: [0],
+        });
+      }),
+    ]).then((results) => {
+      if (results.every((result) => result.status === "rejected")) {
+        prefetchedSessionIdsRef.current.delete(sessionId);
+      }
+    });
+  }, [queryClient]);
+
+  const handleSessionPrefetch = useCallback((thread: TimelineSessionCard) => {
+    prefetchSessionWorkspace(thread.detail.id);
+  }, [prefetchSessionWorkspace]);
+
   const headerActions = (
     <div className="sessions-header-actions">
       {threadCards.length > 0 && (
@@ -869,11 +926,12 @@ export default function SessionsPage() {
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((thread: TimelineSessionCard) => {
     const detailSession = thread.detail;
+    prefetchSessionWorkspace(detailSession.id);
     const matchEventId = debouncedQuery ? detailSession.match_event_id : null;
     navigate(buildSessionDetailPath(detailSession, matchEventId), {
       state: { from: location.pathname + location.search },
     });
-  }, [navigate, location, debouncedQuery]);
+  }, [navigate, location, debouncedQuery, prefetchSessionWorkspace]);
 
   // Load more sessions
   const handleLoadMore = useCallback(() => {
@@ -899,9 +957,7 @@ export default function SessionsPage() {
     setPopoverOpen(false);
   }, [updateUrlState]);
 
-
   // Demo seeding state
-  const queryClient = useQueryClient();
   const [demoLoading, setDemoLoading] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
 
@@ -1229,6 +1285,7 @@ export default function SessionsPage() {
                 title={dateKey}
                 sessions={daySessions}
                 onSessionClick={handleSessionClick}
+                onSessionPrefetch={handleSessionPrefetch}
                 highlightQuery={debouncedQuery}
                 isSemanticResult={aiSearch}
                 compatibilityMode={compatibilityMode}

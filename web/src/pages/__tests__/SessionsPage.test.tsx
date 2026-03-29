@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as agentsApi from "../../services/api/agents";
 import type {
   AgentSession,
   AgentSessionFilters,
@@ -122,15 +123,17 @@ function makeSessionsResponse(): TimelineSessionsListResponse {
   };
 }
 
-function renderSessionsPage(initialEntry = "/timeline") {
-  const queryClient = new QueryClient({
+function createQueryClient() {
+  return new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
+}
 
-  return render(
+function renderSessionsPage(initialEntry = "/timeline", queryClient = createQueryClient()) {
+  const rendered = render(
     <QueryClientProvider client={queryClient}>
       <TestRouter initialEntries={[initialEntry]}>
         <Routes>
@@ -149,6 +152,11 @@ function renderSessionsPage(initialEntry = "/timeline") {
       </TestRouter>
     </QueryClientProvider>
   );
+
+  return {
+    ...rendered,
+    queryClient,
+  };
 }
 
 function LocationProbe() {
@@ -209,6 +217,7 @@ describe("SessionsPage", () => {
   afterEach(() => {
     vi.useRealTimers();
     setDocumentVisibility("visible");
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -229,6 +238,50 @@ describe("SessionsPage", () => {
         sort: "recency",
         hide_autonomous: false,
       });
+    });
+  });
+
+  it("defers filter option loading until the filter popover opens", async () => {
+    const user = userEvent.setup();
+    renderSessionsPage("/timeline");
+
+    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, false);
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+
+    expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, true);
+  });
+
+  it("prefetches the session workspace queries when a session card gets hover intent", async () => {
+    const queryClient = createQueryClient();
+    const prefetchSpy = vi.spyOn(queryClient, "prefetchQuery").mockResolvedValue(undefined);
+    const setQueryDataSpy = vi.spyOn(queryClient, "setQueryData");
+    const projectionSpy = vi.spyOn(agentsApi, "fetchAgentSessionProjection").mockResolvedValue({
+      root_session_id: "session-1",
+      focus_session_id: "session-1",
+      head_session_id: "session-1",
+      path_session_ids: ["session-1"],
+      items: [],
+      total: 0,
+    });
+
+    renderSessionsPage("/timeline", queryClient);
+
+    fireEvent.mouseEnter(await screen.findByTestId("session-card"));
+
+    await waitFor(() => {
+      expect(prefetchSpy).toHaveBeenCalledTimes(2);
+      expect(projectionSpy).toHaveBeenCalledWith("session-1", {
+        limit: 200,
+        branch_mode: "head",
+      });
+      expect(setQueryDataSpy).toHaveBeenCalledWith(
+        ["agent-session-projection-infinite", "session-1", { limit: 200, branch_mode: "head" }],
+        expect.objectContaining({
+          pages: expect.any(Array),
+          pageParams: [0],
+        }),
+      );
     });
   });
 
