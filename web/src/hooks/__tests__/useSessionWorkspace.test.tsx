@@ -7,8 +7,12 @@ const agentSessionMocks = vi.hoisted(() => ({
   useAgentSessionThreadWithOptions: vi.fn(),
   useAgentSessionProjectionInfinite: vi.fn(),
 }));
+const visibilityMocks = vi.hoisted(() => ({
+  useDocumentVisible: vi.fn(),
+}));
 
 vi.mock("../useAgentSessions", () => agentSessionMocks);
+vi.mock("../useDocumentVisible", () => visibilityMocks);
 
 const baseSession = {
   id: "session-1",
@@ -117,6 +121,7 @@ describe("useSessionWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     document.body.innerHTML = "";
+    visibilityMocks.useDocumentVisible.mockReturnValue(true);
     seedHookMocks();
   });
 
@@ -138,15 +143,60 @@ describe("useSessionWorkspace", () => {
     });
   });
 
-  it("polls the session and thread queries to keep workspace runtime metadata fresh", () => {
+  it("keeps polling visible, open sessions to refresh workspace runtime metadata", () => {
     renderHook(() => useSessionWorkspace(baseSession.id));
 
-    expect(agentSessionMocks.useAgentSessionWithOptions).toHaveBeenCalledWith(baseSession.id, {
-      refetchInterval: 5_000,
+    expect(agentSessionMocks.useAgentSessionWithOptions).toHaveBeenCalledTimes(1);
+    expect(agentSessionMocks.useAgentSessionWithOptions.mock.calls[0]?.[0]).toBe(baseSession.id);
+    expect(agentSessionMocks.useAgentSessionWithOptions.mock.calls[0]?.[1]).toMatchObject({
+      refetchInterval: expect.any(Function),
     });
     expect(agentSessionMocks.useAgentSessionThreadWithOptions).toHaveBeenCalledWith(baseSession.id, {
       refetchInterval: 5_000,
     });
+  });
+
+  it("stops polling settled sessions when the document is hidden", () => {
+    visibilityMocks.useDocumentVisible.mockReturnValue(false);
+    agentSessionMocks.useAgentSessionWithOptions.mockReturnValue({
+      data: {
+        ...baseSession,
+        ended_at: "2026-03-14T12:10:00.000Z",
+        status: "completed",
+      },
+      isLoading: false,
+      error: null,
+    });
+    agentSessionMocks.useAgentSessionThreadWithOptions.mockReturnValue({
+      data: {
+        sessions: [
+          {
+            ...baseSession,
+            ended_at: "2026-03-14T12:10:00.000Z",
+            status: "completed",
+          },
+        ],
+        head_session_id: baseSession.id,
+      },
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(agentSessionMocks.useAgentSessionThreadWithOptions).toHaveBeenCalledWith(baseSession.id, {
+      refetchInterval: false,
+    });
+    const refetchInterval = agentSessionMocks.useAgentSessionWithOptions.mock.calls[0]?.[1]?.refetchInterval;
+    expect(
+      refetchInterval?.({
+        state: {
+          data: {
+            ...baseSession,
+            ended_at: "2026-03-14T12:10:00.000Z",
+            status: "completed",
+          },
+        },
+      }),
+    ).toBe(false);
   });
 
   it("retries auto-scroll until the timeline list becomes scrollable", async () => {
