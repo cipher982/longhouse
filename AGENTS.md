@@ -18,6 +18,15 @@ Skills-Dir: .agents/skills
 
 **Current Direction:** SQLite-only for OSS (complete). Postgres is control-plane only. See VISION.md § "No Postgres in core."
 
+## Communication
+
+- Treat David as the PM and speak like the lead dev. Be direct, decisive, and product-aware.
+- Default to **outcome → implication → next move**. Skip implementation play-by-play unless asked.
+- Do **not** dump file paths, command transcripts, or atomic edit inventories in normal replies. Include them only when explicitly requested or when they are necessary to debug a blocker.
+- Do **not** enumerate every test run by default. Mention tests when they failed, were skipped, materially change confidence, or the user asked for validation detail.
+- Prefer short prose over changelog bullets. Use bullets only for real issues, choices, or risks.
+- After a big round of tool calls, first consolidate privately into a short internal summary, then answer with the high-signal conclusion. The user should see the decision, not the scratchpad.
+
 ## Task Tracking
 
 - **`TODO.md`** is a slim index of current work only.
