@@ -40,25 +40,64 @@ Skills-Dir: .agents/skills
 ```bash
 make dev              # Start SQLite dev (backend + frontend, no Docker)
 make stop             # Stop dev services
-make test             # Unit tests (SQLite lite suite)
-make test-e2e         # Core E2E + a11y
-make test-full        # Full suite (full E2E + evals + visual baselines)
+make test             # Python backend tests (tests_lite/, ~10s)
+make test-e2e         # Playwright core + a11y (~2min)
+make test-ci          # Simulate push/PR CI locally (~3min) — run before pushing
+make test-full        # All tiers: backend + engine + frontend + e2e + visual (~8min)
 make dev-docker       # Legacy: Docker + Postgres (CI/testing only)
 ```
 
 ## Testing
 
+### Tier Guide
+
+Run the tier that matches your change. Don't over-test.
+
+| Target | What runs | Changed what? | Time |
+|--------|-----------|---------------|------|
+| `make test` | Python backend (`tests_lite/`, 174 files, SQLite in-memory) | `server/zerg/`, `server/tests_lite/` | ~10s |
+| `make test-engine` | Rust engine unit + golden + adversarial parser tests | `engine/` | ~20s |
+| `make test-frontend` | Frontend unit tests + TypeScript type-check | `web/` | ~15s |
+| `make test-control-plane` | Control plane unit tests | `control-plane/` | ~10s |
+| `make test-runner` | Runner unit tests (Bun) | `runner/` | ~5s |
+| `make test-e2e` | Playwright core + a11y — **must pass 100%** | UI changes, before PR | ~2min |
+| `make test-ci` | Simulate push/PR CI (validate + all unit tiers) | **Before pushing** | ~3min |
+| `make test-full` | All tiers + shipper E2E + visual baselines | Pre-deploy, full verify | ~8min |
+| `make qa-live` | Smoke against hosted instance | **After deploy** | ~60s |
+
+### What `make test-ci` runs
+
+Mirrors exactly what `contract-first-ci.yml` runs on push/PR:
+1. `make validate` — WS/SSE/Makefile contracts + lint patterns
+2. `make test` — Python backend
+3. `make test-control-plane` — control plane unit
+4. `make test-frontend` — frontend unit + TypeScript types
+5. `make test-runner` — runner unit (Bun)
+6. `make test-engine` — Rust engine unit + golden + adversarial
+7. `make test-shipper-e2e` — full shipping pipeline (builds release binary)
+
+### Subsystem targets for targeted runs
+
 ```bash
-make test                    # Unit tests (tests_lite/, ~5s, SQLite in-memory)
-make test-e2e                # Core E2E + a11y
-make test-full               # Full suite (unit + full E2E + evals + visual baselines + visual compare)
-make qa-visual-compare       # Visual comparison with Gemini LLM triage
-make qa-visual-compare-fast  # Visual comparison (pixelmatch only, no LLM)
+make test-engine           # Rust engine — only when changing engine/
+make test-frontend         # Frontend unit + type-check — only when changing web/
+make test-control-plane    # Control plane — only when changing control-plane/
+make test-runner           # Runner — only when changing runner/
+make test-shipper-premerge # Engine + shipper E2E — before merging engine changes
 ```
 
-**Visual compare** (`scripts/visual-compare.ts`): Hybrid pixelmatch + Gemini Flash triage. Catches semantic regressions (color catastrophes, broken layouts) that pixel-perfect baselines miss. Two modes: (1) `--baseline-dir`/`--current-dir` for CI, (2) single-pair manual debugging. Shared page definitions in `e2e/tests/helpers/page-list.ts`. Requires `GOOGLE_API_KEY` for LLM triage; falls back to hard threshold without it.
+### Visual comparison
 
-**`tests_lite/` convention:** No shared conftest. Each test file creates its own DB via `_make_db(tmp_path)` using `make_engine("sqlite:///...")` + `AgentsBase.metadata.create_all()`. HTTP-level tests use `TestClient` with `dependency_overrides` on `api_app` (not `app`). See `test_job_preflight.py` for a clean example of both ORM-only and HTTP-level patterns.
+```bash
+make qa-visual-compare       # Hybrid pixelmatch + Gemini Flash triage (catches color/layout regressions)
+make qa-visual-compare-fast  # Pixelmatch only (no LLM), faster
+```
+
+`scripts/visual-compare.ts`: Two modes: (1) `--baseline-dir`/`--current-dir` for CI, (2) single-pair manual debugging. Shared page definitions in `e2e/tests/helpers/page-list.ts`. Requires `GOOGLE_API_KEY` for LLM triage; falls back to hard threshold without it.
+
+### `tests_lite/` convention
+
+No shared conftest. Each test file creates its own DB via `_make_db(tmp_path)` using `make_engine("sqlite:///...")` + `AgentsBase.metadata.create_all()`. HTTP-level tests use `TestClient` with `dependency_overrides` on `api_app` (not `app`). See `test_job_preflight.py` for a clean example of both ORM-only and HTTP-level patterns.
 
 ## Architecture
 
@@ -161,8 +200,8 @@ Import from `../components/ui`. **Check here before building custom UI.**
 
 ### Before Push
 ```bash
-make test              # Unit tests (required)
-make test-e2e          # Core E2E + a11y — must pass 100%
+make test-ci           # Simulate push/PR CI (validate + all unit tiers) — required
+make test-e2e          # Playwright core + a11y — must pass 100%
 ```
 
 ### After Push
@@ -213,8 +252,9 @@ coolify app logs longhouse-control-plane               # Control plane
 For hosted loop / turn-review debugging on a live tenant, start with `scripts/hosted-loop-debug.sh <subdomain>`. It resolves the instance through the control plane, authenticates a browser cookie, hits `/api/oikos/loop-inbox` + `/api/oikos/turn-reviews`, and only then falls back to a container-side SQLite probe.
 
 ### Checklist for Agents
-1. `make test` pass locally
-2. `make qa-live` pass (5 Playwright tests against live instance, ~5s) — `/zerg-ship` skill has full details
+1. `make test-ci` pass locally (validate + all unit tiers + engine + shipper)
+2. `make test-e2e` pass locally (Playwright core + a11y)
+3. `make qa-live` pass (smoke against hosted instance) — `/zerg-ship` skill has full details
 3. Push to main (triggers GHCR build if code changed)
 4. Wait for GHCR build: `gh run watch <id> --exit-status`
 5. Deploy marketing + control plane (Coolify)

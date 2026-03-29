@@ -16,7 +16,8 @@ on:
           - validate
           - unit
           - frontend
-          - runner-unit
+          - runner
+          - engine
           - e2e-core
           - e2e-a11y
           - e2e-single
@@ -65,14 +66,14 @@ jobs:
           bun-version: '1.2.20'
 
       - name: Setup Rust
-        if: contains(fromJSON('["unit","full"]'), inputs.suite)
+        if: contains(fromJSON('["engine","full","codex-bridge-e2e"]'), inputs.suite)
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y make build-essential pkg-config
 
       - name: Install JS deps (repo root)
-        if: contains('frontend e2e-core e2e-a11y e2e-single full', inputs.suite)
+        if: contains('frontend runner e2e-core e2e-a11y e2e-single full', inputs.suite)
         run: bun install --frozen-lockfile
 
       - name: Build frontend (required by hatch)
@@ -99,12 +100,13 @@ jobs:
               make test
               ;;
             frontend)
-              cd web
-              bun run validate:types
-              bun run test -- --run
+              make test-frontend
               ;;
-            runner-unit)
-              make test-runner-unit
+            runner)
+              make test-runner
+              ;;
+            engine)
+              make test-engine
               ;;
             e2e-core)
               make test-e2e-core
