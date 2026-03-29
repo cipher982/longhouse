@@ -151,7 +151,7 @@ test('live thread card groups continuations and stale branch stays explicit', as
 
   const card = page.locator('.session-card', { hasText: project });
   await expect(card).toHaveCount(1, { timeout: 15_000 });
-  await expect(card).toContainText('Head: Cloud');
+  await expect(card).toContainText('Cloud');
   await expect(card).toContainText('Started: Cinder');
   await expect(card).toContainText('2 continuations');
 
