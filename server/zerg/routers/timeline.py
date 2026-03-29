@@ -133,7 +133,7 @@ def _build_session_response_map(
     presence_map = load_presence_map(db, [session.id for session in sessions])
     runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
     first_user_map = store.get_first_message_map([session.id for session in sessions], role="user", max_len=80)
-    thread_cache: dict[str, tuple[str, int]] = {}
+    thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
     now = datetime.now(timezone.utc)
 
     response_map: dict[str, SessionResponse] = {}
