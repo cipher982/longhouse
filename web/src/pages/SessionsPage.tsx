@@ -538,7 +538,11 @@ function SessionCard({
       onClick={onClick}
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
-      onPointerDown={onPrefetch}
+      onPointerDown={(event) => {
+        if (event.pointerType === "touch" || event.pointerType === "pen") {
+          onPrefetch?.();
+        }
+      }}
       style={{ borderLeftColor: getProviderColor(session.provider) }}
       data-testid="session-card"
       data-session-id={detailSession.id}
@@ -924,12 +928,11 @@ export default function SessionsPage() {
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((thread: TimelineSessionCard) => {
     const detailSession = thread.detail;
-    prefetchSessionWorkspace(detailSession.id);
     const matchEventId = debouncedQuery ? detailSession.match_event_id : null;
     navigate(buildSessionDetailPath(detailSession, matchEventId), {
       state: { from: location.pathname + location.search },
     });
-  }, [navigate, location, debouncedQuery, prefetchSessionWorkspace]);
+  }, [navigate, location, debouncedQuery]);
 
   // Load more sessions
   const handleLoadMore = useCallback(() => {
