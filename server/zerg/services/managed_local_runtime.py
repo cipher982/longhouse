@@ -1,7 +1,7 @@
 """Managed-local runtime signal helpers for Timeline.
 
 These helpers emit provider-agnostic runtime events at the exact points where
-Longhouse knows something concrete about a tmux-backed managed-local session.
+Longhouse knows something concrete about a managed-local session lifecycle.
 """
 
 from __future__ import annotations

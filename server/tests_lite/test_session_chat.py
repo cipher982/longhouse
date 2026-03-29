@@ -107,7 +107,7 @@ def test_fake_cloud_continuation_persists_turn_for_follow_up_requests(monkeypatc
         return provider_session_id
 
     monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
-    monkeypatch.setattr(session_chat, "prepare_session_for_resume", fake_prepare)
+    monkeypatch.setattr(session_chat, "prepare_claude_session_for_resume", fake_prepare)
 
     try:
         response = client.post(

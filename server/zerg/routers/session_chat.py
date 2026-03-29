@@ -1,7 +1,9 @@
 """Session chat router for live-session drop-in functionality.
 
-Enables interactive chat with Claude Code sessions via turn-by-turn resume.
-Each message spawns: claude --resume {id} -p "message" --output-format stream-json
+Enables interactive chat with synced CLI sessions.
+Cloud continuation shells out to the provider CLI (`claude --resume`,
+`codex exec resume`) while managed-local chat injects into the live local
+session.
 
 Security:
 - Workspace path derived server-side from session metadata (not client)
@@ -67,8 +69,8 @@ from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
 from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
 from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
 from zerg.services.session_continuity import ShipSessionResult
+from zerg.services.session_continuity import prepare_claude_session_for_resume
 from zerg.services.session_continuity import prepare_codex_session_for_resume
-from zerg.services.session_continuity import prepare_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_continuity import ship_session_to_zerg
 from zerg.services.session_continuity import workspace_resolver
@@ -149,7 +151,7 @@ def _get_session_chat_backend() -> str:
 
 
 @dataclass(frozen=True)
-class ClaudeResumeRuntime:
+class ContinuationRuntime:
     backend: str
     cmd: list[str]
     env_updates: dict[str, str]
@@ -163,7 +165,7 @@ def _check_claude_binary() -> bool:
     return shutil.which("claude") is not None
 
 
-def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> ClaudeResumeRuntime:
+def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> ContinuationRuntime:
     cmd = [
         "claude",
         "--resume",
@@ -183,7 +185,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
         )
 
     if backend == SESSION_CHAT_BACKEND_AMBIENT:
-        return ClaudeResumeRuntime(backend=backend, cmd=cmd, env_updates={})
+        return ContinuationRuntime(backend=backend, cmd=cmd, env_updates={})
 
     model = os.getenv(SESSION_CHAT_MODEL_ENV, "").strip()
     if backend == SESSION_CHAT_BACKEND_ZAI:
@@ -196,7 +198,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
             "ANTHROPIC_AUTH_TOKEN": api_key,
             "ANTHROPIC_MODEL": model or DEFAULT_SESSION_CHAT_ZAI_MODEL,
         }
-        return ClaudeResumeRuntime(
+        return ContinuationRuntime(
             backend=backend,
             cmd=cmd,
             env_updates=env_updates,
@@ -212,7 +214,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
             env_updates["ANTHROPIC_MODEL"] = model
         else:
             env_updates["ANTHROPIC_MODEL"] = DEFAULT_SESSION_CHAT_ANTHROPIC_MODEL
-        return ClaudeResumeRuntime(
+        return ContinuationRuntime(
             backend=backend,
             cmd=cmd,
             env_updates=env_updates,
@@ -228,7 +230,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
         env_updates["AWS_REGION"] = aws_region
     if model:
         env_updates["ANTHROPIC_MODEL"] = model
-    return ClaudeResumeRuntime(
+    return ContinuationRuntime(
         backend=backend,
         cmd=cmd,
         env_updates=env_updates,
@@ -243,7 +245,7 @@ def _check_codex_binary() -> bool:
     return shutil.which("codex") is not None
 
 
-def _build_codex_resume_runtime(*, provider_session_id: str, message: str) -> ClaudeResumeRuntime:
+def _build_codex_resume_runtime(*, provider_session_id: str, message: str) -> ContinuationRuntime:
     """Build the resume runtime for a Codex session.
 
     Uses codex exec resume for non-interactive cloud continuation.
@@ -272,7 +274,7 @@ def _build_codex_resume_runtime(*, provider_session_id: str, message: str) -> Cl
     if model:
         cmd.extend(["-m", model])
 
-    return ClaudeResumeRuntime(backend="codex", cmd=cmd, env_updates=env_updates)
+    return ContinuationRuntime(backend="codex", cmd=cmd, env_updates=env_updates)
 
 
 # ---------------------------------------------------------------------------
@@ -450,7 +452,7 @@ async def _build_cloud_continuation_chat_response(
                 db=db,
             )
         else:
-            provider_session_id = await prepare_session_for_resume(
+            provider_session_id = await prepare_claude_session_for_resume(
                 session_id=str(source_session.id),
                 workspace_path=resolved_workspace.path,
                 db=db,
@@ -469,7 +471,7 @@ async def _build_cloud_continuation_chat_response(
     async def generate():
         try:
             continued_from_session_id = str(target_session.continued_from_session_id) if target_session.continued_from_session_id else None
-            async for event in stream_claude_output(
+            async for event in stream_session_continuation_output(
                 source_session_id=str(source_session.id),
                 target_session_id=str(target_session.id),
                 thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
@@ -1211,7 +1213,7 @@ class SSEEvent:
         return f"event: {self.event}\ndata: {self.data}\n\n"
 
 
-async def _stream_fake_claude_output(
+async def _stream_fake_session_continuation_output(
     *,
     source_session_id: str,
     target_session_id: str,
@@ -1424,7 +1426,7 @@ def _persist_fake_continuation_turn(
     )
 
 
-async def stream_claude_output(
+async def stream_session_continuation_output(
     *,
     source_session_id: str,
     target_session_id: str,
@@ -1451,7 +1453,7 @@ async def stream_claude_output(
     proc = None
     try:
         if _truthy_env("TESTING") and _truthy_env("E2E_FAKE_SESSION_CHAT"):
-            async for event in _stream_fake_claude_output(
+            async for event in _stream_fake_session_continuation_output(
                 source_session_id=source_session_id,
                 target_session_id=target_session_id,
                 thread_root_session_id=thread_root_session_id,
@@ -1614,7 +1616,7 @@ async def stream_claude_output(
                             event="system",
                             data=json.dumps(
                                 {
-                                    "type": "claude_system",
+                                    "type": "provider_system",
                                     "session_id": event.get("session_id"),
                                 }
                             ),
@@ -1711,7 +1713,7 @@ async def stream_claude_output(
         raise
 
     except Exception as e:
-        logger.exception(f"[{request_id}] Error streaming Claude output")
+        logger.exception(f"[{request_id}] Error streaming continuation output")
         yield SSEEvent(
             event="error",
             data=json.dumps({"error": str(e)[:500]}),
@@ -1729,10 +1731,7 @@ async def chat_with_session(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_oikos_user),
 ):
-    """Chat with a Claude Code session.
-
-    Resumes an existing session and streams the response via SSE.
-    """
+    """Chat with a resumable session and stream the response via SSE."""
     request_id = str(uuid.uuid4())[:8]
     logger.info(f"[{request_id}] Chat request for session {session_id}")
 
