@@ -156,7 +156,7 @@ class SessionResponse(UTCBaseModel):
     )
     source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
     source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
-    attach_command: Optional[str] = Field(None, description="Local reattach command for managed local tmux sessions")
+    attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
 
 

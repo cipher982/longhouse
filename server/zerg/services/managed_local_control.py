@@ -1,7 +1,7 @@
 """Shared managed-local control helpers.
 
-This module keeps tmux-backed local session control in one place so the
-session-chat route and Loop actions use the same transport semantics.
+This module keeps transport-aware local session control in one place so the
+session-chat route and Loop actions use the same managed-local semantics.
 """
 
 from __future__ import annotations

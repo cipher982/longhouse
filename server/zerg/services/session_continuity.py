@@ -1,15 +1,12 @@
-"""Session continuity service for cross-environment Claude Code session resumption.
+"""Session continuity helpers for cross-environment CLI session resumption.
 
-This service enables seamless --resume of Claude Code sessions across environments:
-- Laptop terminal -> Zerg commis
-- Zerg commis -> Laptop terminal
-- Zerg commis -> Zerg commis
+This module now holds:
+- provider-specific resume prep for Claude and Codex
+- shared session fetch/shipping helpers
+- workspace resolution and session locking
 
-Sessions are stored in Zerg's local database and can be fetched/shipped via the
-/api/agents endpoints.
-
-Key insight: Claude Code path encoding is deterministic:
-    encoded_cwd = re.sub(r'[^A-Za-z0-9-]', '-', absolute_path)
+Sessions are stored in Longhouse's local database and can be fetched/shipped via
+the `/api/agents` endpoints.
 """
 
 from __future__ import annotations
@@ -49,7 +46,7 @@ SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 @dataclass(frozen=True)
 class ShipSessionResult:
-    """Structured result from shipping a Claude session back into Longhouse."""
+    """Structured result from shipping a continued session back into Longhouse."""
 
     session_id: str
     events_inserted: int
@@ -178,13 +175,13 @@ async def fetch_session_from_zerg(session_id: str, db: Session | None = None) ->
         return response.content, cwd, provider_session_id
 
 
-async def prepare_session_for_resume(
+async def prepare_claude_session_for_resume(
     session_id: str,
     workspace_path: Path,
     claude_config_dir: Path | None = None,
     db: Session | None = None,
 ) -> str:
-    """Fetch session from Zerg and prepare it for Claude Code --resume.
+    """Fetch session from Zerg and prepare it for Claude Code `--resume`.
 
     Downloads the session JSONL and places it at the path Claude Code expects:
     {claude_config_dir}/projects/{encoded_cwd}/{provider_session_id}.jsonl
@@ -490,7 +487,7 @@ def _find_latest_codex_session_file() -> Path | None:
 __all__ = [
     "encode_cwd_for_claude",
     "fetch_session_from_zerg",
-    "prepare_session_for_resume",
+    "prepare_claude_session_for_resume",
     "prepare_codex_session_for_resume",
     "ship_session_to_zerg",
     "ShipSessionResult",

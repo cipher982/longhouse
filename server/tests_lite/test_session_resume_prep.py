@@ -25,7 +25,7 @@ from zerg.services.session_continuity import ResolvedWorkspace
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import WorkspaceResolver
 from zerg.services.session_continuity import encode_cwd_for_claude
-from zerg.services.session_continuity import prepare_session_for_resume
+from zerg.services.session_continuity import prepare_claude_session_for_resume
 from zerg.services.session_continuity import ship_session_to_zerg
 
 
@@ -90,7 +90,7 @@ def _seed_session(
     return result.session_id
 
 
-def test_prepare_session_for_resume_uses_local_db_export(tmp_path, monkeypatch):
+def test_prepare_claude_session_for_resume_uses_local_db_export(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -98,14 +98,14 @@ def test_prepare_session_for_resume_uses_local_db_export(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_config))
 
     async def fail_get(*_args, **_kwargs):
-        raise AssertionError("prepare_session_for_resume should not self-fetch over HTTP")
+        raise AssertionError("prepare_claude_session_for_resume should not self-fetch over HTTP")
 
     monkeypatch.setattr("zerg.services.session_continuity.httpx.AsyncClient.get", fail_get)
 
     with SessionLocal() as db:
         session_id = _seed_session(db)
         provider_session_id = asyncio.run(
-            prepare_session_for_resume(
+            prepare_claude_session_for_resume(
                 session_id=str(session_id),
                 workspace_path=workspace,
                 db=db,
@@ -154,7 +154,7 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
     async def fake_resolve(*_args, **_kwargs):
         return ResolvedWorkspace(path=workspace, is_temp=False)
 
-    async def fake_stream_claude_output(**kwargs):
+    async def fake_stream_session_continuation_output(**kwargs):
         yield session_chat.SSEEvent(
             event="system",
             data=json.dumps(
@@ -183,7 +183,7 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
 
     monkeypatch.setattr("zerg.services.session_continuity.httpx.AsyncClient.get", fail_get)
     monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
-    monkeypatch.setattr(session_chat, "stream_claude_output", fake_stream_claude_output)
+    monkeypatch.setattr(session_chat, "stream_session_continuation_output", fake_stream_session_continuation_output)
 
     from zerg.main import api_app
     from zerg.main import app
@@ -238,7 +238,7 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
     async def fail_get(*_args, **_kwargs):
         raise AssertionError("session chat should not self-fetch exported sessions over HTTP")
 
-    async def fake_stream_claude_output(**kwargs):
+    async def fake_stream_session_continuation_output(**kwargs):
         captured["workspace_path"] = kwargs["workspace_path"]
         captured["target_session_id"] = kwargs["target_session_id"]
         yield session_chat.SSEEvent(
@@ -277,7 +277,11 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
             scratch_base=managed_base,
         ),
     )
-    monkeypatch.setattr(session_chat, "stream_claude_output", fake_stream_claude_output)
+    monkeypatch.setattr(
+        session_chat,
+        "stream_session_continuation_output",
+        fake_stream_session_continuation_output,
+    )
 
     from zerg.main import api_app
     from zerg.main import app
@@ -339,7 +343,7 @@ def test_ship_session_to_zerg_uses_local_ingest_when_db_provided(tmp_path, monke
     with SessionLocal() as db:
         source_session_id = _seed_session(db)
         provider_session_id = asyncio.run(
-            prepare_session_for_resume(
+            prepare_claude_session_for_resume(
                 session_id=str(source_session_id),
                 workspace_path=workspace,
                 db=db,
@@ -425,7 +429,7 @@ def test_build_claude_resume_runtime_requires_zai_key(monkeypatch):
         )
 
 
-def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
+def test_stream_session_continuation_output_uses_zai_env(monkeypatch, tmp_path):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
@@ -492,7 +496,7 @@ def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
     async def collect_events():
         return [
             event
-            async for event in session_chat.stream_claude_output(
+            async for event in session_chat.stream_session_continuation_output(
                 source_session_id=str(uuid4()),
                 target_session_id=str(uuid4()),
                 thread_root_session_id=str(uuid4()),
@@ -533,7 +537,7 @@ def test_stream_claude_output_uses_zai_env(monkeypatch, tmp_path):
     assert any("event: done" in event for event in events)
 
 
-def test_stream_claude_output_reports_persistence_failure(monkeypatch, tmp_path):
+def test_stream_session_continuation_output_reports_persistence_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
@@ -588,7 +592,7 @@ def test_stream_claude_output_reports_persistence_failure(monkeypatch, tmp_path)
     async def collect_events():
         return [
             event
-            async for event in session_chat.stream_claude_output(
+            async for event in session_chat.stream_session_continuation_output(
                 source_session_id=str(uuid4()),
                 target_session_id=str(uuid4()),
                 thread_root_session_id=str(uuid4()),
@@ -609,7 +613,7 @@ def test_stream_claude_output_reports_persistence_failure(monkeypatch, tmp_path)
     assert "could not save the continuation transcript" in done_event
 
 
-def test_stream_claude_output_fake_mode_persists_turn_for_e2e(monkeypatch, tmp_path):
+def test_stream_session_continuation_output_fake_mode_persists_turn_for_e2e(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     monkeypatch.setenv("TESTING", "1")
     monkeypatch.setenv("E2E_FAKE_SESSION_CHAT", "1")
@@ -624,7 +628,7 @@ def test_stream_claude_output_fake_mode_persists_turn_for_e2e(monkeypatch, tmp_p
         async def collect_events():
             return [
                 event
-                async for event in session_chat.stream_claude_output(
+                async for event in session_chat.stream_session_continuation_output(
                     source_session_id=str(source_session_id),
                     target_session_id=str(target_session.id),
                     thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),

@@ -3,8 +3,8 @@
 Phase 2 keeps this intentionally small:
 - resolve a reachable runner owned by the current user
 - create a managed-local AgentSession row
-- launch the provider CLI inside a detached tmux session on that runner
-- verify the tmux session exists
+- launch the provider CLI on that runner using the provider's managed transport
+- verify the managed runtime is reachable
 
 No chat routing or Loop behavior changes live here yet.
 """
@@ -191,12 +191,10 @@ def _build_codex_entry_command(
     managed_session_name: str,
     env_exports: list[str] | None = None,
 ) -> str:
-    """Build the tmux entry command for a managed-local Codex session.
+    """Build the entry command for a managed-local Codex session.
 
-    Managed-local Codex is terminal-first for the current MVP: Longhouse owns
-    the tmux session and the user drives the live Codex TUI by attaching to it.
-    We deliberately avoid browser-side control paths for Codex until there is
-    a first-class provider control plane.
+    Codex still starts as a local TUI on the runner, but Longhouse can later
+    drive it through the codex bridge once the managed session is up.
     """
     del managed_session_name
     exports = list(env_exports or [f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}"])

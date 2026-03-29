@@ -635,14 +635,14 @@ class CommisJobProcessor:
                     logger.warning(f"Failed to set up artifact store for job {job_id}, continuing without it: {artifact_error}")
                     artifact_store = None  # Disable further artifact operations
 
-            # 3. Prepare session for resume if resume_session_id provided
+            # 3. Prepare a Claude resume file if resume_session_id provided
             prepared_resume_id = None
             if resume_session_id:
                 try:
-                    from zerg.services.session_continuity import prepare_session_for_resume
+                    from zerg.services.session_continuity import prepare_claude_session_for_resume
 
                     with db_session() as resume_prep_db:
-                        prepared_resume_id = await prepare_session_for_resume(
+                        prepared_resume_id = await prepare_claude_session_for_resume(
                             session_id=resume_session_id,
                             workspace_path=workspace_path,
                             db=resume_prep_db,
