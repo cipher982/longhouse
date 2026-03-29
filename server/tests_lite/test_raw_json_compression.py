@@ -467,6 +467,7 @@ def test_backfill_raw_json_script_drains_legacy_rows(tmp_path):
     env["DATABASE_URL"] = f"sqlite:///{db_path}"
     env["RAW_JSON_BACKFILL_ROWS_PER_TX"] = "2"
     env["RAW_JSON_BACKFILL_WORKERS"] = "1"
+    env["RAW_JSON_BACKFILL_PROGRESS_EVERY"] = "1"
 
     result = subprocess.run(
         [sys.executable, str(script_path)],
@@ -480,6 +481,9 @@ def test_backfill_raw_json_script_drains_legacy_rows(tmp_path):
     assert result.returncode == 0, (
         f"script exited {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+    assert "starting raw_json backfill:" in result.stdout
+    assert "events_first_pending_id=" in result.stdout
+    assert "source_lines_first_pending_id=" in result.stdout
     assert "backfill complete" in result.stdout
 
     with SessionLocal() as db:
