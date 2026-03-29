@@ -182,7 +182,7 @@ def test_reconcile_incident_normal_resolves_open_watchman_incidents(tmp_path):
         db.add(incident)
         db.commit()
 
-        action, incident_id = ops_watchman.reconcile_incident(
+        action, incident_id, _resolved_summaries = ops_watchman.reconcile_incident(
             db,
             analysis={
                 "status": "normal",

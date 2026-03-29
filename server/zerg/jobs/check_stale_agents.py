@@ -28,10 +28,7 @@ INCIDENT_TYPE = "stale_agent"
 
 
 def _incident_summary(*, device_id: str, elapsed_minutes: int) -> str:
-    return (
-        f"Agent {device_id} has not checked in for {elapsed_minutes} minutes "
-        f"(threshold: {STALE_THRESHOLD_MINUTES} minutes)."
-    )
+    return f"Agent {device_id} has not checked in for {elapsed_minutes} minutes " f"(threshold: {STALE_THRESHOLD_MINUTES} minutes)."
 
 
 def _incident_context(*, device_id: str, elapsed_minutes: int, last_seen: datetime, now: datetime) -> dict[str, Any]:
@@ -63,6 +60,7 @@ async def run() -> dict[str, Any]:
                     FROM agent_heartbeats
                     GROUP BY device_id
                     HAVING MAX(received_at) < :cutoff
+                      AND COUNT(*) >= 3
                     """
                 ),
                 # Use space-separated format to match SQLAlchemy's SQLite datetime storage
