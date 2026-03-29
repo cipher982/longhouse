@@ -630,7 +630,12 @@ def reconcile_incident(
         existing.incident_type = analysis["incident_type"]
         existing.summary = analysis["summary"]
         existing.last_observed_at = now
-        existing.context = _incident_context(analysis, usage, now)
+        new_ctx = _incident_context(analysis, usage, now)
+        # Preserve email cooldown tracking so re-notification logic stays accurate.
+        last_email_at = (existing.context or {}).get("last_email_at")
+        if last_email_at:
+            new_ctx["last_email_at"] = last_email_at
+        existing.context = new_ctx
         incident_id = existing.id
         action = "updated"
 
@@ -656,6 +661,35 @@ def reconcile_incident(
     return action, incident_id, []
 
 
+def _cooldown_elapsed(db: Session, incident_id: int, cooldown_minutes: int) -> bool:
+    """Return True if enough time has passed since the last email for this incident."""
+    incident = db.query(OperationalIncident).filter(OperationalIncident.id == incident_id).first()
+    if incident is None:
+        return False
+    last_email_str = (incident.context or {}).get("last_email_at")
+    if not last_email_str:
+        return False  # Never emailed via cooldown path — "opened" handles the first send
+    try:
+        last_email_at = datetime.fromisoformat(last_email_str)
+        if last_email_at.tzinfo is None:
+            last_email_at = last_email_at.replace(tzinfo=timezone.utc)
+        return (_utc_now() - last_email_at).total_seconds() / 60 >= cooldown_minutes
+    except Exception:
+        return False
+
+
+def _stamp_email_sent(db: Session, incident_id: int | None) -> None:
+    """Record last_email_at in the incident context after a successful send."""
+    if incident_id is None:
+        return
+    incident = db.query(OperationalIncident).filter(OperationalIncident.id == incident_id).first()
+    if incident is None:
+        return
+    ctx = dict(incident.context or {})
+    ctx["last_email_at"] = _iso(_utc_now())
+    incident.context = ctx
+
+
 def maybe_send_watchman_email(
     db: Session,
     *,
@@ -664,13 +698,24 @@ def maybe_send_watchman_email(
     incident_action: str,
     incident_id: int | None,
 ) -> bool:
-    """Send an operator email for a watchman incident when warranted."""
+    """Send an operator email for a watchman incident when warranted.
+
+    Emails on incident open, and re-notifies for critical incidents after the
+    cooldown period (OPS_WATCHMAN_CRITICAL_RESEND_MINUTES, default 30 min).
+    """
     if not analysis["should_email"]:
         return False
     if analysis["status"] == "watch" and os.getenv("OPS_WATCHMAN_EMAIL_ON_WATCH", "0") != "1":
         return False
 
-    should_send = incident_action == "opened" or analysis["status"] == "critical"
+    if incident_action == "opened":
+        should_send = True
+    elif analysis["status"] == "critical" and incident_id is not None:
+        cooldown = int(os.getenv("OPS_WATCHMAN_CRITICAL_RESEND_MINUTES", "30"))
+        should_send = _cooldown_elapsed(db, incident_id, cooldown)
+    else:
+        should_send = False
+
     if not should_send:
         return False
 
@@ -697,7 +742,7 @@ def maybe_send_watchman_email(
             f"- estimated_cost_usd: {usage.get('estimated_cost_usd')}",
         ]
     )
-    return bool(
+    sent = bool(
         send_alert_email(
             subject,
             "\n".join(body_lines),
@@ -707,6 +752,9 @@ def maybe_send_watchman_email(
             metadata={"incident_id": incident_id, "analysis_status": analysis["status"]},
         )
     )
+    if sent:
+        _stamp_email_sent(db, incident_id)
+    return sent
 
 
 def maybe_send_resolution_email(*, resolved_summaries: list[str]) -> bool:
