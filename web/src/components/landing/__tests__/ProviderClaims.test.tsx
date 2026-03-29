@@ -14,8 +14,9 @@ describe("landing provider claims", () => {
     );
 
     expect(screen.getByText("Claude Code")).toBeInTheDocument();
-    expect(screen.getAllByText("Archive sync and cloud sessions; web continuation later")).toHaveLength(2);
     expect(screen.getByText("Archive sync, cloud sessions, direct web continuation")).toBeInTheDocument();
+    expect(screen.getByText("Archive sync, managed-local browser driving, and cloud session starts")).toBeInTheDocument();
+    expect(screen.getByText("Archive sync and cloud sessions; direct web continuation later")).toBeInTheDocument();
     expect(screen.getAllByText("Live now")).toHaveLength(3);
     expect(
       screen.getByText(/Claude currently has the richest hooks and telemetry/i),

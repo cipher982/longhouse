@@ -41,9 +41,9 @@ import {
 } from "../components/ui";
 import { PresenceBadge } from "../components/PresenceBadge";
 import { parseUTC } from "../lib/dateUtils";
-import { getProviderColor, supportsCloudContinuation } from "../lib/providers";
 import { getExecutionHomeLabel } from "../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
+import { getProviderColor, getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
 import { RecallPanel } from "../components/RecallPanel";
 import "../styles/sessions.css";
 
@@ -520,7 +520,7 @@ function SessionCard({
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
   const primaryActionLabel = compatibilityMode
     ? "Open match"
-    : (supportsCloudContinuation(session.provider) ? "Continue in cloud" : "Latest context");
+    : getSessionInteractionCapabilities({ session }).primaryActionLabel;
   const cardClassName = [
     "session-card",
     runtime.isExecuting ? "session-card--live" : "",

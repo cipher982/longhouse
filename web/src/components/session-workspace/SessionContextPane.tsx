@@ -8,6 +8,7 @@ import {
   formatDuration,
   formatProviderLabel,
   formatFullDate,
+  getSessionInteractionCapabilities,
   getProviderColor,
   getSessionOriginLabel,
   truncatePath,
@@ -104,9 +105,9 @@ export function SessionContextPane({
   turnReviewLoading = false,
   turnReviewUnavailable = false,
 }: SessionContextPaneProps) {
-  const isManagedLocalCodex = session.provider === "codex" && session.execution_home === "managed_local";
-  const canDriveManagedLocalFromBrowser =
-    session.execution_home === "managed_local" && Boolean(session.source_runner_id);
+  const interaction = getSessionInteractionCapabilities({ session });
+  const isManagedLocalCodex = interaction.isManagedLocalCodex;
+  const canDriveManagedLocalFromBrowser = interaction.canDriveManagedLocalSession;
   const turnCount = session.user_messages + session.assistant_messages;
   const decisionMeta = latestTurnReview
     ? TURN_DECISION_META[latestTurnReview.decision] ?? {
@@ -126,6 +127,7 @@ export function SessionContextPane({
   const queueLatency = formatLatency(latestTurnReview?.queueLatencyMs ?? null);
   const reviewLatency = formatLatency(latestTurnReview?.reviewLatencyMs ?? null);
   const processingLatency = formatLatency(latestTurnReview?.processingLatencyMs ?? null);
+  const turnReviewDebugPayload = latestTurnReview ? JSON.stringify(latestTurnReview, null, 2) : null;
   const runtime = resolveSessionRuntimeState(session);
   const executionHomeLabel =
     session.execution_home === "legacy" ? null : getExecutionHomeLabel(session.execution_home);
@@ -298,6 +300,14 @@ export function SessionContextPane({
                   </div>
                 ))}
               </div>
+            ) : null}
+            {turnReviewDebugPayload ? (
+              <details className="session-pane-callout session-pane-callout--muted" data-testid="session-turn-review-debug">
+                <summary className="session-pane-callout-title">Debug review payload</summary>
+                <pre className="inspector-code-block">
+                  <code>{turnReviewDebugPayload}</code>
+                </pre>
+              </details>
             ) : null}
           </div>
         ) : (

@@ -129,9 +129,9 @@ export default function DocsPage() {
 
           <h3>Current Support</h3>
           <ul>
-            <li><strong>Claude Code</strong> — strongest support today: timeline sync, hooks, and browser continuation</li>
-            <li><strong>Codex CLI</strong> — timeline sync today; cloud starts supported; browser continuation still Claude-first</li>
-            <li><strong>Gemini CLI</strong> — timeline sync today; cloud starts supported; browser continuation still Claude-first</li>
+            <li><strong>Claude Code</strong> — strongest support today: timeline sync, hooks, and direct browser continuation</li>
+            <li><strong>Codex CLI</strong> — timeline sync, managed-local browser driving, and cloud starts today; direct cloud continuation is still Claude-first</li>
+            <li><strong>Gemini CLI</strong> — timeline sync and cloud starts today; direct browser continuation is still Claude-first</li>
           </ul>
 
           <h3>Coming Soon</h3>
