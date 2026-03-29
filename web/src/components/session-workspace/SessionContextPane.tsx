@@ -105,6 +105,8 @@ export function SessionContextPane({
   turnReviewUnavailable = false,
 }: SessionContextPaneProps) {
   const isManagedLocalCodex = session.provider === "codex" && session.execution_home === "managed_local";
+  const canDriveManagedLocalFromBrowser =
+    session.execution_home === "managed_local" && Boolean(session.source_runner_id);
   const turnCount = session.user_messages + session.assistant_messages;
   const decisionMeta = latestTurnReview
     ? TURN_DECISION_META[latestTurnReview.decision] ?? {
@@ -135,9 +137,14 @@ export function SessionContextPane({
   const attachCommand =
     session.execution_home === "managed_local" ? session.attach_command?.trim() || null : null;
   const attachRunnerLabel = session.source_runner_name?.trim() || "this machine";
-  const loopModeCaption = isManagedLocalCodex
-    ? "For managed-local Codex, Loop Mode changes review posture only. Keep driving the live session from the attached terminal."
-    : "Stored session preference for what Oikos may do after each completed assistant turn.";
+  const loopModeCaption =
+    session.execution_home !== "managed_local"
+      ? "Stored session preference for what Oikos may do after each completed assistant turn."
+      : canDriveManagedLocalFromBrowser
+        ? "Loop Mode changes review posture only. Keep driving the live session from Longhouse below or by reattaching locally."
+        : isManagedLocalCodex
+          ? "For managed-local Codex, Loop Mode changes review posture only. Keep driving the live session from the attached terminal."
+          : "Loop Mode changes review posture only. Keep driving the live session from the attached terminal.";
 
   return (
     <div className="session-context-pane">
@@ -201,8 +208,12 @@ export function SessionContextPane({
             </div>
             <div className="session-pane-callout-copy">
               {isManagedLocalCodex
-                ? `This managed-local Codex session is running on ${attachRunnerLabel}. Use the local terminal command below to reopen the live Codex TUI.`
-                : `This managed-local session is running on ${attachRunnerLabel}. Use the local terminal command below to reopen the live tmux session.`}
+                ? canDriveManagedLocalFromBrowser
+                  ? `This managed-local Codex session is running on ${attachRunnerLabel}. Reopen the live Codex TUI locally anytime, or send prompts from Longhouse below.`
+                  : `This managed-local Codex session is running on ${attachRunnerLabel}. Use the local terminal command below to reopen the live Codex TUI.`
+                : canDriveManagedLocalFromBrowser
+                  ? `This managed-local session is running on ${attachRunnerLabel}. Reattach locally anytime, or keep sending prompts from Longhouse below.`
+                  : `This managed-local session is running on ${attachRunnerLabel}. Use the local terminal command below to reopen the live tmux session.`}
             </div>
             <pre className="inspector-code-block" data-testid="session-attach-command">
               <code>{attachCommand}</code>

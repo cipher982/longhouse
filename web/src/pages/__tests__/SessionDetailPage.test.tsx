@@ -78,10 +78,10 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     execution_home: "managed_local",
     branched_from_event_id: null,
     is_writable_head: true,
-    managed_transport: "tmux",
+    managed_transport: "codex_app_server",
     source_runner_id: 7,
     source_runner_name: "cinder",
-    attach_command: "zsh -lc 'source ~/.zshrc >/dev/null 2>&1; exec tmux -L longhouse-managed attach -t lh-codex'",
+    attach_command: "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
     loop_mode: "manual",
     ...overrides,
   };
@@ -186,19 +186,22 @@ describe("SessionDetailPage", () => {
     });
   });
 
-  it("renders Codex detail with continuation notice and preserved tool inspector labels", async () => {
+  it("renders managed-local Codex detail with live-session controls and preserved tool inspector labels", async () => {
     const user = userEvent.setup();
     renderSessionDetailPage();
 
-    expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
-      "Managed-local Codex stays terminal-driven",
-    );
+    expect(screen.queryByTestId("session-continuation-unavailable")).not.toBeInTheDocument();
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach the live Codex terminal");
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
-      "tmux -L longhouse-managed attach -t lh-codex",
+      "codex-bridge attach --session-id session-codex",
     );
-    expect(screen.getByText(/Loop Mode changes review posture only/i)).toBeInTheDocument();
-    expect(screen.queryByTestId("session-chat")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent(
+      "send prompts from Longhouse below",
+    );
+    expect(
+      screen.getByText(/Keep driving the live session from Longhouse below or by reattaching locally/i),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();
 
     const toolLabel = screen.getByText("Bash");
