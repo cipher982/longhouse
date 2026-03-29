@@ -658,6 +658,7 @@ async def register_all_jobs(scheduler: AsyncIOScheduler | None = None, use_queue
         "zerg.jobs.ops_watchman",
         "zerg.jobs.oikos_operator_sweep",
         "zerg.jobs.wal_checkpoint",
+        "zerg.jobs.compress_raw_json",
     )
     for module_name in builtin_modules:
         try:
