@@ -1546,7 +1546,7 @@ class AgentsStore:
                     leaf_uuid_hint = event_leaf_uuid
 
                 _ev_raw = event_data.raw_json
-                _ev_raw_z = compress_raw_json(_ev_raw) if _ev_raw else None
+                _ev_raw_z = compress_raw_json(_ev_raw) if _ev_raw is not None else None
                 stmt = sqlite_insert(AgentEvent).values(
                     session_id=session_id,
                     branch_id=ingest_branch.id,
@@ -1629,7 +1629,7 @@ class AgentsStore:
 
             revision = prev_revision + 1
             _sl_raw = line_data.raw_json
-            _sl_raw_z = compress_raw_json(_sl_raw) if _sl_raw else None
+            _sl_raw_z = compress_raw_json(_sl_raw) if _sl_raw is not None else None
             stmt = sqlite_insert(AgentSourceLine).values(
                 session_id=session_id,
                 source_path=line_data.source_path,
@@ -2712,7 +2712,7 @@ class AgentsStore:
         events = list(self.db.execute(events_stmt).scalars().all())
 
         # Check if we have raw_json available (lossless path)
-        has_raw_json = any(decode_raw_json(event) for event in events)
+        has_raw_json = any(decode_raw_json(event) is not None for event in events)
 
         lines = []
         if has_raw_json:
@@ -2721,7 +2721,7 @@ class AgentsStore:
             seen_offsets: set[tuple[str | None, int | None]] = set()
             for event in events:
                 _raw = decode_raw_json(event)
-                if _raw:
+                if _raw is not None:
                     key = (event.source_path, event.source_offset)
                     if key not in seen_offsets:
                         seen_offsets.add(key)

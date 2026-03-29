@@ -273,6 +273,8 @@ def _apply_source_lines_rebuild(conn: Connection) -> str:
                 revision INTEGER NOT NULL DEFAULT 1,
                 is_branch_copy INTEGER NOT NULL DEFAULT 0,
                 raw_json TEXT NOT NULL,
+                raw_json_z BLOB,
+                raw_json_codec INTEGER NOT NULL DEFAULT 0,
                 line_hash VARCHAR(64) NOT NULL,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
@@ -299,6 +301,8 @@ def _apply_source_lines_rebuild(conn: Connection) -> str:
                 revision,
                 is_branch_copy,
                 raw_json,
+                raw_json_z,
+                raw_json_codec,
                 line_hash,
                 created_at
             )
@@ -311,6 +315,8 @@ def _apply_source_lines_rebuild(conn: Connection) -> str:
                 {revision_expr} AS revision,
                 {copy_expr} AS is_branch_copy,
                 sl.raw_json,
+                sl.raw_json_z,
+                COALESCE(sl.raw_json_codec, 0),
                 sl.line_hash,
                 COALESCE(sl.created_at, CURRENT_TIMESTAMP)
             FROM source_lines sl

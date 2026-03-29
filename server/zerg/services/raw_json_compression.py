@@ -5,7 +5,7 @@ Codec values stored in raw_json_codec:
   1 = ZSTD  — zstd-compressed bytes in raw_json_z BLOB; raw_json is '' / NULL sentinel
 
 New rows always write codec=1 (compressed). Legacy rows stay codec=0 until the
-background migration job backfills raw_json_z and nulls/clears raw_json.
+background migration job backfills raw_json_z and clears raw_json text.
 """
 
 from __future__ import annotations
@@ -36,14 +36,15 @@ def decode_raw_json(obj) -> str | None:
 
     Handles both codec=0 (plain TEXT in raw_json) and codec=1 (zstd BLOB in
     raw_json_z). Safe to call on any AgentEvent or AgentSourceLine instance.
-    Returns None when neither column has data (e.g. event had no raw payload).
+    Returns None when no payload exists. Uses explicit None checks — never
+    treats empty string as missing so legitimate empty values aren't lost.
     """
     codec = getattr(obj, "raw_json_codec", None)
     if codec == CODEC_ZSTD:
         blob = getattr(obj, "raw_json_z", None)
-        if not blob:
+        if blob is None:
             return None
         return decompress_raw_json(blob)
-    # CODEC_PLAIN or missing codec field — fall back to text column
+    # CODEC_PLAIN or missing codec field — use text column as-is
     raw = getattr(obj, "raw_json", None)
-    return raw if raw else None
+    return raw  # may be None, empty string, or real content — caller decides
