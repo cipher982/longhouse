@@ -611,13 +611,15 @@ def _migrate_agents_columns(engine: Engine) -> None:
             )
             if "last_activity_at" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN last_activity_at DATETIME"))
-                conn.execute(
-                    text(
-                        "UPDATE sessions SET last_activity_at = ("
-                        "SELECT MAX(e.timestamp) FROM events e WHERE e.session_id = sessions.id"
-                        ") WHERE last_activity_at IS NULL"
+                events_exists = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'")).fetchone()
+                if events_exists:
+                    conn.execute(
+                        text(
+                            "UPDATE sessions SET last_activity_at = ("
+                            "SELECT MAX(e.timestamp) FROM events e WHERE e.session_id = sessions.id"
+                            ") WHERE last_activity_at IS NULL"
+                        )
                     )
-                )
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_last_activity_at ON sessions(last_activity_at)"))
             conn.commit()
     except Exception:
