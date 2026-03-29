@@ -8137,11 +8137,6 @@ export interface components {
              * @default manual
              */
             loop_mode: components["schemas"]["SessionLoopMode"];
-            /**
-             * @description Managed local transport (tmux today; codex_app_server reserved for the native Codex path)
-             * @default tmux
-             */
-            managed_transport: components["schemas"]["ManagedSessionTransport"];
         };
         /**
          * ManagedLocalSessionLaunchResponse
@@ -8208,11 +8203,6 @@ export interface components {
              */
             loop_mode: components["schemas"]["SessionLoopMode"];
             /**
-             * @description Managed local transport (tmux or codex_app_server for native Codex)
-             * @default tmux
-             */
-            managed_transport: components["schemas"]["ManagedSessionTransport"];
-            /**
              * Machine Name
              * @description Optional local Longhouse machine label override used to resolve this device's runner
              */
@@ -8221,6 +8211,8 @@ export interface components {
         /**
          * ManagedSessionTransport
          * @description Execution transport for Longhouse-managed sessions.
+         *
+         *     Transport is auto-determined by provider — not user-selectable.
          * @enum {string}
          */
         ManagedSessionTransport: "tmux" | "codex_app_server";

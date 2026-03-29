@@ -185,12 +185,16 @@ def codex(
     typer.echo(f"Session ID: {result.session_id}")
     typer.echo(f"Session URL: {session_url}")
     typer.echo("Starting native Codex bridge...")
-    thread_id, ws_url = _start_native_codex_bridge(
-        session_id=result.session_id,
-        cwd=cwd,
-        url=resolved_url,
-        token=resolved_token,
-    )
+    try:
+        thread_id, ws_url = _start_native_codex_bridge(
+            session_id=result.session_id,
+            cwd=cwd,
+            url=resolved_url,
+            token=resolved_token,
+        )
+    except _NativeBridgeError as exc:
+        typer.secho(f"Codex bridge failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
     typer.echo(f"Codex thread: {thread_id}")
     typer.echo(f"Remote target: {ws_url}")
 

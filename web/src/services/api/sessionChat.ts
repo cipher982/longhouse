@@ -26,7 +26,6 @@ export interface ManagedLocalSessionLaunchRequest {
   git_branch?: string | null;
   display_name?: string | null;
   loop_mode?: "manual" | "assist" | "autopilot";
-  managed_transport?: "tmux";
 }
 
 export interface ManagedLocalSessionLaunchResponse {

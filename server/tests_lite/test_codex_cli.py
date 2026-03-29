@@ -152,3 +152,34 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert "Attaching..." in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert native_tui_calls == [("thr_123", "ws://127.0.0.1:4800", str(tmp_path))]
+
+
+def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        codex_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(codex_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        codex_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: codex_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="",
+            source_runner_name="work-laptop",
+        ),
+    )
+    monkeypatch.setattr(
+        codex_cli,
+        "_start_native_codex_bridge",
+        lambda **_kwargs: (_ for _ in ()).throw(codex_cli._NativeBridgeError("engine not found")),
+    )
+
+    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "Codex bridge failed: engine not found" in result.output

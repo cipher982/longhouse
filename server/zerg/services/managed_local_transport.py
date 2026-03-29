@@ -37,10 +37,6 @@ class ManagedLocalTransportError(ValueError):
     """Base error for managed-local transport planning."""
 
 
-class ManagedLocalTransportNotImplementedError(ManagedLocalTransportError):
-    """Raised when a valid transport exists conceptually but is not wired yet."""
-
-
 def _build_engine_bridge_shell_command(
     *,
     session_id: str,
@@ -168,7 +164,7 @@ def build_managed_local_interrupt_command(*, session: AgentSession) -> str:
             cmd,
             tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
         )
-    raise ManagedLocalTransportNotImplementedError(f"Managed local interrupt is not implemented for transport '{transport.value}'")
+    raise ManagedLocalTransportError(f"Unknown managed local transport: {transport.value}")
 
 
 def build_managed_local_send_text_command(*, session: AgentSession, text: str) -> str:
@@ -205,7 +201,6 @@ def build_managed_local_send_text_command(*, session: AgentSession, text: str) -
 __all__ = [
     "ManagedLocalLaunchTransportPlan",
     "ManagedLocalTransportError",
-    "ManagedLocalTransportNotImplementedError",
     "build_managed_local_attach_command",
     "build_managed_local_interrupt_command",
     "build_managed_local_launch_transport_plan",

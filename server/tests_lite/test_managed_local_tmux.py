@@ -17,7 +17,6 @@ from zerg.services.managed_local_tmux import build_tmux_paste_text_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
 from zerg.services.managed_local_tmux import build_tmux_set_remain_on_exit_command
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
-from zerg.services.managed_local_tmux import validate_managed_transport
 
 
 def _wrapped_inner(command: str) -> str:
@@ -33,11 +32,6 @@ def test_normalize_tmux_session_name_sanitizes_and_prefixes():
 def test_normalize_tmux_session_name_rewrites_tmux_target_separator():
     assert normalize_tmux_session_name("colon:test") == "lh-colon-test"
 
-
-def test_validate_managed_transport_accepts_known_transports_and_empty():
-    assert validate_managed_transport("tmux") == "tmux"
-    assert validate_managed_transport("codex_app_server") == "codex_app_server"
-    assert validate_managed_transport(None) is None
 
 
 def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
