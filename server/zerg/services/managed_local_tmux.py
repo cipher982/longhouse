@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 import shlex
 
-from zerg.session_execution_home import ManagedSessionTransport
-
 TMUX_SESSION_NAME_MAX = 64
 _TMUX_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 MANAGED_LOCAL_TMUX_SERVER_LABEL = "longhouse-managed"
@@ -34,14 +32,6 @@ def normalize_tmux_session_name(seed: str, *, prefix: str = "lh") -> str:
         raise ValueError("tmux session seed did not contain any safe characters")
     name = f"{prefix}-{cleaned}" if prefix else cleaned
     return name[:TMUX_SESSION_NAME_MAX].rstrip("-")
-
-
-def validate_managed_transport(value: str | None) -> ManagedSessionTransport | None:
-    """Validate managed transport string, returning None for empty values."""
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    return ManagedSessionTransport(raw)
 
 
 def _quote(value: str) -> str:
