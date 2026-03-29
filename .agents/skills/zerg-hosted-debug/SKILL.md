@@ -12,10 +12,10 @@ Use this when the question is about a live hosted tenant, not local `make dev`.
 Start with the repo helper:
 
 ```bash
-scripts/hosted-loop-debug.sh david010
-scripts/hosted-loop-debug.sh --subdomain david010 --session <session-id> --limit 5
-scripts/hosted-loop-debug.sh --subdomain david010 --logs
-scripts/hosted-loop-debug.sh --subdomain david010 --session <session-id> --json
+bash scripts/ops/hosted-loop-debug.sh david010
+bash scripts/ops/hosted-loop-debug.sh --subdomain david010 --session <session-id> --limit 5
+bash scripts/ops/hosted-loop-debug.sh --subdomain david010 --logs
+bash scripts/ops/hosted-loop-debug.sh --subdomain david010 --session <session-id> --json
 ```
 
 It does the right order automatically:
