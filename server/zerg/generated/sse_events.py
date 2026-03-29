@@ -3,7 +3,7 @@
 # Using AsyncAPI 3.0 + SSE Protocol Code Generation
 #
 # This file contains strongly-typed SSE event definitions.
-# To update, modify the schema file and run: python scripts/generate-sse-types.py schemas/sse-events.asyncapi.yml
+# To update, modify the schema file and run: python scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml
 
 import json
 from enum import Enum
