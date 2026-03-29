@@ -24,7 +24,7 @@ import yaml
 class SSETypeGenerator:
     def __init__(self, schema_path: str):
         """Initialize with AsyncAPI 3.0 schema path."""
-        self.repo_root = Path(__file__).resolve().parent.parent
+        self.repo_root = Path(__file__).resolve().parents[2]
         self.schema_path = self.repo_root / schema_path
         self.schema = self._load_schema()
 

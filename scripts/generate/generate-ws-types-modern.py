@@ -20,7 +20,7 @@ import yaml
 class ModernProtocolGenerator:
     def __init__(self, schema_path: str):
         """Initialize with AsyncAPI 3.0 schema path."""
-        self.repo_root = Path(__file__).resolve().parent.parent
+        self.repo_root = Path(__file__).resolve().parents[2]
 
         candidate = Path(schema_path)
         if not candidate.is_absolute():
