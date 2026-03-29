@@ -228,7 +228,10 @@ class AgentEvent(AgentsBase):
     schema_version = Column(Integer, default=1)
 
     # Raw storage for lossless archiving (original JSONL line)
+    # codec=0: plain TEXT in raw_json; codec=1: zstd BLOB in raw_json_z (raw_json is NULL)
     raw_json = Column(Text, nullable=True)
+    raw_json_z = Column(LargeBinary, nullable=True)
+    raw_json_codec = Column(Integer, nullable=False, server_default=text("0"))
     event_uuid = Column(String(255), nullable=True, index=True)  # Raw line uuid (Claude/Codex/Gemini event id)
     parent_event_uuid = Column(String(255), nullable=True, index=True)  # Raw parent linkage id (Claude parentUuid)
 
@@ -285,7 +288,10 @@ class AgentSourceLine(AgentsBase):
     branch_id = Column(Integer, nullable=False, index=True)
     revision = Column(Integer, nullable=False, server_default=text("1"))
     is_branch_copy = Column(Integer, nullable=False, server_default=text("0"))  # 1 when copied during rewind fork
+    # codec=0: plain TEXT in raw_json; codec=1: zstd BLOB in raw_json_z (raw_json is '' sentinel)
     raw_json = Column(Text, nullable=False)
+    raw_json_z = Column(LargeBinary, nullable=True)
+    raw_json_codec = Column(Integer, nullable=False, server_default=text("0"))
     line_hash = Column(String(64), nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
