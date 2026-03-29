@@ -295,6 +295,19 @@ describe("SessionsPage", () => {
     });
   });
 
+  it("does not start a workspace prefetch on mouse pointer-down", async () => {
+    const queryClient = createQueryClient();
+    const prefetchSpy = vi.spyOn(queryClient, "prefetchQuery").mockImplementation(async (options) => {
+      await options.queryFn?.();
+    });
+
+    renderSessionsPage("/timeline", queryClient);
+
+    fireEvent.pointerDown(await screen.findByTestId("session-card"), { pointerType: "mouse" });
+
+    expect(prefetchSpy).not.toHaveBeenCalled();
+  });
+
   it("uses honest grouped-results copy in query compatibility mode", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
