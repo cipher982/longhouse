@@ -213,6 +213,33 @@ async def run_ingest_task_worker(
             await asyncio.sleep(poll_seconds)
 
 
+def _peek_has_pending(
+    session_maker,
+    include_task_types: tuple[str, ...] | None,
+    exclude_task_types: tuple[str, ...] | None,
+) -> bool:
+    """Fast read-only check: any claimable pending tasks?
+
+    Uses a plain read session (not the write serializer) so empty-queue
+    polls don't pollute the task-claim metric. Accepts the sessionmaker
+    directly so patched write-serializer factories work in tests.
+    """
+    db = session_maker()
+    try:
+        now = datetime.now(timezone.utc)
+        q = db.query(SessionTask.id).filter(
+            SessionTask.status == "pending",
+            SessionTask.updated_at <= now,
+        )
+        if include_task_types:
+            q = q.filter(SessionTask.task_type.in_(include_task_types))
+        if exclude_task_types:
+            q = q.filter(~SessionTask.task_type.in_(exclude_task_types))
+        return q.first() is not None
+    finally:
+        db.close()
+
+
 async def _process_batch(
     *,
     worker_name: str = "default",
@@ -222,6 +249,13 @@ async def _process_batch(
     while True:
         ws = get_write_serializer()
         if not ws.is_configured:
+            return
+        # Cheap read-only peek before touching the write serializer — keeps
+        # "task-claim" counts meaningful (actual claims, not idle polls).
+        # Uses the serializer's own factory so patched test serializers work.
+        _session_maker = ws._resolve_session_factory()
+        has_work = await asyncio.to_thread(_peek_has_pending, _session_maker, include_task_types, exclude_task_types)
+        if not has_work:
             return
         tasks = await ws.execute(
             lambda db, _include=include_task_types, _exclude=exclude_task_types: _claim_pending(

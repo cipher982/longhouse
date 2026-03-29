@@ -30,7 +30,7 @@ impl Default for ShipperConfig {
             api_token: None,
             db_path: None,
             workers: num_cpus::get(),
-            max_batch_bytes: 5 * 1024 * 1024, // 5 MB
+            max_batch_bytes: 50 * 1024 * 1024, // 50 MB
             timeout_seconds: 60,
             max_retries_429: 5,
             base_backoff_seconds: 1.0,

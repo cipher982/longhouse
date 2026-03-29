@@ -157,17 +157,34 @@ def _make_observation(
     )
 
 
-def _collect_db_file_stats(now: datetime, window_start: datetime) -> list[OpsWatchObservation]:
+def _collect_db_file_stats(db: Session, now: datetime, window_start: datetime) -> list[OpsWatchObservation]:
     paths = _db_file_paths()
     if paths is None:
         return []
 
     db_path, wal_path = paths
+    db_bytes = db_path.stat().st_size if db_path.exists() else None
+
+    # Compute growth delta vs previous observation.
+    prev = (
+        db.query(OpsWatchObservation)
+        .filter(
+            OpsWatchObservation.entity_type == "tenant",
+            OpsWatchObservation.entity_id == "self",
+            OpsWatchObservation.source == "db_file_stats",
+        )
+        .order_by(OpsWatchObservation.id.desc())
+        .first()
+    )
+    prev_bytes = prev.payload_json.get("db_bytes") if prev and prev.payload_json else None
+    db_bytes_delta = (db_bytes - prev_bytes) if db_bytes is not None and prev_bytes is not None else None
+
     payload = {
         "database_url": get_settings().database_url,
         "db_path": str(db_path),
         "db_exists": db_path.exists(),
-        "db_bytes": db_path.stat().st_size if db_path.exists() else None,
+        "db_bytes": db_bytes,
+        "db_bytes_delta": db_bytes_delta,
         "wal_path": str(wal_path),
         "wal_exists": wal_path.exists(),
         "wal_bytes": wal_path.stat().st_size if wal_path.exists() else 0,
@@ -356,7 +373,7 @@ def collect_observations(db: Session, *, now: datetime | None = None) -> list[Op
     observed_at = now or _utc_now()
     window_start = observed_at - timedelta(minutes=_watchman_window_minutes())
     observations: list[OpsWatchObservation] = []
-    observations.extend(_collect_db_file_stats(observed_at, window_start))
+    observations.extend(_collect_db_file_stats(db, observed_at, window_start))
     observations.extend(_collect_write_serializer_metrics(observed_at, window_start))
     observations.extend(_collect_ingest_health(db, observed_at, window_start))
     observations.extend(_collect_open_incidents(db, observed_at, window_start))
@@ -546,7 +563,7 @@ def _incident_context(analysis: dict[str, Any], usage: dict[str, Any], now: date
     }
 
 
-def _resolve_open_watchman_incidents(db: Session, now: datetime, *, resolved_summary: str) -> int:
+def _resolve_open_watchman_incidents(db: Session, now: datetime, *, resolved_summary: str) -> tuple[int, list[str]]:
     rows = (
         db.query(OperationalIncident)
         .filter(
@@ -555,6 +572,7 @@ def _resolve_open_watchman_incidents(db: Session, now: datetime, *, resolved_sum
         )
         .all()
     )
+    prev_summaries = [row.summary for row in rows if row.summary]
     for row in rows:
         row.status = OPERATIONAL_INCIDENT_STATUS_RESOLVED
         row.summary = resolved_summary
@@ -564,7 +582,7 @@ def _resolve_open_watchman_incidents(db: Session, now: datetime, *, resolved_sum
         context["resolved_at"] = _iso(now)
         context["resolved_by_watchman"] = True
         row.context = context
-    return len(rows)
+    return len(rows), prev_summaries
 
 
 def reconcile_incident(
@@ -573,15 +591,15 @@ def reconcile_incident(
     analysis: dict[str, Any],
     usage: dict[str, Any],
     now: datetime,
-) -> tuple[str, int | None]:
+) -> tuple[str, int | None, list[str]]:
     """Open/update/resolve watchman incidents for the current analysis."""
     if analysis["status"] == "normal":
-        resolved = _resolve_open_watchman_incidents(
+        resolved, prev_summaries = _resolve_open_watchman_incidents(
             db,
             now,
             resolved_summary="AI ops watchman returned to normal",
         )
-        return ("resolved" if resolved else "none"), None
+        return ("resolved" if resolved else "none"), None, prev_summaries
 
     existing = (
         db.query(OperationalIncident)
@@ -635,7 +653,7 @@ def reconcile_incident(
         context["resolved_by_watchman"] = True
         row.context = context
 
-    return action, incident_id
+    return action, incident_id, []
 
 
 def maybe_send_watchman_email(
@@ -687,6 +705,28 @@ def maybe_send_watchman_email(
             alert_type="ai_ops_watchman",
             job_id="ai-ops-watchman",
             metadata={"incident_id": incident_id, "analysis_status": analysis["status"]},
+        )
+    )
+
+
+def maybe_send_resolution_email(*, resolved_summaries: list[str]) -> bool:
+    """Send a resolution notification when the watchman clears back to normal."""
+    if not resolved_summaries:
+        return False
+    body_lines = [
+        "AI Ops Watchman: system returned to normal.",
+        "",
+        "Resolved:",
+    ]
+    body_lines.extend(f"- {s}" for s in resolved_summaries)
+    return bool(
+        send_alert_email(
+            "RESOLVED (LONGHOUSE): AI ops watchman back to normal",
+            "\n".join(body_lines),
+            level="INFO",
+            alert_type="ai_ops_watchman_resolved",
+            job_id="ai-ops-watchman",
+            metadata={"resolved_summaries": resolved_summaries},
         )
     )
 
@@ -759,7 +799,7 @@ async def run_watchman_cycle(*, db_session_factory) -> dict[str, Any]:
         run.estimated_cost_usd = usage.get("estimated_cost_usd")
         run.usage_json = usage
 
-        incident_action, incident_id = reconcile_incident(db, analysis=analysis, usage=usage, now=finished)
+        incident_action, incident_id, resolved_summaries = reconcile_incident(db, analysis=analysis, usage=usage, now=finished)
         email_sent = maybe_send_watchman_email(
             db,
             analysis=analysis,
@@ -767,11 +807,15 @@ async def run_watchman_cycle(*, db_session_factory) -> dict[str, Any]:
             incident_action=incident_action,
             incident_id=incident_id,
         )
+        resolution_email_sent = False
+        if incident_action == "resolved":
+            resolution_email_sent = maybe_send_resolution_email(resolved_summaries=resolved_summaries)
         run.result_json = {
             **analysis,
             "incident_action": incident_action,
             "incident_id": incident_id,
             "email_sent": email_sent,
+            "resolution_email_sent": resolution_email_sent,
             "observation_count": len(observations),
         }
         db.commit()
@@ -782,6 +826,7 @@ async def run_watchman_cycle(*, db_session_factory) -> dict[str, Any]:
         "incident_action": incident_action,
         "incident_id": incident_id,
         "email_sent": email_sent,
+        "resolution_email_sent": resolution_email_sent,
         "observations": len(observations),
         "input_tokens": usage.get("input_tokens"),
         "estimated_cost_usd": usage.get("estimated_cost_usd"),
