@@ -18,6 +18,7 @@ import { EventInspectorPane } from "../components/session-workspace/EventInspect
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
+import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
@@ -45,6 +46,7 @@ function SessionDetailWorkspaceRoute({
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const workspace = useSessionWorkspace(sessionId, { highlightEventId });
+  const documentVisible = useDocumentVisible();
   const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
   const [loopModePending, setLoopModePending] = useState(false);
 
@@ -93,18 +95,20 @@ function SessionDetailWorkspaceRoute({
     navigate(returnTo);
   };
 
+  const workspaceReady = !sessionLoading && !eventsLoading;
+
   useReadinessFlag({
-    ready: !sessionLoading && !eventsLoading,
-    screenshotReady: !sessionLoading && !eventsLoading,
+    ready: workspaceReady,
+    screenshotReady: workspaceReady,
   });
 
   const turnTelemetryQuery = useQuery({
     queryKey: ["session-turn-telemetry", session?.id],
     queryFn: () => fetchSessionTurnTelemetry(session?.id as string),
-    enabled: Boolean(session?.id),
+    enabled: Boolean(session?.id) && workspaceReady && documentVisible,
     retry: false,
     refetchOnWindowFocus: false,
-    staleTime: 30_000,
+    staleTime: 60_000,
   });
 
   const latestTurnReview: SessionTurnReview | null = turnTelemetryQuery.data?.latestReview ?? null;

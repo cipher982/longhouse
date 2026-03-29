@@ -17,6 +17,7 @@ import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import { useClickOutside } from "../hooks/useClickOutside";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
+import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useTimelineSessionStream } from "../hooks/useTimelineSessionStream";
 import { useReadinessFlag } from "../lib/readiness-contract";
@@ -102,25 +103,6 @@ function getDateKey(dateStr: string, nowMs: number = Date.now()): string {
     month: "short",
     day: "numeric",
   });
-}
-
-function useDocumentVisible(): boolean {
-  const [isVisible, setIsVisible] = useState(() => typeof document === "undefined" || !document.hidden);
-
-  useEffect(() => {
-    if (typeof document === "undefined") {
-      return;
-    }
-
-    const handleVisibilityChange = () => {
-      setIsVisible(!document.hidden);
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, []);
-
-  return isVisible;
 }
 
 function useRelativeTimeClock(enabled: boolean): number {

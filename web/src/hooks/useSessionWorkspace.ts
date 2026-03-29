@@ -5,6 +5,8 @@ import {
   useAgentSessionWithOptions,
 } from "./useAgentSessions";
 import { useDebouncedValue } from "./useDebouncedValue";
+import { useDocumentVisible } from "./useDocumentVisible";
+import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import {
   buildTimelineModel,
   getPreferredSelectionKey,
@@ -12,7 +14,7 @@ import {
   type EventFilter,
 } from "../lib/sessionWorkspace";
 
-const EVENTS_PAGE_SIZE = 1000;
+const INITIAL_EVENTS_PAGE_SIZE = 200;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
 const AUTO_SCROLL_EPSILON_PX = 1;
 const WORKSPACE_RUNTIME_REFRESH_MS = 5_000;
@@ -26,13 +28,43 @@ export function useSessionWorkspace(
   options: UseSessionWorkspaceOptions = {},
 ) {
   const highlightEventId = options.highlightEventId ?? null;
+  const documentVisible = useDocumentVisible();
 
   const { data: session, isLoading: sessionLoading, error: sessionError } = useAgentSessionWithOptions(
     sessionId,
-    { refetchInterval: WORKSPACE_RUNTIME_REFRESH_MS },
+    {
+      refetchInterval: (query) => {
+        const currentSession = query.state.data;
+        if (!documentVisible || !currentSession) {
+          return false;
+        }
+
+        const runtime = resolveSessionRuntimeState(currentSession);
+        const shouldRefresh =
+          currentSession.ended_at == null ||
+          runtime.isLive ||
+          runtime.needsAttention ||
+          runtime.heuristicActive;
+
+        return shouldRefresh ? WORKSPACE_RUNTIME_REFRESH_MS : false;
+      },
+    },
   );
+  const sessionRuntime = useMemo(
+    () => (session ? resolveSessionRuntimeState(session) : null),
+    [session],
+  );
+  const shouldRefreshRuntime =
+    documentVisible &&
+    session != null &&
+    (session.ended_at == null ||
+      sessionRuntime?.isLive ||
+      sessionRuntime?.needsAttention ||
+      sessionRuntime?.heuristicActive);
+  const runtimeRefreshInterval = shouldRefreshRuntime ? WORKSPACE_RUNTIME_REFRESH_MS : false;
+
   const { data: threadData } = useAgentSessionThreadWithOptions(sessionId, {
-    refetchInterval: WORKSPACE_RUNTIME_REFRESH_MS,
+    refetchInterval: runtimeRefreshInterval,
   });
 
   const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
@@ -44,7 +76,7 @@ export function useSessionWorkspace(
     hasNextPage,
     isFetchingNextPage,
   } = useAgentSessionProjectionInfinite(sessionId, {
-    limit: EVENTS_PAGE_SIZE,
+    limit: INITIAL_EVENTS_PAGE_SIZE,
     branch_mode: showAbandonedBranches ? "all" : "head",
   });
 
@@ -83,7 +115,8 @@ export function useSessionWorkspace(
     [threadData, session],
   );
 
-  const headSessionId = threadData?.head_session_id || session?.thread_head_session_id || session?.id || null;
+  const headSessionId =
+    threadData?.head_session_id || session?.thread_head_session_id || session?.id || null;
 
   const currentThreadSession = useMemo(
     () => threadSessions.find((item) => item.id === session?.id) || session || null,
