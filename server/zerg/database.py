@@ -257,6 +257,23 @@ def make_sessionmaker(engine: Engine) -> sessionmaker:
     )
 
 
+def make_write_engine(db_url: str) -> Engine:
+    """Create the dedicated writer engine used by the write serializer.
+
+    File-backed SQLite uses a one-connection QueuePool instead of StaticPool.
+    The serializer executes writes in worker threads, and reusing the same raw
+    sqlite connection across thread hops via StaticPool can produce broken ORM
+    state on live request paths. In-memory SQLite still relies on StaticPool so
+    the ephemeral database survives across checkouts.
+    """
+
+    parsed = make_url(db_url)
+    is_memory = parsed.database in (None, "", ":memory:")
+    if is_memory:
+        return make_engine(db_url, busy_timeout_ms=30000)
+    return make_engine(db_url, busy_timeout_ms=30000, pool_size=1, max_overflow=0)
+
+
 def get_session_factory() -> sessionmaker:
     """Get the default session factory for the application.
 
@@ -289,14 +306,9 @@ if _settings.database_url:
     default_engine = make_engine(_settings.database_url)
     default_session_factory = make_sessionmaker(default_engine)
 
-    # Dedicated write engine: single connection (StaticPool) so the
-    # WriteSerializer is the only thing that ever writes.  30s busy_timeout
-    # for the writer — it's the serialized path so contention is near-zero.
-    _write_engine = make_engine(
-        _settings.database_url,
-        busy_timeout_ms=30000,
-        poolclass=StaticPool,
-    )
+    # Dedicated write engine: a single checked-out connection for file-backed
+    # SQLite, or StaticPool for in-memory SQLite.
+    _write_engine = make_write_engine(_settings.database_url)
     _write_session_factory = make_sessionmaker(_write_engine)
 else:
     # Unit tests will override these in conftest.py before any actual usage

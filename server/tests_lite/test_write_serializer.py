@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import os
+import subprocess
+import sys
 import threading
 import time
 from contextvars import ContextVar
+from pathlib import Path
+from textwrap import dedent
 
 import pytest
 from sqlalchemy import text as sa_text
@@ -142,3 +148,77 @@ async def test_dynamic_session_factory_routes_writes_by_context(tmp_path):
 
     assert base_rows == ["base-write"]
     assert commis_rows == ["commis-write"]
+
+
+def test_full_app_ingest_succeeds_in_subprocess_without_testing_flag(tmp_path):
+    """Regression: full-app ingest must work on the production-style writer path."""
+
+    db_path = tmp_path / "full-app-ingest.db"
+    server_dir = Path(__file__).resolve().parents[1]
+    payload_script = dedent(
+        """
+        import json
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        from fastapi.testclient import TestClient
+
+        from zerg.main import app
+
+        session_id = str(uuid4())
+        payload = {
+            "id": session_id,
+            "provider": "claude",
+            "environment": "development",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "events": [
+                {
+                    "role": "user",
+                    "content_text": "hello",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "source_path": "/tmp/session.jsonl",
+                    "source_offset": 1,
+                    "raw_json": "{\\"type\\":\\"user\\",\\"message\\":\\"hello\\"}",
+                }
+            ],
+            "source_lines": [],
+        }
+
+        with TestClient(app) as client:
+            ingest = client.post("/api/agents/ingest", content=json.dumps(payload))
+            print("ingest", ingest.status_code, ingest.text)
+            if ingest.status_code != 200:
+                raise SystemExit(1)
+
+            session = client.get(f"/api/agents/sessions/{session_id}")
+            print("session", session.status_code, session.text)
+            if session.status_code != 200:
+                raise SystemExit(2)
+        """
+    )
+
+    env = os.environ.copy()
+    env.pop("TESTING", None)
+    env.update(
+        {
+            "DATABASE_URL": f"sqlite:///{db_path}",
+            "AUTH_DISABLED": "1",
+            "SKIP_DEMO_SEED": "1",
+            "JOB_QUEUE_ENABLED": "0",
+            "FERNET_SECRET": base64.urlsafe_b64encode(os.urandom(32)).decode(),
+            "TRIGGER_SIGNING_SECRET": base64.urlsafe_b64encode(os.urandom(32)).decode(),
+        }
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", payload_script],
+        cwd=server_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        f"subprocess exited {result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
