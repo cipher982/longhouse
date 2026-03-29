@@ -12,10 +12,13 @@ Covers:
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
 
+from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
 from zerg.database import make_engine
@@ -41,6 +44,80 @@ def _make_db(tmp_path):
     engine = engine.execution_options(schema_translate_map={"agents": None})
     AgentsBase.metadata.create_all(bind=engine)
     return sessionmaker(bind=engine)
+
+
+class _FakeWriteSerializer:
+    def __init__(self, session_factory, *, configured: bool = True):
+        self._session_factory = session_factory
+        self.is_configured = configured
+        self.calls: list[dict[str, object]] = []
+
+    async def execute(self, fn, *, label="", auto_commit=True):
+        self.calls.append({"label": label, "auto_commit": auto_commit})
+        db = self._session_factory()
+        try:
+            result = fn(db)
+            if auto_commit:
+                db.commit()
+            return result
+        finally:
+            db.close()
+
+
+def _seed_legacy_rows(SessionLocal, *, source_lines: list[str] | None = None, events: list[str | None] | None = None) -> UUID:
+    session_id = uuid4()
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = AgentSession(
+            id=session_id,
+            provider="claude",
+            environment="test",
+            project="compression-test",
+            started_at=now,
+        )
+        db.add(session)
+        db.flush()
+
+        branch = AgentSessionBranch(session_id=session_id, branch_reason="root", is_head=1)
+        db.add(branch)
+        db.flush()
+
+        for idx, raw_json in enumerate(source_lines or []):
+            db.add(
+                AgentSourceLine(
+                    session_id=session_id,
+                    source_path=_SOURCE_PATH,
+                    source_offset=idx,
+                    branch_id=branch.id,
+                    revision=1,
+                    is_branch_copy=0,
+                    raw_json=raw_json,
+                    raw_json_z=None,
+                    raw_json_codec=CODEC_PLAIN,
+                    line_hash=hashlib.sha256(raw_json.encode()).hexdigest(),
+                )
+            )
+
+        for idx, raw_json in enumerate(events or []):
+            db.add(
+                AgentEvent(
+                    session_id=session_id,
+                    branch_id=branch.id,
+                    role="user",
+                    content_text=f"event-{idx}",
+                    timestamp=now,
+                    source_path=_SOURCE_PATH,
+                    source_offset=idx,
+                    raw_json=raw_json,
+                    raw_json_z=None,
+                    raw_json_codec=CODEC_PLAIN,
+                )
+            )
+
+        db.commit()
+
+    return session_id
 
 
 # ---------------------------------------------------------------------------
@@ -275,3 +352,89 @@ def test_export_mixed_legacy_and_compressed(tmp_path):
     exported_lines = [l for l in content_bytes.decode("utf-8").strip().split("\n") if l]
     assert legacy_line in exported_lines
     assert new_line in exported_lines
+
+
+def test_compress_raw_json_job_drains_all_chunks_and_compresses_empty_string_source_line(tmp_path, monkeypatch):
+    from zerg.jobs.compress_raw_json import run
+
+    SessionLocal = _make_db(tmp_path)
+    engine = SessionLocal.kw["bind"]
+    _seed_legacy_rows(
+        SessionLocal,
+        source_lines=[
+            '{"type":"system","content":"first legacy line"}',
+            "",
+            '{"type":"user","content":"third legacy line"}',
+        ],
+    )
+
+    fake_ws = _FakeWriteSerializer(SessionLocal)
+    monkeypatch.setattr("zerg.database.default_engine", engine)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: fake_ws)
+    monkeypatch.setenv("COMPRESS_RAW_JSON_CHUNK_SIZE", "2")
+    monkeypatch.setenv("COMPRESS_RAW_JSON_BATCH_SLEEP_MS", "0")
+
+    result = asyncio.run(run())
+
+    assert result["status"] == "success"
+    assert result["source_lines_compressed"] == 3
+    assert result["source_lines_batches"] == 2
+    assert result["source_lines_drained"] is True
+
+    with SessionLocal() as db:
+        rows = db.query(AgentSourceLine).order_by(AgentSourceLine.source_offset.asc()).all()
+        events_idx_sql = db.execute(
+            text("SELECT sql FROM sqlite_master WHERE type='index' AND name='ix_events_raw_json_pending'")
+        ).scalar()
+        source_lines_idx_sql = db.execute(
+            text("SELECT sql FROM sqlite_master WHERE type='index' AND name='ix_source_lines_raw_json_pending'")
+        ).scalar()
+
+    assert [row.raw_json_codec for row in rows] == [CODEC_ZSTD, CODEC_ZSTD, CODEC_ZSTD]
+    assert [row.raw_json for row in rows] == ["", "", ""]
+    assert all(row.raw_json_z is not None for row in rows)
+    assert [decode_raw_json(row) for row in rows] == [
+        '{"type":"system","content":"first legacy line"}',
+        "",
+        '{"type":"user","content":"third legacy line"}',
+    ]
+    assert "WHERE raw_json_codec = 0" in str(events_idx_sql)
+    assert "raw_json IS NOT NULL" in str(events_idx_sql)
+    assert "WHERE raw_json_codec = 0" in str(source_lines_idx_sql)
+
+
+def test_compress_raw_json_job_leaves_event_rows_without_raw_payload_uncompressed(tmp_path, monkeypatch):
+    from zerg.jobs.compress_raw_json import run
+
+    SessionLocal = _make_db(tmp_path)
+    engine = SessionLocal.kw["bind"]
+    _seed_legacy_rows(
+        SessionLocal,
+        events=[
+            None,
+            '{"type":"assistant","content":"compress me"}',
+        ],
+    )
+
+    fake_ws = _FakeWriteSerializer(SessionLocal)
+    monkeypatch.setattr("zerg.database.default_engine", engine)
+    monkeypatch.setattr("zerg.services.write_serializer.get_write_serializer", lambda: fake_ws)
+    monkeypatch.setenv("COMPRESS_RAW_JSON_CHUNK_SIZE", "10")
+    monkeypatch.setenv("COMPRESS_RAW_JSON_BATCH_SLEEP_MS", "0")
+
+    result = asyncio.run(run())
+
+    assert result["status"] == "success"
+    assert result["events_compressed"] == 1
+    assert result["events_drained"] is True
+
+    with SessionLocal() as db:
+        rows = db.query(AgentEvent).order_by(AgentEvent.source_offset.asc()).all()
+
+    assert rows[0].raw_json is None
+    assert rows[0].raw_json_codec == CODEC_PLAIN
+    assert rows[0].raw_json_z is None
+
+    assert rows[1].raw_json is None
+    assert rows[1].raw_json_codec == CODEC_ZSTD
+    assert rows[1].raw_json_z is not None

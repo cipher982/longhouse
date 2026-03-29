@@ -24,8 +24,7 @@ Architecture:
     - The write function receives a fresh Session, does its work, and returns
     - Session lifecycle (commit on success, rollback on error, close) is managed
       by the serializer
-    - A dedicated write engine with StaticPool (single connection) prevents
-      connection pool contention
+    - A dedicated single-connection write engine prevents pool contention
 """
 
 from __future__ import annotations
