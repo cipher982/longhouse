@@ -282,6 +282,7 @@ async def _timeline_sessions_stream(
     sort: Optional[str],
     mode: Optional[str],
     context_mode: str,
+    skip_initial_replay: bool,
 ):
     previous_signatures: dict[str, str] = {}
     previous_window_signature: (
@@ -299,6 +300,14 @@ async def _timeline_sessions_stream(
         if await request.is_disconnected():
             logger.info("Timeline sessions SSE disconnected")
             break
+
+        if skip_initial_replay:
+            # The browser already has a fresh timeline snapshot from the initial
+            # HTTP query. Do not immediately rebuild the same window on stream
+            # connect; wait for the next write/heartbeat cycle instead.
+            skip_initial_replay = False
+            await _wait_for_timeline_change()
+            continue
 
         if preflight_enabled:
             with session_factory() as db:
@@ -566,6 +575,10 @@ async def stream_timeline_sessions(
     ),
     mode: Optional[str] = Query("lexical", description="Search mode: lexical|semantic|hybrid. Default: lexical."),
     context_mode: str = Query("forensic", description="Context projection mode: forensic|active_context"),
+    skip_initial_replay: bool = Query(
+        False,
+        description="When true, subscribe without immediately replaying the already-fresh default timeline snapshot.",
+    ),
     db: Session = Depends(get_db),
 ) -> EventSourceResponse:
     _validate_timeline_stream_contract(query=query, sort=sort, mode=mode)
@@ -589,6 +602,7 @@ async def stream_timeline_sessions(
             sort=sort,
             mode=mode,
             context_mode=context_mode,
+            skip_initial_replay=skip_initial_replay,
         )
     )
 

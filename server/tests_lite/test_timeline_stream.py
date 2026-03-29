@@ -62,6 +62,15 @@ class _ConnectedRequest:
         return False
 
 
+class _DisconnectAfterFirstCycleRequest:
+    def __init__(self) -> None:
+        self._checks = 0
+
+    async def is_disconnected(self) -> bool:
+        self._checks += 1
+        return self._checks > 1
+
+
 def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
     session_local = _make_db(tmp_path, "timeline_stream_upsert.db")
     now = datetime.now(timezone.utc)
@@ -118,6 +127,7 @@ def test_timeline_stream_emits_runtime_backed_session_upsert(tmp_path):
             sort=None,
             mode="lexical",
             context_mode="forensic",
+            skip_initial_replay=False,
         )
         events = [await anext(stream), await anext(stream)]
         await stream.aclose()
@@ -271,6 +281,7 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
             sort=None,
             mode="lexical",
             context_mode="forensic",
+            skip_initial_replay=False,
         )
         events = [await anext(stream), await anext(stream), await anext(stream)]
         await stream.aclose()
@@ -291,6 +302,61 @@ def test_timeline_stream_skips_full_rebuild_when_window_is_unchanged(tmp_path):
     assert list_sessions_calls == 1
     assert len(window_signature_kwargs) >= 1
     assert all(call.get("include_total") is False for call in window_signature_kwargs)
+
+
+def test_timeline_stream_skip_initial_replay_avoids_redundant_rebuild_before_disconnect(tmp_path):
+    session_local = _make_db(tmp_path, "timeline_stream_skip_initial_replay.db")
+    now = datetime.now(timezone.utc)
+
+    with session_local() as db:
+        _seed_session(
+            db,
+            started_at=now - timedelta(minutes=5),
+            ended_at=None,
+            project="skip-initial-replay",
+        )
+
+    list_sessions_calls = 0
+    original_list_timeline_sessions = timeline_router.list_timeline_sessions
+
+    async def _counting_list_timeline_sessions(*args, **kwargs):
+        nonlocal list_sessions_calls
+        list_sessions_calls += 1
+        return await original_list_timeline_sessions(*args, **kwargs)
+
+    async def _collect_events():
+        stream = timeline_router._timeline_sessions_stream(
+            _DisconnectAfterFirstCycleRequest(),
+            session_factory=session_local,
+            project=None,
+            provider=None,
+            environment=None,
+            include_test=False,
+            hide_autonomous=True,
+            device_id=None,
+            days_back=14,
+            query=None,
+            limit=1,
+            offset=0,
+            sort=None,
+            mode="lexical",
+            context_mode="forensic",
+            skip_initial_replay=True,
+        )
+        connected = await anext(stream)
+        with pytest.raises(StopAsyncIteration):
+            await anext(stream)
+        await stream.aclose()
+        return connected
+
+    with (
+        patch.object(timeline_router, "list_timeline_sessions", new=_counting_list_timeline_sessions),
+        patch.object(timeline_router, "_wait_for_timeline_change", new=_noop_coro),
+    ):
+        event = asyncio.run(_collect_events())
+
+    assert event["event"] == "connected"
+    assert list_sessions_calls == 0
 
 
 def test_list_timeline_sessions_default_cards_open_writable_head_and_keep_thread_anchor(tmp_path):

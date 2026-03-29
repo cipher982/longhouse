@@ -48,6 +48,7 @@ function removeTimelineSession(
 
 export interface UseTimelineSessionStreamOptions {
   enabled?: boolean;
+  skipInitialReplay?: boolean;
 }
 
 export function useTimelineSessionStream(
@@ -56,25 +57,30 @@ export function useTimelineSessionStream(
 ) {
   const queryClient = useQueryClient();
   const enabled = options.enabled !== false;
+  const skipInitialReplay = options.skipInitialReplay === true;
 
   useEffect(() => {
     if (!enabled || typeof EventSource === "undefined") {
       return;
     }
 
-    return connectTimelineSessionsStream(filters, {
-      onSessionUpsert: (event) => {
-        queryClient.setQueryData<TimelineSessionsListResponse>(
-          ["agent-sessions", filters],
-          (current) => (current ? upsertTimelineSession(current, event, filters.limit) : current),
-        );
+    return connectTimelineSessionsStream(
+      filters,
+      {
+        onSessionUpsert: (event) => {
+          queryClient.setQueryData<TimelineSessionsListResponse>(
+            ["agent-sessions", filters],
+            (current) => (current ? upsertTimelineSession(current, event, filters.limit) : current),
+          );
+        },
+        onSessionRemove: (event) => {
+          queryClient.setQueryData<TimelineSessionsListResponse>(
+            ["agent-sessions", filters],
+            (current) => (current ? removeTimelineSession(current, event) : current),
+          );
+        },
       },
-      onSessionRemove: (event) => {
-        queryClient.setQueryData<TimelineSessionsListResponse>(
-          ["agent-sessions", filters],
-          (current) => (current ? removeTimelineSession(current, event) : current),
-        );
-      },
-    });
-  }, [enabled, filters, queryClient]);
+      { skipInitialReplay },
+    );
+  }, [enabled, filters, queryClient, skipInitialReplay]);
 }
