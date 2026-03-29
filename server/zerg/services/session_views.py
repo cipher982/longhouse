@@ -26,7 +26,6 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
-from zerg.services.managed_local_transport import coerce_managed_transport
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
@@ -61,8 +60,10 @@ def _coerce_execution_home(value: str | None) -> SessionExecutionHome | None:
 
 
 def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
+    if value is None or not str(value).strip():
+        return None
     try:
-        return coerce_managed_transport(value)
+        return ManagedSessionTransport(str(value).strip())
     except ValueError:
         return None
 
