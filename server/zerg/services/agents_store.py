@@ -271,6 +271,32 @@ class AgentsStore:
         if session.is_writable_head is None:
             session.is_writable_head = 1
 
+    def batch_thread_meta(self, sessions: list[AgentSession]) -> dict[str, tuple[str, int]]:
+        """Batch-load thread head ID and continuation count for multiple sessions.
+
+        Returns a dict keyed by thread root ID → (head_session_id, count).
+        """
+        root_ids: set[UUID] = set()
+        for s in sessions:
+            root_ids.add(s.thread_root_session_id or s.id)
+        if not root_ids:
+            return {}
+        all_members = (
+            self.db.query(AgentSession.id, AgentSession.thread_root_session_id, AgentSession.is_writable_head)
+            .filter(or_(AgentSession.thread_root_session_id.in_(root_ids), AgentSession.id.in_(root_ids)))
+            .all()
+        )
+        by_root: dict[str, list] = {}
+        for sid, troot, is_head in all_members:
+            key = str(troot or sid)
+            by_root.setdefault(key, []).append((str(sid), is_head))
+        result: dict[str, tuple[str, int]] = {}
+        for root_key, members in by_root.items():
+            heads = [sid for sid, is_head in members if is_head]
+            head_id = heads[0] if heads else members[-1][0]
+            result[root_key] = (head_id, max(1, len(members)))
+        return result
+
     def _get_thread_sessions(self, session_or_id: UUID | AgentSession) -> list[AgentSession]:
         session = session_or_id if isinstance(session_or_id, AgentSession) else self.get_session(session_or_id)
         if session is None:
