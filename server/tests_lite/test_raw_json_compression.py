@@ -14,11 +14,13 @@ Covers:
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
@@ -38,6 +40,8 @@ from zerg.services.agents_store import SessionIngest
 from zerg.services.agents_store import SourceLineIngest
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
+from zerg.services.raw_json_compression import _get_compressor
+from zerg.services.raw_json_compression import _get_decompressor
 from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.services.raw_json_compression import decompress_raw_json
@@ -143,6 +147,40 @@ def test_compress_decompress_roundtrip():
 def test_compress_handles_unicode():
     original = '{"content":"hello 🌍 — こんにちは"}'
     assert decompress_raw_json(compress_raw_json(original)) == original
+
+
+def test_zstd_contexts_are_thread_local():
+    workers = 4
+    barrier = threading.Barrier(workers)
+
+    def _worker() -> tuple[int, int]:
+        barrier.wait()
+        return (id(_get_compressor()), id(_get_decompressor()))
+
+    main_thread_contexts = (id(_get_compressor()), id(_get_decompressor()))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        thread_contexts = list(executor.map(lambda _n: _worker(), range(workers)))
+
+    compressor_ids = {compressor_id for compressor_id, _decompressor_id in thread_contexts}
+    decompressor_ids = {decompressor_id for _compressor_id, decompressor_id in thread_contexts}
+
+    assert len(compressor_ids) == workers
+    assert len(decompressor_ids) == workers
+    assert main_thread_contexts[0] not in compressor_ids
+    assert main_thread_contexts[1] not in decompressor_ids
+
+
+def test_compress_decompress_parallel_roundtrip():
+    large_text = "x" * 2048
+    payloads = [
+        f'{{"type":"assistant","idx":{idx},"text":"{large_text}"}}'
+        for idx in range(128)
+    ]
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        restored = list(executor.map(lambda raw: decompress_raw_json(compress_raw_json(raw)), payloads))
+
+    assert restored == payloads
 
 
 def test_decode_raw_json_codec_plain():

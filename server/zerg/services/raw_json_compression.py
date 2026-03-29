@@ -10,25 +10,40 @@ background migration job backfills raw_json_z and clears raw_json text.
 
 from __future__ import annotations
 
+import threading
+
 import zstandard as zstd
 
 CODEC_PLAIN = 0
 CODEC_ZSTD = 1
 
-# Module-level compressor/decompressor — thread-safe for reads; writes go
-# through the single WriteSerializer so no concurrent compression contention.
-_cctx = zstd.ZstdCompressor(level=3)
-_dctx = zstd.ZstdDecompressor()
+_thread_state = threading.local()
+
+
+def _get_compressor() -> zstd.ZstdCompressor:
+    cctx = getattr(_thread_state, "compressor", None)
+    if cctx is None:
+        cctx = zstd.ZstdCompressor(level=3)
+        _thread_state.compressor = cctx
+    return cctx
+
+
+def _get_decompressor() -> zstd.ZstdDecompressor:
+    dctx = getattr(_thread_state, "decompressor", None)
+    if dctx is None:
+        dctx = zstd.ZstdDecompressor()
+        _thread_state.decompressor = dctx
+    return dctx
 
 
 def compress_raw_json(text: str) -> bytes:
     """Compress a raw_json string to zstd bytes."""
-    return _cctx.compress(text.encode())
+    return _get_compressor().compress(text.encode())
 
 
 def decompress_raw_json(blob: bytes) -> str:
     """Decompress a zstd BLOB back to a raw_json string."""
-    return _dctx.decompress(blob).decode()
+    return _get_decompressor().decompress(blob).decode()
 
 
 def decode_raw_json(obj) -> str | None:
