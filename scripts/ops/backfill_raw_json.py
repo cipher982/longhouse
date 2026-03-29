@@ -14,6 +14,7 @@ Tuning:
     RAW_JSON_BACKFILL_ROWS_PER_TX   rows per write transaction (default 25000)
     RAW_JSON_BACKFILL_WORKERS       compression threads (default cpu_count)
     RAW_JSON_BACKFILL_CHECKPOINT_EVERY  PASSIVE WAL checkpoint cadence in batches (default 20)
+    RAW_JSON_BACKFILL_PROGRESS_EVERY    per-table progress log cadence in batches (default 10)
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ class TableStats:
     compression_failures: int = 0
     write_conflicts: int = 0
     duration_s: float = 0.0
+    last_seen_id: int = 0
 
 
 _EVENTS = TablePlan(
@@ -113,21 +115,20 @@ def _ensure_pending_indexes(conn: sqlite3.Connection) -> None:
     )
 
 
-def _pending_counts(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:
-    counts: dict[str, dict[str, int]] = {}
+def _first_pending_ids(conn: sqlite3.Connection) -> dict[str, int | None]:
+    pending: dict[str, int | None] = {}
     for table in _TABLES:
         row = conn.execute(
             f"""
-            SELECT COUNT(*) AS rows, COALESCE(SUM(LENGTH(raw_json)), 0) AS raw_bytes
+            SELECT id
             FROM {table.name}
             WHERE {table.pending_where}
+            ORDER BY id
+            LIMIT 1
             """
         ).fetchone()
-        counts[table.name] = {
-            "rows": int(row["rows"]) if row else 0,
-            "raw_bytes": int(row["raw_bytes"]) if row else 0,
-        }
-    return counts
+        pending[table.name] = int(row["id"]) if row else None
+    return pending
 
 
 def _fetch_batch(conn: sqlite3.Connection, table: TablePlan, *, after_id: int, limit: int) -> list[tuple[int, str]]:
@@ -195,10 +196,6 @@ def _apply_batch(conn: sqlite3.Connection, table: TablePlan, updates: list[tuple
     return conn.total_changes - before
 
 
-def _format_mib(raw_bytes: int) -> str:
-    return f"{raw_bytes / (1024 * 1024):.1f} MiB"
-
-
 def _backfill_table(
     conn: sqlite3.Connection,
     table: TablePlan,
@@ -206,6 +203,7 @@ def _backfill_table(
     rows_per_tx: int,
     workers: int,
     checkpoint_every: int,
+    progress_every: int,
 ) -> TableStats:
     stats = TableStats()
     started = time.monotonic()
@@ -218,12 +216,21 @@ def _backfill_table(
 
         stats.batches += 1
         last_seen_id = rows[-1][0]
+        stats.last_seen_id = last_seen_id
         updates, failures = _compress_rows(rows, table_name=table.name, workers=workers)
         updated = _apply_batch(conn, table, updates)
 
         stats.compression_failures += failures
         stats.compressed_rows += updated
         stats.write_conflicts += max(0, len(updates) - updated)
+
+        if progress_every > 0 and stats.batches % progress_every == 0:
+            elapsed = time.monotonic() - started
+            print(
+                f"{table.name} progress: batches={stats.batches} "
+                f"compressed={stats.compressed_rows} last_id={stats.last_seen_id} "
+                f"elapsed={elapsed:.1f}s"
+            )
 
         if checkpoint_every > 0 and stats.batches % checkpoint_every == 0:
             conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
@@ -241,19 +248,21 @@ def main() -> int:
     rows_per_tx = _env_int("RAW_JSON_BACKFILL_ROWS_PER_TX", 25_000)
     workers = max(1, _env_int("RAW_JSON_BACKFILL_WORKERS", os.cpu_count() or 1))
     checkpoint_every = max(0, _env_int("RAW_JSON_BACKFILL_CHECKPOINT_EVERY", 20))
+    progress_every = max(0, _env_int("RAW_JSON_BACKFILL_PROGRESS_EVERY", 10))
 
     conn = _connect_sqlite(db_url)
     try:
         _ensure_pending_indexes(conn)
-        before = _pending_counts(conn)
+        before = _first_pending_ids(conn)
         print(
             "starting raw_json backfill:",
-            f"events={before['events']['rows']} rows/{_format_mib(before['events']['raw_bytes'])},",
-            f"source_lines={before['source_lines']['rows']} rows/{_format_mib(before['source_lines']['raw_bytes'])},",
-            f"rows_per_tx={rows_per_tx}, workers={workers}",
+            f"events_first_pending_id={before['events'] or 'none'},",
+            f"source_lines_first_pending_id={before['source_lines'] or 'none'},",
+            f"rows_per_tx={rows_per_tx}, workers={workers},",
+            f"checkpoint_every={checkpoint_every}, progress_every={progress_every}",
         )
 
-        if sum(item["rows"] for item in before.values()) == 0:
+        if all(first_id is None for first_id in before.values()):
             print("nothing to do")
             return 0
 
@@ -264,29 +273,30 @@ def main() -> int:
                 rows_per_tx=rows_per_tx,
                 workers=workers,
                 checkpoint_every=checkpoint_every,
+                progress_every=progress_every,
             )
             for table in _TABLES
         }
         conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        after = _pending_counts(conn)
+        after = _first_pending_ids(conn)
 
         for table in _TABLES:
             stats = results[table.name]
-            remaining = after[table.name]["rows"]
+            remaining_first_id = after[table.name]
             print(
                 f"{table.name}: compressed={stats.compressed_rows} "
                 f"batches={stats.batches} failures={stats.compression_failures} "
-                f"conflicts={stats.write_conflicts} remaining={remaining} "
+                f"conflicts={stats.write_conflicts} remaining_first_id={remaining_first_id or 'none'} "
                 f"duration={stats.duration_s:.2f}s"
             )
 
-        remaining_total = sum(item["rows"] for item in after.values())
+        remaining = {name: first_id for name, first_id in after.items() if first_id is not None}
         failures_total = sum(stats.compression_failures for stats in results.values())
         conflicts_total = sum(stats.write_conflicts for stats in results.values())
 
-        if remaining_total or failures_total or conflicts_total:
+        if remaining or failures_total or conflicts_total:
             print(
-                f"backfill incomplete: remaining={remaining_total} "
+                f"backfill incomplete: remaining={remaining} "
                 f"failures={failures_total} conflicts={conflicts_total}",
                 file=sys.stderr,
             )
