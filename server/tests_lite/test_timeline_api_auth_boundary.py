@@ -116,6 +116,34 @@ def test_timeline_sessions_accept_browser_session_cookie(tmp_path):
         assert payload["sessions"][0]["thread_id"] == session_id
         assert payload["sessions"][0]["head"]["project"] == "timeline-auth"
         assert payload["sessions"][0]["detail"]["project"] == "timeline-auth"
+        assert "list_threads;dur=" in response.headers["server-timing"]
+        assert "build_cards;dur=" in response.headers["server-timing"]
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_filters_use_cache_control_and_cache_hit_timing(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        _seed_session(db)
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            first = client.get("/timeline/filters?days_back=14")
+            second = client.get("/timeline/filters?days_back=14")
+
+        assert first.status_code == 200
+        assert first.headers["cache-control"] == "private, max-age=60"
+        assert "distinct_filters;dur=" in first.headers["server-timing"]
+
+        assert second.status_code == 200
+        assert second.headers["cache-control"] == "private, max-age=60"
+        assert "cache_hit;dur=" in second.headers["server-timing"]
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
@@ -161,6 +189,8 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
         assert payload["execution_home"] == "managed_local"
         assert payload["source_runner_name"] == "cinder"
         assert payload["attach_command"] == build_tmux_attach_command(session_name="lh-codex-managed-local")
+        assert "load_session;dur=" in response.headers["server-timing"]
+        assert "build_response;dur=" in response.headers["server-timing"]
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

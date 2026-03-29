@@ -54,6 +54,7 @@ from zerg.services.runner_health import build_runner_response
 from zerg.services.runner_health import normalize_runner_binary_tag
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.services.write_serializer import get_write_serializer
+from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
@@ -693,6 +694,7 @@ async def register_runner(
 
 @router.get("/status", response_model=RunnerStatusResponse)
 def get_runner_status(
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> RunnerStatusResponse:
@@ -701,20 +703,25 @@ def get_runner_status(
     Returns a lightweight summary of runner status for UI health indicators.
     Useful for detecting broken runner connections early.
     """
-    runners = runner_crud.get_runners(db=db, owner_id=current_user.id)
+    timing = ServerTimingRecorder()
+    response.headers["Cache-Control"] = "private, max-age=15"
+
+    with timing.span("load_runners"):
+        runners = runner_crud.get_runners(db=db, owner_id=current_user.id)
     connection_manager = get_runner_connection_manager()
-    serialized = [
-        build_runner_response(
-            runner,
-            is_connected=connection_manager.is_online(runner.owner_id, runner.id),
-        )
-        for runner in runners
-    ]
+    with timing.span("serialize_status"):
+        serialized = [
+            build_runner_response(
+                runner,
+                is_connected=connection_manager.is_online(runner.owner_id, runner.id),
+            )
+            for runner in runners
+        ]
 
     online_count = sum(1 for runner in serialized if runner.status == "online")
     offline_count = sum(1 for runner in serialized if runner.status in ("offline", "revoked"))
 
-    return RunnerStatusResponse(
+    result = RunnerStatusResponse(
         total=len(runners),
         online=online_count,
         offline=offline_count,
@@ -729,6 +736,8 @@ def get_runner_status(
             for runner in serialized
         ],
     )
+    timing.apply(response)
+    return result
 
 
 @router.get("/", response_model=RunnerListResponse)
