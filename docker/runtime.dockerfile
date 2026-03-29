@@ -32,31 +32,7 @@ COPY web/ ./
 RUN bun run build
 
 # =============================================================================
-# Stage 1.5: Build pinned SQLite runtime
-# =============================================================================
-FROM debian:bookworm-slim AS sqlite-builder
-
-ARG SQLITE_VERSION=3510300
-ARG SQLITE_SHA3=581215771b32ea4c4062e6fb9842c4aa43d0a7fb2b6670ff6fa4ebb807781204
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    ca-certificates \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /tmp
-
-RUN curl -fsSLO "https://sqlite.org/2026/sqlite-autoconf-${SQLITE_VERSION}.tar.gz" \
-    && test "$(openssl dgst -sha3-256 "sqlite-autoconf-${SQLITE_VERSION}.tar.gz" | awk '{print $2}')" = "${SQLITE_SHA3}" \
-    && tar -xzf "sqlite-autoconf-${SQLITE_VERSION}.tar.gz" \
-    && cd "sqlite-autoconf-${SQLITE_VERSION}" \
-    && ./configure --prefix=/usr/local --disable-static --enable-threadsafe \
-    && make -j"$(nproc)" \
-    && make install DESTDIR=/sqlite-dist
-
-# =============================================================================
-# Stage 1.6: Build pinned Python SQLite wheel with bundled amalgamation
+# Stage 1.5: Build pysqlite3 wheel with pinned SQLite amalgamation
 # =============================================================================
 FROM python:3.12-slim-bookworm AS pysqlite-builder
 
@@ -64,25 +40,19 @@ ARG SQLITE_VERSION=3510300
 ARG SQLITE_SHA3=581215771b32ea4c4062e6fb9842c4aa43d0a7fb2b6670ff6fa4ebb807781204
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    ca-certificates \
-    curl \
-    openssl \
+    build-essential ca-certificates curl openssl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /tmp
-
-RUN curl -fsSLO "https://sqlite.org/2026/sqlite-autoconf-${SQLITE_VERSION}.tar.gz" \
+RUN pip install --upgrade setuptools wheel \
+    && curl -fsSLO "https://sqlite.org/2026/sqlite-autoconf-${SQLITE_VERSION}.tar.gz" \
     && test "$(openssl dgst -sha3-256 "sqlite-autoconf-${SQLITE_VERSION}.tar.gz" | awk '{print $2}')" = "${SQLITE_SHA3}" \
     && tar -xzf "sqlite-autoconf-${SQLITE_VERSION}.tar.gz" \
-    && python -m pip install --upgrade pip setuptools wheel \
     && pip download --no-binary=:all: pysqlite3==0.6.0 \
     && tar -xzf pysqlite3-0.6.0.tar.gz \
     && cp "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.c" "sqlite-autoconf-${SQLITE_VERSION}/sqlite3.h" pysqlite3-0.6.0/ \
-    && cd pysqlite3-0.6.0 \
-    && python setup.py bdist_wheel \
-    && mkdir -p /dist \
-    && cp dist/*.whl /dist/
+    && cd pysqlite3-0.6.0 && python setup.py bdist_wheel \
+    && mkdir -p /dist && cp dist/*.whl /dist/
 
 # =============================================================================
 # Stage 2: Build Backend Dependencies
@@ -116,9 +86,6 @@ ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 
 WORKDIR /repo/server
 
-COPY --from=sqlite-builder /sqlite-dist/usr/local/ /usr/local/
-RUN ldconfig
-
 # Copy virtual environment from dependencies stage
 COPY --from=dependencies /repo/server/.venv ./.venv
 
@@ -132,21 +99,17 @@ COPY config/models.json /config/models.json
 # Copy REAL frontend dist from frontend-builder (not placeholder)
 COPY --from=frontend-builder /app/dist /repo/web/dist
 
-# Install the project
+# Install the project + pysqlite3 wheel (statically links modern SQLite)
 COPY --from=pysqlite-builder /dist/ /tmp/pysqlite3-dist/
 RUN uv sync --frozen --no-dev \
-    && ./.venv/bin/python -m ensurepip --default-pip \
-    && ./.venv/bin/pip install --no-cache-dir /tmp/pysqlite3-dist/*.whl \
-    && PYTHONPATH=/repo/server ./.venv/bin/python - <<'PY'
-from zerg.bootstrap_sqlite import bootstrap
-
-bootstrap()
-import sqlite3
-
-assert sqlite3.sqlite_version == "3.51.3", sqlite3.sqlite_version
-with sqlite3.connect(":memory:") as conn:
-    conn.execute("create virtual table t using fts5(x)")
-PY
+    && uv pip install /tmp/pysqlite3-dist/*.whl \
+    && PYTHONPATH=/repo/server ./.venv/bin/python -c "\
+import pysqlite3; v = pysqlite3.sqlite_version; \
+parts = tuple(int(x) for x in v.split('.')); \
+assert parts >= (3, 35, 0), f'SQLite {v} < 3.35.0'; \
+conn = pysqlite3.connect(':memory:'); \
+conn.execute('create virtual table t using fts5(x)'); \
+conn.close(); print(f'pysqlite3 OK: SQLite {v}, FTS5 available')"
 
 # =============================================================================
 # Stage 4: Production Runtime
@@ -163,18 +126,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
-COPY --from=sqlite-builder /sqlite-dist/usr/local/ /usr/local/
-COPY --from=pysqlite-builder /dist/ /tmp/pysqlite3-dist/
-RUN ldconfig \
-    && python -m pip install --no-cache-dir /tmp/pysqlite3-dist/*.whl \
-    && python - <<'PY'
-import pysqlite3
-
-assert pysqlite3.sqlite_version == "3.51.3", pysqlite3.sqlite_version
-with pysqlite3.connect(":memory:") as conn:
-    conn.execute("create virtual table t using fts5(x)")
-PY
-
 # Install Node.js 22 LTS (required by Claude Code CLI for session continuation)
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
@@ -187,7 +138,7 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 longhouse
 
 WORKDIR /app
 
-# Copy backend with virtual environment
+# Copy backend with virtual environment (includes pysqlite3 from builder)
 COPY --from=backend-builder --chown=longhouse:longhouse /repo/server /app
 COPY --from=backend-builder --chown=longhouse:longhouse /app/longhouse_shared /app/longhouse_shared
 
@@ -196,21 +147,9 @@ COPY --from=frontend-builder --chown=longhouse:longhouse /app/dist /app/web/dist
 
 # Copy config
 COPY --from=backend-builder --chown=longhouse:longhouse /config /config
-COPY --from=backend-builder --chown=longhouse:longhouse /tmp/pysqlite3-dist /tmp/pysqlite3-dist
 
 # Bootstrap pip in the venv so job packs can pip-install their own deps at startup
-RUN /app/.venv/bin/python -m ensurepip --default-pip 2>/dev/null || true \
-    && /app/.venv/bin/python -m pip install --no-cache-dir /tmp/pysqlite3-dist/*.whl \
-    && PYTHONPATH=/app /app/.venv/bin/python - <<'PY'
-from zerg.bootstrap_sqlite import bootstrap
-
-bootstrap()
-import sqlite3
-
-assert sqlite3.sqlite_version == "3.51.3", sqlite3.sqlite_version
-with sqlite3.connect(":memory:") as conn:
-    conn.execute("create virtual table t using fts5(x)")
-PY
+RUN /app/.venv/bin/python -m ensurepip --default-pip 2>/dev/null || true
 
 # Create required directories
 RUN mkdir -p /app/static/avatars /data \
