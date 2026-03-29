@@ -644,15 +644,18 @@ function SessionCard({
 
       <div className="session-card-footer">
         <div className="session-card-stats">
-          <span className="session-stat" style={{ color: getTurnsColor(turnCount) }}>{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
-          <span className="session-stat-separator">&middot;</span>
-          <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
-          <span className="session-stat-separator">&middot;</span>
-          <span className="session-stat session-stat--secondary">
-            {compatibilityMode
-              ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
-              : `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`}
-          </span>
+          <div className="session-card-stats-primary">
+            <span className="session-stat" style={{ color: getTurnsColor(turnCount) }}>{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
+            <span className="session-stat-separator">&middot;</span>
+            <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
+          </div>
+          <div className="session-card-stats-secondary">
+            <span className="session-stat session-stat--secondary">
+              {compatibilityMode
+                ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
+                : `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`}
+            </span>
+          </div>
         </div>
         <div className="session-card-actions">
           <span className="session-card-action-label">{primaryActionLabel}</span>
