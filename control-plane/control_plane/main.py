@@ -15,6 +15,8 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
+import control_plane.bootstrap_sqlite  # noqa: F401
+
 from control_plane.config import settings
 from control_plane.db import Base
 from control_plane.db import engine

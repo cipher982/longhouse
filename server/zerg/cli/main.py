@@ -19,6 +19,7 @@ import json
 
 import typer
 
+import zerg.bootstrap_sqlite  # noqa: F401
 from zerg.cli.claude import claude
 from zerg.cli.codex import codex
 from zerg.cli.connect import app as connect_app
