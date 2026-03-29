@@ -1,4 +1,5 @@
 import { request } from "./base";
+import type { ManagedSessionTransport, SessionExecutionHome } from "./agents";
 
 export interface SessionLockInfo {
   locked: boolean;
@@ -32,10 +33,10 @@ export interface ManagedLocalSessionLaunchResponse {
   session_id: string;
   provider: string;
   provider_session_id: string;
-  execution_home: string;
-  managed_transport: string;
+  execution_home: SessionExecutionHome;
+  managed_transport: ManagedSessionTransport;
   loop_mode: string;
-  source_runner_id: number;
+  source_runner_id: number | null;
   source_runner_name: string;
   managed_session_name: string;
   attach_command: string;

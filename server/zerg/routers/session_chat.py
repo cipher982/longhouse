@@ -324,7 +324,7 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     execution_home: SessionExecutionHome
     managed_transport: ManagedSessionTransport
     loop_mode: SessionLoopMode
-    source_runner_id: int
+    source_runner_id: int | None = None
     source_runner_name: str
     managed_session_name: str
     attach_command: str
@@ -370,11 +370,127 @@ def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
         execution_home=SessionExecutionHome(session.execution_home or SessionExecutionHome.LEGACY.value),
         managed_transport=ManagedSessionTransport(session.managed_transport or ManagedSessionTransport.TMUX.value),
         loop_mode=SessionLoopMode(session.loop_mode or SessionLoopMode.MANUAL.value),
-        source_runner_id=int(session.source_runner_id or 0),
+        source_runner_id=getattr(session, "source_runner_id", None),
         source_runner_name=session.source_runner_name or "",
         managed_session_name=session.managed_session_name or "",
         attach_command=result.attach_command,
     )
+
+
+def _session_chat_streaming_response(stream: AsyncIterator[str]) -> StreamingResponse:
+    return StreamingResponse(
+        stream,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _build_managed_local_chat_response(
+    *,
+    source_session,
+    owner_id: int,
+    message: str,
+    request_id: str,
+    lock_scope_id: str,
+    db: Session,
+) -> StreamingResponse:
+    async def generate_managed_local():
+        try:
+            async for event in _stream_managed_local_output(
+                source_session=source_session,
+                owner_id=owner_id,
+                message=message,
+                request_id=request_id,
+                db=db,
+            ):
+                yield event
+        finally:
+            await session_lock_manager.release(lock_scope_id, request_id)
+            logger.info(f"[{request_id}] Managed local chat complete, lock released")
+
+    return _session_chat_streaming_response(generate_managed_local())
+
+
+async def _build_cloud_continuation_chat_response(
+    *,
+    source_session,
+    message: str,
+    request_id: str,
+    lock_scope_id: str,
+    db: Session,
+) -> StreamingResponse:
+    store = AgentsStore(db)
+    target_session, created_continuation = store.ensure_cloud_continuation_target(source_session.id)
+    db.commit()
+
+    resolved_workspace = await workspace_resolver.resolve(
+        original_cwd=source_session.cwd,
+        git_repo=source_session.git_repo,
+        git_branch=source_session.git_branch,
+        session_id=str(target_session.id),
+    )
+
+    if resolved_workspace.error:
+        if resolved_workspace.is_temp:
+            resolved_workspace.cleanup()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot resolve workspace: {resolved_workspace.error}",
+        )
+
+    try:
+        session_provider = source_session.provider or "claude"
+        if session_provider == "codex":
+            provider_session_id = await prepare_codex_session_for_resume(
+                session_id=str(source_session.id),
+                db=db,
+            )
+        else:
+            provider_session_id = await prepare_session_for_resume(
+                session_id=str(source_session.id),
+                workspace_path=resolved_workspace.path,
+                db=db,
+            )
+    except Exception:
+        if resolved_workspace.is_temp:
+            resolved_workspace.cleanup()
+        raise
+
+    logger.info(
+        f"[{request_id}] Prepared source session {source_session.id} -> {provider_session_id[:20]}... "
+        f"target={target_session.id} workspace={resolved_workspace.path} is_temp={resolved_workspace.is_temp} "
+        f"provider={session_provider}"
+    )
+
+    async def generate():
+        try:
+            continued_from_session_id = str(target_session.continued_from_session_id) if target_session.continued_from_session_id else None
+            async for event in stream_claude_output(
+                source_session_id=str(source_session.id),
+                target_session_id=str(target_session.id),
+                thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
+                continued_from_session_id=continued_from_session_id,
+                created_continuation=created_continuation,
+                branched_from_event_id=target_session.branched_from_event_id,
+                provider_session_id=provider_session_id,
+                workspace_path=resolved_workspace.path,
+                message=message,
+                request_id=request_id,
+                db=db,
+                provider=session_provider,
+            ):
+                yield event
+        finally:
+            await session_lock_manager.release(lock_scope_id, request_id)
+            if resolved_workspace.is_temp:
+                resolved_workspace.cleanup()
+            logger.info(f"[{request_id}] Session chat complete, lock released")
+
+    return _session_chat_streaming_response(generate())
 
 
 def _lock_scope_id_for_session(db: Session, session_id: str) -> str:
@@ -667,8 +783,8 @@ async def _stream_managed_local_output(
 ) -> AsyncIterator[str]:
     if db is None:
         raise RuntimeError("Managed local chat requires a database session")
-    if not source_session.source_runner_id or not source_session.managed_session_name:
-        raise RuntimeError("Managed local session is missing runner or tmux metadata")
+    if getattr(source_session, "source_runner_id", None) is None:
+        raise RuntimeError("Managed local session is missing live runner metadata")
 
     yield SSEEvent(
         event="system",
@@ -1628,8 +1744,7 @@ async def chat_with_session(
             detail=f"Invalid session id: {session_id}",
         ) from exc
 
-    store = AgentsStore(db)
-    source_session = store.get_session(source_session_uuid)
+    source_session = AgentsStore(db).get_session(source_session_uuid)
     if not source_session:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1674,116 +1789,30 @@ async def chat_with_session(
             },
         )
 
-    resolved_workspace = None
-
     try:
         if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
-
-            async def generate_managed_local():
-                try:
-                    async for event in _stream_managed_local_output(
-                        source_session=source_session,
-                        owner_id=current_user.id,
-                        message=body.message,
-                        request_id=request_id,
-                        db=db,
-                    ):
-                        yield event
-                finally:
-                    await session_lock_manager.release(lock_scope_id, request_id)
-                    logger.info(f"[{request_id}] Managed local chat complete, lock released")
-
-            return StreamingResponse(
-                generate_managed_local(),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
-            )
-
-        target_session, created_continuation = store.ensure_cloud_continuation_target(source_session.id)
-        db.commit()
-
-        resolved_workspace = await workspace_resolver.resolve(
-            original_cwd=source_session.cwd,
-            git_repo=source_session.git_repo,
-            git_branch=source_session.git_branch,
-            session_id=str(target_session.id),
-        )
-
-        if resolved_workspace.error:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Cannot resolve workspace: {resolved_workspace.error}",
-            )
-
-        session_provider = source_session.provider or "claude"
-        if session_provider == "codex":
-            provider_session_id = await prepare_codex_session_for_resume(
-                session_id=str(source_session.id),
+            return _build_managed_local_chat_response(
+                source_session=source_session,
+                owner_id=current_user.id,
+                message=body.message,
+                request_id=request_id,
+                lock_scope_id=lock_scope_id,
                 db=db,
             )
-        else:
-            provider_session_id = await prepare_session_for_resume(
-                session_id=str(source_session.id),
-                workspace_path=resolved_workspace.path,
-                db=db,
-            )
-
-        logger.info(
-            f"[{request_id}] Prepared source session {source_session.id} -> {provider_session_id[:20]}... "
-            f"target={target_session.id} workspace={resolved_workspace.path} is_temp={resolved_workspace.is_temp} "
-            f"provider={session_provider}"
-        )
-
-        async def generate():
-            try:
-                continued_from_session_id = (
-                    str(target_session.continued_from_session_id) if target_session.continued_from_session_id else None
-                )
-                async for event in stream_claude_output(
-                    source_session_id=str(source_session.id),
-                    target_session_id=str(target_session.id),
-                    thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
-                    continued_from_session_id=continued_from_session_id,
-                    created_continuation=created_continuation,
-                    branched_from_event_id=target_session.branched_from_event_id,
-                    provider_session_id=provider_session_id,
-                    workspace_path=resolved_workspace.path,
-                    message=body.message,
-                    request_id=request_id,
-                    db=db,
-                    provider=session_provider,
-                ):
-                    yield event
-            finally:
-                await session_lock_manager.release(lock_scope_id, request_id)
-                if resolved_workspace and resolved_workspace.is_temp:
-                    resolved_workspace.cleanup()
-                logger.info(f"[{request_id}] Session chat complete, lock released")
-
-        return StreamingResponse(
-            generate(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            },
+        return await _build_cloud_continuation_chat_response(
+            source_session=source_session,
+            message=body.message,
+            request_id=request_id,
+            lock_scope_id=lock_scope_id,
+            db=db,
         )
 
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, request_id)
-        if resolved_workspace and resolved_workspace.is_temp:
-            resolved_workspace.cleanup()
         raise
 
     except Exception as e:
         await session_lock_manager.release(lock_scope_id, request_id)
-        if resolved_workspace and resolved_workspace.is_temp:
-            resolved_workspace.cleanup()
         logger.exception(f"[{request_id}] Error in chat_with_session")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1800,8 +1829,7 @@ async def launch_managed_local(
 ):
     """Start a managed local AI agent session on a connected runner.
 
-    Supports both Claude and Codex providers. tmux is the current implementation;
-    other managed transports can slot in behind the same API contract.
+    Supports both Claude and Codex providers under a transport-aware contract.
     """
     hook_url = get_request_public_base_url(request)
     try:
