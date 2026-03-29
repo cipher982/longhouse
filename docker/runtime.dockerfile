@@ -106,7 +106,7 @@ COPY --from=frontend-builder /app/dist /repo/web/dist
 # Install the project
 RUN uv sync --frozen --no-dev \
     && ./.venv/bin/python -m ensurepip --default-pip \
-    && ./.venv/bin/pip install --no-cache-dir --no-binary pysqlite3 pysqlite3==0.6.0
+    && ./.venv/bin/pip install --no-cache-dir pysqlite3==0.6.0
 
 # =============================================================================
 # Stage 4: Production Runtime
