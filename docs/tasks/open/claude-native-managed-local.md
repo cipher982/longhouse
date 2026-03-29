@@ -1,6 +1,6 @@
 # Claude Native Managed-Local
 
-Status: In progress
+Status: Implemented locally
 Spec: `docs/specs/claude-native-managed-local.md`
 Last updated: 2026-03-29
 
@@ -17,16 +17,17 @@ Replace the current `longhouse claude` tmux path with a native Claude launch on 
 
 ## Checklist
 
-- [ ] Add the spec and transport split (`claude_channel_bridge`)
-- [ ] Refactor managed-local launch resolution so Claude `this-device` no longer goes through tmux
-- [ ] Add the local Claude channel server + send/interrupt helpers
-- [ ] Update `longhouse claude` to ensure config and launch native Claude with channel flags
-- [ ] Add unit/API/CLI tests for the new transport
-- [ ] Add a subprocess E2E test for MCP init + `notifications/claude/channel` emission
-- [ ] Run targeted tests and verify the native Claude path locally without deploying hosted instances
+- [x] Add the spec and transport split (`claude_channel_bridge`)
+- [x] Refactor managed-local launch resolution so Claude `this-device` no longer goes through tmux
+- [x] Add the local Claude channel server + send/interrupt helpers
+- [x] Update `longhouse claude` to ensure config and launch native Claude with channel flags
+- [x] Add unit/API/CLI tests for the new transport
+- [x] Add a subprocess E2E test for MCP init + `notifications/claude/channel` emission
+- [x] Run targeted tests and verify the native Claude path locally without deploying hosted instances
 
 ## Notes
 
 - Bedrock patching is intentionally not the default architecture in this task; leave room for it as a later compatibility layer.
 - Claude channel registration should use Claude's local-scope MCP config in `~/.claude.json`, keyed by canonical workspace path. Do not write `.mcp.json` into the repo.
 - Avoid hosted/user-instance deploys while the current backfill work is in progress.
+- Local verification on 2026-03-29 confirmed real Claude Code spawned the bridge, registered `server:longhouse-channel`, wrote bridge state, and accepted a live injected message through `notifications/claude/channel`.
