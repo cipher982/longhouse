@@ -59,7 +59,6 @@ from zerg.services.managed_local_control import ship_managed_local_claude_transc
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
-from zerg.services.managed_local_transport import managed_local_transport_supports_interactive_chat
 from zerg.services.managed_local_turns import create_managed_local_turn
 from zerg.services.managed_local_turns import get_managed_local_turn_snapshot
 from zerg.services.managed_local_turns import mark_managed_local_turn_failed
@@ -298,10 +297,6 @@ class ManagedLocalSessionLaunchRequest(BaseModel):
     git_branch: str | None = Field(None, description="Optional git branch name")
     display_name: str | None = Field(None, description="Optional display name for the session")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
-    managed_transport: ManagedSessionTransport = Field(
-        ManagedSessionTransport.TMUX,
-        description="Managed local transport (tmux today; codex_app_server reserved for the native Codex path)",
-    )
 
 
 class ManagedLocalThisDeviceLaunchRequest(BaseModel):
@@ -314,10 +309,6 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     git_branch: str | None = Field(None, description="Optional git branch name")
     display_name: str | None = Field(None, description="Optional display name for the session")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
-    managed_transport: ManagedSessionTransport = Field(
-        ManagedSessionTransport.TMUX,
-        description="Managed local transport (tmux or codex_app_server for native Codex)",
-    )
     machine_name: str | None = Field(
         None,
         description="Optional local Longhouse machine label override used to resolve this device's runner",
@@ -1687,11 +1678,6 @@ async def chat_with_session(
 
     try:
         if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
-            if not managed_local_transport_supports_interactive_chat(source_session.managed_transport):
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Unsupported managed local transport: {source_session.managed_transport}",
-                )
 
             async def generate_managed_local():
                 try:
@@ -1831,7 +1817,6 @@ async def launch_managed_local(
                 git_branch=body.git_branch,
                 display_name=body.display_name,
                 loop_mode=body.loop_mode.value,
-                managed_transport=body.managed_transport.value,
                 hook_url=hook_url,
             ),
         )
@@ -1875,7 +1860,6 @@ async def launch_managed_local_this_device(
                 git_branch=body.git_branch,
                 display_name=body.display_name,
                 loop_mode=body.loop_mode.value,
-                managed_transport=body.managed_transport.value,
                 hook_url=hook_url,
                 machine_name=machine_name,
             ),

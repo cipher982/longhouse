@@ -13,27 +13,13 @@ import typer
 from zerg.cli import claude as managed_local_cli
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
-from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 
 ManagedLocalLaunchResponse = managed_local_cli.ManagedLocalLaunchResponse
 
-_TRANSPORT_ENV_VAR = "LONGHOUSE_CODEX_TRANSPORT"
-
-
-def _default_codex_transport() -> ManagedSessionTransport:
-    env_val = os.environ.get(_TRANSPORT_ENV_VAR, "").strip().lower()
-    if env_val in ("tmux",):
-        return ManagedSessionTransport.TMUX
-    if env_val in ("codex_app_server", "native"):
-        return ManagedSessionTransport.CODEX_APP_SERVER
-    return ManagedSessionTransport.CODEX_APP_SERVER
-
 
 _interactive_stdio = managed_local_cli._interactive_stdio
 _load_api_credentials = managed_local_cli._load_api_credentials
-_run_attach_command = managed_local_cli._run_attach_command
-_finalize_managed_local_launch = managed_local_cli._finalize_managed_local_launch
 _build_session_url = managed_local_cli._build_session_url
 _open_session_url = managed_local_cli._open_session_url
 
@@ -119,7 +105,6 @@ def _launch_managed_local_from_api(
     loop_mode: SessionLoopMode,
     name: str | None,
     machine_name: str,
-    managed_transport: ManagedSessionTransport,
 ) -> ManagedLocalLaunchResponse:
     return managed_local_cli._launch_managed_local_from_api(
         url=url,
@@ -130,7 +115,6 @@ def _launch_managed_local_from_api(
         name=name,
         machine_name=machine_name,
         provider="codex",
-        managed_transport=managed_transport,
     )
 
 
@@ -160,11 +144,6 @@ def codex(
         False,
         "--open/--no-open",
         help="Open the session detail page in the default browser after launch.",
-    ),
-    transport: ManagedSessionTransport = typer.Option(
-        _default_codex_transport(),
-        "--transport",
-        help="Managed local transport: codex_app_server (native) or tmux (fallback). Override default via LONGHOUSE_CODEX_TRANSPORT env var.",
     ),
     url: str | None = typer.Option(
         None,
@@ -200,52 +179,18 @@ def codex(
         loop_mode=loop_mode,
         name=name,
         machine_name=machine_name,
-        managed_transport=transport,
     )
-    if result.managed_transport == ManagedSessionTransport.TMUX:
-        _finalize_managed_local_launch(
-            provider_label="Codex",
-            base_url=resolved_url,
-            result=result,
-            open_browser=open_browser,
-            attach=attach,
-        )
-        return
-
     session_url = _build_session_url(resolved_url, result.session_id)
     typer.secho("Managed local Codex session launched on this device.", fg=typer.colors.GREEN)
     typer.echo(f"Session ID: {result.session_id}")
-    typer.echo(f"Provider session ID: {result.provider_session_id}")
     typer.echo(f"Session URL: {session_url}")
     typer.echo("Starting native Codex bridge...")
-    try:
-        thread_id, ws_url = _start_native_codex_bridge(
-            session_id=result.session_id,
-            cwd=cwd,
-            url=resolved_url,
-            token=resolved_token,
-        )
-    except _NativeBridgeError as exc:
-        typer.secho(f"Native bridge failed: {exc}", fg=typer.colors.YELLOW)
-        typer.secho("Falling back to tmux transport...", fg=typer.colors.YELLOW)
-        result = _launch_managed_local_from_api(
-            url=resolved_url,
-            token=resolved_token,
-            cwd=cwd,
-            project=project,
-            loop_mode=loop_mode,
-            name=name,
-            machine_name=machine_name,
-            managed_transport=ManagedSessionTransport.TMUX,
-        )
-        _finalize_managed_local_launch(
-            provider_label="Codex",
-            base_url=resolved_url,
-            result=result,
-            open_browser=open_browser,
-            attach=attach,
-        )
-        return
+    thread_id, ws_url = _start_native_codex_bridge(
+        session_id=result.session_id,
+        cwd=cwd,
+        url=resolved_url,
+        token=resolved_token,
+    )
     typer.echo(f"Codex thread: {thread_id}")
     typer.echo(f"Remote target: {ws_url}")
 

@@ -435,7 +435,6 @@ def test_launch_managed_local_session_creates_native_codex_session_without_tmux(
                     "runner_target": runner.name,
                     "cwd": "/Users/davidrose/git/zerg",
                     "provider": "codex",
-                    "managed_transport": "codex_app_server",
                 },
             )
             assert response.status_code == 200, response.text
@@ -480,7 +479,6 @@ def test_launch_managed_local_session_rejects_unknown_runner_for_native_codex_tr
                     "runner_target": "missing-runner",
                     "cwd": "/Users/davidrose/git/zerg",
                     "provider": "codex",
-                    "managed_transport": "codex_app_server",
                 },
             )
             assert response.status_code == 404, response.text
@@ -489,36 +487,6 @@ def test_launch_managed_local_session_rejects_unknown_runner_for_native_codex_tr
         finally:
             api_app_ref.dependency_overrides = {}
 
-
-def test_launch_managed_local_session_rejects_codex_native_transport_for_claude(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        client, api_app_ref = _make_client(db, user)
-
-        monkeypatch.setattr(
-            "zerg.services.managed_local_launcher.get_runner_connection_manager",
-            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
-        )
-
-        try:
-            response = client.post(
-                "/api/sessions/managed-local",
-                json={
-                    "runner_target": runner.name,
-                    "cwd": "/Users/davidrose/git/zerg",
-                    "provider": "claude",
-                    "managed_transport": "codex_app_server",
-                },
-            )
-            assert response.status_code == 400, response.text
-            assert (
-                response.json()["detail"]
-                == "Managed local transport 'codex_app_server' currently only supports provider 'codex'"
-            )
-        finally:
-            api_app_ref.dependency_overrides = {}
 
 
 def test_launch_managed_local_session_accepts_shell_wrapper_when_capture_has_output(monkeypatch, tmp_path):
@@ -707,7 +675,6 @@ def test_launch_managed_local_this_device_allows_native_codex_without_runner_row
                     "machine_name": "work-laptop",
                     "cwd": "/Users/davidrose/git/zerg",
                     "provider": "codex",
-                    "managed_transport": "codex_app_server",
                 },
             )
             assert response.status_code == 200, response.text
@@ -809,10 +776,13 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
             payload = response.json()
             assert payload["provider"] == "codex"
             assert payload["execution_home"] == "managed_local"
+            assert payload["managed_transport"] == "codex_app_server"
+            assert payload["attach_command"] == ""
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.provider == "codex"
             assert session.execution_home == "managed_local"
+            assert session.managed_transport == "codex_app_server"
 
             presence = db.query(SessionPresence).filter(SessionPresence.session_id == str(session.id)).one()
             assert presence.state == "idle"
@@ -820,66 +790,11 @@ def test_launch_managed_local_codex_session(monkeypatch, tmp_path):
             assert presence.cwd == session.cwd
             assert presence.project == session.project
 
-            preflight_inner = _inner_command(dispatcher.calls[0]["command"])
-            assert "command -v codex" in preflight_inner
-            assert "command -v claude-code" not in preflight_inner
-
-            hooks_inner = _inner_command(dispatcher.calls[1]["command"])
-            assert "longhouse connect --hooks-only" in hooks_inner
-            assert "${HOME}/.codex/hooks/longhouse-codex-hook.sh" in hooks_inner
-            assert "${HOME}/.codex/hooks.json" in hooks_inner
-
-            launch_inner = _inner_command(dispatcher.calls[2]["command"])
-            assert "exec codex --enable codex_hooks --no-alt-screen" in launch_inner
-            assert "claude-code" not in launch_inner
-
-            # Must inject LONGHOUSE_SESSION_ID so hook routes presence to Longhouse's UUID
-            assert "LONGHOUSE_SESSION_ID" in launch_inner
-            assert payload["provider_session_id"] in launch_inner
-            assert "codex app-server" not in launch_inner
-            assert "--remote" not in launch_inner
-            assert len(dispatcher.calls) == 4
-            assert "has-session" in _inner_command(dispatcher.calls[3]["command"])
+            # Native bridge (codex_app_server) skips runner-dispatched preflight
+            assert len(dispatcher.calls) == 0
         finally:
             api_app_ref.dependency_overrides = {}
 
-
-def test_launch_managed_local_codex_fails_when_hook_install_does_not_produce_hooks(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        client, api_app_ref = _make_client(db, user)
-        dispatcher = _FakeDispatcher(
-            hook_install_exit_code=18,
-            hook_install_stderr="Longhouse hook config is missing the expected hook entry",
-        )
-
-        monkeypatch.setattr(
-            "zerg.services.managed_local_launcher.get_runner_connection_manager",
-            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
-        )
-        monkeypatch.setattr(
-            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
-            lambda: dispatcher,
-        )
-
-        try:
-            response = client.post(
-                "/api/sessions/managed-local",
-                json={
-                    "runner_target": runner.name,
-                    "cwd": "/Users/davidrose/git/zerg",
-                    "provider": "codex",
-                },
-            )
-            assert response.status_code == 424, response.text
-            assert response.json()["detail"] == "Longhouse hook config is missing the expected hook entry"
-            assert db.query(AgentSession).count() == 0
-            assert len(dispatcher.calls) == 2
-            assert "longhouse connect --hooks-only" in _inner_command(dispatcher.calls[1]["command"])
-        finally:
-            api_app_ref.dependency_overrides = {}
 
 
 def test_launch_managed_local_rejects_invalid_provider(monkeypatch, tmp_path):
@@ -914,77 +829,6 @@ def test_launch_managed_local_rejects_invalid_provider(monkeypatch, tmp_path):
         finally:
             api_app_ref.dependency_overrides = {}
 
-
-def test_launch_managed_local_codex_returns_without_waiting_for_ui_boot(monkeypatch, tmp_path):
-    """Managed-local Codex should return once tmux is live, not after TUI readiness."""
-    session_local = _make_db(tmp_path)
-
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        client, api_app_ref = _make_client(db, user)
-        dispatcher = _FakeDispatcher(pane_command="zsh", capture_stdout="zsh: command not found: codex")
-
-        monkeypatch.setattr(
-            "zerg.services.managed_local_launcher.get_runner_connection_manager",
-            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
-        )
-        monkeypatch.setattr(
-            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
-            lambda: dispatcher,
-        )
-
-        try:
-            response = client.post(
-                "/api/sessions/managed-local",
-                json={
-                    "runner_target": runner.name,
-                    "cwd": "/Users/davidrose/git/zerg",
-                    "provider": "codex",
-                },
-            )
-            assert response.status_code == 200, response.text
-            assert len(dispatcher.calls) == 4
-            assert all("display-message" not in _inner_command(call["command"]) for call in dispatcher.calls)
-            assert all("capture-pane" not in _inner_command(call["command"]) for call in dispatcher.calls)
-        finally:
-            api_app_ref.dependency_overrides = {}
-
-
-def test_launch_managed_local_codex_ignores_bootstrap_script_probe_on_launch(monkeypatch, tmp_path):
-    session_local = _make_db(tmp_path)
-
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        client, api_app_ref = _make_client(db, user)
-        dispatcher = _FakeDispatcher(
-            pane_command="longhouse-managed-lh-Codex-CLI-smoke-3649a5df.zsh",
-            capture_stdout="",
-        )
-
-        monkeypatch.setattr(
-            "zerg.services.managed_local_launcher.get_runner_connection_manager",
-            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
-        )
-        monkeypatch.setattr(
-            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
-            lambda: dispatcher,
-        )
-
-        try:
-            response = client.post(
-                "/api/sessions/managed-local",
-                json={
-                    "runner_target": runner.name,
-                    "cwd": "/Users/davidrose/git/zerg",
-                    "project": "zerg",
-                    "provider": "codex",
-                },
-            )
-            assert response.status_code == 200, response.text
-            assert len(dispatcher.calls) == 4
-            assert all("display-message" not in _inner_command(call["command"]) for call in dispatcher.calls)
-        finally:
-            api_app_ref.dependency_overrides = {}
 
 
 def test_launch_managed_local_this_device_falls_back_from_stale_token_owner(monkeypatch, tmp_path):

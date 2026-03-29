@@ -28,7 +28,6 @@ from zerg.services.managed_local_runtime import mark_managed_local_session_launc
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
 from zerg.services.managed_local_transport import build_managed_local_launch_transport_plan
-from zerg.services.managed_local_transport import coerce_managed_transport
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import ManagedSessionTransport
@@ -55,7 +54,6 @@ class ManagedLocalLaunchParams:
     git_branch: str | None = None
     display_name: str | None = None
     loop_mode: str = "manual"
-    managed_transport: str = ManagedSessionTransport.TMUX.value
     hook_url: str | None = None
     hook_token: str | None = None
     machine_name: str | None = None
@@ -295,29 +293,10 @@ def _pane_command_is_bootstrap_script(*, pane_command: str, managed_session_name
 
 
 async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchParams) -> ManagedLocalLaunchResult:
-    try:
-        transport = coerce_managed_transport(
-            params.managed_transport,
-            default=ManagedSessionTransport.TMUX,
-        )
-    except ValueError as exc:
-        raise ManagedLocalLaunchError(str(exc), status_code=400) from exc
-    if transport is None:
-        transport = ManagedSessionTransport.TMUX
-    if transport not in {ManagedSessionTransport.TMUX, ManagedSessionTransport.CODEX_APP_SERVER}:
-        raise ManagedLocalLaunchError(
-            f"Managed local transport '{transport.value}' is not implemented yet",
-            status_code=501,
-        )
-
     provider = params.provider or "claude"
     if provider not in _VALID_PROVIDERS:
         raise ManagedLocalLaunchError(f"Unsupported provider '{provider}' for managed local", status_code=400)
-    if transport == ManagedSessionTransport.CODEX_APP_SERVER and provider != "codex":
-        raise ManagedLocalLaunchError(
-            "Managed local transport 'codex_app_server' currently only supports provider 'codex'",
-            status_code=400,
-        )
+    transport = ManagedSessionTransport.for_provider(provider)
     provider_name = _PROVIDER_DISPLAY_NAMES.get(provider, provider)
 
     cwd = params.cwd.strip()
@@ -454,7 +433,6 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         return ManagedLocalLaunchResult(session=session, attach_command="")
 
     transport_plan = build_managed_local_launch_transport_plan(
-        transport=transport,
         session_name=managed_session_name,
         cwd=cwd,
         entry_command=entry_command,
