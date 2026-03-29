@@ -609,6 +609,16 @@ def _migrate_agents_columns(engine: Engine) -> None:
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started ON sessions(continued_from_session_id, started_at)")
             )
+            if "last_activity_at" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_activity_at DATETIME"))
+                conn.execute(
+                    text(
+                        "UPDATE sessions SET last_activity_at = ("
+                        "SELECT MAX(e.timestamp) FROM events e WHERE e.session_id = sessions.id"
+                        ") WHERE last_activity_at IS NULL"
+                    )
+                )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_last_activity_at ON sessions(last_activity_at)"))
             conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
