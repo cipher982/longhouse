@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { useState, useCallback, useRef, type PropsWithChildren } from "react";
+import { useState, useCallback, useEffect, useRef, type PropsWithChildren } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useAuthMethods } from "../lib/auth";
@@ -8,12 +8,15 @@ import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket
 import { useApiHealth } from "../lib/apiHealth";
 import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
 import { useClickOutside } from "../hooks/useClickOutside";
+import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useConfirm } from "./confirm";
 import { fetchRunnerStatus } from "../services/api";
 import "../styles/layout.css";
 import { SidebarIcon, XIcon } from "./icons";
 import { getNavItems } from "./navigation/navItems";
+
+const RUNNER_STATUS_INITIAL_DELAY_MS = 2_500;
 
 function WelcomeHeader() {
   const { user, logout } = useAuth();
@@ -377,10 +380,28 @@ function WelcomeHeader() {
 }
 
 function RunnerStatusIndicator() {
+  const documentVisible = useDocumentVisible();
+  const [queryEnabled, setQueryEnabled] = useState(false);
+
+  useEffect(() => {
+    if (!documentVisible) {
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      setQueryEnabled(true);
+    }, RUNNER_STATUS_INITIAL_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [documentVisible]);
+
   const { data: runnerStatus } = useQuery({
     queryKey: ["runnerStatus"],
     queryFn: fetchRunnerStatus,
-    refetchInterval: 30000, // Poll every 30 seconds
+    enabled: queryEnabled,
+    refetchInterval: documentVisible ? 30000 : false,
     staleTime: 15000,
     retry: false, // Don't retry on failure - just show stale data
   });

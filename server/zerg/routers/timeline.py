@@ -53,6 +53,7 @@ from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
+from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import normalize_utc_datetime
@@ -766,6 +767,25 @@ async def get_timeline_session_projection(
         branch_mode=branch_mode,
         limit=limit,
         offset=offset,
+        response=response,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
+
+
+@router.get("/sessions/{session_id}/workspace", response_model=SessionWorkspaceResponse)
+async def get_timeline_session_workspace(
+    session_id: UUID,
+    response: Response,
+    branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
+    db: Session = Depends(get_db),
+):
+    return await _sessions_router.get_session_workspace(
+        session_id=session_id,
+        branch_mode=branch_mode,
+        limit=limit,
         response=response,
         db=db,
         _auth=None,

@@ -3,8 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useSessionWorkspace } from "../useSessionWorkspace";
 
 const agentSessionMocks = vi.hoisted(() => ({
-  useAgentSessionWithOptions: vi.fn(),
-  useAgentSessionThreadWithOptions: vi.fn(),
+  useAgentSessionWorkspace: vi.fn(),
   useAgentSessionProjectionInfinite: vi.fn(),
 }));
 const visibilityMocks = vi.hoisted(() => ({
@@ -38,16 +37,31 @@ function makeEvents(count: number) {
 
 function seedHookMocks(eventCount: number = 80) {
   const events = makeEvents(eventCount);
-  agentSessionMocks.useAgentSessionWithOptions.mockReturnValue({
-    data: baseSession,
+  agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+    data: {
+      session: baseSession,
+      thread: {
+        sessions: [baseSession],
+        head_session_id: baseSession.id,
+        root_session_id: baseSession.id,
+      },
+      projection: {
+        root_session_id: baseSession.id,
+        focus_session_id: baseSession.id,
+        head_session_id: baseSession.id,
+        path_session_ids: [baseSession.id],
+        items: events.map((event) => ({
+          kind: "event",
+          session_id: baseSession.id,
+          timestamp: event.timestamp,
+          event,
+        })),
+        total: events.length,
+        abandoned_events: 0,
+      },
+    },
     isLoading: false,
     error: null,
-  });
-  agentSessionMocks.useAgentSessionThreadWithOptions.mockReturnValue({
-    data: {
-      sessions: [baseSession],
-      head_session_id: baseSession.id,
-    },
   });
   agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
     data: {
@@ -146,53 +160,69 @@ describe("useSessionWorkspace", () => {
   it("keeps polling visible, open sessions to refresh workspace runtime metadata", () => {
     renderHook(() => useSessionWorkspace(baseSession.id));
 
-    expect(agentSessionMocks.useAgentSessionWithOptions).toHaveBeenCalledTimes(1);
-    expect(agentSessionMocks.useAgentSessionWithOptions.mock.calls[0]?.[0]).toBe(baseSession.id);
-    expect(agentSessionMocks.useAgentSessionWithOptions.mock.calls[0]?.[1]).toMatchObject({
+    expect(agentSessionMocks.useAgentSessionWorkspace).toHaveBeenCalledTimes(1);
+    expect(agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[0]).toBe(baseSession.id);
+    expect(agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[1]).toMatchObject({
+      limit: 200,
+      branch_mode: "head",
       refetchInterval: expect.any(Function),
     });
-    expect(agentSessionMocks.useAgentSessionThreadWithOptions).toHaveBeenCalledWith(baseSession.id, {
-      refetchInterval: 5_000,
+    expect(agentSessionMocks.useAgentSessionProjectionInfinite).toHaveBeenCalledWith(baseSession.id, {
+      limit: 200,
+      branch_mode: "head",
+      enabled: true,
+      initialPage: expect.objectContaining({
+        focus_session_id: baseSession.id,
+      }),
     });
   });
 
   it("stops polling settled sessions when the document is hidden", () => {
     visibilityMocks.useDocumentVisible.mockReturnValue(false);
-    agentSessionMocks.useAgentSessionWithOptions.mockReturnValue({
+    agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
       data: {
-        ...baseSession,
-        ended_at: "2026-03-14T12:10:00.000Z",
-        status: "completed",
+        session: {
+          ...baseSession,
+          ended_at: "2026-03-14T12:10:00.000Z",
+          status: "completed",
+        },
+        thread: {
+          sessions: [
+            {
+              ...baseSession,
+              ended_at: "2026-03-14T12:10:00.000Z",
+              status: "completed",
+            },
+          ],
+          head_session_id: baseSession.id,
+          root_session_id: baseSession.id,
+        },
+        projection: {
+          root_session_id: baseSession.id,
+          focus_session_id: baseSession.id,
+          head_session_id: baseSession.id,
+          path_session_ids: [baseSession.id],
+          items: [],
+          total: 0,
+          abandoned_events: 0,
+        },
       },
       isLoading: false,
       error: null,
     });
-    agentSessionMocks.useAgentSessionThreadWithOptions.mockReturnValue({
-      data: {
-        sessions: [
-          {
-            ...baseSession,
-            ended_at: "2026-03-14T12:10:00.000Z",
-            status: "completed",
-          },
-        ],
-        head_session_id: baseSession.id,
-      },
-    });
 
     renderHook(() => useSessionWorkspace(baseSession.id));
 
-    expect(agentSessionMocks.useAgentSessionThreadWithOptions).toHaveBeenCalledWith(baseSession.id, {
-      refetchInterval: false,
-    });
-    const refetchInterval = agentSessionMocks.useAgentSessionWithOptions.mock.calls[0]?.[1]?.refetchInterval;
+    const refetchInterval = agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[1]?.refetchInterval;
     expect(
       refetchInterval?.({
         state: {
           data: {
-            ...baseSession,
-            ended_at: "2026-03-14T12:10:00.000Z",
-            status: "completed",
+            session: {
+              ...baseSession,
+              ended_at: "2026-03-14T12:10:00.000Z",
+              status: "completed",
+            },
           },
         },
       }),
@@ -271,16 +301,44 @@ describe("useSessionWorkspace", () => {
       started_at: "2026-03-19T16:45:00Z",
     };
 
-    agentSessionMocks.useAgentSessionWithOptions.mockReturnValue({
-      data: childSession,
+    agentSessionMocks.useAgentSessionWorkspace.mockReturnValue({
+      data: {
+        session: childSession,
+        thread: {
+          sessions: [parentSession, childSession],
+          head_session_id: childSession.id,
+          root_session_id: parentSession.id,
+        },
+        projection: {
+          root_session_id: parentSession.id,
+          focus_session_id: childSession.id,
+          head_session_id: childSession.id,
+          path_session_ids: [parentSession.id, childSession.id],
+          items: [
+            {
+              kind: "event",
+              session_id: parentSession.id,
+              timestamp: "2026-03-19T16:40:00Z",
+              event: makeEvents(1)[0],
+            },
+            {
+              kind: "seam",
+              session_id: childSession.id,
+              timestamp: "2026-03-19T16:45:00Z",
+              continued_from_session_id: parentSession.id,
+              continuation_kind: "cloud",
+              origin_label: "Cloud",
+              parent_origin_label: "Local",
+              parent_continuation_kind: "local",
+              branched_from_event_id: 12,
+            },
+          ],
+          total: 2,
+          abandoned_events: 0,
+        },
+      },
       isLoading: false,
       error: null,
-    });
-    agentSessionMocks.useAgentSessionThreadWithOptions.mockReturnValue({
-      data: {
-        sessions: [parentSession, childSession],
-        head_session_id: childSession.id,
-      },
     });
     agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
       data: {

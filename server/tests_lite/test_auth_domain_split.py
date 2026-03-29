@@ -43,6 +43,7 @@ def test_timeline_router_exposes_browser_archive_routes():
 
         "/timeline/sessions/{session_id}",
         "/timeline/sessions/{session_id}/thread",
+        "/timeline/sessions/{session_id}/workspace",
         "/timeline/sessions/{session_id}/events",
         "/timeline/sessions/{session_id}/preview",
         "/timeline/sessions/{session_id}/action",

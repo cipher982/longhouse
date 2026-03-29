@@ -41,6 +41,7 @@ from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import SessionsSummaryResponse
 from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
+from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import _coerce_managed_transport
 from zerg.services.session_views import _coerce_session_loop_mode
 from zerg.services.session_views import build_event_response
@@ -964,6 +965,171 @@ async def get_session_projection(
             total=projection.total,
             branch_mode=projection.branch_mode,
             abandoned_events=projection.abandoned_events,
+        )
+    timing.apply(response)
+    return result
+
+
+@router.get("/sessions/{session_id}/workspace", response_model=SessionWorkspaceResponse)
+async def get_session_workspace(
+    session_id: UUID,
+    response: Response,
+    branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionWorkspaceResponse:
+    """Get the focused session, its thread, and the first projection page in one round trip."""
+    store = AgentsStore(db)
+    timing = ServerTimingRecorder()
+    response.headers["Cache-Control"] = "private, max-age=5"
+
+    with timing.span("load_session"):
+        session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    if branch_mode not in {"head", "all"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="branch_mode must be one of: head, all",
+        )
+
+    with timing.span("load_thread"):
+        thread_sessions = store.list_thread_sessions(session)
+    if not thread_sessions:
+        thread_sessions = [session]
+
+    with timing.span("load_head"):
+        head = next((item for item in thread_sessions if bool(item.is_writable_head)), None) or store.get_thread_head(session)
+
+    thread_session_ids = [item.id for item in thread_sessions]
+    with timing.span("load_activity"):
+        activity_map = store.get_last_activity_map(thread_session_ids)
+    with timing.span("load_presence"):
+        presence_map = load_presence_map(db, thread_session_ids)
+    with timing.span("load_runtime"):
+        runtime_state_map = load_runtime_state_map(db, thread_session_ids)
+    with timing.span("load_first_user"):
+        first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
+    with timing.span("load_projection"):
+        projection = store.get_session_projection_page(
+            session,
+            branch_mode=branch_mode,
+            limit=limit,
+            offset=0,
+        )
+
+    thread_cache: dict[str, tuple[str, int]] = {}
+    now = datetime.now(timezone.utc)
+    with timing.span("build_thread_responses"):
+        thread_response_map = {
+            str(item.id): build_session_response(
+                store,
+                item,
+                thread_cache=thread_cache,
+                last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
+                runtime_overlay=resolve_runtime_overlay(
+                    item,
+                    last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
+                    presence_map=presence_map,
+                    runtime_state_map=runtime_state_map,
+                    now=now,
+                ),
+                first_user_message=first_user_map.get(item.id),
+            )
+            for item in thread_sessions
+        }
+
+    session_response = thread_response_map.get(str(session.id))
+    if session_response is None:
+        session_response = build_session_response(
+            store,
+            session,
+            thread_cache=thread_cache,
+            last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
+            runtime_overlay=resolve_runtime_overlay(
+                session,
+                last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
+                presence_map=presence_map,
+                runtime_state_map=runtime_state_map,
+                now=now,
+            ),
+            first_user_message=first_user_map.get(session.id),
+        )
+
+    active_context_boundary_cache: dict[UUID, int | None] = {}
+    head_branch_id_cache: dict[UUID, int | None] = {}
+
+    def get_boundary(current_session_id: UUID) -> int | None:
+        if current_session_id not in active_context_boundary_cache:
+            active_context_boundary_cache[current_session_id] = store.get_active_context_boundary(
+                current_session_id,
+                branch_mode=branch_mode,
+            )
+        return active_context_boundary_cache[current_session_id]
+
+    def get_head_branch_id(current_session_id: UUID) -> int | None:
+        if current_session_id not in head_branch_id_cache:
+            head_branch_id_cache[current_session_id] = store.get_head_branch_id(current_session_id)
+        return head_branch_id_cache[current_session_id]
+
+    with timing.span("build_projection"):
+        projection_items: list[SessionProjectionItemResponse] = []
+        for item in projection.items:
+            if item.kind == "event" and item.event is not None:
+                projection_items.append(
+                    SessionProjectionItemResponse(
+                        kind="event",
+                        session_id=str(item.session.id),
+                        timestamp=item.event.timestamp,
+                        event=build_event_response(
+                            store,
+                            item.event,
+                            boundary=get_boundary(item.session.id),
+                            head_branch_id=get_head_branch_id(item.session.id),
+                        ),
+                    )
+                )
+                continue
+
+            projection_items.append(
+                SessionProjectionItemResponse(
+                    kind="seam",
+                    session_id=str(item.session.id),
+                    timestamp=item.session.started_at,
+                    continued_from_session_id=(
+                        str(item.session.continued_from_session_id) if item.session.continued_from_session_id else None
+                    ),
+                    continuation_kind=item.session.continuation_kind,
+                    origin_label=item.session.origin_label,
+                    parent_origin_label=(item.parent_session.origin_label if item.parent_session else None),
+                    parent_continuation_kind=(item.parent_session.continuation_kind if item.parent_session else None),
+                    branched_from_event_id=item.session.branched_from_event_id,
+                )
+            )
+
+        result = SessionWorkspaceResponse(
+            session=session_response,
+            thread=SessionThreadResponse(
+                root_session_id=str(session.thread_root_session_id or session.id),
+                head_session_id=str(head.id if head else session.id),
+                sessions=[thread_response_map.get(str(item.id), session_response) for item in thread_sessions],
+            ),
+            projection=SessionProjectionResponse(
+                root_session_id=str(session.thread_root_session_id or session.id),
+                focus_session_id=str(session.id),
+                head_session_id=str(head.id if head else session.id),
+                path_session_ids=[str(path_session.id) for path_session in projection.path_sessions],
+                items=projection_items,
+                total=projection.total,
+                branch_mode=projection.branch_mode,
+                abandoned_events=projection.abandoned_events,
+            ),
         )
     timing.apply(response)
     return result

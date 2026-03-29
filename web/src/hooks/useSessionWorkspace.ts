@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   useAgentSessionProjectionInfinite,
-  useAgentSessionThreadWithOptions,
-  useAgentSessionWithOptions,
+  useAgentSessionWorkspace,
 } from "./useAgentSessions";
 import { useDebouncedValue } from "./useDebouncedValue";
 import { useDocumentVisible } from "./useDocumentVisible";
@@ -30,44 +29,33 @@ export function useSessionWorkspace(
   const highlightEventId = options.highlightEventId ?? null;
   const documentVisible = useDocumentVisible();
 
-  const { data: session, isLoading: sessionLoading, error: sessionError } = useAgentSessionWithOptions(
-    sessionId,
-    {
-      refetchInterval: (query) => {
-        const currentSession = query.state.data;
-        if (!documentVisible || !currentSession) {
-          return false;
-        }
-
-        const runtime = resolveSessionRuntimeState(currentSession);
-        const shouldRefresh =
-          currentSession.ended_at == null ||
-          runtime.isLive ||
-          runtime.needsAttention ||
-          runtime.heuristicActive;
-
-        return shouldRefresh ? WORKSPACE_RUNTIME_REFRESH_MS : false;
-      },
-    },
-  );
-  const sessionRuntime = useMemo(
-    () => (session ? resolveSessionRuntimeState(session) : null),
-    [session],
-  );
-  const shouldRefreshRuntime =
-    documentVisible &&
-    session != null &&
-    (session.ended_at == null ||
-      sessionRuntime?.isLive ||
-      sessionRuntime?.needsAttention ||
-      sessionRuntime?.heuristicActive);
-  const runtimeRefreshInterval = shouldRefreshRuntime ? WORKSPACE_RUNTIME_REFRESH_MS : false;
-
-  const { data: threadData } = useAgentSessionThreadWithOptions(sessionId, {
-    refetchInterval: runtimeRefreshInterval,
-  });
-
   const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
+  const branchMode = showAbandonedBranches ? "all" : "head";
+  const {
+    data: workspaceData,
+    isLoading: sessionLoading,
+    error: sessionError,
+  } = useAgentSessionWorkspace(sessionId, {
+    limit: INITIAL_EVENTS_PAGE_SIZE,
+    branch_mode: branchMode,
+    refetchInterval: (query) => {
+      const currentSession = query.state.data?.session;
+      if (!documentVisible || !currentSession) {
+        return false;
+      }
+
+      const runtime = resolveSessionRuntimeState(currentSession);
+      const shouldRefresh =
+        currentSession.ended_at == null ||
+        runtime.isLive ||
+        runtime.needsAttention ||
+        runtime.heuristicActive;
+
+      return shouldRefresh ? WORKSPACE_RUNTIME_REFRESH_MS : false;
+    },
+  });
+  const session = workspaceData?.session ?? null;
+  const threadData = workspaceData?.thread ?? null;
   const {
     data: projectionPagesData,
     isLoading: projectionLoading,
@@ -77,7 +65,9 @@ export function useSessionWorkspace(
     isFetchingNextPage,
   } = useAgentSessionProjectionInfinite(sessionId, {
     limit: INITIAL_EVENTS_PAGE_SIZE,
-    branch_mode: showAbandonedBranches ? "all" : "head",
+    branch_mode: branchMode,
+    enabled: Boolean(workspaceData),
+    initialPage: workspaceData?.projection ?? null,
   });
 
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");

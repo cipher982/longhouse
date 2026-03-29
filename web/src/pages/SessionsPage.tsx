@@ -24,9 +24,7 @@ import { useReadinessFlag } from "../lib/readiness-contract";
 import {
   type AgentSession,
   type AgentSessionFilters,
-  fetchAgentSession,
-  fetchAgentSessionProjection,
-  fetchAgentSessionThread,
+  fetchAgentSessionWorkspace,
   getTimelineCardAnchor,
   type TimelineSessionCard,
   seedDemoSessions,
@@ -834,7 +832,6 @@ export default function SessionsPage() {
   );
 
   const timelineStreamEligible = !debouncedQuery && !aiSearch && typeof EventSource !== "undefined";
-  const timelineStreamEnabled = timelineStreamEligible && documentVisible;
 
   // Single unified query — use SSE for live rows and keep a slow polling backstop.
   const timelineResult = useAgentSessions(filters, {
@@ -851,6 +848,7 @@ export default function SessionsPage() {
   const isLoading = timelineResult.isLoading;
   const error = timelineResult.error;
   const refetch = timelineResult.refetch;
+  const timelineStreamEnabled = timelineStreamEligible && documentVisible && !isLoading && !!data;
 
   const sessions = useMemo(() => data?.sessions || [], [data?.sessions]);
   const total = data?.total || 0;
@@ -869,37 +867,23 @@ export default function SessionsPage() {
     }
 
     prefetchedSessionIdsRef.current.add(sessionId);
-    const projectionQueryKey = [
-      "agent-session-projection-infinite",
-      sessionId,
-      { limit: SESSION_WORKSPACE_PREFETCH_LIMIT, branch_mode: "head" as const },
-    ] as const;
-
-    void Promise.allSettled([
-      queryClient.prefetchQuery({
-        queryKey: ["agent-session", sessionId],
-        queryFn: () => fetchAgentSession(sessionId),
-        staleTime: 30_000,
-      }),
-      queryClient.prefetchQuery({
-        queryKey: ["agent-session-thread", sessionId],
-        queryFn: () => fetchAgentSessionThread(sessionId),
-        staleTime: 30_000,
-      }),
-      fetchAgentSessionProjection(sessionId, {
-        limit: SESSION_WORKSPACE_PREFETCH_LIMIT,
-        branch_mode: "head",
-      }).then((page) => {
-        queryClient.setQueryData(projectionQueryKey, {
-          pages: [page],
-          pageParams: [0],
-        });
-      }),
-    ]).then((results) => {
-      if (results.every((result) => result.status === "rejected")) {
+    void queryClient
+      .prefetchQuery({
+        queryKey: [
+          "agent-session-workspace",
+          sessionId,
+          { limit: SESSION_WORKSPACE_PREFETCH_LIMIT, branch_mode: "head" as const },
+        ],
+        queryFn: () =>
+          fetchAgentSessionWorkspace(sessionId, {
+            limit: SESSION_WORKSPACE_PREFETCH_LIMIT,
+            branch_mode: "head",
+          }),
+        staleTime: 10_000,
+      })
+      .catch(() => {
         prefetchedSessionIdsRef.current.delete(sessionId);
-      }
-    });
+      });
   }, [queryClient]);
 
   const handleSessionPrefetch = useCallback((thread: TimelineSessionCard) => {

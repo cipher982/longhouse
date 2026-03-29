@@ -328,6 +328,14 @@ class SessionProjectionResponse(BaseModel):
     abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
 
 
+class SessionWorkspaceResponse(BaseModel):
+    """Response for the primary session workspace bootstrap payload."""
+
+    session: SessionResponse = Field(..., description="Focused session metadata")
+    thread: SessionThreadResponse = Field(..., description="Logical thread continuations for the focused session")
+    projection: SessionProjectionResponse = Field(..., description="First page of the stitched lineage projection")
+
+
 class IngestResponse(BaseModel):
     """Response for ingest endpoint."""
 
