@@ -503,6 +503,7 @@ class AgentsStore:
             .update({AgentSession.is_writable_head: 0}, synchronize_session=False)
         )
 
+        effective_started = started_at or datetime.now(timezone.utc)
         session = AgentSession(
             id=uuid4(),
             provider=parent.provider,
@@ -512,8 +513,9 @@ class AgentsStore:
             cwd=parent.cwd,
             git_repo=parent.git_repo,
             git_branch=parent.git_branch,
-            started_at=started_at or datetime.now(timezone.utc),
+            started_at=effective_started,
             ended_at=None,
+            last_activity_at=_normalize_utc_naive(effective_started),
             provider_session_id=provider_session_id or parent.provider_session_id,
             thread_root_session_id=root_id,
             continued_from_session_id=parent.id,
@@ -579,6 +581,9 @@ class AgentsStore:
         existing_ended_at = _normalize_utc_naive(session.ended_at)
         if incoming_ended_at and (existing_ended_at is None or incoming_ended_at > existing_ended_at):
             session.ended_at = data.ended_at
+            current_activity = _normalize_utc_naive(session.last_activity_at)
+            if current_activity is None or incoming_ended_at > current_activity:
+                session.last_activity_at = data.ended_at
 
         if data.is_sidechain:
             session.is_sidechain = 1
@@ -1455,6 +1460,7 @@ class AgentsStore:
                 git_branch=data.git_branch,
                 started_at=data.started_at,
                 ended_at=data.ended_at,
+                last_activity_at=_normalize_utc_naive(data.started_at),
                 provider_session_id=data.provider_session_id,
                 thread_root_session_id=root_id,
                 continued_from_session_id=data.continued_from_session_id,
@@ -1613,6 +1619,10 @@ class AgentsStore:
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if session_obj and events_inserted > 0:
             session_obj.needs_embedding = 1
+            if latest_inserted_timestamp is not None:
+                current = _normalize_utc_naive(session_obj.last_activity_at)
+                if current is None or latest_inserted_timestamp > current:
+                    session_obj.last_activity_at = latest_inserted_timestamp
 
         if events_inserted > 0:
             from zerg.services.ingest_task_queue import enqueue_ingest_tasks
