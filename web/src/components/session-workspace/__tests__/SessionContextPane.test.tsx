@@ -156,7 +156,7 @@ describe("SessionContextPane", () => {
       session: makeSession({
         provider: "codex",
         execution_home: "managed_local",
-        managed_transport: "tmux",
+        managed_transport: "codex_app_server",
         source_runner_id: 7,
         source_runner_name: "cinder",
         attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
@@ -202,8 +202,10 @@ describe("SessionContextPane", () => {
     expect(within(turnReview).getByText(/Review recorded in 6\.0 s/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Queue delay before turn-loop: 2\.0 s/i)).toBeInTheDocument();
     expect(within(turnReview).getByText(/Turn-loop processing time: 5\.0 s/i)).toBeInTheDocument();
-    expect(within(turnReview).getByText(/Only targeted verification remains\. Run the pending targeted tests\./i)).toBeInTheDocument();
-    expect(within(turnReview).getByText(/Autonomous continue cap reached/i)).toBeInTheDocument();
+    expect(turnReview).toHaveTextContent("Only targeted verification remains. Run the pending targeted tests.");
+    expect(turnReview).toHaveTextContent("Autonomous continue cap reached.");
+    expect(screen.getByTestId("session-turn-review-debug")).toHaveTextContent('"recommendedAction": "continue_session"');
+    expect(screen.getByTestId("session-turn-review-debug")).toHaveTextContent('"executionState": "awaiting_user_approval"');
   });
 
   it("shows a graceful empty state when no turn review is available", () => {

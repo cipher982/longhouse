@@ -28,9 +28,7 @@ import {
   type SessionTurnReview,
 } from "../services/api/oikos";
 import {
-  formatProviderLabel,
-  getSessionOriginLabel,
-  supportsCloudContinuation,
+  getSessionInteractionCapabilities,
 } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
 
@@ -157,94 +155,16 @@ function SessionDetailWorkspaceRoute({
     effectiveLoopMode === session.loop_mode ? session : { ...session, loop_mode: effectiveLoopMode };
 
   const continuationSourceSession = currentThreadSession || session;
-  const providerLabel = formatProviderLabel(continuationSourceSession.provider);
-  const isManagedLocalSession = continuationSourceSession.execution_home === "managed_local";
-  const canDriveManagedLocalSession = isManagedLocalSession && Boolean(continuationSourceSession.source_runner_id);
-  const canContinueInCloud =
-    !isManagedLocalSession && supportsCloudContinuation(continuationSourceSession.provider);
-  const isManagedLocalCodex =
-    continuationSourceSession.provider === "codex" &&
-    continuationSourceSession.execution_home === "managed_local";
-  const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
-  const sourceOriginLabel = continuationSourceSession
-    ? getSessionOriginLabel(continuationSourceSession)
-    : null;
-
-  const interactionMode:
-    | "managed_local"
-    | "managed_local_unavailable"
-    | "unsupported"
-    | "head"
-    | "promote"
-    | "branch" = canDriveManagedLocalSession
-    ? "managed_local"
-    : isManagedLocalSession
-      ? "managed_local_unavailable"
-      : !canContinueInCloud
-        ? "unsupported"
-        : !isViewingHead
-          ? "branch"
-          : continuationSourceSession.continuation_kind === "cloud"
-            ? "head"
-            : "promote";
-
-  const continuationSubmitLabel =
-    interactionMode === "managed_local"
-      ? "Send"
-      : interactionMode === "branch"
-      ? "Branch in Cloud"
-      : interactionMode === "promote"
-        ? "Start in Cloud"
-        : "Reply";
-
-  const continuationTitle =
-    interactionMode === "managed_local"
-      ? `Drive this live ${providerLabel} session`
-      : interactionMode === "head"
-      ? "Cloud continuation began here"
-      : interactionMode === "promote"
-        ? "Cloud continuation starts here"
-        : interactionMode === "branch"
-          ? "New cloud branch starts here"
-          : interactionMode === "managed_local_unavailable" && isManagedLocalCodex
-            ? "Drive this session from the attached Codex terminal"
-            : interactionMode === "managed_local_unavailable"
-              ? "Drive this session from the attached terminal"
-              : `This ${providerLabel} transcript is synced, but not resumable from the web yet`;
-
-  const continuationDescription =
-    interactionMode === "managed_local"
-      ? `This session is still running on ${sourceOriginLabel}. Messages below are injected into the live local ${providerLabel} session and sync back into the timeline here.`
-      : interactionMode === "head"
-      ? `Earlier turns were synced from ${sourceOriginLabel}. New messages below keep extending this cloud session.`
-      : interactionMode === "promote"
-      ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts the cloud continuation.`
-      : interactionMode === "branch"
-        ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts a new cloud branch from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
-        : interactionMode === "managed_local_unavailable"
-          ? `This managed-local ${providerLabel} session is still visible here, but Longhouse cannot inject prompts because the live runner bridge metadata is missing. Reattach locally to continue.`
-          : `Direct cloud continuation is currently wired for Claude sessions only. This ${providerLabel} transcript is still searchable and auditable here while we close that provider gap.`;
+  const interaction = getSessionInteractionCapabilities({
+    session: continuationSourceSession,
+    isViewingHead,
+    headThreadSession,
+  });
 
   const continuationHint = undefined;
 
-  const continuationPlaceholder =
-    interactionMode === "managed_local"
-      ? `Send a message to the live ${providerLabel} session...`
-      : interactionMode === "branch"
-      ? "Branch from this point in cloud..."
-      : interactionMode === "promote"
-        ? "Continue this thread in the cloud..."
-        : "Type a message...";
-
-  const continuationKeyboardHint =
-    interactionMode === "branch"
-      ? 'Press the "Branch in Cloud" button to confirm the new branch.'
-      : interactionMode === "promote"
-        ? 'Press the "Start in Cloud" button to confirm the first cloud message.'
-        : undefined;
-
   const sessionChatTarget: SessionChatTarget | null =
-    interactionMode === "managed_local" || canContinueInCloud
+    interaction.canChatFromBrowser
     ? {
         id: continuationSourceSession.id,
         project: continuationSourceSession.project,
@@ -255,20 +175,7 @@ function SessionDetailWorkspaceRoute({
   const inspectorSelection =
     selectedSelection && selectedSelection.kind !== "message" ? selectedSelection : null;
 
-  const continuationNotice =
-    interactionMode === "managed_local_unavailable"
-    ? {
-        title: isManagedLocalCodex
-          ? "Managed-local Codex needs local attach"
-          : "Managed-local session needs local attach",
-        body: `This live ${providerLabel} session is still searchable here, but Longhouse cannot inject prompts until the local runner bridge is present. Reattach locally to continue.`,
-      }
-    : interactionMode === "unsupported"
-      ? {
-          title: `Web continuation unavailable for ${providerLabel}`,
-          body: `This ${providerLabel} transcript is still fully searchable here, but direct cloud continuation is currently wired for Claude sessions only.`,
-        }
-      : null;
+  const continuationNotice = interaction.notice;
 
   const handleLoopModeChange = async (nextMode: SessionLoopMode) => {
     if (loopModePending || nextMode === effectiveLoopMode) {
@@ -393,26 +300,26 @@ function SessionDetailWorkspaceRoute({
             dock={
               sessionChatTarget ? (
                 <SessionChat
-                  key={`${sessionChatTarget.id}:${interactionMode}`}
+                  key={`${sessionChatTarget.id}:${interaction.mode}`}
                   session={sessionChatTarget}
                   layout="dock"
-                  dockHeaderStyle={interactionMode === "head" ? "hidden" : "divider"}
+                  dockHeaderStyle={interaction.mode === "head" ? "hidden" : "divider"}
                   introEyebrow={
-                    interactionMode === "managed_local"
+                    interaction.mode === "managed_local"
                       ? "Live session"
-                      : interactionMode === "branch"
+                      : interaction.mode === "branch"
                         ? "Cloud branch"
                         : "Cloud continuation"
                   }
-                  introTitle={continuationTitle}
-                  introDescription={continuationDescription}
+                  introTitle={interaction.title}
+                  introDescription={interaction.description}
                   hintText={continuationHint}
-                  composerPlaceholder={continuationPlaceholder}
-                  submitLabel={continuationSubmitLabel}
+                  composerPlaceholder={interaction.placeholder}
+                  submitLabel={interaction.submitLabel}
                   requireClickForFirstSend={
-                    interactionMode === "branch" || interactionMode === "promote"
+                    interaction.mode === "branch" || interaction.mode === "promote"
                   }
-                  keyboardHintText={continuationKeyboardHint}
+                  keyboardHintText={interaction.keyboardHint}
                   onSessionChanged={(nextSessionId) => {
                     if (!nextSessionId || nextSessionId === session.id) return;
                     navigate(`/timeline/${nextSessionId}`, {

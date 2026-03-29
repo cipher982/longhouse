@@ -35,7 +35,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   codex: {
     id: "codex",
     marketingName: "Codex CLI",
-    cardDescription: "Archive sync and cloud sessions; web continuation later",
+    cardDescription: "Archive sync, managed-local browser driving, and cloud session starts",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
@@ -46,7 +46,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   gemini: {
     id: "gemini",
     marketingName: "Gemini CLI",
-    cardDescription: "Archive sync and cloud sessions; web continuation later",
+    cardDescription: "Archive sync and cloud sessions; direct web continuation later",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
@@ -108,7 +108,7 @@ export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
   ];
 }
 
-/** Whether a provider supports cloud session continuation. */
-export function supportsCloudContinuation(provider: string): boolean {
+/** Whether a provider supports direct web continuation from a cloud transcript. */
+export function supportsDirectWebContinuation(provider: string): boolean {
   return getLaunchProviderSupport(provider)?.directWebContinuation === "live";
 }

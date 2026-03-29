@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getLaunchProviderSupport,
   getLaunchProviderSupportList,
-  supportsCloudContinuation,
+  supportsDirectWebContinuation,
 } from "../providers";
 
 describe("providers launch support", () => {
@@ -14,9 +14,9 @@ describe("providers launch support", () => {
   });
 
   it("marks Claude as the only direct web continuation provider today", () => {
-    expect(supportsCloudContinuation("claude")).toBe(true);
-    expect(supportsCloudContinuation("codex")).toBe(false);
-    expect(supportsCloudContinuation("gemini")).toBe(false);
+    expect(supportsDirectWebContinuation("claude")).toBe(true);
+    expect(supportsDirectWebContinuation("codex")).toBe(false);
+    expect(supportsDirectWebContinuation("gemini")).toBe(false);
   });
 
   it("records hooks and telemetry differences for the landing truth pass", () => {
