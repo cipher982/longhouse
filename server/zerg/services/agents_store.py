@@ -2294,35 +2294,16 @@ class AgentsStore:
         return result
 
     def get_last_activity_map(self, session_ids: List[UUID]) -> dict[UUID, datetime]:
-        """Return last activity timestamp per session."""
+        """Return last activity timestamp per session (denormalized column read)."""
         if not session_ids:
             return {}
-
-        heads_subq = (
-            select(
-                AgentSessionBranch.session_id.label("session_id"),
-                func.max(AgentSessionBranch.id).label("head_branch_id"),
-            )
-            .where(AgentSessionBranch.session_id.in_(session_ids))
-            .where(AgentSessionBranch.is_head == 1)
-            .group_by(AgentSessionBranch.session_id)
-            .subquery()
+        rows = (
+            self.db.query(AgentSession.id, AgentSession.last_activity_at)
+            .filter(AgentSession.id.in_(session_ids))
+            .filter(AgentSession.last_activity_at.isnot(None))
+            .all()
         )
-        stmt = (
-            select(AgentEvent.session_id, func.max(AgentEvent.timestamp))
-            .select_from(AgentEvent)
-            .outerjoin(heads_subq, AgentEvent.session_id == heads_subq.c.session_id)
-            .where(AgentEvent.session_id.in_(session_ids))
-            .where(
-                or_(
-                    heads_subq.c.head_branch_id.is_(None),
-                    AgentEvent.branch_id == heads_subq.c.head_branch_id,
-                )
-            )
-            .group_by(AgentEvent.session_id)
-        )
-        rows = self.db.execute(stmt).fetchall()
-        return {session_id: ts for session_id, ts in rows if ts}
+        return {session_id: ts for session_id, ts in rows}
 
     def get_session_preview(self, session_id: UUID, last_n: int) -> List[AgentEvent]:
         """Return last N user/assistant messages for preview (chronological)."""
