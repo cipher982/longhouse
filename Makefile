@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-lite test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-perf qa-live-conversations reprovision qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-frontend-unit test-hatch-agent test-runner test-runner-unit test-install-runner test-hosted-instance test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check env-check-prod verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-perf qa-live-conversations reprovision qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
 
 
 # ---------------------------------------------------------------------------
@@ -53,32 +53,6 @@ env-check: ## Validate required environment variables (Docker mode)
 		else \
 			echo "✅ Required variables set (warnings above are optional)"; \
 		fi
-
-env-check-prod: ## Validate production environment variables
-	@missing=0; \
-	echo "🔍 Checking production environment variables..."; \
-	\
-	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB \
-		   JWT_SECRET INTERNAL_API_SECRET FERNET_SECRET TRIGGER_SIGNING_SECRET \
-		   GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET \
-		   OPENAI_API_KEY ALLOWED_CORS_ORIGINS; do \
-		if [ -z "$$$(printenv $$var)" ]; then \
-			echo "❌ Missing required for prod: $$var"; \
-			missing=1; \
-		fi; \
-	done; \
-	\
-		if [ "$$AUTH_DISABLED" = "1" ]; then \
-			echo "❌ AUTH_DISABLED must be 0 for production"; \
-			missing=1; \
-		fi; \
-	\
-		if [ $$missing -eq 1 ]; then \
-			echo ""; \
-			echo "💡 Set all required production variables before deploying"; \
-		exit 1; \
-		fi; \
-	echo "✅ All production environment variables set"
 
 # ---------------------------------------------------------------------------
 # Core Development Commands
@@ -206,10 +180,6 @@ test: ## ⭐ Python backend unit tests (tests_lite/, SQLite in-memory, ~10s)
 
 test-readmes: ## Run README contract tests (MODE=smoke[default] or full)
 	@python3 scripts/qa/run-readme-tests.py --mode $(or $(MODE),smoke) $(FILES)
-
-test-lite: ## Deprecated — use `make test` instead
-	@echo "⚠️  test-lite is deprecated, use \`make test\` instead"
-	@$(MAKE) test
 
 test-autonomy-journeys: ## Run deterministic Oikos autonomy journey harness tests
 	@echo "🧪 Running Oikos autonomy journey harness tests..."
@@ -387,9 +357,6 @@ test-frontend: ## Frontend unit tests + TypeScript type-check (use when changing
 	@echo "⚛️  Running frontend unit + type-check..."
 	cd web && bun run validate:types && bun run test -- --run
 
-test-frontend-unit: ## @internal Deprecated — use `make test-frontend` instead
-	@$(MAKE) test-frontend
-
 test-hatch-agent: ## @internal Run hatch-agent package tests from sibling repo
 	@if [ ! -d ../hatch ]; then \
 		echo "❌ hatch repo not found at ../hatch"; \
@@ -407,9 +374,6 @@ test-hatch-agent: ## @internal Run hatch-agent package tests from sibling repo
 test-runner: ## Runner unit tests — Bun (use when changing runner/)
 	@echo "🏃 Running runner unit tests..."
 	cd runner && bun test
-
-test-runner-unit: ## @internal Deprecated — use `make test-runner` instead
-	@$(MAKE) test-runner
 
 test-install-runner: ## @internal Run install-runner script tests
 	@echo "🧪 Running install-runner script tests..."
