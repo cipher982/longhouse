@@ -8,12 +8,17 @@ const { fetchWithRefreshMock } = vi.hoisted(() => ({
   fetchWithRefreshMock: vi.fn(),
 }));
 
+const { requestMock } = vi.hoisted(() => ({
+  requestMock: vi.fn(),
+}));
+
 vi.mock("../../lib/auth-refresh", () => ({
   fetchWithRefresh: fetchWithRefreshMock,
 }));
 
 vi.mock("../../services/api/base", () => ({
   buildUrl: (path: string) => path,
+  request: requestMock,
 }));
 
 function makeSession(overrides: Partial<SessionChatTarget> = {}): SessionChatTarget {
@@ -54,10 +59,6 @@ function sseResponse(events: Array<{ event: string; data: unknown }>): Response 
 
 function mockSessionChatFetches(chatResponse: Response) {
   fetchWithRefreshMock.mockImplementation((url: string) => {
-    if (url.endsWith("/lock")) {
-      return Promise.resolve(jsonResponse({ locked: false, fork_available: false }));
-    }
-
     if (url.endsWith("/chat")) {
       return Promise.resolve(chatResponse);
     }
@@ -68,6 +69,23 @@ function mockSessionChatFetches(chatResponse: Response) {
 
 function getChatCallCount() {
   return fetchWithRefreshMock.mock.calls.filter(([url]) => String(url).endsWith("/chat")).length;
+}
+
+function createDeferredResponse() {
+  let resolve: ((response: Response) => void) | null = null;
+  const promise = new Promise<Response>((nextResolve) => {
+    resolve = nextResolve;
+  });
+  return {
+    promise,
+    resolve(response: Response) {
+      if (!resolve) {
+        throw new Error("Deferred response already resolved");
+      }
+      resolve(response);
+      resolve = null;
+    },
+  };
 }
 
 function renderSessionChat(
@@ -101,6 +119,13 @@ function renderSessionChat(
 describe("SessionChat", () => {
   beforeEach(() => {
     fetchWithRefreshMock.mockReset();
+    requestMock.mockReset();
+    requestMock.mockImplementation((path: string) => {
+      if (String(path).endsWith("/lock")) {
+        return Promise.resolve({ locked: false, fork_available: false });
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
     Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: vi.fn(),
@@ -320,11 +345,12 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "tesT: whats 2+2");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(7));
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(8));
     await waitFor(() => {
       expect(screen.queryByText("tesT: whats 2+2")).not.toBeInTheDocument();
       expect(screen.queryByText("4")).not.toBeInTheDocument();
     });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-lock", "sess-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session", "sess-1"] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-thread", "sess-1"] });
@@ -337,6 +363,74 @@ describe("SessionChat", () => {
     });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-sessions"] });
     expect(onSessionChanged).not.toHaveBeenCalled();
+  });
+
+  it("blocks duplicate input until a managed-local ack arrives, then refreshes all workspace caches", async () => {
+    const user = userEvent.setup();
+    const deferred = createDeferredResponse();
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+    let lockReads = 0;
+
+    requestMock.mockImplementation((path: string) => {
+      if (String(path).endsWith("/lock")) {
+        lockReads += 1;
+        return Promise.resolve(
+          lockReads === 1
+            ? { locked: false, fork_available: false }
+            : {
+                locked: true,
+                holder: "req-1234",
+                time_remaining_seconds: 295,
+                fork_available: true,
+              },
+        );
+      }
+      return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+
+    fetchWithRefreshMock.mockImplementation((url: string) => {
+      if (url.endsWith("/chat")) {
+        return deferred.promise;
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
+    });
+
+    renderSessionChat({ chatMode: "managed_local" }, { queryClient });
+
+    await user.type(screen.getByRole("textbox"), "Continue locally");
+    await user.click(screen.getByRole("button", { name: /send/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("textbox")).toBeDisabled();
+      expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+      expect(screen.getByText("Sending")).toBeInTheDocument();
+    });
+
+    deferred.resolve(
+      jsonResponse({
+        accepted: true,
+        session_id: "sess-1",
+        request_id: "req-1234",
+        dispatch_ms: 12.5,
+      }),
+    );
+
+    expect(
+      await screen.findByText("Sent to local session. Response will appear in the timeline above."),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(8));
+    await waitFor(() => {
+      expect(screen.getByRole("textbox")).toBeDisabled();
+      expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
+      expect(screen.getByText("Locked")).toBeInTheDocument();
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-lock", "sess-1"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] });
   });
 
   it("requires an explicit click for the first branching message", async () => {
