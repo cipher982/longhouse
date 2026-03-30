@@ -13,6 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "react-hot-toast";
 import { Button, EmptyState, Spinner } from "../components/ui";
+import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { EventInspectorPane } from "../components/session-workspace/EventInspectorPane";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
@@ -73,9 +74,9 @@ function SessionDetailWorkspaceRoute({
     });
   };
 
-  const handleBack = () => {
+  const handleBack = useCallback(() => {
     navigate(returnTo);
-  };
+  }, [navigate, returnTo]);
 
   const { effectiveLoopMode, loopModePending, handleLoopModeChange } = useLoopModeChange(session);
   const queryClient = useQueryClient();
@@ -87,6 +88,7 @@ function SessionDetailWorkspaceRoute({
     try {
       await setSessionAction(session.id, "archive");
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+      queryClient.invalidateQueries({ queryKey: ["agent-session", session.id] });
       handleBack();
     } catch {
       toast.error("Failed to archive session");
@@ -220,37 +222,24 @@ function SessionDetailWorkspaceRoute({
               confirmingArchive ? (
                 <div className="session-detail-archive-confirm">
                   <span className="session-detail-archive-confirm-label">Archive this session?</span>
-                  <button
-                    type="button"
-                    className="session-detail-archive-cancel"
-                    onClick={() => setConfirmingArchive(false)}
-                  >
+                  <Button variant="ghost" size="sm" onClick={() => setConfirmingArchive(false)}>
                     Cancel
-                  </button>
-                  <button
-                    type="button"
-                    className="session-detail-archive-ok"
-                    onClick={() => void handleArchiveConfirm()}
-                  >
+                  </Button>
+                  <Button variant="danger" size="sm" onClick={() => void handleArchiveConfirm()}>
                     Archive
-                  </button>
+                  </Button>
                 </div>
               ) : (
-                <button
-                  type="button"
-                  className="session-detail-archive-btn"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setConfirmingArchive(true)}
                   title="Archive session"
                   aria-label="Archive session"
                 >
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <polyline points="3 6 5 6 21 6" />
-                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                    <path d="M10 11v6M14 11v6" />
-                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-                  </svg>
+                  <TrashIcon width={13} height={13} />
                   Archive
-                </button>
+                </Button>
               )
             }
             listRef={registerTimelineList}

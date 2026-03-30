@@ -39,6 +39,14 @@ export function SettingsIcon(props: IconProps) {
   );
 }
 
+export function FunnelIcon(props: IconProps) {
+  return (
+    <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
+      <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
+    </svg>
+  );
+}
+
 export function TrashIcon(props: IconProps) {
   return (
     <svg {...baseProps} {...props} aria-hidden="true" focusable="false">
