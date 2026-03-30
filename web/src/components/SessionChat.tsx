@@ -522,12 +522,14 @@ export function SessionChat({
       )}
 
       {isDock ? (
-        messages.length > 0 ? (
-          <div className="session-chat-messages session-chat-messages--dock">
-            {renderMessages()}
-            <div ref={messagesEndRef} />
-          </div>
-        ) : null
+        <div className="session-chat-messages session-chat-messages--dock">
+          {messages.length > 0 ? (
+            <>
+              {renderMessages()}
+              <div ref={messagesEndRef} />
+            </>
+          ) : null}
+        </div>
       ) : (
         <div className="session-chat-messages">
           {messages.length === 0 ? (
