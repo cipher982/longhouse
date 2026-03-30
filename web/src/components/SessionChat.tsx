@@ -340,11 +340,12 @@ export function SessionChat({
         setSentConfirmation(true);
         sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
 
-        // Close SSE race window: if the reply shipped before the stream
-        // picked it up, this catch-up invalidation ensures it appears.
-        void refreshCurrentSessionWorkspace();
+        // Kick off workspace refresh; clear local echo once it resolves
+        // so the timeline's real event replaces the optimistic bubble.
+        void refreshCurrentSessionWorkspace().finally(() => setMessages([]));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Unknown error");
+        setMessages([]);
       } finally {
         setIsSubmitting(false);
       }
@@ -448,13 +449,10 @@ export function SessionChat({
       setError(null);
       setBlockedKeyboardSubmit(false);
 
-      // For managed_local, the user message appears in the timeline via SSE — no local copy needed.
-      if (!isManagedLocal) {
-        setMessages((prev) => [
-          ...prev,
-          { id: `user-${Date.now()}`, role: "user", content: message, timestamp: new Date() },
-        ]);
-      }
+      setMessages((prev) => [
+        ...prev,
+        { id: `user-${Date.now()}`, role: "user", content: message, timestamp: new Date() },
+      ]);
 
       if (isManagedLocal) {
         await handleManagedLocalSend(message);
@@ -594,7 +592,7 @@ export function SessionChat({
         </div>
       )}
 
-      {isDock && isManagedLocal ? null : isDock ? (
+      {isDock ? (
         <div className="session-chat-messages session-chat-messages--dock">
           {messages.length > 0 ? (
             <>

@@ -409,6 +409,8 @@ describe("SessionChat", () => {
       expect(screen.getByRole("textbox")).toBeDisabled();
       expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();
       expect(screen.getByText("Sending")).toBeInTheDocument();
+      // User message shows as optimistic bubble while in-flight
+      expect(screen.getByText("Continue locally")).toBeInTheDocument();
     });
 
     deferred.resolve(
@@ -420,9 +422,6 @@ describe("SessionChat", () => {
       }),
     );
 
-    expect(
-      await screen.findByText("Sent to local session. Response will appear in the timeline above."),
-    ).toBeInTheDocument();
     await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(8));
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toBeDisabled();
