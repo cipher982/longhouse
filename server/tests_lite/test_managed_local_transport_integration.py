@@ -240,7 +240,7 @@ def _make_fake_claude_home(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
         """
     )
 
-    claude_path = bin_dir / "claude-code"
+    claude_path = bin_dir / "claude"
     claude_path.write_text(launcher, encoding="utf-8")
     claude_path.chmod(claude_path.stat().st_mode | stat.S_IXUSR)
 

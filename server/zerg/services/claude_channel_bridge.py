@@ -168,7 +168,7 @@ def build_claude_channel_exec_command(
     resume: bool,
     hook_url: str | None = None,
     hook_token: str | None = None,
-    claude_command: str = "claude-code",
+    claude_command: str = "claude",
 ) -> str:
     """Build the native Claude launch/resume shell command for channel sessions."""
 

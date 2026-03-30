@@ -2,7 +2,7 @@
 """Directly probe Claude tmux input semantics using the real transcript JSONL.
 
 This script avoids the Longhouse backend entirely. It launches a fresh
-interactive `claude-code` session inside tmux using the same command builders
+interactive `claude` session inside tmux using the same command builders
 that managed-local launch/send paths use, sends repeated one-line prompts, and
 verifies the resulting Claude transcript on disk.
 """
@@ -196,7 +196,7 @@ def _looks_ready(capture: str) -> bool:
 
 
 def _build_entry_command(*, session_id: str, display_name: str, claude_config_dir: Path | None) -> str:
-    parts = ["claude-code", "--session-id", session_id]
+    parts = ["claude", "--session-id", session_id]
     if display_name.strip():
         parts.extend(["-n", display_name.strip()])
     setup: list[str] = []

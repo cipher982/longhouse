@@ -36,15 +36,19 @@ class _NativeClaudeError(Exception):
     """Raised when native Claude launch preparation fails."""
 
 
+def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["claude", "auth", "status", "--json"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+
 def _detect_native_claude_channels_available() -> tuple[bool, str]:
     try:
-        completed = subprocess.run(
-            ["claude", "auth", "status", "--json"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        )
+        completed = _run_claude_auth_status()
     except (OSError, subprocess.TimeoutExpired):
         return False, "claude auth status unavailable"
 

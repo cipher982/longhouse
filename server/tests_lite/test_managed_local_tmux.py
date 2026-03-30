@@ -38,7 +38,7 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
     command = build_tmux_launch_command(
         session_name="lh-demo",
         cwd="/tmp/path with spaces",
-        launch_command="claude-code --dangerously-skip-permissions",
+        launch_command="claude --dangerously-skip-permissions",
     )
 
     inner = _wrapped_inner(command)
@@ -55,7 +55,7 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
         "new-session -d -s lh-demo -c '/tmp/path with spaces' /tmp/longhouse-managed-lh-demo.zsh"
     ) in inner
     assert "cat > /tmp/longhouse-managed-lh-demo.zsh <<'__LONGHOUSE_MANAGED_LOCAL__'" in inner
-    assert "exec claude-code --dangerously-skip-permissions" in inner
+    assert "exec claude --dangerously-skip-permissions" in inner
 
 
 def test_build_tmux_has_session_command_targets_session():

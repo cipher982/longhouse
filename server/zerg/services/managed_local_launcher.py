@@ -171,7 +171,7 @@ def _build_entry_command(
             managed_session_name=managed_session_name or provider_session_id,
             env_exports=env_exports,
         )
-    parts = ["claude-code", "--session-id", provider_session_id]
+    parts = ["claude", "--session-id", provider_session_id]
     if display_name and display_name.strip():
         parts.extend(["-n", display_name.strip()])
     inner = "; ".join(
@@ -179,7 +179,7 @@ def _build_entry_command(
             *env_exports,
             build_managed_local_shell_prelude(
                 require_tmux=False,
-                required_commands=("claude-code",),
+                required_commands=("claude",),
             ),
             "exec " + " ".join(shlex.quote(part) for part in parts),
         ]
@@ -220,7 +220,7 @@ def _build_preflight_command(
     require_tmux: bool = True,
 ) -> str:
     quoted_cwd = shlex.quote(cwd)
-    cli_name = "codex" if provider == "codex" else "claude-code"
+    cli_name = "codex" if provider == "codex" else "claude"
     checks = [
         build_managed_local_shell_prelude(
             require_tmux=require_tmux,
