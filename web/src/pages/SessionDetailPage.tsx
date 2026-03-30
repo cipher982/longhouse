@@ -8,9 +8,8 @@
  * - Bottom dock: inline live-session / cloud continuation composer
  */
 
-import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { toast } from "react-hot-toast";
+import { useMemo } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
@@ -19,17 +18,11 @@ import { SessionContextPane } from "../components/session-workspace/SessionConte
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
 import { useDocumentVisible } from "../hooks/useDocumentVisible";
+import { useLoopModeChange } from "../hooks/useLoopModeChange";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useReadinessFlag } from "../lib/readiness-contract";
-import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
-import type { AgentSession, AgentSessionThreadResponse, AgentSessionWorkspaceResponse } from "../services/api";
-import {
-  fetchSessionTurnTelemetry,
-  type SessionTurnReview,
-} from "../services/api/oikos";
-import {
-  getSessionInteractionCapabilities,
-} from "../lib/sessionWorkspace";
+import { fetchSessionTurnTelemetry, type SessionTurnReview } from "../services/api/oikos";
+import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
 
 function SessionDetailWorkspaceRoute({
@@ -42,11 +35,8 @@ function SessionDetailWorkspaceRoute({
   sessionId: string | null;
 }) {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const workspace = useSessionWorkspace(sessionId, { highlightEventId });
   const documentVisible = useDocumentVisible();
-  const [loopModeOverride, setLoopModeOverride] = useState<SessionLoopMode | null>(null);
-  const [loopModePending, setLoopModePending] = useState(false);
 
   const {
     session,
@@ -84,6 +74,8 @@ function SessionDetailWorkspaceRoute({
   const handleBack = () => {
     navigate(returnTo);
   };
+
+  const { effectiveLoopMode, loopModePending, handleLoopModeChange } = useLoopModeChange(session);
 
   const workspaceReady = !sessionLoading && !eventsLoading;
 
@@ -142,7 +134,6 @@ function SessionDetailWorkspaceRoute({
     session.summary_title && session.summary_title !== "Untitled Session"
       ? session.summary_title
       : session.project || session.git_branch || "Session";
-  const effectiveLoopMode = loopModeOverride ?? session.loop_mode;
   const displaySession =
     effectiveLoopMode === session.loop_mode ? session : { ...session, loop_mode: effectiveLoopMode };
 
@@ -152,8 +143,6 @@ function SessionDetailWorkspaceRoute({
     isViewingHead,
     headThreadSession,
   });
-
-  const continuationHint = undefined;
 
   const sessionChatTarget: SessionChatTarget | null =
     interaction.canChatFromBrowser
@@ -166,66 +155,6 @@ function SessionDetailWorkspaceRoute({
 
   const inspectorSelection =
     selectedSelection && selectedSelection.kind !== "message" ? selectedSelection : null;
-
-  const continuationNotice = interaction.notice;
-
-  const handleLoopModeChange = async (nextMode: SessionLoopMode) => {
-    if (loopModePending || nextMode === effectiveLoopMode) {
-      return;
-    }
-    setLoopModeOverride(nextMode);
-    setLoopModePending(true);
-    try {
-      const updatedSession = await setSessionLoopMode(session.id, nextMode);
-      queryClient.setQueryData<AgentSession>(["agent-session", session.id], (current) =>
-        current ? { ...current, loop_mode: updatedSession.loop_mode } : current,
-      );
-      queryClient.setQueryData<AgentSessionThreadResponse>(["agent-session-thread", session.id], (current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          ...current,
-          sessions: current.sessions.map((threadSession) =>
-            threadSession.id === session.id
-              ? { ...threadSession, loop_mode: updatedSession.loop_mode }
-              : threadSession,
-          ),
-        };
-      });
-      queryClient.setQueriesData<AgentSessionWorkspaceResponse>(
-        { queryKey: ["agent-session-workspace", session.id] },
-        (current) => {
-          if (!current) {
-            return current;
-          }
-
-          return {
-            ...current,
-            session:
-              current.session.id === session.id
-                ? { ...current.session, loop_mode: updatedSession.loop_mode }
-                : current.session,
-            thread: {
-              ...current.thread,
-              sessions: current.thread.sessions.map((threadSession) =>
-                threadSession.id === session.id
-                  ? { ...threadSession, loop_mode: updatedSession.loop_mode }
-                  : threadSession,
-              ),
-            },
-          };
-        },
-      );
-      setLoopModeOverride(null);
-      toast.success(`Loop mode set to ${nextMode}.`);
-    } catch (error) {
-      setLoopModeOverride(null);
-      toast.error(error instanceof Error ? error.message : "Failed to update loop mode.");
-    } finally {
-      setLoopModePending(false);
-    }
-  };
 
   return (
     <div className="session-workspace-route">
@@ -256,7 +185,7 @@ function SessionDetailWorkspaceRoute({
             isViewingHead={isViewingHead}
             onOpenSession={navigateToSession}
             onOpenLatest={() => headThreadSession && navigateToSession(headThreadSession.id)}
-            continuationNotice={continuationNotice}
+            continuationNotice={interaction.notice}
             loopModePending={loopModePending}
             onLoopModeChange={handleLoopModeChange}
             latestTurnReview={latestTurnReview}
@@ -297,7 +226,6 @@ function SessionDetailWorkspaceRoute({
                   }
                   introTitle={interaction.title}
                   introDescription={interaction.description}
-                  hintText={continuationHint}
                   chatMode={interaction.mode === "managed_local" ? "managed_local" : "cloud"}
                   composerPlaceholder={interaction.placeholder}
                   submitLabel={interaction.submitLabel}
