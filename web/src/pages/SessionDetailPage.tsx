@@ -70,6 +70,7 @@ function SessionDetailWorkspaceRoute({
     selectedKey,
     selectedSelection,
     selectKey,
+    handleVisibleSelectionChange,
     registerTimelineList,
   } = workspace;
 
@@ -278,6 +279,7 @@ function SessionDetailWorkspaceRoute({
             error={eventsError}
             selectedKey={selectedKey}
             onSelectKey={selectKey}
+            onVisibleSelectionChange={handleVisibleSelectionChange}
             listRef={registerTimelineList}
             dock={
               sessionChatTarget ? (
@@ -296,6 +298,7 @@ function SessionDetailWorkspaceRoute({
                   introTitle={interaction.title}
                   introDescription={interaction.description}
                   hintText={continuationHint}
+                  chatMode={interaction.mode === "managed_local" ? "managed_local" : "cloud"}
                   composerPlaceholder={interaction.placeholder}
                   submitLabel={interaction.submitLabel}
                   requireClickForFirstSend={

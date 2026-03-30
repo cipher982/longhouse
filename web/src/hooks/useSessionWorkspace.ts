@@ -105,6 +105,8 @@ export function useSessionWorkspace(
   });
 
   const [manualSelectedKey, setManualSelectedKey] = useState<string | null>(null);
+  // Tracks which key is actually visible after TimelinePane's local filtering
+  const [filteredVisibleKey, setFilteredVisibleKey] = useState<string | null | undefined>(undefined);
   const [timelineListElement, setTimelineListElement] = useState<HTMLDivElement | null>(null);
   const highlightedEventRef = useRef<number | null>(null);
   const autoScrolledSelectionRef = useRef(false);
@@ -275,14 +277,22 @@ export function useSessionWorkspace(
     };
   }, [highlightEventId, projectionLoading, selectedKey, model.items, model.selectionMap, timelineListElement]);
 
+  // When TimelinePane reports a filtered visible key, use that for the inspector.
+  // `undefined` means no filter callback has fired yet (treat as unfiltered).
+  const effectiveSelectedKey = filteredVisibleKey === undefined ? selectedKey : filteredVisibleKey;
+
   const selectedSelection = useMemo(
-    () => (selectedKey ? model.selectionMap.get(selectedKey) ?? null : null),
-    [selectedKey, model.selectionMap],
+    () => (effectiveSelectedKey ? model.selectionMap.get(effectiveSelectedKey) ?? null : null),
+    [effectiveSelectedKey, model.selectionMap],
   );
 
   const selectKey = (key: string) => {
     setManualSelectedKey(key);
   };
+
+  const handleVisibleSelectionChange = useCallback((visibleKey: string | null) => {
+    setFilteredVisibleKey(visibleKey);
+  }, []);
 
   return {
     session,
@@ -308,6 +318,7 @@ export function useSessionWorkspace(
     selectedKey,
     selectedSelection,
     selectKey,
+    handleVisibleSelectionChange,
     registerTimelineList,
   };
 }
