@@ -9,7 +9,7 @@ use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -154,6 +154,118 @@ struct BridgeContext {
 struct ResolvedBridgePaths {
     state_file: PathBuf,
     log_file: PathBuf,
+}
+
+/// IPC command sent from `send` to the running daemon via Unix socket.
+struct IpcCommand {
+    text: String,
+    thread_id: String,
+    reply: oneshot::Sender<Result<BridgeSendSummary>>,
+}
+
+fn ipc_socket_path(state_file: &Path) -> PathBuf {
+    state_file.with_extension("sock")
+}
+
+/// Spawn a Unix socket listener that accepts IPC commands from `send` callers.
+/// Each connection reads a single JSON line `{"text": "...", "thread_id": "..."}`,
+/// forwards it as an `IpcCommand` to the daemon loop, and writes back the JSON result.
+#[cfg(unix)]
+fn spawn_ipc_listener(
+    sock_path: PathBuf,
+    tx: mpsc::UnboundedSender<IpcCommand>,
+) -> Result<tokio::task::JoinHandle<()>> {
+    // Clean up stale socket
+    let _ = fs::remove_file(&sock_path);
+    if let Some(parent) = sock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let listener = tokio::net::UnixListener::bind(&sock_path)
+        .with_context(|| format!("binding IPC socket at {}", sock_path.display()))?;
+
+    Ok(tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("[codex-bridge] ipc accept error: {e}");
+                    continue;
+                }
+            };
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                if let Err(e) = handle_ipc_connection(stream, tx).await {
+                    eprintln!("[codex-bridge] ipc connection error: {e}");
+                }
+            });
+        }
+    }))
+}
+
+#[cfg(unix)]
+async fn handle_ipc_connection(
+    mut stream: tokio::net::UnixStream,
+    tx: mpsc::UnboundedSender<IpcCommand>,
+) -> Result<()> {
+    let mut buf = vec![0u8; 8192];
+    let mut total = 0usize;
+    // Read until newline or EOF
+    loop {
+        if total >= buf.len() {
+            bail!("IPC request too large");
+        }
+        let n = stream.read(&mut buf[total..]).await?;
+        if n == 0 {
+            break;
+        }
+        total += n;
+        if buf[..total].contains(&b'\n') {
+            break;
+        }
+    }
+    let request: Value =
+        serde_json::from_slice(&buf[..total]).context("parsing IPC request JSON")?;
+    let text = request
+        .get("text")
+        .and_then(Value::as_str)
+        .context("IPC request missing 'text'")?
+        .to_string();
+    let thread_id = request
+        .get("thread_id")
+        .and_then(Value::as_str)
+        .context("IPC request missing 'thread_id'")?
+        .to_string();
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    tx.send(IpcCommand {
+        text,
+        thread_id,
+        reply: reply_tx,
+    })
+    .map_err(|_| anyhow!("daemon event loop closed"))?;
+
+    let result = reply_rx
+        .await
+        .map_err(|_| anyhow!("daemon dropped reply channel"))?;
+
+    let response = match result {
+        Ok(summary) => json!({
+            "ok": true,
+            "session_id": summary.session_id,
+            "thread_id": summary.thread_id,
+            "turn_id": summary.turn_id,
+            "turn_status": summary.turn_status,
+        }),
+        Err(e) => json!({
+            "ok": false,
+            "error": format!("{e:#}"),
+        }),
+    };
+    let mut resp_bytes = serde_json::to_vec(&response)?;
+    resp_bytes.push(b'\n');
+    stream.write_all(&resp_bytes).await?;
+    stream.shutdown().await?;
+    Ok(())
 }
 
 pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeStartSummary> {
@@ -407,30 +519,80 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         )
         .await;
 
+    // Spawn IPC socket listener so `send` routes through the daemon's persistent connection
+    let sock_path = ipc_socket_path(&context.state_file);
+    let (ipc_tx, mut ipc_rx) = mpsc::unbounded_channel::<IpcCommand>();
+
+    #[cfg(unix)]
+    let _ipc_handle = spawn_ipc_listener(sock_path.clone(), ipc_tx)?;
+
+    // Cleanup socket on exit
+    struct SocketCleanup(PathBuf);
+    impl Drop for SocketCleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(&self.0);
+        }
+    }
+    let _sock_guard = SocketCleanup(sock_path);
+
     loop {
-        let event = recv_event(&mut client).await?;
-        match event {
-            StreamEvent::Rpc(value) => {
-                if value.get("id").is_some() && value.get("method").is_some() {
-                    handle_server_request(&config, value, &mut client, &mut context).await?;
-                    continue;
+        tokio::select! {
+            event_result = recv_event(&mut client) => {
+                let event = event_result?;
+                match event {
+                    StreamEvent::Rpc(value) => {
+                        if value.get("id").is_some() && value.get("method").is_some() {
+                            handle_server_request(&config, value, &mut client, &mut context).await?;
+                            continue;
+                        }
+                        if let Some(id) = value.get("id").and_then(Value::as_u64) {
+                            let _ = client.pending_methods.remove(&id);
+                            continue;
+                        }
+                        process_notification(&value, &config, &mut context).await?;
+                    }
+                    StreamEvent::Stderr(line) => {
+                        eprintln!("[codex-bridge] app-server: {line}");
+                    }
+                    StreamEvent::StdoutParseError(detail) => {
+                        eprintln!("[codex-bridge] protocol error: {detail}");
+                        update_bridge_error(&mut context, &detail)?;
+                        bail!("codex bridge protocol error: {detail}");
+                    }
                 }
-                if let Some(id) = value.get("id").and_then(Value::as_u64) {
-                    let _ = client.pending_methods.remove(&id);
-                    continue;
-                }
-                process_notification(&value, &config, &mut context).await?;
             }
-            StreamEvent::Stderr(line) => {
-                eprintln!("[codex-bridge] app-server: {line}");
-            }
-            StreamEvent::StdoutParseError(detail) => {
-                eprintln!("[codex-bridge] protocol error: {detail}");
-                update_bridge_error(&mut context, &detail)?;
-                bail!("codex bridge protocol error: {detail}");
+            Some(cmd) = ipc_rx.recv() => {
+                let result = handle_ipc_turn_start(&mut client, &context, &cmd).await;
+                let _ = cmd.reply.send(result);
             }
         }
     }
+}
+
+async fn handle_ipc_turn_start(
+    client: &mut RpcClient,
+    context: &BridgeContext,
+    cmd: &IpcCommand,
+) -> Result<BridgeSendSummary> {
+    let response = send_request(
+        client,
+        "turn/start",
+        json!({
+            "threadId": cmd.thread_id,
+            "input": [{"type": "text", "text": cmd.text}],
+        }),
+    )
+    .await?;
+    let turn_id = extract_string(&response, &["turn", "id"])
+        .context("missing turn.id in IPC turn/start response")?;
+    let turn_status =
+        extract_string(&response, &["turn", "status"]).unwrap_or_else(|| "inProgress".to_string());
+    Ok(BridgeSendSummary {
+        session_id: context.state.session_id.clone(),
+        thread_id: cmd.thread_id.clone(),
+        turn_id,
+        turn_status,
+    })
 }
 
 pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSendSummary> {
@@ -442,6 +604,22 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
         .thread_id
         .clone()
         .context("bridge state is missing thread_id")?;
+
+    // Try daemon IPC socket first — routes through the persistent connection
+    // which preserves full conversation context.
+    let paths = resolve_bridge_paths(config.state_root.as_deref(), &config.session_id, None)?;
+    let sock_path = ipc_socket_path(&paths.state_file);
+    #[cfg(unix)]
+    if sock_path.exists() {
+        match send_via_ipc(&sock_path, &config.text, &thread_id).await {
+            Ok(summary) => return Ok(summary),
+            Err(e) => {
+                eprintln!("[codex-bridge] IPC send failed, falling back to direct WebSocket: {e}");
+            }
+        }
+    }
+
+    // Fallback: direct WebSocket (loses conversation context but still works)
     let ws_url = state
         .ws_url
         .clone()
@@ -469,6 +647,62 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
         thread_id,
         turn_id,
         turn_status,
+    })
+}
+
+/// Send text to the daemon via its Unix domain socket.
+#[cfg(unix)]
+async fn send_via_ipc(
+    sock_path: &Path,
+    text: &str,
+    thread_id: &str,
+) -> Result<BridgeSendSummary> {
+    let mut stream = tokio::net::UnixStream::connect(sock_path)
+        .await
+        .with_context(|| format!("connecting to IPC socket {}", sock_path.display()))?;
+
+    let mut request = serde_json::to_vec(&json!({
+        "text": text,
+        "thread_id": thread_id,
+    }))?;
+    request.push(b'\n');
+    stream.write_all(&request).await?;
+    stream.shutdown().await?;
+
+    let mut response_buf = Vec::new();
+    stream.read_to_end(&mut response_buf).await?;
+    let response: Value =
+        serde_json::from_slice(&response_buf).context("parsing IPC response")?;
+
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown IPC error");
+        bail!("daemon IPC error: {error}");
+    }
+
+    Ok(BridgeSendSummary {
+        session_id: response
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        thread_id: response
+            .get("thread_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        turn_id: response
+            .get("turn_id")
+            .and_then(Value::as_str)
+            .context("IPC response missing turn_id")?
+            .to_string(),
+        turn_status: response
+            .get("turn_status")
+            .and_then(Value::as_str)
+            .unwrap_or("inProgress")
+            .to_string(),
     })
 }
 
@@ -1330,5 +1564,12 @@ mod tests {
             true,
         );
         assert_eq!(answers["color"]["answers"][0], "blue");
+    }
+
+    #[test]
+    fn ipc_socket_path_is_sibling_of_state_file() {
+        let state = Path::new("/tmp/codex-bridge/session-42.json");
+        let sock = ipc_socket_path(state);
+        assert_eq!(sock, Path::new("/tmp/codex-bridge/session-42.sock"));
     }
 }
