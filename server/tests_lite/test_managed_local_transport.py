@@ -69,7 +69,7 @@ def test_build_managed_local_attach_command_uses_native_claude_resume_for_channe
     assert "export LONGHOUSE_SESSION_ID=session-123" in inner
     assert "export LONGHOUSE_CHANNEL_SESSION_ID=session-123" in inner
     assert "export LONGHOUSE_PROVIDER_SESSION_ID=provider-123" in inner
-    assert "exec claude --resume provider-123 --dangerously-load-development-channels server:longhouse-channel" in inner
+    assert "exec claude --resume provider-123 --channels server:longhouse-channel" in inner
 
 
 def test_build_managed_local_send_text_command_uses_engine_bridge_for_codex_app_server():
