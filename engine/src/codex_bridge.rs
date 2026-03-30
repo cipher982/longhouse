@@ -8,7 +8,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use chrono::Utc;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
@@ -44,9 +44,6 @@ pub struct BridgeRunConfig {
     pub api_token: String,
     pub codex_bin: String,
     pub session_source: Option<String>,
-    pub approval_policy: Option<String>,
-    pub sandbox: Option<String>,
-    pub model: Option<String>,
     pub machine_name: Option<String>,
     pub auto_approve: bool,
     pub state_file: PathBuf,
@@ -97,7 +94,8 @@ pub struct BridgeStartSummary {
     pub log_file: String,
     pub pid: u32,
     pub ws_url: String,
-    pub thread_id: String,
+    /// None until the TUI connects and creates a thread (captured via thread/started notification).
+    pub thread_id: Option<String>,
     pub thread_path: Option<String>,
 }
 
@@ -397,17 +395,13 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
                 .ws_url
                 .clone()
                 .context("bridge marked ready without ws_url")?;
-            let thread_id = state
-                .thread_id
-                .clone()
-                .context("bridge marked ready without thread_id")?;
             return Ok(BridgeStartSummary {
                 session_id: state.session_id,
                 state_file: paths.state_file.display().to_string(),
                 log_file: paths.log_file.display().to_string(),
                 pid: state.pid,
                 ws_url,
-                thread_id,
+                thread_id: state.thread_id.clone(),
                 thread_path: state.thread_path,
             });
         }
@@ -447,36 +441,12 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         std::env::current_exe().context("resolving current executable for codex-bridge run")?;
     let mut client = spawn_app_server_client(&config).await?;
     let ws_url = client.ws_url.clone();
-    let thread_response = start_managed_thread(&mut client, &config).await?;
-    let thread_id = extract_string(&thread_response, &["thread", "id"])
-        .context("missing thread.id in codex bridge thread/start response")?;
-    let thread_path = extract_string(&thread_response, &["thread", "path"]);
 
-    // Seed the rollout file so `codex resume <thread_id> --remote` can find it.
-    // The app-server creates the thread in memory but only writes the JSONL file
-    // after the first turn completes, so `codex resume` would fail on a fresh
-    // zero-turn thread without this bootstrap.
-    if let Some(ref tp) = thread_path {
-        let rollout = Path::new(tp);
-        if !rollout.exists() {
-            if let Some(parent) = rollout.parent() {
-                let _ = fs::create_dir_all(parent);
-            }
-            let meta = json!({
-                "timestamp": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                "type": "session_meta",
-                "payload": {
-                    "id": thread_id,
-                    "timestamp": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                    "cwd": config.cwd.display().to_string(),
-                    "originator": "longhouse_codex_bridge",
-                }
-            });
-            if let Err(e) = fs::write(rollout, format!("{}\n", meta)) {
-                eprintln!("[codex-bridge] warning: could not seed rollout file {}: {e}", tp);
-            }
-        }
-    }
+    // Initialize the protocol handshake but do NOT call thread/start.
+    // The TUI (codex --enable tui_app_server --remote <ws_url>) will create
+    // the thread; the bridge captures the thread_id via the thread/started
+    // notification and posts idle once it knows which thread to drive.
+    initialize_client(&mut client).await?;
 
     let mut context = BridgeContext {
         state_file: config.state_file.clone(),
@@ -485,8 +455,8 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             cwd: config.cwd.display().to_string(),
             codex_bin: config.codex_bin.clone(),
             ws_url: Some(ws_url.clone()),
-            thread_id: Some(thread_id.clone()),
-            thread_path: thread_path.clone(),
+            thread_id: None,
+            thread_path: None,
             pid,
             status: "ready".to_string(),
             log_file: config.log_file.display().to_string(),
@@ -504,20 +474,14 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             api_token: config.api_token.clone(),
             session_id: config.session_id.clone(),
             machine_name: config.machine_name.clone(),
-            thread_id: Some(thread_id.clone()),
+            thread_id: None,
         },
         current_exe,
         last_progress_emit: None,
     };
+    // Mark ready so the CLI can read ws_url and launch the TUI.
+    // idle is posted once the TUI creates a thread (thread/started notification).
     write_state_file(&context.state_file, &context.state)?;
-    context
-        .runtime
-        .post_phase(
-            "idle",
-            format!("bridge:launch:{}", context.state.session_id),
-            None,
-        )
-        .await;
 
     // Spawn IPC socket listener so `send` routes through the daemon's persistent connection
     let sock_path = ipc_socket_path(&context.state_file);
@@ -1059,25 +1023,6 @@ async fn initialize_client(client: &mut RpcClient) -> Result<()> {
     send_notification(client, "initialized", json!({})).await
 }
 
-async fn start_managed_thread(client: &mut RpcClient, config: &BridgeRunConfig) -> Result<Value> {
-    initialize_client(client).await?;
-    let mut params = Map::new();
-    params.insert(
-        "cwd".to_string(),
-        Value::String(config.cwd.display().to_string()),
-    );
-    if let Some(policy) = config.approval_policy.as_ref() {
-        params.insert("approvalPolicy".to_string(), Value::String(policy.clone()));
-    }
-    if let Some(sandbox) = config.sandbox.as_ref() {
-        params.insert("sandbox".to_string(), Value::String(sandbox.clone()));
-    }
-    if let Some(model) = config.model.as_ref() {
-        params.insert("model".to_string(), Value::String(model.clone()));
-    }
-    send_request(client, "thread/start", Value::Object(params)).await
-}
-
 async fn send_notification(client: &mut RpcClient, method: &str, params: Value) -> Result<()> {
     let payload = json!({
         "method": method,
@@ -1308,6 +1253,28 @@ async fn process_notification(
     };
     let params = value.get("params").cloned().unwrap_or(Value::Null);
     match method {
+        "thread/started" => {
+            // Capture the thread created by the TUI (first time only).
+            if context.state.thread_id.is_none() {
+                let thread_id = extract_string(&params, &["thread", "id"]);
+                let thread_path = extract_string(&params, &["thread", "path"]);
+                if let Some(ref id) = thread_id {
+                    context.state.thread_id = thread_id.clone();
+                    context.state.thread_path = thread_path.clone();
+                    context.runtime.thread_id = thread_id.clone();
+                    write_state_file(&context.state_file, &context.state)?;
+                    context
+                        .runtime
+                        .post_phase(
+                            "idle",
+                            format!("bridge:launch:{}", context.state.session_id),
+                            None,
+                        )
+                        .await;
+                    eprintln!("[codex-bridge] TUI thread captured: {id}");
+                }
+            }
+        }
         "turn/started" => {
             context.state.active_turn_id = extract_string(&params, &["turn", "id"]);
             context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
@@ -1714,9 +1681,6 @@ mod tests {
             api_token: "token".to_string(),
             codex_bin: "codex".to_string(),
             session_source: None,
-            approval_policy: None,
-            sandbox: None,
-            model: None,
             machine_name: Some("test-box".to_string()),
             auto_approve: true,
             state_file,

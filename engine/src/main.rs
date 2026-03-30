@@ -782,7 +782,9 @@ fn main() -> anyhow::Result<()> {
                         println!("state_file: {}", summary.state_file);
                         println!("log_file: {}", summary.log_file);
                         println!("ws_url: {}", summary.ws_url);
-                        println!("thread_id: {}", summary.thread_id);
+                        if let Some(ref tid) = summary.thread_id {
+                            println!("thread_id: {tid}");
+                        }
                         if let Some(path) = summary.thread_path.as_deref() {
                             println!("thread_path: {}", path);
                         }
@@ -795,9 +797,9 @@ fn main() -> anyhow::Result<()> {
                     token,
                     codex_bin,
                     session_source,
-                    approval_policy,
-                    sandbox,
-                    model,
+                    approval_policy: _,
+                    sandbox: _,
+                    model: _,
                     machine_name,
                     auto_approve,
                     state_file,
@@ -810,9 +812,6 @@ fn main() -> anyhow::Result<()> {
                         api_token: token,
                         codex_bin,
                         session_source,
-                        approval_policy,
-                        sandbox,
-                        model,
                         machine_name,
                         auto_approve,
                         state_file,
