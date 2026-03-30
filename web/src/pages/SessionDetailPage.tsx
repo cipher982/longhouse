@@ -159,23 +159,6 @@ function SessionDetailWorkspaceRoute({
   return (
     <div className="session-workspace-route">
       <WorkspaceShell
-        header={
-          <div className="session-workspace-header">
-            <div className="session-workspace-header__left">
-              <Button variant="ghost" size="sm" onClick={handleBack}>
-                &larr; Timeline
-              </Button>
-              <div className="session-workspace-header__context">
-                <span className="session-workspace-header__name">{title}</span>
-                <span className="session-workspace-header__meta">
-                  {threadSessions.length > 1
-                    ? `${threadSessions.length} continuations`
-                    : "Single continuation"}
-                </span>
-              </div>
-            </div>
-          </div>
-        }
         sidebar={
           <SessionContextPane
             session={displaySession}
@@ -209,6 +192,14 @@ function SessionDetailWorkspaceRoute({
             selectedKey={selectedKey}
             onSelectKey={selectKey}
             onVisibleSelectionChange={handleVisibleSelectionChange}
+            headerLeft={
+              <div className="session-workspace-header__left">
+                <Button variant="ghost" size="sm" onClick={handleBack}>
+                  &larr;
+                </Button>
+                <span className="session-workspace-header__name">{title}</span>
+              </div>
+            }
             listRef={registerTimelineList}
             dock={
               sessionChatTarget ? (
