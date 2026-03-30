@@ -105,6 +105,7 @@ SUPPORTED_SESSION_CHAT_BACKENDS = {
     SESSION_CHAT_BACKEND_ANTHROPIC,
 }
 MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
+MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS = 300.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 0.1
 MANAGED_LOCAL_STABLE_POLLS = 1
 MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS = 0.1
@@ -415,17 +416,88 @@ async def _build_managed_local_chat_response(
     the session workspace SSE stream (Step 1).  No inline streaming, no
     polling, no force-ship.
     """
+    return await _dispatch_managed_local_text(
+        source_session=source_session,
+        owner_id=owner_id,
+        message=message,
+        request_id=request_id,
+        lock_scope_id=lock_scope_id,
+        db=db,
+    )
+
+
+async def _release_managed_local_lock_after_terminal(
+    *,
+    lock_scope_id: str,
+    request_id: str,
+    session_id: UUID,
+    db_bind,
+    after_runtime_event_id: int,
+    after_presence_updated_at: datetime | None,
+) -> None:
     try:
-        return await _dispatch_managed_local_text(
-            source_session=source_session,
-            owner_id=owner_id,
-            message=message,
-            request_id=request_id,
-            db=db,
+        terminal_result = await await_managed_local_turn_terminal(
+            db_bind=db_bind,
+            session_id=session_id,
+            after_runtime_event_id=after_runtime_event_id,
+            after_presence_updated_at=after_presence_updated_at,
+            timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
         )
-    finally:
-        await session_lock_manager.release(lock_scope_id, request_id)
-        logger.info(f"[{request_id}] Managed local chat dispatch complete, lock released")
+    except Exception:
+        logger.warning(
+            "[%s] Managed-local lock watcher crashed for %s",
+            request_id,
+            session_id,
+            exc_info=True,
+        )
+        return
+
+    if terminal_result is None:
+        logger.warning(
+            "[%s] Managed-local lock watcher timed out for %s; leaving TTL lock in place",
+            request_id,
+            session_id,
+        )
+        return
+
+    released = await session_lock_manager.release(lock_scope_id, request_id)
+    logger.info(
+        "[%s] Managed-local session reached terminal phase %s; lock release=%s",
+        request_id,
+        terminal_result.phase,
+        released,
+    )
+
+
+def _schedule_managed_local_lock_release(
+    *,
+    lock_scope_id: str,
+    request_id: str,
+    session_id: UUID,
+    db_bind,
+    after_runtime_event_id: int,
+    after_presence_updated_at: datetime | None,
+) -> None:
+    task = asyncio.create_task(
+        _release_managed_local_lock_after_terminal(
+            lock_scope_id=lock_scope_id,
+            request_id=request_id,
+            session_id=session_id,
+            db_bind=db_bind,
+            after_runtime_event_id=after_runtime_event_id,
+            after_presence_updated_at=after_presence_updated_at,
+        )
+    )
+
+    def _log_task_failure(done: asyncio.Task[None]) -> None:
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            logger.debug("[%s] Managed-local lock watcher cancelled for %s", request_id, session_id)
+        except Exception:
+            logger.exception("[%s] Managed-local lock watcher failed for %s", request_id, session_id)
+
+    task.add_done_callback(_log_task_failure)
 
 
 async def _dispatch_managed_local_text(
@@ -434,6 +506,7 @@ async def _dispatch_managed_local_text(
     owner_id: int,
     message: str,
     request_id: str,
+    lock_scope_id: str,
     db: Session,
 ) -> JSONResponse:
     """Send text to a managed-local session and return acceptance status."""
@@ -449,6 +522,7 @@ async def _dispatch_managed_local_text(
         db=db,
         session_id=source_session.id,
     )
+    baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
     t_baseline = time.monotonic()
     run_best_effort_managed_local_turn_write(
         db_bind=db.get_bind(),
@@ -470,6 +544,8 @@ async def _dispatch_managed_local_text(
         text=message,
         commis_id=request_id,
         timeout_secs=15,
+        verify_turn_started=True,
+        verification_timeout_secs=15.0,
     )
     t_sent = time.monotonic()
 
@@ -485,6 +561,8 @@ async def _dispatch_managed_local_text(
             ),
         )
         error_message = str(send_result.error or "Failed to send text to managed local session")
+        await session_lock_manager.release(lock_scope_id, request_id)
+        logger.info(f"[{request_id}] Managed local chat dispatch failed, lock released")
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={
@@ -503,6 +581,15 @@ async def _dispatch_managed_local_text(
             session_id=source_session.id,
             request_id=request_id,
         ),
+    )
+
+    _schedule_managed_local_lock_release(
+        lock_scope_id=lock_scope_id,
+        request_id=request_id,
+        session_id=source_session.id,
+        db_bind=db.get_bind(),
+        after_runtime_event_id=baseline_hook_runtime_event_id,
+        after_presence_updated_at=baseline_presence_updated_at,
     )
 
     dispatch_ms = round((t_sent - t0) * 1000, 1)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timezone
@@ -24,6 +25,7 @@ from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers import session_chat
+from zerg.services.session_continuity import session_lock_manager
 
 
 def _make_db(tmp_path):
@@ -157,22 +159,39 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
     """Managed-local Claude chat returns JSON {accepted: true} instead of SSE stream."""
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
+    lock_release_calls: list[dict[str, object]] = []
 
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
         source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
         client, api_app_ref = _make_client(db, user)
 
-        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            commis_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+        ):
             calls.append({
                 "owner_id": owner_id,
                 "session_id": str(session.id),
                 "runner_id": session.source_runner_id,
                 "text": text,
+                "verify_turn_started": verify_turn_started,
+                "verification_timeout_secs": verification_timeout_secs,
             })
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
+        def fake_schedule_lock_release(**kwargs):
+            lock_release_calls.append(kwargs)
+
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", fake_schedule_lock_release)
 
         try:
             response = client.post(
@@ -200,7 +219,12 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
             assert calls[0]["runner_id"] == runner.id
             assert calls[0]["owner_id"] == user.id
             assert calls[0]["text"] == "continue"
+            assert calls[0]["verify_turn_started"] is True
+            assert calls[0]["verification_timeout_secs"] == 15.0
+            assert len(lock_release_calls) == 1
+            assert lock_release_calls[0]["lock_scope_id"] == str(source_session.id)
         finally:
+            asyncio.run(session_lock_manager.release(str(source_session.id)))
             api_app_ref.dependency_overrides = {}
 
 
@@ -213,10 +237,21 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
         source_session = _seed_managed_local_session(db, runner=runner, provider="codex")
         client, api_app_ref = _make_client(db, user)
 
-        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            commis_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+        ):
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
 
         try:
             response = client.post(
@@ -228,6 +263,7 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
             assert data["accepted"] is True
             assert data["session_id"] == str(source_session.id)
         finally:
+            asyncio.run(session_lock_manager.release(str(source_session.id)))
             api_app_ref.dependency_overrides = {}
 
 
@@ -240,7 +276,17 @@ def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
         source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
         client, api_app_ref = _make_client(db, user)
 
-        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            commis_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+        ):
             return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed")
 
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
@@ -267,6 +313,59 @@ def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
+def test_managed_local_dispatch_send_failure_releases_lock_for_retry(monkeypatch, tmp_path):
+    """Failed dispatches should release the lock so the next send can retry immediately."""
+    session_local = _make_db(tmp_path)
+    send_calls = 0
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            commis_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+        ):
+            nonlocal send_calls
+            send_calls += 1
+            return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed")
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+
+        try:
+            first = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert first.status_code == 502
+
+            second = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "retry"},
+            )
+            assert second.status_code == 502
+            assert send_calls == 2
+
+            turn_rows = (
+                db.query(ManagedLocalTurn)
+                .filter(ManagedLocalTurn.session_id == source_session.id)
+                .order_by(ManagedLocalTurn.id.asc())
+                .all()
+            )
+            assert len(turn_rows) == 2
+            assert [row.error_code for row in turn_rows] == ["send_failed", "send_failed"]
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, tmp_path):
     """Managed-local chat must not create cloud continuation sessions."""
     session_local = _make_db(tmp_path)
@@ -276,13 +375,24 @@ def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, 
         source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
         client, api_app_ref = _make_client(db, user)
 
-        async def fake_send_text(*, db, owner_id, session, text, commis_id=None, timeout_secs=15):
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            commis_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+        ):
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
         def fail_cloud_target(*_args, **_kwargs):
             raise AssertionError("managed_local should not create cloud continuations")
 
         monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
         monkeypatch.setattr(
             session_chat.AgentsStore,
             "ensure_cloud_continuation_target",
@@ -298,4 +408,89 @@ def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, 
             assert response.status_code == 200
             assert response.json()["accepted"] is True
         finally:
+            asyncio.run(session_lock_manager.release(str(source_session.id)))
+            api_app_ref.dependency_overrides = {}
+
+
+def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path):
+    """Successful managed-local dispatch should keep the thread lock until terminal state."""
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            commis_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+        ):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
+
+        try:
+            first = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert first.status_code == 200
+
+            second = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue again"},
+            )
+            assert second.status_code == 409
+            assert second.json()["detail"]["code"] == "SESSION_LOCKED"
+        finally:
+            asyncio.run(session_lock_manager.release(str(source_session.id)))
+            api_app_ref.dependency_overrides = {}
+
+
+def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(monkeypatch, tmp_path):
+    """Successful dispatch should surface the held lock via the lock-status endpoint."""
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            commis_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+        ):
+            return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/chat",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 200
+
+            lock_response = client.get(f"/api/sessions/{source_session.id}/lock")
+            assert lock_response.status_code == 200
+            assert lock_response.json()["locked"] is True
+            assert lock_response.json()["fork_available"] is True
+        finally:
+            asyncio.run(session_lock_manager.release(str(source_session.id)))
             api_app_ref.dependency_overrides = {}

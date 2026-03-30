@@ -118,6 +118,7 @@ export function SessionChat({
   const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
@@ -146,6 +147,7 @@ export function SessionChat({
 
   const refreshCurrentSessionWorkspace = useCallback(async () => {
     await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["session-lock", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-session", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-session-thread", session.id] }),
@@ -257,6 +259,7 @@ export function SessionChat({
     enabled: Boolean(session.id),
     retry: false,
     refetchOnWindowFocus: false,
+    refetchInterval: (query) => (query.state.data?.locked ? 2_000 : false),
     staleTime: 15_000,
   });
 
@@ -282,6 +285,7 @@ export function SessionChat({
 
   const handleManagedLocalSend = useCallback(
     async (message: string) => {
+      setIsSubmitting(true);
       try {
         const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
           method: "POST",
@@ -310,6 +314,13 @@ export function SessionChat({
           throw new Error(result.error || "Session did not accept the message");
         }
 
+        queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
+          locked: true,
+          holder: result.request_id ?? null,
+          time_remaining_seconds: null,
+          fork_available: true,
+        });
+
         // Show confirmation — the response will appear in the timeline above
         // via the session workspace SSE stream as the engine ships events.
         setMessages((prev) => [
@@ -327,6 +338,8 @@ export function SessionChat({
         void refreshCurrentSessionWorkspace();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Unknown error");
+      } finally {
+        setIsSubmitting(false);
       }
     },
     [queryClient, session.id, refreshCurrentSessionWorkspace],
@@ -340,6 +353,7 @@ export function SessionChat({
         { id: assistantId, role: "assistant", content: "", timestamp: new Date(), isStreaming: true },
       ]);
 
+      setIsSubmitting(true);
       setIsStreaming(true);
       abortControllerRef.current = new AbortController();
 
@@ -405,6 +419,7 @@ export function SessionChat({
           setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content.length > 0));
         }
       } finally {
+        setIsSubmitting(false);
         setIsStreaming(false);
         abortControllerRef.current = null;
         setMessages((prev) =>
@@ -420,7 +435,7 @@ export function SessionChat({
       e.preventDefault();
 
       const message = draft.trim();
-      if (!message || isStreaming) return;
+      if (!message || isSubmitting) return;
 
       setDraft("");
       setError(null);
@@ -438,7 +453,7 @@ export function SessionChat({
         await handleCloudSend(message);
       }
     },
-    [draft, isStreaming, isManagedLocal, handleManagedLocalSend, handleCloudSend],
+    [draft, isSubmitting, isManagedLocal, handleManagedLocalSend, handleCloudSend],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -459,6 +474,8 @@ export function SessionChat({
 
   const statusBadge = isStreaming
     ? { variant: "success" as const, label: "Streaming" }
+    : isSubmitting
+      ? { variant: "warning" as const, label: "Sending" }
     : lockInfo?.locked
       ? { variant: "warning" as const, label: "Locked" }
       : { variant: "neutral" as const, label: "Ready" };
@@ -609,7 +626,7 @@ export function SessionChat({
           onChange={(e) => handleDraftChange(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={composerPlaceholder || "Type a message..."}
-          disabled={isStreaming || lockInfo?.locked}
+          disabled={isSubmitting || lockInfo?.locked}
           rows={isDock ? 3 : 2}
         />
         <div className="session-chat-actions">
@@ -622,7 +639,7 @@ export function SessionChat({
               type="submit"
               variant="primary"
               size="sm"
-              disabled={!draft.trim() || lockInfo?.locked}
+              disabled={!draft.trim() || isSubmitting || lockInfo?.locked}
             >
               {submitLabel}
             </Button>
