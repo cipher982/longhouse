@@ -488,7 +488,7 @@ interface SessionCardProps {
   thread: TimelineSessionCard;
   onClick: () => void;
   onPrefetch?: () => void;
-  onArchive?: (e: React.MouseEvent) => void;
+  onArchive?: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
   compatibilityMode?: boolean;
@@ -505,6 +505,7 @@ function SessionCard({
   compatibilityMode = false,
   relativeNowMs,
 }: SessionCardProps) {
+  const [confirming, setConfirming] = useState(false);
   const detailSession = thread.detail;
   const session = compatibilityMode ? detailSession : thread.head;
   const turnCount = session.user_messages;
@@ -527,6 +528,7 @@ function SessionCard({
     : getSessionInteractionCapabilities({ session }).primaryActionLabel;
   const cardClassName = [
     "session-card",
+    confirming ? "session-card--confirming" : "",
     runtime.isExecuting ? "session-card--live" : "",
     runtime.isIdle ? "session-card--idle" : "",
     runtime.tone === "inferred" ? "session-card--inferred" : "",
@@ -536,10 +538,18 @@ function SessionCard({
     runtime.tone === "blocked" ? "session-card--blocked" : "",
   ].filter(Boolean).join(" ");
 
+  const handleCardClick = () => {
+    if (confirming) {
+      setConfirming(false);
+    } else {
+      onClick();
+    }
+  };
+
   return (
     <Card
       className={cardClassName}
-      onClick={onClick}
+      onClick={handleCardClick}
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
       onPointerDown={(event) => {
@@ -558,11 +568,11 @@ function SessionCard({
         <div className="session-card-project">{projectLabel}</div>
         <div className="session-card-header-right">
           <span className="session-card-time">{formatRelativeTime(getTimelineCardAnchor(thread), relativeNowMs)}</span>
-          {onArchive && (
+          {onArchive && !confirming && (
             <button
               type="button"
               className="session-card-archive-btn"
-              onClick={onArchive}
+              onClick={(e) => { e.stopPropagation(); setConfirming(true); }}
               aria-label="Archive session"
               title="Archive"
             >
@@ -657,26 +667,46 @@ function SessionCard({
         )}
       </div>
 
-      <div className="session-card-footer">
-        <div className="session-card-stats">
-          <div className="session-card-stats-primary">
-            <span className="session-stat" style={{ color: getTurnsColor(turnCount) }}>{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
-            <span className="session-stat-separator">&middot;</span>
-            <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
+      {confirming ? (
+        <div className="session-card-confirm-row" onClick={(e) => e.stopPropagation()}>
+          <span className="session-card-confirm-label">Archive this session?</span>
+          <button
+            type="button"
+            className="session-card-confirm-cancel"
+            onClick={() => setConfirming(false)}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="session-card-confirm-ok"
+            onClick={() => { setConfirming(false); onArchive?.(); }}
+          >
+            Archive
+          </button>
+        </div>
+      ) : (
+        <div className="session-card-footer">
+          <div className="session-card-stats">
+            <div className="session-card-stats-primary">
+              <span className="session-stat" style={{ color: getTurnsColor(turnCount) }}>{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
+              <span className="session-stat-separator">&middot;</span>
+              <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
+            </div>
+            <div className="session-card-stats-secondary">
+              <span className="session-stat session-stat--secondary">
+                {compatibilityMode
+                  ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
+                  : `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`}
+              </span>
+            </div>
           </div>
-          <div className="session-card-stats-secondary">
-            <span className="session-stat session-stat--secondary">
-              {compatibilityMode
-                ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
-                : `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`}
-            </span>
+          <div className="session-card-actions">
+            <span className="session-card-action-label">{primaryActionLabel}</span>
+            <span className="session-card-arrow">&rarr;</span>
           </div>
         </div>
-        <div className="session-card-actions">
-          <span className="session-card-action-label">{primaryActionLabel}</span>
-          <span className="session-card-arrow">&rarr;</span>
-        </div>
-      </div>
+      )}
     </Card>
   );
 }
@@ -721,7 +751,7 @@ function SessionGroup({
             thread={thread}
             onClick={() => onSessionClick(thread)}
             onPrefetch={() => onSessionPrefetch(thread)}
-            onArchive={(e) => { e.stopPropagation(); onSessionArchive(thread); }}
+            onArchive={() => onSessionArchive(thread)}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
             compatibilityMode={compatibilityMode}
@@ -950,11 +980,9 @@ export default function SessionsPage() {
     </div>
   );
 
-  // Archive a session — optimistic remove + undo toast, API fires after 5s
-  const handleSessionArchive = useCallback((thread: TimelineSessionCard) => {
+  // Archive a session — optimistic remove, confirmed by inline card UI
+  const handleSessionArchive = useCallback(async (thread: TimelineSessionCard) => {
     const sessionId = thread.detail.id;
-
-    // Optimistically remove from list
     queryClient.setQueriesData<{ sessions: TimelineSessionCard[]; total: number }>(
       { queryKey: ["agent-sessions"] },
       (old) => {
@@ -966,38 +994,12 @@ export default function SessionsPage() {
         };
       },
     );
-
-    let cancelled = false;
-    const toastId = toast(
-      (t) => (
-        <span style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          Session archived
-          <button
-            type="button"
-            onClick={() => {
-              cancelled = true;
-              toast.dismiss(t.id);
-              queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
-            }}
-            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-brand-primary)", fontSize: "13px", fontWeight: 600, padding: 0 }}
-          >
-            Undo
-          </button>
-        </span>
-      ),
-      { duration: 5000 },
-    );
-
-    setTimeout(async () => {
-      if (cancelled) return;
-      toast.dismiss(toastId);
-      try {
-        await setSessionAction(sessionId, "archive");
-      } catch {
-        queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
-        toast.error("Failed to archive session");
-      }
-    }, 5000);
+    try {
+      await setSessionAction(sessionId, "archive");
+    } catch {
+      queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+      toast.error("Failed to archive session");
+    }
   }, [queryClient]);
 
   // Handle session click - preserve current filters in location state

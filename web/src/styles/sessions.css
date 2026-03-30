@@ -738,6 +738,56 @@
     color: var(--color-brand-primary);
   }
 
+  /* Inline archive confirmation row */
+  .session-card-confirm-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding-top: var(--space-2);
+    border-top: 1px solid color-mix(in srgb, var(--color-intent-error) 25%, transparent);
+  }
+
+  .session-card-confirm-label {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    flex: 1;
+  }
+
+  .session-card-confirm-cancel,
+  .session-card-confirm-ok {
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-medium);
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .session-card-confirm-cancel {
+    background: var(--surface-glass-2);
+    border-color: var(--border-glass-1);
+    color: var(--color-text-secondary);
+  }
+
+  .session-card-confirm-cancel:hover {
+    background: var(--surface-glass-3);
+  }
+
+  .session-card-confirm-ok {
+    background: color-mix(in srgb, var(--color-intent-error) 15%, transparent);
+    border-color: color-mix(in srgb, var(--color-intent-error) 35%, transparent);
+    color: var(--color-intent-error);
+  }
+
+  .session-card-confirm-ok:hover {
+    background: color-mix(in srgb, var(--color-intent-error) 25%, transparent);
+  }
+
+  .session-card--confirming {
+    border-color: color-mix(in srgb, var(--color-intent-error) 35%, transparent) !important;
+  }
+
   @media (max-width: 560px) {
     .session-card-footer {
       grid-template-columns: 1fr;
