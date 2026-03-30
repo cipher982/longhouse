@@ -13,6 +13,9 @@ import {
   getSessionOriginLabel,
   truncatePath,
 } from "../../lib/sessionWorkspace";
+import { LoopModeSelector } from "./LoopModeSelector";
+import { TurnReviewCard } from "./TurnReviewCard";
+import { ContinuationsList } from "./ContinuationsList";
 
 interface SessionContextPaneProps {
   session: AgentSession;
@@ -31,54 +34,6 @@ interface SessionContextPaneProps {
   latestTurnReview?: SessionTurnReview | null;
   turnReviewLoading?: boolean;
   turnReviewUnavailable?: boolean;
-}
-
-const LOOP_MODE_OPTIONS: Array<{
-  value: SessionLoopMode;
-  label: string;
-  hint: string;
-}> = [
-  { value: "manual", label: "Manual", hint: "Observe only" },
-  { value: "assist", label: "Assist", hint: "Suggest and nudge" },
-  { value: "autopilot", label: "Autopilot", hint: "Continue bounded turns" },
-];
-
-const TURN_DECISION_META: Record<string, { label: string; variant: "neutral" | "warning" | "success" }> = {
-  continue: { label: "Continue", variant: "success" },
-  ask_user: { label: "Ask You", variant: "warning" },
-  wait: { label: "Wait", variant: "neutral" },
-  done: { label: "Done", variant: "neutral" },
-  escalate: { label: "Escalate", variant: "warning" },
-};
-
-const EXECUTION_STATE_META: Record<
-  string,
-  { label: string; variant: "neutral" | "warning" | "success" }
-> = {
-  observe_only: { label: "Observe Only", variant: "neutral" },
-  awaiting_user_approval: { label: "Ask You", variant: "warning" },
-  would_auto_continue: { label: "Would Auto-Continue", variant: "success" },
-  needs_human: { label: "Needs You", variant: "warning" },
-  no_action: { label: "No Action", variant: "neutral" },
-};
-
-function formatRecommendedAction(value: string | null): string | null {
-  if (!value) return null;
-  return value
-    .split("_")
-    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-    .join(" ");
-}
-
-function formatLatency(value: number | null): string | null {
-  if (value == null || !Number.isFinite(value) || value < 0) {
-    return null;
-  }
-  if (value < 1000) {
-    return `${Math.round(value)} ms`;
-  }
-  const seconds = value / 1000;
-  return `${seconds >= 10 ? seconds.toFixed(0) : seconds.toFixed(1)} s`;
 }
 
 function MetaRow({ label, value }: { label: string; value: string }) {
@@ -109,25 +64,6 @@ export function SessionContextPane({
   const isManagedLocalCodex = interaction.isManagedLocalCodex;
   const canDriveManagedLocalFromBrowser = interaction.canDriveManagedLocalSession;
   const turnCount = session.user_messages + session.assistant_messages;
-  const decisionMeta = latestTurnReview
-    ? TURN_DECISION_META[latestTurnReview.decision] ?? {
-        label: latestTurnReview.decision,
-        variant: "neutral" as const,
-      }
-    : null;
-  const executionMeta = latestTurnReview
-    ? EXECUTION_STATE_META[latestTurnReview.executionState] ?? {
-        label: latestTurnReview.executionState,
-        variant: "neutral" as const,
-      }
-    : null;
-  const recommendedAction = formatRecommendedAction(latestTurnReview?.recommendedAction ?? null);
-  const actualOutcome = formatRecommendedAction(latestTurnReview?.actualOutcome ?? null);
-  const followUpPrompt = latestTurnReview?.followUpPrompt?.trim() || null;
-  const queueLatency = formatLatency(latestTurnReview?.queueLatencyMs ?? null);
-  const reviewLatency = formatLatency(latestTurnReview?.reviewLatencyMs ?? null);
-  const processingLatency = formatLatency(latestTurnReview?.processingLatencyMs ?? null);
-  const turnReviewDebugPayload = latestTurnReview ? JSON.stringify(latestTurnReview, null, 2) : null;
   const runtime = resolveSessionRuntimeState(session);
   const executionHomeLabel =
     session.execution_home === "legacy" ? null : getExecutionHomeLabel(session.execution_home);
@@ -150,6 +86,7 @@ export function SessionContextPane({
 
   return (
     <div className="session-context-pane">
+      {/* Hero: title, provider, badges */}
       <div className="session-pane-section session-pane-section--hero">
         <div className="session-pane-eyebrow">Session</div>
         <div className="session-context-title">{title}</div>
@@ -174,6 +111,7 @@ export function SessionContextPane({
         </div>
       </div>
 
+      {/* Branch banner (not viewing head) */}
       {!isViewingHead && headThreadSession ? (
         <div
           className="session-pane-callout session-pane-callout--warning session-branch-banner"
@@ -190,6 +128,7 @@ export function SessionContextPane({
         </div>
       ) : null}
 
+      {/* Metadata */}
       <div className="session-pane-section">
         <div className="session-pane-section-title">Metadata</div>
         <div className="session-context-meta">
@@ -201,6 +140,7 @@ export function SessionContextPane({
         </div>
       </div>
 
+      {/* Reattach command */}
       {attachCommand ? (
         <div className="session-pane-section">
           <div className="session-pane-section-title">Reattach</div>
@@ -224,101 +164,22 @@ export function SessionContextPane({
         </div>
       ) : null}
 
-      <div className="session-pane-section">
-        <div className="session-pane-section-title">Loop Mode</div>
-        <div
-          className="session-loop-mode"
-          role="radiogroup"
-          aria-label="Session loop mode"
-          data-testid="session-loop-mode-group"
-        >
-          {LOOP_MODE_OPTIONS.map((option) => {
-            const isActive = session.loop_mode === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={isActive}
-                className={`session-loop-mode__option${isActive ? " is-active" : ""}`}
-                onClick={() => onLoopModeChange?.(option.value)}
-                disabled={loopModePending || !onLoopModeChange}
-              >
-                <span className="session-loop-mode__label">{option.label}</span>
-                <span className="session-loop-mode__hint">{option.hint}</span>
-              </button>
-            );
-          })}
-        </div>
-        <div className="session-loop-mode__caption">{loopModeCaption}</div>
-      </div>
+      {/* Loop mode selector */}
+      <LoopModeSelector
+        currentMode={session.loop_mode}
+        caption={loopModeCaption}
+        pending={loopModePending}
+        onChange={onLoopModeChange}
+      />
 
-      <div className="session-pane-section">
-        <div className="session-pane-section-title">Turn Loop</div>
-        {turnReviewLoading ? (
-          <div className="session-shadow-review__empty">Loading latest completed-turn review...</div>
-        ) : latestTurnReview ? (
-          <div className="session-shadow-review" data-testid="session-turn-review">
-            <div className="session-shadow-review__header">
-              {decisionMeta ? <Badge variant={decisionMeta.variant}>{decisionMeta.label}</Badge> : null}
-              {executionMeta ? <Badge variant={executionMeta.variant}>{executionMeta.label}</Badge> : null}
-              <span className="session-shadow-review__stamp">{formatFullDate(latestTurnReview.createdAt)}</span>
-            </div>
-            <div className="session-shadow-review__summary">{latestTurnReview.summary}</div>
-            {latestTurnReview.modeSummary ? (
-              <div className="session-shadow-review__mode">{latestTurnReview.modeSummary}</div>
-            ) : null}
-            <div className="session-shadow-review__meta">
-              Latest assistant turn #{latestTurnReview.turnIndex + 1}
-            </div>
-            {recommendedAction ? (
-              <div className="session-shadow-review__meta">Recommended action: {recommendedAction}</div>
-            ) : null}
-            {followUpPrompt ? (
-              <div className="session-shadow-review__meta">Suggested next prompt: {followUpPrompt}</div>
-            ) : null}
-            {actualOutcome ? (
-              <div className="session-shadow-review__meta">Live outcome: {actualOutcome}</div>
-            ) : null}
-            {reviewLatency ? (
-              <div className="session-shadow-review__meta">Review recorded in {reviewLatency}</div>
-            ) : null}
-            {queueLatency ? (
-              <div className="session-shadow-review__meta">Queue delay before turn-loop: {queueLatency}</div>
-            ) : null}
-            {processingLatency ? (
-              <div className="session-shadow-review__meta">Turn-loop processing time: {processingLatency}</div>
-            ) : null}
-            {latestTurnReview.turnExcerpt ? (
-              <div className="session-shadow-review__mode">{latestTurnReview.turnExcerpt}</div>
-            ) : null}
-            {latestTurnReview.blockedReasons.length > 0 ? (
-              <div className="session-shadow-review__blockers">
-                {latestTurnReview.blockedReasons.map((reason) => (
-                  <div key={reason} className="session-shadow-review__blocker">
-                    {reason}
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {turnReviewDebugPayload ? (
-              <details className="session-pane-callout session-pane-callout--muted" data-testid="session-turn-review-debug">
-                <summary className="session-pane-callout-title">Debug review payload</summary>
-                <pre className="inspector-code-block">
-                  <code>{turnReviewDebugPayload}</code>
-                </pre>
-              </details>
-            ) : null}
-          </div>
-        ) : (
-          <div className="session-shadow-review__empty">
-            {turnReviewUnavailable
-              ? "Turn-loop review is unavailable right now."
-              : "No completed-turn review has been recorded for this session yet."}
-          </div>
-        )}
-      </div>
+      {/* Turn review */}
+      <TurnReviewCard
+        review={latestTurnReview}
+        loading={turnReviewLoading}
+        unavailable={turnReviewUnavailable}
+      />
 
+      {/* Continuation notice */}
       {continuationNotice ? (
         <div
           className="session-pane-callout session-pane-callout--muted"
@@ -329,6 +190,7 @@ export function SessionContextPane({
         </div>
       ) : null}
 
+      {/* Summary */}
       {session.summary ? (
         <div className="session-pane-section">
           <div className="session-pane-section-title">Summary</div>
@@ -336,39 +198,13 @@ export function SessionContextPane({
         </div>
       ) : null}
 
-      {threadSessions.length > 1 ? (
-        <div
-          className="session-pane-section session-pane-section--grow session-lineage-panel"
-          data-testid="session-lineage-panel"
-        >
-          <div className="session-pane-section-title">Continuations</div>
-          <div className="session-context-thread-list">
-            {threadSessions.map((threadSession) => {
-              const isCurrent = threadSession.id === session.id;
-              const isHead = threadSession.id === headThreadSession?.id;
-              return (
-                <button
-                  key={threadSession.id}
-                  type="button"
-                  className={`session-context-thread-item${isCurrent ? " is-current" : ""}${isHead ? " is-head" : ""}`}
-                  onClick={() => onOpenSession(threadSession.id)}
-                >
-                  <div className="session-context-thread-item-title">
-                    {getSessionOriginLabel(threadSession)}
-                  </div>
-                  <div className="session-context-thread-item-meta">
-                    {formatContinuationStamp(threadSession.started_at)}
-                  </div>
-                  <div className="session-context-thread-item-badges">
-                    {isHead ? <Badge variant="success">Latest</Badge> : null}
-                    {isCurrent ? <Badge variant="neutral">Viewing</Badge> : null}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+      {/* Continuations list */}
+      <ContinuationsList
+        sessions={threadSessions}
+        currentSessionId={session.id}
+        headSessionId={headThreadSession?.id ?? null}
+        onOpenSession={onOpenSession}
+      />
     </div>
   );
 }
