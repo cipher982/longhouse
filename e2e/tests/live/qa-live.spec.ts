@@ -189,7 +189,7 @@ test("loop login round-trip preserves loop destination", async ({
   browser,
   frontendBaseUrl,
 }) => {
-  test.setTimeout(45_000);
+  test.setTimeout(30_000);
 
   const loginToken = normalizeToken(process.env.SMOKE_LOGIN_TOKEN);
   if (!loginToken) {
@@ -202,23 +202,43 @@ test("loop login round-trip preserves loop destination", async ({
   const page = await context.newPage();
 
   try {
+    // --- Part 1: Unauthenticated /loop shows login with SSO CTA ---
     await page.goto(`${baseOrigin}/loop`, { waitUntil: "domcontentloaded" });
     const loginButton = page.getByRole("button", {
       name: /continue to your longhouse account/i,
     });
     await loginButton.waitFor({ timeout: 15_000 });
-    await loginButton.click();
-    await page.waitForURL((url) => url.host === "control.longhouse.ai", {
-      timeout: 20_000,
+
+    // Intercept the navigation instead of actually going to control.longhouse.ai.
+    // The old test clicked the button and waited for the external domain to load,
+    // which was the sole source of flakiness (network, Cloudflare, DNS).
+    await page.route("**/*", (route) => {
+      const url = new URL(route.request().url());
+      if (url.host === "control.longhouse.ai") {
+        route.abort();
+      } else {
+        route.continue();
+      }
     });
 
-    const controlPlaneUrl = page.url();
-    const controlPlaneDestination = new URL(controlPlaneUrl);
+    const [interceptedRequest] = await Promise.all([
+      page.waitForRequest(
+        (req) => new URL(req.url()).host === "control.longhouse.ai",
+        { timeout: 15_000 },
+      ),
+      loginButton.click(),
+    ]);
+
+    const redirectParsed = new URL(interceptedRequest.url());
     expect(
-      controlPlaneDestination.host,
-      "Hosted login CTA should hand off to the control plane",
+      redirectParsed.host,
+      "Login CTA should redirect to control.longhouse.ai",
     ).toBe("control.longhouse.ai");
 
+    // Clean up route handler before continuing
+    await page.unroute("**/*");
+
+    // --- Part 2: accept-token with return_to=/loop lands on /loop ---
     await page.goto(
       `${baseOrigin}/api/auth/accept-token?token=${encodeURIComponent(loginToken)}&return_to=%2Floop`,
       { waitUntil: "domcontentloaded" },
