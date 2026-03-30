@@ -56,26 +56,17 @@ function SessionDetailWorkspaceRoute({
     currentThreadSession,
     headThreadSession,
     isViewingHead,
+    showAbandonedBranches,
+    setShowAbandonedBranches,
     totalEntries,
     loadedEntryCount,
     items,
-    filteredItems,
     eventsLoading,
     eventsError,
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-    eventFilter,
-    setEventFilter,
-    searchQuery,
-    setSearchQuery,
-    debouncedSearch,
-    messageCount,
-    toolRowCount,
-    outsideActiveCount,
     abandonedEvents,
-    showAbandonedBranches,
-    setShowAbandonedBranches,
     selectedKey,
     selectedSelection,
     selectKey,
@@ -275,17 +266,8 @@ function SessionDetailWorkspaceRoute({
         main={
           <TimelinePane
             items={items}
-            filteredItems={filteredItems}
             totalEntries={totalEntries}
             loadedEntries={loadedEntryCount}
-            eventFilter={eventFilter}
-            onEventFilterChange={setEventFilter}
-            searchQuery={searchQuery}
-            onSearchQueryChange={setSearchQuery}
-            debouncedSearch={debouncedSearch}
-            messageCount={messageCount}
-            toolRowCount={toolRowCount}
-            outsideActiveCount={outsideActiveCount}
             abandonedEvents={abandonedEvents}
             showAbandonedBranches={showAbandonedBranches}
             onShowAbandonedBranchesChange={setShowAbandonedBranches}

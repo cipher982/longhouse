@@ -1,11 +1,10 @@
-import type { ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { Button, EmptyState, Spinner } from "../ui";
 import type {
   TimelineSeam,
   TimelineItem,
   ToolBatch,
   ToolInteraction,
-  EventFilter,
 } from "../../lib/sessionWorkspace";
 import {
   formatContinuationStamp,
@@ -18,20 +17,14 @@ import {
   isOutsideActiveContext,
   timelineItemContainsSelection,
 } from "../../lib/sessionWorkspace";
+import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+
+type EventFilter = "all" | "messages" | "tools";
 
 interface TimelinePaneProps {
   items: TimelineItem[];
-  filteredItems: TimelineItem[];
   totalEntries: number;
   loadedEntries: number;
-  eventFilter: EventFilter;
-  onEventFilterChange: (filter: EventFilter) => void;
-  searchQuery: string;
-  onSearchQueryChange: (value: string) => void;
-  debouncedSearch: string;
-  messageCount: number;
-  toolRowCount: number;
-  outsideActiveCount: number;
   abandonedEvents: number;
   showAbandonedBranches: boolean;
   onShowAbandonedBranchesChange: (show: boolean) => void;
@@ -202,17 +195,8 @@ function ToolBatchRow({
 
 export function TimelinePane({
   items,
-  filteredItems,
   totalEntries,
   loadedEntries,
-  eventFilter,
-  onEventFilterChange,
-  searchQuery,
-  onSearchQueryChange,
-  debouncedSearch,
-  messageCount,
-  toolRowCount,
-  outsideActiveCount,
   abandonedEvents,
   showAbandonedBranches,
   onShowAbandonedBranchesChange,
@@ -226,6 +210,69 @@ export function TimelinePane({
   dock = null,
   listRef,
 }: TimelinePaneProps) {
+  // Filter and search state — owned here, not passed in
+  const [eventFilter, setEventFilter] = useState<EventFilter>("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearch = useDebouncedValue(searchQuery, 300);
+  const messageCount = useMemo(
+    () => items.filter((item) => item.kind === "message").length,
+    [items],
+  );
+
+  const toolRowCount = useMemo(
+    () => items.filter((item) => item.kind === "tool" || item.kind === "tool_batch").length,
+    [items],
+  );
+
+  const outsideActiveCount = useMemo(
+    () => items.reduce((count, item) => {
+      if (item.kind === "message" && item.event.in_active_context === false) return count + 1;
+      return count;
+    }, 0),
+    [items],
+  );
+
+  const filteredItems = useMemo(() => {
+    let result = items;
+
+    if (eventFilter === "messages") {
+      result = result.filter((item) => item.kind === "message");
+    } else if (eventFilter === "tools") {
+      result = result.filter((item) => item.kind === "tool" || item.kind === "tool_batch");
+    }
+
+    if (!debouncedSearch.trim()) return result;
+
+    const query = debouncedSearch.toLowerCase();
+    return result.filter((item) => {
+      if (item.kind === "seam") {
+        return (
+          item.seam.label.toLowerCase().includes(query) ||
+          item.seam.description.toLowerCase().includes(query)
+        );
+      }
+
+      if (item.kind === "message") {
+        return item.event.content_text?.toLowerCase().includes(query);
+      }
+
+      const interactions = item.kind === "tool_batch" ? item.batch.interactions : [item.interaction];
+      return interactions.some((interaction) => {
+        if (interaction.toolName.toLowerCase().includes(query)) return true;
+        if (
+          interaction.callEvent?.tool_input_json &&
+          JSON.stringify(interaction.callEvent.tool_input_json).toLowerCase().includes(query)
+        ) {
+          return true;
+        }
+        if (interaction.resultEvent?.tool_output_text?.toLowerCase().includes(query)) {
+          return true;
+        }
+        return false;
+      });
+    });
+  }, [items, eventFilter, debouncedSearch]);
+
   const toolFilterLabel = `Tools (${toolRowCount})`;
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
@@ -249,21 +296,21 @@ export function TimelinePane({
             <button
               type="button"
               className={`timeline-pane__filter${eventFilter === "all" ? " is-active" : ""}`}
-              onClick={() => onEventFilterChange("all")}
+              onClick={() => setEventFilter("all")}
             >
               All ({items.length})
             </button>
             <button
               type="button"
               className={`timeline-pane__filter${eventFilter === "messages" ? " is-active" : ""}`}
-              onClick={() => onEventFilterChange("messages")}
+              onClick={() => setEventFilter("messages")}
             >
               Messages ({messageCount})
             </button>
             <button
               type="button"
               className={`timeline-pane__filter${eventFilter === "tools" ? " is-active" : ""}`}
-              onClick={() => onEventFilterChange("tools")}
+              onClick={() => setEventFilter("tools")}
             >
               {toolFilterLabel}
             </button>
@@ -281,7 +328,7 @@ export function TimelinePane({
               className="timeline-pane__search-input"
               placeholder="Search events..."
               value={searchQuery}
-              onChange={(event) => onSearchQueryChange(event.target.value)}
+              onChange={(event) => setSearchQuery(event.target.value)}
             />
           </div>
         </div>

@@ -34,17 +34,8 @@ describe("TimelinePane", () => {
     render(
       <TimelinePane
         items={[seamItem, messageItem]}
-        filteredItems={[seamItem, messageItem]}
         totalEntries={2}
         loadedEntries={2}
-        eventFilter="all"
-        onEventFilterChange={vi.fn()}
-        searchQuery=""
-        onSearchQueryChange={vi.fn()}
-        debouncedSearch=""
-        messageCount={1}
-        toolRowCount={0}
-        outsideActiveCount={0}
         abandonedEvents={0}
         showAbandonedBranches={false}
         onShowAbandonedBranchesChange={vi.fn()}
