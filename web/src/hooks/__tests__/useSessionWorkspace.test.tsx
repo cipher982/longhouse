@@ -12,12 +12,15 @@ const visibilityMocks = vi.hoisted(() => ({
 const streamMocks = vi.hoisted(() => ({
   connectSessionWorkspaceStream: vi.fn(() => vi.fn()),
 }));
+const queryClientMocks = vi.hoisted(() => ({
+  invalidateQueries: vi.fn(),
+}));
 
 vi.mock("../useAgentSessions", () => agentSessionMocks);
 vi.mock("../useDocumentVisible", () => visibilityMocks);
 vi.mock("../../services/api/agents", () => streamMocks);
 vi.mock("@tanstack/react-query", () => ({
-  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+  useQueryClient: () => queryClientMocks,
 }));
 
 const baseSession = {
@@ -181,6 +184,39 @@ describe("useSessionWorkspace", () => {
       initialPage: expect.objectContaining({
         focus_session_id: baseSession.id,
       }),
+    });
+  });
+
+  it("invalidates the workspace query itself when the SSE stream reports a change", () => {
+    let handlers:
+      | {
+          onConnected?: () => void;
+          onWorkspaceChanged?: (data: {
+            session_id: string;
+            latest_event_id: number;
+            thread_session_count: number;
+          }) => void;
+          onError?: () => void;
+        }
+      | undefined;
+    streamMocks.connectSessionWorkspaceStream.mockImplementation((_sessionId, nextHandlers) => {
+      handlers = nextHandlers;
+      return vi.fn();
+    });
+
+    renderHook(() => useSessionWorkspace(baseSession.id));
+
+    act(() => {
+      handlers?.onConnected?.();
+      handlers?.onWorkspaceChanged?.({
+        session_id: baseSession.id,
+        latest_event_id: 99,
+        thread_session_count: 1,
+      });
+    });
+
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["agent-session-workspace", baseSession.id],
     });
   });
 
