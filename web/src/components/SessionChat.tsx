@@ -124,6 +124,7 @@ export function SessionChat({
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
 
   const [sentConfirmation, setSentConfirmation] = useState(false);
+  const [pendingManagedLocalMessage, setPendingManagedLocalMessage] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const dockTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -299,6 +300,7 @@ export function SessionChat({
 
   const handleManagedLocalSend = useCallback(
     async (message: string) => {
+      setPendingManagedLocalMessage(message);
       setIsSubmitting(true);
       try {
         const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
@@ -340,12 +342,10 @@ export function SessionChat({
         setSentConfirmation(true);
         sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
 
-        // Kick off workspace refresh; clear local echo once it resolves
-        // so the timeline's real event replaces the optimistic bubble.
-        void refreshCurrentSessionWorkspace().finally(() => setMessages([]));
+        void refreshCurrentSessionWorkspace().finally(() => setPendingManagedLocalMessage(null));
       } catch (e) {
         setError(e instanceof Error ? e.message : "Unknown error");
-        setMessages([]);
+        setPendingManagedLocalMessage(null);
       } finally {
         setIsSubmitting(false);
       }
@@ -449,10 +449,12 @@ export function SessionChat({
       setError(null);
       setBlockedKeyboardSubmit(false);
 
-      setMessages((prev) => [
-        ...prev,
-        { id: `user-${Date.now()}`, role: "user", content: message, timestamp: new Date() },
-      ]);
+      if (!isManagedLocal) {
+        setMessages((prev) => [
+          ...prev,
+          { id: `user-${Date.now()}`, role: "user", content: message, timestamp: new Date() },
+        ]);
+      }
 
       if (isManagedLocal) {
         await handleManagedLocalSend(message);
@@ -592,7 +594,7 @@ export function SessionChat({
         </div>
       )}
 
-      {isDock ? (
+      {isDock && isManagedLocal ? null : isDock ? (
         <div className="session-chat-messages session-chat-messages--dock">
           {messages.length > 0 ? (
             <>
@@ -628,6 +630,12 @@ export function SessionChat({
         ) : isDock ? null : (
           <div className="session-chat-confirmation session-chat-confirmation--spacer" aria-hidden="true" />
         )}
+        {isManagedLocal && pendingManagedLocalMessage ? (
+          <div className="session-chat-pending-message">
+            <span className="session-chat-pending-message__text">{pendingManagedLocalMessage}</span>
+            <span className="session-chat-pending-message__spinner" aria-label="Sending" />
+          </div>
+        ) : null}
         {isDock ? (
           <div className="session-chat-composer-row">
             <textarea
