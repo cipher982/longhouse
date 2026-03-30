@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from typing import Any
 
@@ -27,9 +28,31 @@ from zerg.models.work import OperationalIncident
 logger = logging.getLogger(__name__)
 
 _THRESHOLD_HOURS = float(os.getenv("INGEST_STALE_THRESHOLD_HOURS", "4"))
+_ONLINE_THRESHOLD_MINUTES = int(os.getenv("DEVICE_ONLINE_THRESHOLD_MINUTES", "15"))
 INCIDENT_SOURCE = "ingest_health"
 INCIDENT_TYPE = "stale_ingest"
 INCIDENT_DEDUPE_KEY = "ingest-health:stale"
+
+
+def _is_any_device_online(db: DBSession, now: datetime) -> tuple[bool, datetime | None]:
+    """Return (is_online, last_heartbeat_at).
+
+    Online means a non-offline heartbeat was received within _ONLINE_THRESHOLD_MINUTES.
+    If no heartbeats have ever been sent (new install), returns (False, None).
+    """
+    cutoff = now - timedelta(minutes=_ONLINE_THRESHOLD_MINUTES)
+    row = db.execute(
+        text("SELECT MAX(received_at) FROM agent_heartbeats " "WHERE received_at > :cutoff AND is_offline = 0"),
+        {"cutoff": cutoff},
+    ).fetchone()
+    if not row or row[0] is None:
+        return False, None
+    last_hb = row[0]
+    if isinstance(last_hb, str):
+        last_hb = datetime.fromisoformat(last_hb)
+    if last_hb.tzinfo is None:
+        last_hb = last_hb.replace(tzinfo=timezone.utc)
+    return True, last_hb
 
 
 def compute_ingest_health(db: DBSession) -> dict:
@@ -84,12 +107,40 @@ def compute_ingest_health(db: DBSession) -> dict:
 
     is_stale = gap_hours >= threshold_hours
 
+    if not is_stale:
+        return {
+            "status": "ok",
+            "last_session_at": last_at,
+            "gap_hours": round(gap_hours, 2),
+            "threshold_hours": threshold_hours,
+            "session_count": session_count,
+            "device_online": None,
+            "last_heartbeat_at": None,
+        }
+
+    # Gap is over threshold — only a real problem if the device is actually online.
+    # If there's no recent heartbeat, the laptop/device is off or sleeping.
+    now = datetime.now(timezone.utc)
+    device_online, last_heartbeat_at = _is_any_device_online(db, now)
+    if not device_online:
+        return {
+            "status": "device_offline",
+            "last_session_at": last_at,
+            "gap_hours": round(gap_hours, 2),
+            "threshold_hours": threshold_hours,
+            "session_count": session_count,
+            "device_online": False,
+            "last_heartbeat_at": None,
+        }
+
     return {
-        "status": "stale" if is_stale else "ok",
+        "status": "stale",
         "last_session_at": last_at,
         "gap_hours": round(gap_hours, 2),
         "threshold_hours": threshold_hours,
         "session_count": session_count,
+        "device_online": True,
+        "last_heartbeat_at": last_heartbeat_at,
     }
 
 
@@ -112,13 +163,28 @@ async def run() -> dict[str, Any]:
             .first()
         )
 
-        if status not in ("ok", "stale"):
+        if status not in ("ok", "stale", "device_offline"):
             return {"status": status, "action": "none"}
 
+        if status == "device_offline":
+            # Device is off/sleeping — ingest gap is expected, not actionable.
+            # If a stale incident was open before the device went offline, close it.
+            if open_incident is not None:
+                open_incident.status = OPERATIONAL_INCIDENT_STATUS_RESOLVED
+                open_incident.summary = "Session ingest stale but device is offline (expected)"
+                open_incident.last_observed_at = now
+                open_incident.resolved_at = now
+                open_incident.context = {
+                    **dict(open_incident.context or {}),
+                    "resolved_at": now.isoformat(),
+                    "resolved_reason": "device_offline",
+                }
+                db.commit()
+                return {"status": "device_offline", "action": "incident_resolved"}
+            return {"status": "device_offline", "action": "none"}
+
         if status == "stale":
-            summary = (
-                f"No sessions ingested for {health['gap_hours']:.1f} hours (threshold: {health['threshold_hours']}h)."
-            )
+            summary = f"No sessions ingested for {health['gap_hours']:.1f} hours (threshold: {health['threshold_hours']}h)."
             context = {
                 "gap_hours": health["gap_hours"],
                 "threshold_hours": health["threshold_hours"],
@@ -157,9 +223,7 @@ async def run() -> dict[str, Any]:
             open_incident.context = {
                 **dict(open_incident.context or {}),
                 "resolved_at": now.isoformat(),
-                "resolved_last_session_at": health["last_session_at"].isoformat()
-                if health["last_session_at"]
-                else None,
+                "resolved_last_session_at": health["last_session_at"].isoformat() if health["last_session_at"] else None,
             }
             db.commit()
             return {"status": "ok", "action": "incident_resolved"}
