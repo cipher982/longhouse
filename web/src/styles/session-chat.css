@@ -6,7 +6,7 @@
 }
 
 .session-chat--dock {
-  flex: 1;
+  flex: 0 1 auto;
   height: auto;
   min-height: 0;
   gap: var(--space-3);
@@ -225,12 +225,17 @@
 }
 
 .session-chat-messages--dock {
-  flex: 1;
+  flex: 0 1 auto;
+  max-height: 40vh;
   min-height: 0;
   padding: var(--space-3);
   border-radius: var(--radius-lg);
   border: 1px solid rgba(158, 124, 90, 0.14);
   background: rgba(18, 11, 9, 0.52);
+}
+
+.session-chat-messages--dock:empty {
+  display: none;
 }
 
 .session-chat-empty {
