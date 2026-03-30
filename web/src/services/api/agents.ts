@@ -485,7 +485,7 @@ export function connectSessionWorkspaceStream(
   }
   const queryString = params.toString();
   const url = buildUrl(
-    `${TIMELINE_SESSIONS_PREFIX}/sessions/${sessionId}/workspace/stream${queryString ? `?${queryString}` : ""}`,
+    `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workspace/stream${queryString ? `?${queryString}` : ""}`,
   );
   const eventSource = new EventSource(url, { withCredentials: true });
 
