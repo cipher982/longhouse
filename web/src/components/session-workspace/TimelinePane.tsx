@@ -296,6 +296,9 @@ export function TimelinePane({
   }, [visibleSelectedKey, onVisibleSelectionChange]);
 
   const toolFilterLabel = `Tools (${toolRowCount})`;
+  const [filtersExpanded, setFiltersExpanded] = useState(false);
+  const showFilters = filtersExpanded || eventFilter !== "all" || debouncedSearch.trim().length > 0;
+
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
 
@@ -314,6 +317,25 @@ export function TimelinePane({
                 : `${loadedEntries}/${totalEntries} entries loaded`}
             </div>
           </div>
+          <button
+            type="button"
+            className={`timeline-pane__filter-toggle${showFilters ? " is-active" : ""}`}
+            onClick={() => setFiltersExpanded((prev) => !prev)}
+            aria-label="Toggle filters"
+            title="Toggle filters and search"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
+            </svg>
+            {eventFilter !== "all" || debouncedSearch.trim() ? (
+              <span className="timeline-pane__filter-toggle-dot" />
+            ) : null}
+          </button>
+        </div>
+      </div>
+
+      {showFilters ? (
+        <div className="timeline-pane__header-expandable" data-testid="session-timeline-filters">
           <div className="timeline-pane__filters">
             <button
               type="button"
@@ -337,24 +359,24 @@ export function TimelinePane({
               {toolFilterLabel}
             </button>
           </div>
-        </div>
-        <div className="timeline-pane__header-actions">
-          {debouncedSearch.trim() ? (
-            <div className="timeline-pane__match-count">
-              {filteredItems.length} match{filteredItems.length === 1 ? "" : "es"}
+          <div className="timeline-pane__header-actions">
+            {debouncedSearch.trim() ? (
+              <div className="timeline-pane__match-count">
+                {filteredItems.length} match{filteredItems.length === 1 ? "" : "es"}
+              </div>
+            ) : null}
+            <div className="timeline-pane__search">
+              <input
+                type="text"
+                className="timeline-pane__search-input"
+                placeholder="Search events..."
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+              />
             </div>
-          ) : null}
-          <div className="timeline-pane__search">
-            <input
-              type="text"
-              className="timeline-pane__search-input"
-              placeholder="Search events..."
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-            />
           </div>
         </div>
-      </div>
+      ) : null}
 
       {outsideActiveCount > 0 || abandonedEvents > 0 ? (
         <div className="timeline-pane__status-row">
