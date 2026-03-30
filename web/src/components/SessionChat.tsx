@@ -320,11 +320,15 @@ export function SessionChat({
             timestamp: new Date(),
           },
         ]);
+
+        // Close SSE race window: if the reply shipped before the stream
+        // picked it up, this catch-up invalidation ensures it appears.
+        void refreshCurrentSessionWorkspace();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Unknown error");
       }
     },
-    [queryClient, session.id],
+    [queryClient, session.id, refreshCurrentSessionWorkspace],
   );
 
   const handleCloudSend = useCallback(

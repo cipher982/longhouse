@@ -895,12 +895,15 @@ async def _session_workspace_stream(
         "data": json.dumps({"session_id": str(session_id)}),
     }
 
+    wait_start: float | None = None
+
     while True:
         if await request.is_disconnected():
             break
 
         if skip_initial:
             skip_initial = False
+            wait_start = monotonic()
             await _wait_for_timeline_change()
             continue
 
@@ -922,11 +925,13 @@ async def _session_workspace_stream(
                     "data": json.dumps({"timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}),
                 }
                 last_heartbeat = now
+            wait_start = monotonic()
             await _wait_for_timeline_change()
             continue
 
         previous_sig = current_sig
 
+        detect_ms = round((monotonic() - wait_start) * 1000, 1) if wait_start else 0
         yield {
             "event": "workspace_changed",
             "data": json.dumps(
@@ -934,6 +939,7 @@ async def _session_workspace_stream(
                     "session_id": str(session_id),
                     "latest_event_id": current_sig[2],
                     "thread_session_count": current_sig[5],
+                    "detect_ms": detect_ms,
                 }
             ),
         }
@@ -941,6 +947,7 @@ async def _session_workspace_stream(
         now = monotonic()
         last_heartbeat = now
 
+        wait_start = monotonic()
         await _wait_for_timeline_change()
 
 
