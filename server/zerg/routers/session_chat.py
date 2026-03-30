@@ -437,6 +437,7 @@ async def _dispatch_managed_local_text(
     db: Session,
 ) -> JSONResponse:
     """Send text to a managed-local session and return acceptance status."""
+    t0 = time.monotonic()
     if getattr(source_session, "source_runner_id", None) is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -448,6 +449,7 @@ async def _dispatch_managed_local_text(
         db=db,
         session_id=source_session.id,
     )
+    t_baseline = time.monotonic()
     run_best_effort_managed_local_turn_write(
         db_bind=db.get_bind(),
         label="create",
@@ -460,6 +462,7 @@ async def _dispatch_managed_local_text(
             expected_user_text=message,
         ),
     )
+    t_turn_created = time.monotonic()
     send_result = await send_text_to_managed_local_session(
         db=db,
         owner_id=owner_id,
@@ -468,6 +471,7 @@ async def _dispatch_managed_local_text(
         commis_id=request_id,
         timeout_secs=15,
     )
+    t_sent = time.monotonic()
 
     if not send_result.ok:
         run_best_effort_managed_local_turn_write(
@@ -501,11 +505,22 @@ async def _dispatch_managed_local_text(
         ),
     )
 
+    dispatch_ms = round((t_sent - t0) * 1000, 1)
+    logger.info(
+        "[%s] managed-local dispatch: baseline=%.0fms turn_create=%.0fms send=%.0fms total=%.0fms",
+        request_id,
+        (t_baseline - t0) * 1000,
+        (t_turn_created - t_baseline) * 1000,
+        (t_sent - t_turn_created) * 1000,
+        dispatch_ms,
+    )
+
     return JSONResponse(
         content={
             "accepted": True,
             "session_id": str(source_session.id),
             "request_id": request_id,
+            "dispatch_ms": dispatch_ms,
         },
     )
 
