@@ -319,6 +319,10 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
         None,
         description="Optional CLI capability hint for whether native Claude channels are available on this device",
     )
+    claude_launch_env: dict[str, str] | None = Field(
+        None,
+        description="Optional allowlisted Claude launch env overrides to apply on the local runner",
+    )
 
 
 class ManagedLocalSessionLaunchResponse(BaseModel):
@@ -1894,6 +1898,7 @@ async def launch_managed_local_this_device(
                 hook_url=hook_url,
                 machine_name=machine_name,
                 native_claude_channels_available=body.native_claude_channels_available,
+                claude_launch_env=body.claude_launch_env,
             ),
         )
     except ManagedLocalLaunchError as exc:
