@@ -186,6 +186,7 @@
   .timeline-pane,
   .event-inspector {
     min-height: 0;
+    flex: 1;
     display: flex;
     flex-direction: column;
   }
