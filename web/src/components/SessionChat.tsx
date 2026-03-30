@@ -123,8 +123,18 @@ export function SessionChat({
   const [error, setError] = useState<string | null>(null);
   const [blockedKeyboardSubmit, setBlockedKeyboardSubmit] = useState(false);
 
+  const [sentConfirmation, setSentConfirmation] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const dockTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const sentConfirmationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const autoResizeDockTextarea = useCallback((el: HTMLTextAreaElement) => {
+    el.style.height = "auto";
+    if (el.scrollHeight > 0) {
+      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+    }
+  }, []);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -135,6 +145,7 @@ export function SessionChat({
     return () => {
       abortControllerRef.current?.abort();
       abortControllerRef.current = null;
+      if (sentConfirmationTimerRef.current) clearTimeout(sentConfirmationTimerRef.current);
     };
   }, []);
 
@@ -142,6 +153,9 @@ export function SessionChat({
     setDraft(nextDraft);
     if (!nextDraft.trim()) {
       setBlockedKeyboardSubmit(false);
+      if (dockTextareaRef.current) {
+        dockTextareaRef.current.style.height = "auto";
+      }
     }
   }, []);
 
@@ -321,17 +335,10 @@ export function SessionChat({
           fork_available: true,
         });
 
-        // Show confirmation — the response will appear in the timeline above
-        // via the session workspace SSE stream as the engine ships events.
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `system-${Date.now()}`,
-            role: "assistant" as const,
-            content: "Sent to local session. Response will appear in the timeline above.",
-            timestamp: new Date(),
-          },
-        ]);
+        // Show brief "Sent" confirmation near the compose button.
+        if (sentConfirmationTimerRef.current) clearTimeout(sentConfirmationTimerRef.current);
+        setSentConfirmation(true);
+        sentConfirmationTimerRef.current = setTimeout(() => setSentConfirmation(false), 2000);
 
         // Close SSE race window: if the reply shipped before the stream
         // picked it up, this catch-up invalidation ensures it appears.
@@ -441,11 +448,13 @@ export function SessionChat({
       setError(null);
       setBlockedKeyboardSubmit(false);
 
-      // Add user message
-      setMessages((prev) => [
-        ...prev,
-        { id: `user-${Date.now()}`, role: "user", content: message, timestamp: new Date() },
-      ]);
+      // For managed_local, the user message appears in the timeline via SSE — no local copy needed.
+      if (!isManagedLocal) {
+        setMessages((prev) => [
+          ...prev,
+          { id: `user-${Date.now()}`, role: "user", content: message, timestamp: new Date() },
+        ]);
+      }
 
       if (isManagedLocal) {
         await handleManagedLocalSend(message);
@@ -585,7 +594,7 @@ export function SessionChat({
         </div>
       )}
 
-      {isDock ? (
+      {isDock && isManagedLocal ? null : isDock ? (
         <div className="session-chat-messages session-chat-messages--dock">
           {messages.length > 0 ? (
             <>
@@ -618,33 +627,69 @@ export function SessionChat({
           <div className="session-chat-confirmation" data-testid="session-chat-explicit-submit-hint">
             {keyboardHintText || `Click "${submitLabel}" to confirm the first cloud message.`}
           </div>
-        ) : (
+        ) : isDock ? null : (
           <div className="session-chat-confirmation session-chat-confirmation--spacer" aria-hidden="true" />
         )}
-        <textarea
-          value={draft}
-          onChange={(e) => handleDraftChange(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={composerPlaceholder || "Type a message..."}
-          disabled={isSubmitting || lockInfo?.locked}
-          rows={isDock ? 3 : 2}
-        />
-        <div className="session-chat-actions">
-          {isStreaming ? (
-            <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>
-              Cancel
-            </Button>
-          ) : (
-            <Button
-              type="submit"
-              variant="primary"
-              size="sm"
-              disabled={!draft.trim() || isSubmitting || lockInfo?.locked}
-            >
-              {submitLabel}
-            </Button>
-          )}
-        </div>
+        {isDock ? (
+          <div className="session-chat-composer-row">
+            <textarea
+              ref={dockTextareaRef}
+              value={draft}
+              onChange={(e) => {
+                handleDraftChange(e.target.value);
+                autoResizeDockTextarea(e.target);
+              }}
+              onKeyDown={handleKeyDown}
+              placeholder={composerPlaceholder || "Type a message..."}
+              disabled={isSubmitting || lockInfo?.locked}
+              rows={1}
+            />
+            {isManagedLocal && sentConfirmation ? (
+              <span className="session-chat-sent-notice">Sent</span>
+            ) : null}
+            {isStreaming ? (
+              <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>
+                Cancel
+              </Button>
+            ) : (
+              <Button
+                type="submit"
+                variant="primary"
+                size="sm"
+                disabled={!draft.trim() || isSubmitting || lockInfo?.locked}
+              >
+                {submitLabel}
+              </Button>
+            )}
+          </div>
+        ) : (
+          <>
+            <textarea
+              value={draft}
+              onChange={(e) => handleDraftChange(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={composerPlaceholder || "Type a message..."}
+              disabled={isSubmitting || lockInfo?.locked}
+              rows={2}
+            />
+            <div className="session-chat-actions">
+              {isStreaming ? (
+                <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>
+                  Cancel
+                </Button>
+              ) : (
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  disabled={!draft.trim() || isSubmitting || lockInfo?.locked}
+                >
+                  {submitLabel}
+                </Button>
+              )}
+            </div>
+          </>
+        )}
       </form>
     </div>
   );
