@@ -31,6 +31,7 @@ from zerg.services.runner_connection_manager import get_runner_connection_manage
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.services.session_continuity import encode_cwd_for_claude
 from zerg.services.session_continuity import validate_session_id
+from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 
 logger = logging.getLogger(__name__)
@@ -523,12 +524,16 @@ async def send_text_to_managed_local_session(
     if runner_id is None:
         return ManagedLocalSendResult(ok=False, error="Managed local session is missing source runner metadata")
 
+    # CLAUDE_CHANNEL_BRIDGE injects via MCP channel notification, not keyboard
+    # input — UserPromptSubmit never fires, so phase verification always times
+    # out.  Skip it unconditionally for this transport.
+    transport = str(getattr(session, "managed_transport", "") or "").strip()
+    effective_verify = verify_turn_started and transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+
     baseline_event_id = get_managed_local_latest_event_id(db=db, session_id=session.id)
-    baseline_hook_runtime_event_id = (
-        get_managed_local_latest_hook_runtime_event_id(db=db, session_id=session.id) if verify_turn_started else 0
-    )
+    baseline_hook_runtime_event_id = get_managed_local_latest_hook_runtime_event_id(db=db, session_id=session.id) if effective_verify else 0
     baseline_presence_updated_at = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET
-    if verify_turn_started:
+    if effective_verify:
         baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=session.id)
     try:
         command = build_managed_local_send_text_command(session=session, text=text)
@@ -563,7 +568,7 @@ async def send_text_to_managed_local_session(
             error=detail or "Managed local send-text command failed",
         )
 
-    if verify_turn_started:
+    if effective_verify:
         verification_timeout = float(
             verification_timeout_secs if verification_timeout_secs is not None else MANAGED_LOCAL_EVENT_TIMEOUT_SECS
         )
@@ -588,7 +593,7 @@ async def send_text_to_managed_local_session(
         ok=True,
         exit_code=0,
         baseline_event_id=baseline_event_id,
-        verified_turn_started=verify_turn_started,
+        verified_turn_started=effective_verify,
     )
 
 

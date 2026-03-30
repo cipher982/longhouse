@@ -1010,3 +1010,38 @@ def test_await_managed_local_turn_terminal_accepts_runtime_terminal_without_acti
         assert result is not None
         assert result.phase == "idle"
         assert result.control_status == "completed"
+
+
+def test_send_text_skips_phase_verification_for_claude_channel_bridge(monkeypatch, tmp_path):
+    """CLAUDE_CHANNEL_BRIDGE never fires UserPromptSubmit so verify_turn_started
+    must be ignored — the send should succeed without waiting for a phase signal."""
+    from zerg.session_execution_home import ManagedSessionTransport
+
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+
+    with SessionLocal() as db:
+        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        # Override to channel-bridge transport (no tmux fields needed)
+        session.managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+        session.provider_session_id = "provider-abc"
+        session.cwd = "/tmp/demo"
+        db.commit()
+
+        # verify_turn_started=True — would time out for tmux; must be a no-op here
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="hello channel",
+                commis_id="channel-test",
+                verify_turn_started=True,
+                verification_timeout_secs=0.1,
+            )
+        )
+
+    assert result.ok is True, result.error
+    assert result.verified_turn_started is False
+    assert len(dispatcher.calls) == 1
