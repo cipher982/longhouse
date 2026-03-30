@@ -359,7 +359,7 @@ def send(
     payload = {
         "content": text,
         "meta": {
-            "source": "longhouse",
+            "injected_by": "longhouse",
             "longhouse_session_id": session_id,
             **_parse_meta(meta),
         },
