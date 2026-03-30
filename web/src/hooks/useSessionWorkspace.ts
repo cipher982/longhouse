@@ -44,6 +44,7 @@ export function useSessionWorkspace(
       {
         onConnected: () => setStreamConnected(true),
         onWorkspaceChanged: () => {
+          void queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session-thread", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session-projection-infinite", sessionId] });

@@ -146,6 +146,7 @@ export function SessionChat({
 
   const refreshCurrentSessionWorkspace = useCallback(async () => {
     await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-session", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-session-thread", session.id] }),
       queryClient.invalidateQueries({ queryKey: ["agent-session-projection-infinite", session.id] }),
