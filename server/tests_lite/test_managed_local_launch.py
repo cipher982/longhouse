@@ -544,6 +544,38 @@ def test_launch_managed_local_session_accepts_shell_wrapper_when_capture_has_out
             api_app_ref.dependency_overrides = {}
 
 
+def test_launch_managed_local_session_accepts_versioned_claude_binary_name(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        client, api_app_ref = _make_client(db, user)
+        dispatcher = _FakeDispatcher(pane_command="2.1.87")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local",
+                json={
+                    "runner_target": runner.name,
+                    "cwd": "/Users/davidrose/git/zeta/hiring",
+                    "project": "hiring",
+                },
+            )
+            assert response.status_code == 200, response.text
+            assert len(dispatcher.calls) == 5
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_launch_managed_local_session_rejects_shell_wrapper_startup_error(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 

@@ -12,6 +12,7 @@ No chat routing or Loop behavior changes live here yet.
 from __future__ import annotations
 
 import asyncio
+import re
 import shlex
 from dataclasses import dataclass
 from datetime import datetime
@@ -309,6 +310,10 @@ def _pane_command_matches_provider(*, pane_command: str, expected_pane_commands:
     normalized = str(pane_command or "").strip().lower()
     if not normalized:
         return False
+    if "claude" in expected_pane_commands and re.fullmatch(r"\d+\.\d+\.\d+(?:[-._][a-z0-9]+)*", normalized):
+        # Homebrew/npm-style Claude installs can exec a versioned binary target
+        # (for example "2.1.87"), which tmux reports as the pane command.
+        return True
     return normalized in expected_pane_commands
 
 
