@@ -614,7 +614,23 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
         match send_via_ipc(&sock_path, &config.text, &thread_id).await {
             Ok(summary) => return Ok(summary),
             Err(e) => {
-                eprintln!("[codex-bridge] IPC send failed, falling back to direct WebSocket: {e}");
+                // Only fall back on connection failures. If the daemon accepted the
+                // request but the reply was lost, retrying via direct WebSocket would
+                // duplicate the turn.
+                let is_connect_failure = e
+                    .downcast_ref::<std::io::Error>()
+                    .map_or(false, |io_err| {
+                        matches!(
+                            io_err.kind(),
+                            std::io::ErrorKind::ConnectionRefused
+                                | std::io::ErrorKind::NotFound
+                                | std::io::ErrorKind::BrokenPipe
+                        )
+                    });
+                if !is_connect_failure {
+                    return Err(e.context("IPC dispatch may have succeeded; not retrying to avoid duplicate turn"));
+                }
+                eprintln!("[codex-bridge] IPC connect failed, falling back to direct WebSocket: {e}");
             }
         }
     }
@@ -651,8 +667,24 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
 }
 
 /// Send text to the daemon via its Unix domain socket.
+///
+/// The entire round-trip (connect + write + read response) is bounded by a
+/// timeout to prevent wedging if the daemon or app-server stalls.
+const IPC_SEND_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[cfg(unix)]
 async fn send_via_ipc(
+    sock_path: &Path,
+    text: &str,
+    thread_id: &str,
+) -> Result<BridgeSendSummary> {
+    tokio::time::timeout(IPC_SEND_TIMEOUT, send_via_ipc_inner(sock_path, text, thread_id))
+        .await
+        .map_err(|_| anyhow!("IPC send timed out after {}s", IPC_SEND_TIMEOUT.as_secs()))?
+}
+
+#[cfg(unix)]
+async fn send_via_ipc_inner(
     sock_path: &Path,
     text: &str,
     thread_id: &str,
