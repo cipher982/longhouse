@@ -216,7 +216,11 @@ function SessionDetailWorkspaceRoute({
                   key={`${sessionChatTarget.id}:${interaction.mode}`}
                   session={sessionChatTarget}
                   layout="dock"
-                  dockHeaderStyle={interaction.mode === "head" ? "hidden" : "divider"}
+                  dockHeaderStyle={
+                    interaction.mode === "head" || interaction.mode === "managed_local"
+                      ? "hidden"
+                      : "divider"
+                  }
                   introEyebrow={
                     interaction.mode === "managed_local"
                       ? "Live session"

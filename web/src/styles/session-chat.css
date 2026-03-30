@@ -312,6 +312,25 @@
   padding: 0;
   border-top: 0;
   background: transparent;
+  gap: var(--space-1);
+}
+
+.session-chat-composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+}
+
+.session-chat-composer-row textarea {
+  flex: 1;
+  min-height: 0;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.session-chat-composer-row > button,
+.session-chat-composer-row > .badge {
+  flex-shrink: 0;
 }
 
 .session-chat-composer textarea {
@@ -345,7 +364,14 @@
 .session-chat-actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: var(--space-2);
+}
+
+.session-chat-sent-notice {
+  font-size: var(--font-size-xs);
+  color: rgba(138, 200, 138, 0.75);
+  margin-right: auto;
 }
 
 .session-chat-confirmation {
