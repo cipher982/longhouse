@@ -198,8 +198,8 @@ def test_build_entry_command_claude_includes_session_id():
     inner = _inner_command(cmd)
     assert "export LONGHOUSE_SESSION_ID=abc-123" in inner
     assert _MANAGED_LOCAL_PATH_EXPORT in inner
-    assert "if ! command -v claude-code >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner
-    assert "claude-code --session-id abc-123" in inner
+    assert "if ! command -v claude >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner
+    assert "claude --session-id abc-123" in inner
     assert "codex" not in inner
 
 
@@ -215,7 +215,7 @@ def test_build_entry_command_claude_includes_hook_target_overrides():
     assert "export LONGHOUSE_SESSION_ID=abc-123" in inner
     assert "export LONGHOUSE_HOOK_URL=https://david010.longhouse.ai" in inner
     assert "export LONGHOUSE_HOOK_TOKEN=zdt_live_token" in inner
-    assert "claude-code --session-id abc-123" in inner
+    assert "claude --session-id abc-123" in inner
 
 
 def test_build_entry_command_codex_injects_longhouse_session_id():
@@ -227,7 +227,7 @@ def test_build_entry_command_codex_injects_longhouse_session_id():
     )
     inner = _inner_command(cmd)
     assert inner.endswith("exec codex --enable codex_hooks --no-alt-screen")
-    assert "claude-code" not in inner
+    assert "claude --session-id" not in inner
     assert "--session-id" not in inner
     assert "export LONGHOUSE_SESSION_ID=" in inner
     assert _MANAGED_LOCAL_PATH_EXPORT in inner
@@ -250,15 +250,15 @@ def test_build_entry_command_codex_does_not_depend_on_remote_tui():
     assert "curl -fsS" not in inner
 
 
-def test_build_preflight_command_claude_checks_claude_code():
+def test_build_preflight_command_claude_checks_claude():
     cmd = _build_preflight_command(provider="claude", cwd="/tmp/test")
     inner = _inner_command(cmd)
     assert _MANAGED_LOCAL_PATH_EXPORT in inner
     assert (
-        "if ! command -v claude-code >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; "
+        "if ! command -v claude >/dev/null 2>&1 || ! command -v tmux >/dev/null 2>&1; "
         "then source ~/.zshrc >/dev/null 2>&1 || true; fi"
     ) in inner
-    assert "command -v claude-code" in inner
+    assert "command -v claude" in inner
     assert "command -v codex" not in inner
 
 
@@ -270,7 +270,7 @@ def test_build_preflight_command_codex_checks_codex():
         "then source ~/.zshrc >/dev/null 2>&1 || true; fi"
     ) in inner
     assert "command -v codex" in inner
-    assert "command -v claude-code" not in inner
+    assert "command -v claude" not in inner
 
 
 def test_build_preflight_command_codex_native_does_not_require_tmux():
@@ -367,7 +367,7 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert dispatcher.calls[0]["runner_id"] == runner.id
             assert _MANAGED_LOCAL_PATH_EXPORT in preflight_inner
             assert "command -v tmux" in preflight_inner
-            assert "command -v claude-code" in preflight_inner
+            assert "command -v claude" in preflight_inner
             assert "printf '__LONGHOUSE_TMUX_TMPDIR__=%s\\n' \"${TMUX_TMPDIR:-}\"" in preflight_inner
             assert (
                 "if ! command -v longhouse >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi"
@@ -378,9 +378,7 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert "cat > /tmp/longhouse-managed-" in launch_inner
             assert "__LONGHOUSE_MANAGED_LOCAL__" in launch_inner
             assert "export LONGHOUSE_HOOK_URL=http://testserver" in launch_inner
-            assert (
-                "if ! command -v claude-code >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi"
-            ) in launch_inner
+            assert "if ! command -v claude >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in launch_inner
             token_fragment = launch_inner.split("export LONGHOUSE_HOOK_TOKEN=", 1)[1].split(";", 1)[0].strip()
             hook_token = shlex.split(token_fragment)[0]
             auth = validate_managed_local_hook_token(hook_token)
@@ -398,7 +396,7 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
                 "set-option -g remain-on-exit failed \\; "
                 f"new-session -d -s"
             ) in launch_inner
-            assert "claude-code --session-id" in launch_inner
+            assert "claude --session-id" in launch_inner
             assert (
                 f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} has-session -t {session.managed_session_name}"
                 in has_session_inner
@@ -527,7 +525,7 @@ def test_launch_managed_local_session_rejects_shell_wrapper_startup_error(monkey
     with session_local() as db:
         user, runner = _seed_user_and_runner(db)
         client, api_app_ref = _make_client(db, user)
-        dispatcher = _FakeDispatcher(pane_command="zsh", capture_stdout="zsh: command not found: claude-code")
+        dispatcher = _FakeDispatcher(pane_command="zsh", capture_stdout="zsh: command not found: claude")
 
         monkeypatch.setattr(
             "zerg.services.managed_local_launcher.get_runner_connection_manager",
@@ -628,7 +626,7 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             payload = response.json()
             assert payload["managed_transport"] == "claude_channel_bridge"
             assert payload["source_runner_name"] == "work-laptop"
-            assert "claude-code --resume" in payload["attach_command"]
+            assert "claude --resume" in payload["attach_command"]
             assert "server:longhouse-channel" in payload["attach_command"]
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()

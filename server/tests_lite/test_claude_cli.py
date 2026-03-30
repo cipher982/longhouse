@@ -192,7 +192,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
             session_id="session-123",
             provider_session_id="provider-123",
             attach_command=(
-                "zsh -lc 'exec claude-code --resume provider-123 "
+                "zsh -lc 'exec claude --resume provider-123 "
                 "--dangerously-load-development-channels server:longhouse-channel'"
             ),
             source_runner_name="work-laptop",
@@ -236,7 +236,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     assert result.exit_code == 0, result.output
     assert "Managed local Claude session launched on this device." in result.output
     assert (
-        "Attach: zsh -lc 'exec claude-code --resume provider-123 "
+        "Attach: zsh -lc 'exec claude --resume provider-123 "
         "--dangerously-load-development-channels server:longhouse-channel'" in result.output
     )
     assert "Preparing native Claude bridge..." in result.output
@@ -247,6 +247,25 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
         ("session-123", "provider-123", str(tmp_path), "https://longhouse.test", "zdt_test_token")
     ]
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
+
+
+def test_run_claude_auth_status_uses_bare_claude(monkeypatch):
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        return SimpleNamespace(
+            returncode=0,
+            stdout='{"loggedIn": true, "authMethod": "third_party", "apiProvider": "bedrock"}',
+            stderr="",
+        )
+
+    monkeypatch.setattr(claude_cli.subprocess, "run", fake_run)
+
+    completed = claude_cli._run_claude_auth_status()
+
+    assert completed.returncode == 0
+    assert calls == [["claude", "auth", "status", "--json"]]
 
 
 def test_detect_native_claude_channels_available_true_for_first_party_auth(monkeypatch):
@@ -268,8 +287,8 @@ def test_detect_native_claude_channels_available_true_for_first_party_auth(monke
 
 def test_detect_native_claude_channels_available_false_for_bedrock(monkeypatch):
     monkeypatch.setattr(
-        claude_cli.subprocess,
-        "run",
+        claude_cli,
+        "_run_claude_auth_status",
         lambda *args, **kwargs: SimpleNamespace(
             returncode=0,
             stdout='{"loggedIn": true, "authMethod": "third_party", "apiProvider": "bedrock"}',

@@ -6,7 +6,7 @@ does `tmux send-keys -l <text>` + `Enter` create one real Claude turn on a
 live interactive Claude Code session, and does that keep working across
 multiple sends on the same session?
 
-It launches a detached tmux session running `claude-code --session-id ...`,
+It launches a detached tmux session running `claude --session-id ...`,
 waits until Claude is actually at a usable prompt, submits a sequence of
 simple one-line prompts with unique tokens, and validates the resulting
 transcript and pane output.
@@ -142,7 +142,7 @@ class ClaudeHarnessContext:
 
 
 def _build_entry_command(*, provider_session_id: str, claude_config_dir: Path, display_name: str) -> str:
-    parts = ["claude-code", "--session-id", provider_session_id, "-n", display_name]
+    parts = ["claude", "--session-id", provider_session_id, "-n", display_name]
     inner = (
         f"export CLAUDE_CONFIG_DIR={shlex.quote(str(claude_config_dir))}; "
         "source ~/.zshrc >/dev/null 2>&1; "
