@@ -820,3 +820,154 @@ async def export_timeline_session(
         _auth=None,
         _single=None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Session workspace SSE stream
+# ---------------------------------------------------------------------------
+
+WORKSPACE_STREAM_HEARTBEAT_SECONDS = 30.0
+
+
+def _load_workspace_signature(
+    db: Session,
+    session_id: UUID,
+) -> tuple:
+    """Lightweight signature for a session's workspace state.
+
+    Returns a tuple of scalar values that change whenever the workspace has
+    new data the browser should display.  Comparing successive tuples is
+    cheap — a single DB query touching indexed columns only.
+    """
+    from zerg.models.agents import AgentEvent
+    from zerg.models.agents import AgentSession
+    from zerg.models.agents import SessionPresence
+    from zerg.models.agents import SessionRuntimeState
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        return ()
+
+    # Resolve thread: all session IDs sharing this thread
+    thread_root_id = session.thread_root_session_id or session.id
+    thread_sessions = (
+        db.query(AgentSession.id, AgentSession.updated_at)
+        .filter((AgentSession.id == thread_root_id) | (AgentSession.thread_root_session_id == thread_root_id))
+        .all()
+    )
+    thread_session_ids = [str(row.id) for row in thread_sessions]
+    latest_session_updated = max((row.updated_at for row in thread_sessions if row.updated_at), default=None)
+
+    # Latest event ID across thread
+    latest_event_id = (db.query(func.max(AgentEvent.id)).filter(AgentEvent.session_id.in_(thread_session_ids)).scalar()) or 0
+
+    # Latest presence updated_at across thread
+    latest_presence = db.query(func.max(SessionPresence.updated_at)).filter(SessionPresence.session_id.in_(thread_session_ids)).scalar()
+
+    # Latest runtime version across thread
+    latest_runtime_version = (
+        db.query(func.max(SessionRuntimeState.runtime_version)).filter(SessionRuntimeState.session_id.in_(thread_session_ids)).scalar()
+    ) or 0
+
+    return (
+        str(thread_root_id),
+        latest_session_updated,
+        latest_event_id,
+        latest_presence,
+        latest_runtime_version,
+        len(thread_session_ids),
+    )
+
+
+async def _session_workspace_stream(
+    request: Request,
+    *,
+    session_factory: sessionmaker,
+    session_id: UUID,
+    skip_initial: bool,
+):
+    """SSE generator that emits workspace_changed when a session's data mutates."""
+    previous_sig: tuple | None = None
+    last_heartbeat = monotonic()
+
+    yield {
+        "event": "connected",
+        "data": json.dumps({"session_id": str(session_id)}),
+    }
+
+    while True:
+        if await request.is_disconnected():
+            break
+
+        if skip_initial:
+            skip_initial = False
+            await _wait_for_timeline_change()
+            continue
+
+        with session_factory() as db:
+            current_sig = _load_workspace_signature(db, session_id)
+
+        if not current_sig:
+            yield {
+                "event": "error",
+                "data": json.dumps({"error": "session_not_found"}),
+            }
+            break
+
+        if previous_sig is not None and current_sig == previous_sig:
+            now = monotonic()
+            if now - last_heartbeat >= WORKSPACE_STREAM_HEARTBEAT_SECONDS:
+                yield {
+                    "event": "heartbeat",
+                    "data": json.dumps({"timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")}),
+                }
+                last_heartbeat = now
+            await _wait_for_timeline_change()
+            continue
+
+        previous_sig = current_sig
+
+        yield {
+            "event": "workspace_changed",
+            "data": json.dumps(
+                {
+                    "session_id": str(session_id),
+                    "latest_event_id": current_sig[2],
+                    "thread_session_count": current_sig[5],
+                }
+            ),
+        }
+
+        now = monotonic()
+        last_heartbeat = now
+
+        await _wait_for_timeline_change()
+
+
+@router.get("/sessions/{session_id}/workspace/stream")
+async def stream_session_workspace(
+    request: Request,
+    session_id: UUID,
+    skip_initial: bool = Query(
+        False,
+        description="When true, wait for first change before emitting workspace_changed.",
+    ),
+    db: Session = Depends(get_db),
+) -> EventSourceResponse:
+    """SSE stream that emits workspace_changed when the session's data mutates.
+
+    The browser subscribes on session detail page load and uses each event to
+    invalidate React Query caches — replacing the 5-second polling interval
+    with event-driven refresh.
+    """
+    session_factory = make_sessionmaker(db.get_bind())
+    db.close()
+
+    return EventSourceResponse(
+        _session_workspace_stream(
+            request,
+            session_factory=session_factory,
+            session_id=session_id,
+            skip_initial=skip_initial,
+        ),
+    )

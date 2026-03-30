@@ -458,6 +458,68 @@ export function connectTimelineSessionsStream(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Session workspace SSE stream
+// ---------------------------------------------------------------------------
+
+export interface SessionWorkspaceStreamHandlers {
+  onConnected?: () => void;
+  onWorkspaceChanged?: (data: { session_id: string; latest_event_id: number; thread_session_count: number }) => void;
+  onHeartbeat?: (timestamp: string) => void;
+  onError?: (error: Event) => void;
+}
+
+/**
+ * Connect to a per-session SSE stream that fires on any workspace-visible
+ * mutation (ingest, presence, runtime, session actions).  Returns a cleanup
+ * function that closes the EventSource.
+ */
+export function connectSessionWorkspaceStream(
+  sessionId: string,
+  handlers: SessionWorkspaceStreamHandlers = {},
+  options: { skipInitial?: boolean } = {},
+): () => void {
+  const params = new URLSearchParams();
+  if (options.skipInitial) {
+    params.set("skip_initial", "true");
+  }
+  const queryString = params.toString();
+  const url = buildUrl(
+    `${TIMELINE_SESSIONS_PREFIX}/sessions/${sessionId}/workspace/stream${queryString ? `?${queryString}` : ""}`,
+  );
+  const eventSource = new EventSource(url, { withCredentials: true });
+
+  eventSource.addEventListener("connected", () => {
+    handlers.onConnected?.();
+  });
+
+  eventSource.addEventListener("workspace_changed", (event: MessageEvent) => {
+    const data = parseStreamEventData<{
+      session_id: string;
+      latest_event_id: number;
+      thread_session_count: number;
+    }>(event);
+    if (data) {
+      handlers.onWorkspaceChanged?.(data);
+    }
+  });
+
+  eventSource.addEventListener("heartbeat", (event: MessageEvent) => {
+    const data = parseStreamEventData<{ timestamp: string }>(event);
+    if (data?.timestamp) {
+      handlers.onHeartbeat?.(data.timestamp);
+    }
+  });
+
+  eventSource.onerror = (error) => {
+    handlers.onError?.(error);
+  };
+
+  return () => {
+    eventSource.close();
+  };
+}
+
 /**
  * List agent session summaries for picker UI.
  */
