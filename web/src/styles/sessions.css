@@ -450,6 +450,40 @@
     gap: var(--space-2);
   }
 
+  .session-card-header-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+  }
+
+  .session-card-archive-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-text-muted);
+    border-radius: var(--radius-sm);
+    opacity: 0;
+    transition: opacity var(--motion-duration-fast) var(--motion-easing-standard),
+                color var(--motion-duration-fast) var(--motion-easing-standard),
+                background var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .session-card:hover .session-card-archive-btn {
+    opacity: 1;
+  }
+
+  .session-card-archive-btn:hover {
+    color: var(--color-intent-error);
+    background: color-mix(in srgb, var(--color-intent-error) 12%, transparent);
+  }
+
   /* Primary identifier: repo/project name */
   .session-card-project {
     font-size: var(--font-size-base);

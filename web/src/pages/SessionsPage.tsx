@@ -26,6 +26,7 @@ import {
   type AgentSessionFilters,
   fetchAgentSessionWorkspace,
   getTimelineCardAnchor,
+  setSessionAction,
   type TimelineSessionCard,
   seedDemoSessions,
 } from "../services/api/agents";
@@ -486,6 +487,7 @@ interface SessionCardProps {
   thread: TimelineSessionCard;
   onClick: () => void;
   onPrefetch?: () => void;
+  onArchive?: (e: React.MouseEvent) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
   compatibilityMode?: boolean;
@@ -496,6 +498,7 @@ function SessionCard({
   thread,
   onClick,
   onPrefetch,
+  onArchive,
   highlightQuery,
   isSemanticResult,
   compatibilityMode = false,
@@ -552,7 +555,25 @@ function SessionCard({
     >
       <div className="session-card-header">
         <div className="session-card-project">{projectLabel}</div>
-        <span className="session-card-time">{formatRelativeTime(getTimelineCardAnchor(thread), relativeNowMs)}</span>
+        <div className="session-card-header-right">
+          <span className="session-card-time">{formatRelativeTime(getTimelineCardAnchor(thread), relativeNowMs)}</span>
+          {onArchive && (
+            <button
+              type="button"
+              className="session-card-archive-btn"
+              onClick={onArchive}
+              aria-label="Archive session"
+              title="Archive"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <polyline points="3 6 5 6 21 6" />
+                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                <path d="M10 11v6M14 11v6" />
+                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+              </svg>
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="session-card-meta">
@@ -668,6 +689,7 @@ interface SessionGroupProps {
   sessions: TimelineSessionCard[];
   onSessionClick: (thread: TimelineSessionCard) => void;
   onSessionPrefetch: (thread: TimelineSessionCard) => void;
+  onSessionArchive: (thread: TimelineSessionCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
   compatibilityMode?: boolean;
@@ -679,6 +701,7 @@ function SessionGroup({
   sessions,
   onSessionClick,
   onSessionPrefetch,
+  onSessionArchive,
   highlightQuery,
   isSemanticResult,
   compatibilityMode,
@@ -697,6 +720,7 @@ function SessionGroup({
             thread={thread}
             onClick={() => onSessionClick(thread)}
             onPrefetch={() => onSessionPrefetch(thread)}
+            onArchive={(e) => { e.stopPropagation(); onSessionArchive(thread); }}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
             compatibilityMode={compatibilityMode}
@@ -924,6 +948,27 @@ export default function SessionsPage() {
       </Button>
     </div>
   );
+
+  // Archive a session — optimistic remove, restore on failure
+  const handleSessionArchive = useCallback(async (thread: TimelineSessionCard) => {
+    const sessionId = thread.detail.id;
+    queryClient.setQueriesData<{ sessions: TimelineSessionCard[]; total: number }>(
+      { queryKey: ["agent-sessions"] },
+      (old) => {
+        if (!old) return old;
+        return {
+          ...old,
+          sessions: old.sessions.filter((t) => t.thread_id !== thread.thread_id),
+          total: Math.max(0, old.total - 1),
+        };
+      },
+    );
+    try {
+      await setSessionAction(sessionId, "archive");
+    } catch {
+      queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+    }
+  }, [queryClient]);
 
   // Handle session click - preserve current filters in location state
   const handleSessionClick = useCallback((thread: TimelineSessionCard) => {
@@ -1287,6 +1332,7 @@ export default function SessionsPage() {
                 sessions={daySessions}
                 onSessionClick={handleSessionClick}
                 onSessionPrefetch={handleSessionPrefetch}
+                onSessionArchive={handleSessionArchive}
                 highlightQuery={debouncedQuery}
                 isSemanticResult={aiSearch}
                 compatibilityMode={compatibilityMode}

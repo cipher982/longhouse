@@ -158,6 +158,7 @@ class SessionResponse(UTCBaseModel):
     source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
     attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
+    user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
 
 
 class SessionSummaryResponse(UTCBaseModel):
@@ -661,6 +662,7 @@ def build_session_response(
         source_runner_name=getattr(session, "source_runner_name", None),
         attach_command=build_attach_command(session),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
+        user_state=session.user_state or "active",
     )
 
 

@@ -65,6 +65,7 @@ export interface AgentSession {
   source_runner_name: string | null;
   attach_command?: string | null;
   loop_mode: SessionLoopMode;
+  user_state?: string;
 }
 
 export interface AgentSessionsListResponse {
