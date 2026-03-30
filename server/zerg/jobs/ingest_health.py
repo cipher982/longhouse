@@ -6,7 +6,6 @@ stale and resolves it when ingest resumes.
 
 from __future__ import annotations
 
-import logging
 import os
 from datetime import datetime
 from datetime import timedelta
@@ -24,8 +23,6 @@ from zerg.models.agents import AgentSession
 from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_OPEN
 from zerg.models.work import OPERATIONAL_INCIDENT_STATUS_RESOLVED
 from zerg.models.work import OperationalIncident
-
-logger = logging.getLogger(__name__)
 
 _THRESHOLD_HOURS = float(os.getenv("INGEST_STALE_THRESHOLD_HOURS", "4"))
 _ONLINE_THRESHOLD_MINUTES = int(os.getenv("DEVICE_ONLINE_THRESHOLD_MINUTES", "15"))
@@ -168,19 +165,10 @@ async def run() -> dict[str, Any]:
 
         if status == "device_offline":
             # Device is off/sleeping — ingest gap is expected, not actionable.
-            # If a stale incident was open before the device went offline, close it.
-            if open_incident is not None:
-                open_incident.status = OPERATIONAL_INCIDENT_STATUS_RESOLVED
-                open_incident.summary = "Session ingest stale but device is offline (expected)"
-                open_incident.last_observed_at = now
-                open_incident.resolved_at = now
-                open_incident.context = {
-                    **dict(open_incident.context or {}),
-                    "resolved_at": now.isoformat(),
-                    "resolved_reason": "device_offline",
-                }
-                db.commit()
-                return {"status": "device_offline", "action": "incident_resolved"}
+            # Leave any open incident alone: resolving it would hide its real
+            # duration and make MTTR look better than reality. When the device
+            # comes back online the existing incident stays open and continues
+            # accumulating time. We simply don't create a new one.
             return {"status": "device_offline", "action": "none"}
 
         if status == "stale":
