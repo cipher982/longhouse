@@ -186,8 +186,12 @@ def test_run_device_offline_does_not_open_incident(tmp_path, monkeypatch):
         assert db.query(OperationalIncident).count() == 0
 
 
-def test_run_device_offline_resolves_open_incident(tmp_path, monkeypatch):
-    """If an open incident exists and device goes offline, resolve it."""
+def test_run_device_offline_leaves_open_incident_open(tmp_path, monkeypatch):
+    """If an open stale incident exists and device goes offline, leave it open.
+
+    Resolving it would hide the real incident duration. When the device comes
+    back online the incident stays open and the clock keeps running.
+    """
     import zerg.jobs.ingest_health as ih
 
     SessionLocal = _make_session_local(tmp_path)
@@ -213,11 +217,12 @@ def test_run_device_offline_resolves_open_incident(tmp_path, monkeypatch):
         result = asyncio.run(ih.run())
 
     assert result["status"] == "device_offline"
-    assert result["action"] == "incident_resolved"
+    assert result["action"] == "none"
     with SessionLocal() as db:
         incident = db.query(OperationalIncident).filter(OperationalIncident.dedupe_key == "ingest-health:stale").one()
-        assert incident.status == OPERATIONAL_INCIDENT_STATUS_RESOLVED
-        assert incident.resolved_at is not None
+        # Must still be open — device going offline is not recovery
+        assert incident.status == OPERATIONAL_INCIDENT_STATUS_OPEN
+        assert incident.resolved_at is None
 
 
 def test_run_recovery_resolves_open_incident(tmp_path, monkeypatch):
