@@ -1193,6 +1193,119 @@ test.describe("Session Detail Page", () => {
     );
   });
 
+  test("Managed-local session detail keeps the composer locked from dispatch through ack", async ({
+    page,
+    request,
+  }) => {
+    const sessionId = await ingestSession(request, {
+      provider: "codex",
+      project: `managed-local-detail-${randomUUID().slice(0, 8)}`,
+    });
+
+    let chatRequests = 0;
+    let lockRequests = 0;
+    let lockState = {
+      locked: false,
+      holder: null as string | null,
+      time_remaining_seconds: null as number | null,
+      fork_available: false,
+    };
+
+    try {
+      await page.route(`**/api/timeline/sessions/${sessionId}/workspace*`, async (route) => {
+        const response = await route.fetch();
+        const payload = await response.json();
+        const managedSessionFields = {
+          execution_home: "managed_local",
+          managed_transport: "codex_app_server",
+          source_runner_id: 77,
+          source_runner_name: "Cinder",
+          managed_session_name: "lh-codex-managed-local-e2e",
+          continuation_kind: "local",
+          origin_label: "Cinder",
+        };
+
+        payload.session = {
+          ...payload.session,
+          ...managedSessionFields,
+        };
+        payload.thread = {
+          ...payload.thread,
+          head_session_id: sessionId,
+          sessions: Array.isArray(payload.thread?.sessions)
+            ? payload.thread.sessions.map((item: Record<string, unknown>) =>
+                item.id === sessionId ? { ...item, ...managedSessionFields } : item,
+              )
+            : payload.thread?.sessions,
+        };
+
+        await route.fulfill({
+          response,
+          json: payload,
+        });
+      });
+
+      await page.route(`**/api/sessions/${sessionId}/lock`, async (route) => {
+        lockRequests += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(lockState),
+        });
+      });
+
+      await page.route(`**/api/sessions/${sessionId}/chat`, async (route) => {
+        chatRequests += 1;
+        expect(route.request().method()).toBe("POST");
+        expect(route.request().postDataJSON()).toMatchObject({
+          message: "Continue locally",
+        });
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        lockState = {
+          locked: true,
+          holder: "req-e2e",
+          time_remaining_seconds: 295,
+          fork_available: true,
+        };
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            accepted: true,
+            session_id: sessionId,
+            request_id: "req-e2e",
+            dispatch_ms: 11.4,
+          }),
+        });
+      });
+
+      await page.goto(`/timeline/${sessionId}`);
+      await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+
+      await expect(page.getByTestId("session-continuation-panel")).toContainText(
+        "Drive this live Codex session",
+      );
+
+      const composer = page.locator(".session-chat-composer textarea");
+      await composer.fill("Continue locally");
+      await page.getByRole("button", { name: "Send" }).click();
+
+      await expect(page.getByText("Sending")).toBeVisible();
+      await expect(composer).toBeDisabled();
+      await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
+
+      await expect(
+        page.getByText("Sent to local session. Response will appear in the timeline above."),
+      ).toBeVisible();
+      await expect(page.getByText("Locked")).toBeVisible();
+      await expect(composer).toBeDisabled();
+      await expect.poll(() => chatRequests).toBe(1);
+      await expect.poll(() => lockRequests).toBeGreaterThan(1);
+    } finally {
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+    }
+  });
+
   test("Opening a long session lands near the latest continuation point instead of the top", async ({
     page,
     request,
