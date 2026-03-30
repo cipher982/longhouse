@@ -10,7 +10,7 @@ Replace the current `longhouse claude` tmux path with a native Claude launch on 
 
 ## Done when
 
-- `longhouse claude` launches native Claude on this device with `managed_transport=claude_channel_bridge`.
+- `longhouse claude` launches native Claude on this device with `managed_transport=claude_channel_bridge` when native channels are available, otherwise falls back cleanly.
 - Longhouse can inject a live message into the active Claude session through the new bridge transport.
 - Generic Claude `/managed-local` launch still uses tmux and keeps existing behavior.
 - Automated tests cover transport resolution, API launch semantics, CLI launch semantics, and bridge notification delivery.

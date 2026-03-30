@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shlex
 import subprocess
 import sys
@@ -33,6 +34,39 @@ class ManagedLocalLaunchResponse:
 
 class _NativeClaudeError(Exception):
     """Raised when native Claude launch preparation fails."""
+
+
+def _detect_native_claude_channels_available() -> tuple[bool, str]:
+    try:
+        completed = subprocess.run(
+            ["claude", "auth", "status", "--json"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False, "claude auth status unavailable"
+
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        detail = stderr or f"claude auth status exited {completed.returncode}"
+        return False, detail
+
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError:
+        return False, "claude auth status returned invalid JSON"
+
+    logged_in = bool(payload.get("loggedIn"))
+    auth_method = str(payload.get("authMethod") or "").strip()
+    api_provider = str(payload.get("apiProvider") or "").strip()
+    available = logged_in and auth_method == "claude.ai" and api_provider == "firstParty"
+    if available:
+        return True, f"authMethod={auth_method}, apiProvider={api_provider}"
+    if not logged_in:
+        return False, "Claude is not logged in with Claude.ai auth"
+    return False, f"authMethod={auth_method or 'unknown'}, apiProvider={api_provider or 'unknown'}"
 
 
 def _interactive_stdio() -> bool:
@@ -109,6 +143,7 @@ def _launch_managed_local_from_api(
     loop_mode: SessionLoopMode,
     name: str | None,
     machine_name: str,
+    native_claude_channels_available: bool | None = None,
     provider: str = "claude",
 ) -> ManagedLocalLaunchResponse:
     git_repo, git_branch = _infer_git_context(cwd)
@@ -122,6 +157,8 @@ def _launch_managed_local_from_api(
         "loop_mode": loop_mode.value,
         "machine_name": machine_name,
     }
+    if provider == "claude":
+        payload["native_claude_channels_available"] = native_claude_channels_available
 
     try:
         with httpx.Client(timeout=30) as client:
@@ -340,6 +377,7 @@ def claude(
     resolved_config_dir = Path(config_dir) if config_dir else None
     resolved_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=resolved_config_dir)
     machine_name = get_machine_name_label()
+    native_claude_channels_available, native_claude_channels_detail = _detect_native_claude_channels_available()
     typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
@@ -349,8 +387,14 @@ def claude(
         loop_mode=loop_mode,
         name=name,
         machine_name=machine_name,
+        native_claude_channels_available=native_claude_channels_available,
         provider="claude",
     )
+    if not native_claude_channels_available and result.managed_transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
+        typer.secho(
+            f"Native Claude channels unavailable ({native_claude_channels_detail}); using tmux fallback.",
+            fg=typer.colors.YELLOW,
+        )
     resolved_claude_dir = Path(config_dir) if config_dir else None
     if result.managed_transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
         _finalize_native_claude_launch(

@@ -621,6 +621,7 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
                     "project": "hiring",
                     "display_name": "Hiring session",
                     "loop_mode": "assist",
+                    "native_claude_channels_available": True,
                 },
             )
             assert response.status_code == 200, response.text
@@ -636,6 +637,57 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             assert session.managed_transport == "claude_channel_bridge"
             assert session.managed_tmux_tmpdir is None
             assert dispatcher.calls == []
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
+def test_launch_managed_local_this_device_falls_back_to_tmux_when_native_channels_unavailable(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        runner.name = "work-laptop"
+        db.commit()
+        db.refresh(runner)
+
+        device_token = SimpleNamespace(owner_id=user.id, device_id="host-123", id="token-1")
+        client, api_app_ref = _make_device_client(db, device_token)
+        dispatcher = _FakeDispatcher(preflight_tmux_tmpdir="/tmp/lh-managed-launch")
+
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda owner_id, runner_id: True),
+        )
+        monkeypatch.setattr(
+            "zerg.services.managed_local_launcher.get_runner_job_dispatcher",
+            lambda: dispatcher,
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                headers={"X-Agents-Token": "zdt_test_token"},
+                json={
+                    "machine_name": "work-laptop",
+                    "cwd": "/Users/davidrose/git/zeta/hiring",
+                    "project": "hiring",
+                    "display_name": "Hiring session",
+                    "loop_mode": "assist",
+                    "native_claude_channels_available": False,
+                },
+            )
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["managed_transport"] == "tmux"
+            attach_inner = _inner_command(payload["attach_command"])
+            assert attach_inner.endswith(f"attach -t {payload['managed_session_name']}")
+
+            session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+            assert session.source_runner_id == runner.id
+            assert session.source_runner_name == "work-laptop"
+            assert session.managed_transport == "tmux"
+            assert session.managed_tmux_tmpdir == "/tmp/lh-managed-launch"
+            assert len(dispatcher.calls) == 5
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -728,6 +780,7 @@ def test_launch_managed_local_this_device_prefers_forwarded_https_hook_url(monke
                     "project": "hiring",
                     "display_name": "Hiring session",
                     "loop_mode": "assist",
+                    "native_claude_channels_available": True,
                 },
             )
             assert response.status_code == 200, response.text
@@ -852,6 +905,7 @@ def test_launch_managed_local_this_device_falls_back_from_stale_token_owner(monk
                     "display_name": "Hiring session",
                     "loop_mode": "assist",
                     "machine_name": "cinder",
+                    "native_claude_channels_available": True,
                 },
             )
             assert response.status_code == 200, response.text

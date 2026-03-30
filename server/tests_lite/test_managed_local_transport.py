@@ -156,3 +156,11 @@ def test_transport_for_provider():
         ManagedSessionTransport.for_provider("claude", machine_name="work-laptop")
         == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
     )
+    assert (
+        ManagedSessionTransport.for_provider(
+            "claude",
+            machine_name="work-laptop",
+            native_claude_channels_available=False,
+        )
+        == ManagedSessionTransport.TMUX
+    )

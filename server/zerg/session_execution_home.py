@@ -25,9 +25,16 @@ class ManagedSessionTransport(str, Enum):
     CODEX_APP_SERVER = "codex_app_server"
 
     @staticmethod
-    def for_provider(provider: str, *, machine_name: str | None = None) -> "ManagedSessionTransport":
+    def for_provider(
+        provider: str,
+        *,
+        machine_name: str | None = None,
+        native_claude_channels_available: bool | None = None,
+    ) -> "ManagedSessionTransport":
         if provider == "codex":
             return ManagedSessionTransport.CODEX_APP_SERVER
         if provider == "claude" and str(machine_name or "").strip():
+            if native_claude_channels_available is False:
+                return ManagedSessionTransport.TMUX
             return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
         return ManagedSessionTransport.TMUX

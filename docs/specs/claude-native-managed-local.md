@@ -27,7 +27,8 @@ Add a third managed-local transport:
 Resolution rules for this phase:
 
 - `provider=codex` -> `codex_app_server`
-- `provider=claude` and launch target is `this-device` -> `claude_channel_bridge`
+- `provider=claude`, launch target is `this-device`, and the local CLI confirms native Claude channels are available -> `claude_channel_bridge`
+- `provider=claude` on `this-device` without native channel availability -> `tmux`
 - all other Claude launches -> `tmux`
 
 ### Launch shape
@@ -66,7 +67,7 @@ For `claude_channel_bridge`:
 
 ### API and transport
 
-- `/api/sessions/managed-local/this-device` returns `managed_transport="claude_channel_bridge"` for Claude.
+- `/api/sessions/managed-local/this-device` returns `managed_transport="claude_channel_bridge"` for Claude only when the local CLI reports native channel support; otherwise it returns `tmux`.
 - Generic `/api/sessions/managed-local` still returns `managed_transport="tmux"` for Claude.
 - Session detail / attach command generation works for the new Claude transport.
 - Managed-local send routing uses bridge commands for `claude_channel_bridge`, tmux for `tmux`, and engine RPC for `codex_app_server`.

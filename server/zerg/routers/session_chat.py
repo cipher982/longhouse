@@ -315,6 +315,10 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
         None,
         description="Optional local Longhouse machine label override used to resolve this device's runner",
     )
+    native_claude_channels_available: bool | None = Field(
+        None,
+        description="Optional CLI capability hint for whether native Claude channels are available on this device",
+    )
 
 
 class ManagedLocalSessionLaunchResponse(BaseModel):
@@ -1889,6 +1893,7 @@ async def launch_managed_local_this_device(
                 loop_mode=body.loop_mode.value,
                 hook_url=hook_url,
                 machine_name=machine_name,
+                native_claude_channels_available=body.native_claude_channels_available,
             ),
         )
     except ManagedLocalLaunchError as exc:
