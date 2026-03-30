@@ -9,9 +9,16 @@ const agentSessionMocks = vi.hoisted(() => ({
 const visibilityMocks = vi.hoisted(() => ({
   useDocumentVisible: vi.fn(),
 }));
+const streamMocks = vi.hoisted(() => ({
+  connectSessionWorkspaceStream: vi.fn(() => vi.fn()),
+}));
 
 vi.mock("../useAgentSessions", () => agentSessionMocks);
 vi.mock("../useDocumentVisible", () => visibilityMocks);
+vi.mock("../../services/api/agents", () => streamMocks);
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({ invalidateQueries: vi.fn() }),
+}));
 
 const baseSession = {
   id: "session-1",

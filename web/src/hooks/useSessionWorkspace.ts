@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   useAgentSessionProjectionInfinite,
   useAgentSessionWorkspace,
@@ -12,11 +13,13 @@ import {
   timelineItemContainsSelection,
   type EventFilter,
 } from "../lib/sessionWorkspace";
+import { connectSessionWorkspaceStream } from "../services/api/agents";
 
 const INITIAL_EVENTS_PAGE_SIZE = 200;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
 const AUTO_SCROLL_EPSILON_PX = 1;
-const WORKSPACE_RUNTIME_REFRESH_MS = 5_000;
+/** Fallback polling interval when SSE stream is disconnected. */
+const WORKSPACE_FALLBACK_REFRESH_MS = 30_000;
 
 interface UseSessionWorkspaceOptions {
   highlightEventId?: number | null;
@@ -28,6 +31,35 @@ export function useSessionWorkspace(
 ) {
   const highlightEventId = options.highlightEventId ?? null;
   const documentVisible = useDocumentVisible();
+  const queryClient = useQueryClient();
+  const [streamConnected, setStreamConnected] = useState(false);
+
+  // SSE stream subscription — invalidates queries on server-side change detection
+  useEffect(() => {
+    if (!sessionId || !documentVisible) {
+      setStreamConnected(false);
+      return;
+    }
+
+    const cleanup = connectSessionWorkspaceStream(
+      sessionId,
+      {
+        onConnected: () => setStreamConnected(true),
+        onWorkspaceChanged: () => {
+          void queryClient.invalidateQueries({ queryKey: ["agent-session", sessionId] });
+          void queryClient.invalidateQueries({ queryKey: ["agent-session-thread", sessionId] });
+          void queryClient.invalidateQueries({ queryKey: ["agent-session-projection-infinite", sessionId] });
+          void queryClient.invalidateQueries({ queryKey: ["agent-session-events", sessionId] });
+          void queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", sessionId] });
+          void queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+        },
+        onError: () => setStreamConnected(false),
+      },
+      { skipInitial: true },
+    );
+
+    return cleanup;
+  }, [sessionId, documentVisible, queryClient]);
 
   const [showAbandonedBranches, setShowAbandonedBranches] = useState(false);
   const branchMode = showAbandonedBranches ? "all" : "head";
@@ -39,6 +71,10 @@ export function useSessionWorkspace(
     limit: INITIAL_EVENTS_PAGE_SIZE,
     branch_mode: branchMode,
     refetchInterval: (query) => {
+      // When SSE stream is connected, no polling needed
+      if (streamConnected) return false;
+
+      // Fallback: poll at reduced frequency when stream is down
       const currentSession = query.state.data?.session;
       if (!documentVisible || !currentSession) {
         return false;
@@ -51,7 +87,7 @@ export function useSessionWorkspace(
         runtime.needsAttention ||
         runtime.heuristicActive;
 
-      return shouldRefresh ? WORKSPACE_RUNTIME_REFRESH_MS : false;
+      return shouldRefresh ? WORKSPACE_FALLBACK_REFRESH_MS : false;
     },
   });
   const session = workspaceData?.session ?? null;
