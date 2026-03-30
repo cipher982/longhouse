@@ -97,7 +97,7 @@ def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path
 def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     runner = CliRunner()
     open_calls: list[str] = []
-    native_tui_calls: list[tuple[str, str, str]] = []
+    native_tui_calls: list[tuple[str, str]] = []
 
     monkeypatch.setattr(
         codex_cli,
@@ -120,7 +120,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     monkeypatch.setattr(
         codex_cli,
         "_run_native_codex_tui",
-        lambda *, thread_id, ws_url, cwd: native_tui_calls.append((thread_id, ws_url, str(cwd))) or 0,
+        lambda *, ws_url, cwd: native_tui_calls.append((ws_url, str(cwd))) or 0,
     )
     monkeypatch.setattr(codex_cli, "_open_session_url", lambda url: open_calls.append(url) or True)
 
@@ -151,7 +151,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert "Opening session in browser..." in result.output
     assert "Attaching..." in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
-    assert native_tui_calls == [("thr_123", "ws://127.0.0.1:4800", str(tmp_path))]
+    assert native_tui_calls == [("ws://127.0.0.1:4800", str(tmp_path))]
 
 
 def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):

@@ -17,7 +17,8 @@ const INITIAL_EVENTS_PAGE_SIZE = 200;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
 const AUTO_SCROLL_EPSILON_PX = 1;
 /** Fallback polling interval when SSE stream is disconnected. */
-const WORKSPACE_FALLBACK_REFRESH_MS = 30_000;
+const WORKSPACE_FALLBACK_REFRESH_MS =
+  (typeof window !== "undefined" && window.__TEST_WORKSPACE_FALLBACK_MS__) || 30_000;
 
 interface UseSessionWorkspaceOptions {
   highlightEventId?: number | null;
