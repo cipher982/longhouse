@@ -4,14 +4,12 @@ import {
   useAgentSessionProjectionInfinite,
   useAgentSessionWorkspace,
 } from "./useAgentSessions";
-import { useDebouncedValue } from "./useDebouncedValue";
 import { useDocumentVisible } from "./useDocumentVisible";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import {
   buildTimelineModel,
   getPreferredSelectionKey,
   timelineItemContainsSelection,
-  type EventFilter,
 } from "../lib/sessionWorkspace";
 import { connectSessionWorkspaceStream } from "../services/api/agents";
 
@@ -106,9 +104,6 @@ export function useSessionWorkspace(
     initialPage: workspaceData?.projection ?? null,
   });
 
-  const [eventFilter, setEventFilter] = useState<EventFilter>("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const [manualSelectedKey, setManualSelectedKey] = useState<string | null>(null);
   const [timelineListElement, setTimelineListElement] = useState<HTMLDivElement | null>(null);
   const highlightedEventRef = useRef<number | null>(null);
@@ -159,62 +154,6 @@ export function useSessionWorkspace(
     !!headThreadSession &&
     currentThreadSession.id === headThreadSession.id;
 
-  const filteredItems = useMemo(() => {
-    let result = model.items;
-
-    if (eventFilter === "messages") {
-      result = result.filter((item) => item.kind === "message");
-    } else if (eventFilter === "tools") {
-      result = result.filter((item) => item.kind === "tool" || item.kind === "tool_batch");
-    }
-
-    if (!debouncedSearch.trim()) return result;
-
-    const query = debouncedSearch.toLowerCase();
-    return result.filter((item) => {
-      if (item.kind === "seam") {
-        return (
-          item.seam.label.toLowerCase().includes(query) ||
-          item.seam.description.toLowerCase().includes(query)
-        );
-      }
-
-      if (item.kind === "message") {
-        return item.event.content_text?.toLowerCase().includes(query);
-      }
-
-      const interactions = item.kind === "tool_batch" ? item.batch.interactions : [item.interaction];
-      return interactions.some((interaction) => {
-        if (interaction.toolName.toLowerCase().includes(query)) return true;
-        if (
-          interaction.callEvent?.tool_input_json &&
-          JSON.stringify(interaction.callEvent.tool_input_json).toLowerCase().includes(query)
-        ) {
-          return true;
-        }
-        if (interaction.resultEvent?.tool_output_text?.toLowerCase().includes(query)) {
-          return true;
-        }
-        return false;
-      });
-    });
-  }, [model.items, eventFilter, debouncedSearch]);
-
-  const messageCount = useMemo(
-    () => model.items.filter((item) => item.kind === "message").length,
-    [model.items],
-  );
-
-  const toolRowCount = useMemo(
-    () => model.items.filter((item) => item.kind === "tool" || item.kind === "tool_batch").length,
-    [model.items],
-  );
-
-  const outsideActiveCount = useMemo(
-    () => events.filter((event) => event.in_active_context === false).length,
-    [events],
-  );
-
   const hasHighlightEvent = useMemo(() => {
     if (highlightEventId == null) return true;
     return events.some((event) => event.id === highlightEventId);
@@ -228,14 +167,14 @@ export function useSessionWorkspace(
   }, [highlightEventId, hasHighlightEvent, model.eventIdToSelectionKey]);
 
   const visibleManualSelectedKey = useMemo(() => {
-    if (filteredItems.length === 0 || manualSelectedKey == null) {
+    if (model.items.length === 0 || manualSelectedKey == null) {
       return null;
     }
 
-    return filteredItems.some((item) => timelineItemContainsSelection(item, manualSelectedKey))
+    return model.items.some((item) => timelineItemContainsSelection(item, manualSelectedKey))
       ? manualSelectedKey
       : null;
-  }, [filteredItems, manualSelectedKey]);
+  }, [model.items, manualSelectedKey]);
 
   const selectedKey = highlightSelectionKey ?? visibleManualSelectedKey;
 
@@ -280,8 +219,8 @@ export function useSessionWorkspace(
     if (highlightEventId != null) return;
     if (projectionLoading) return;
     if (autoScrolledSelectionRef.current) return;
-    if (filteredItems.length === 0) return;
-    const fallbackItem = [...filteredItems].reverse().find((item) => getPreferredSelectionKey(item)) ?? null;
+    if (model.items.length === 0) return;
+    const fallbackItem = [...model.items].reverse().find((item) => getPreferredSelectionKey(item)) ?? null;
     const targetKey = selectedKey || (fallbackItem ? getPreferredSelectionKey(fallbackItem) : null);
     const selection = targetKey ? model.selectionMap.get(targetKey) ?? null : null;
 
@@ -334,7 +273,7 @@ export function useSessionWorkspace(
         window.cancelAnimationFrame(frameId);
       }
     };
-  }, [highlightEventId, projectionLoading, selectedKey, filteredItems, model.selectionMap, timelineListElement]);
+  }, [highlightEventId, projectionLoading, selectedKey, model.items, model.selectionMap, timelineListElement]);
 
   const selectedSelection = useMemo(
     () => (selectedKey ? model.selectionMap.get(selectedKey) ?? null : null),
@@ -366,17 +305,6 @@ export function useSessionWorkspace(
     hasNextPage,
     isFetchingNextPage,
     items: model.items,
-    toolItems: model.toolItems,
-    toolBatches: model.toolBatches,
-    filteredItems,
-    eventFilter,
-    setEventFilter,
-    searchQuery,
-    setSearchQuery,
-    debouncedSearch,
-    messageCount,
-    toolRowCount,
-    outsideActiveCount,
     selectedKey,
     selectedSelection,
     selectKey,
