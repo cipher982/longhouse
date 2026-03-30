@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, EmptyState, Spinner } from "../ui";
 import type {
   TimelineSeam,
@@ -35,6 +35,8 @@ interface TimelinePaneProps {
   error?: unknown;
   selectedKey: string | null;
   onSelectKey: (key: string) => void;
+  /** Called when local filtering hides/reveals the parent-selected key. */
+  onVisibleSelectionChange?: (visibleKey: string | null) => void;
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
 }
@@ -207,6 +209,7 @@ export function TimelinePane({
   error = null,
   selectedKey,
   onSelectKey,
+  onVisibleSelectionChange,
   dock = null,
   listRef,
 }: TimelinePaneProps) {
@@ -272,6 +275,22 @@ export function TimelinePane({
       });
     });
   }, [items, eventFilter, debouncedSearch]);
+
+  // Tell the parent when the selected key becomes hidden/visible due to local filtering
+  const visibleSelectedKey = useMemo(() => {
+    if (!selectedKey) return null;
+    return filteredItems.some((item) => timelineItemContainsSelection(item, selectedKey))
+      ? selectedKey
+      : null;
+  }, [selectedKey, filteredItems]);
+
+  const prevVisibleKeyRef = useRef(visibleSelectedKey);
+  useEffect(() => {
+    if (prevVisibleKeyRef.current !== visibleSelectedKey) {
+      prevVisibleKeyRef.current = visibleSelectedKey;
+      onVisibleSelectionChange?.(visibleSelectedKey);
+    }
+  }, [visibleSelectedKey, onVisibleSelectionChange]);
 
   const toolFilterLabel = `Tools (${toolRowCount})`;
   const showScopedLoading = loading && filteredItems.length === 0;

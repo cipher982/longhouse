@@ -172,6 +172,7 @@ describe("SessionDetailPage", () => {
         selectedKey,
         selectedSelection: selectedKey ? model.selectionMap.get(selectedKey) ?? null : null,
         selectKey: setSelectedKey,
+        handleVisibleSelectionChange: vi.fn(),
         registerTimelineList: vi.fn(),
       };
     });

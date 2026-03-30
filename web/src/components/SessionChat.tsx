@@ -73,6 +73,8 @@ interface SessionChatProps {
   submitLabel?: string;
   requireClickForFirstSend?: boolean;
   keyboardHintText?: string;
+  /** Managed-local sessions use fire-and-forget dispatch (response arrives via SSE stream). */
+  chatMode?: "cloud" | "managed_local";
 }
 
 export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider">;
@@ -109,8 +111,10 @@ export function SessionChat({
   submitLabel = "Send",
   requireClickForFirstSend = false,
   keyboardHintText,
+  chatMode = "cloud",
 }: SessionChatProps) {
   const isDock = layout === "dock";
+  const isManagedLocal = chatMode === "managed_local";
   const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -275,57 +279,19 @@ export function SessionChat({
     setIsStreaming(false);
   }, []);
 
-  const handleSend = useCallback(
-    async (e: FormEvent) => {
-      e.preventDefault();
-
-      const message = draft.trim();
-      if (!message || isStreaming) return;
-
-      setDraft("");
-      setError(null);
-      setBlockedKeyboardSubmit(false);
-
-      // Add user message
-      const userMessage: ChatMessage = {
-        id: `user-${Date.now()}`,
-        role: "user",
-        content: message,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, userMessage]);
-
-      // Create placeholder for assistant response
-      const assistantId = `assistant-${Date.now()}`;
-      const assistantMessage: ChatMessage = {
-        id: assistantId,
-        role: "assistant",
-        content: "",
-        timestamp: new Date(),
-        isStreaming: true,
-      };
-      setMessages((prev) => [...prev, assistantMessage]);
-
-      // Start streaming
-      setIsStreaming(true);
-      abortControllerRef.current = new AbortController();
-
+  const handleManagedLocalSend = useCallback(
+    async (message: string) => {
       try {
         const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message }),
           credentials: "include",
-          signal: abortControllerRef.current.signal,
         });
 
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
-
           if (response.status === 409) {
-            // Session locked - backend nests lock_info under detail.lock_info
             const lockData = errorData?.detail?.lock_info;
             queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
               locked: true,
@@ -335,11 +301,67 @@ export function SessionChat({
             });
             throw new Error("Session is currently in use by another request");
           }
+          throw new Error(errorData?.error || errorData?.detail || `Request failed: ${response.status}`);
+        }
 
+        const result = await response.json();
+        if (!result.accepted) {
+          throw new Error(result.error || "Session did not accept the message");
+        }
+
+        // Show confirmation — the response will appear in the timeline above
+        // via the session workspace SSE stream as the engine ships events.
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `system-${Date.now()}`,
+            role: "assistant" as const,
+            content: "Sent to local session. Response will appear in the timeline above.",
+            timestamp: new Date(),
+          },
+        ]);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Unknown error");
+      }
+    },
+    [queryClient, session.id],
+  );
+
+  const handleCloudSend = useCallback(
+    async (message: string) => {
+      const assistantId = `assistant-${Date.now()}`;
+      setMessages((prev) => [
+        ...prev,
+        { id: assistantId, role: "assistant", content: "", timestamp: new Date(), isStreaming: true },
+      ]);
+
+      setIsStreaming(true);
+      abortControllerRef.current = new AbortController();
+
+      try {
+        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+          credentials: "include",
+          signal: abortControllerRef.current.signal,
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          if (response.status === 409) {
+            const lockData = errorData?.detail?.lock_info;
+            queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
+              locked: true,
+              holder: lockData?.holder,
+              time_remaining_seconds: lockData?.time_remaining_seconds,
+              fork_available: lockData?.fork_available,
+            });
+            throw new Error("Session is currently in use by another request");
+          }
           throw new Error(errorData?.detail || `Request failed: ${response.status}`);
         }
 
-        // Process SSE stream
         const reader = response.body?.getReader();
         if (!reader) throw new Error("No response body");
 
@@ -358,19 +380,16 @@ export function SessionChat({
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-
           buffer = consumeSessionChatSseBuffer(
             buffer,
             decoder.decode(value, { stream: true }),
             processEvent,
           );
         }
-
         buffer = consumeSessionChatSseBuffer(buffer, decoder.decode(), processEvent);
         flushSessionChatSseBuffer(buffer, processEvent);
       } catch (e) {
         if (e instanceof Error && e.name === "AbortError") {
-          // Cancelled by user
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId ? { ...m, content: m.content + "\n\n[Cancelled]", isStreaming: false } : m,
@@ -378,20 +397,43 @@ export function SessionChat({
           );
         } else {
           setError(e instanceof Error ? e.message : "Unknown error");
-          // Remove empty assistant message on error
           setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content.length > 0));
         }
       } finally {
         setIsStreaming(false);
         abortControllerRef.current = null;
-
-        // Mark message as done streaming
         setMessages((prev) =>
           prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m)),
         );
       }
     },
-    [draft, handleSSEEvent, isStreaming, queryClient, session.id],
+    [handleSSEEvent, queryClient, session.id],
+  );
+
+  const handleSend = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+
+      const message = draft.trim();
+      if (!message || isStreaming) return;
+
+      setDraft("");
+      setError(null);
+      setBlockedKeyboardSubmit(false);
+
+      // Add user message
+      setMessages((prev) => [
+        ...prev,
+        { id: `user-${Date.now()}`, role: "user", content: message, timestamp: new Date() },
+      ]);
+
+      if (isManagedLocal) {
+        await handleManagedLocalSend(message);
+      } else {
+        await handleCloudSend(message);
+      }
+    },
+    [draft, isStreaming, isManagedLocal, handleManagedLocalSend, handleCloudSend],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

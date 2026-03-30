@@ -32,6 +32,7 @@ from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Request
 from fastapi import status
+from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pydantic import Field
@@ -399,7 +400,7 @@ def _session_chat_streaming_response(stream: AsyncIterator[str]) -> StreamingRes
     )
 
 
-def _build_managed_local_chat_response(
+async def _build_managed_local_chat_response(
     *,
     source_session,
     owner_id: int,
@@ -407,22 +408,106 @@ def _build_managed_local_chat_response(
     request_id: str,
     lock_scope_id: str,
     db: Session,
-) -> StreamingResponse:
-    async def generate_managed_local():
-        try:
-            async for event in _stream_managed_local_output(
-                source_session=source_session,
-                owner_id=owner_id,
-                message=message,
-                request_id=request_id,
-                db=db,
-            ):
-                yield event
-        finally:
-            await session_lock_manager.release(lock_scope_id, request_id)
-            logger.info(f"[{request_id}] Managed local chat complete, lock released")
+) -> JSONResponse:
+    """Dispatch text to a managed-local session and return a fast ack.
 
-    return _session_chat_streaming_response(generate_managed_local())
+    The response appears in the timeline via the normal engine shipping path +
+    the session workspace SSE stream (Step 1).  No inline streaming, no
+    polling, no force-ship.
+    """
+    try:
+        return await _dispatch_managed_local_text(
+            source_session=source_session,
+            owner_id=owner_id,
+            message=message,
+            request_id=request_id,
+            db=db,
+        )
+    finally:
+        await session_lock_manager.release(lock_scope_id, request_id)
+        logger.info(f"[{request_id}] Managed local chat dispatch complete, lock released")
+
+
+async def _dispatch_managed_local_text(
+    *,
+    source_session,
+    owner_id: int,
+    message: str,
+    request_id: str,
+    db: Session,
+) -> JSONResponse:
+    """Send text to a managed-local session and return acceptance status."""
+    if getattr(source_session, "source_runner_id", None) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Managed local session is missing live runner metadata",
+        )
+
+    baseline_event_id = int(AgentsStore(db).get_latest_event_id(source_session.id) or 0)
+    baseline_hook_runtime_event_id = get_managed_local_latest_hook_runtime_event_id(
+        db=db,
+        session_id=source_session.id,
+    )
+    run_best_effort_managed_local_turn_write(
+        db_bind=db.get_bind(),
+        label="create",
+        fn=lambda turn_db: create_managed_local_turn(
+            turn_db,
+            session_id=source_session.id,
+            request_id=request_id,
+            baseline_event_id=baseline_event_id,
+            baseline_runtime_event_id=baseline_hook_runtime_event_id,
+            expected_user_text=message,
+        ),
+    )
+    send_result = await send_text_to_managed_local_session(
+        db=db,
+        owner_id=owner_id,
+        session=source_session,
+        text=message,
+        commis_id=request_id,
+        timeout_secs=15,
+    )
+
+    if not send_result.ok:
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="send_failed",
+            fn=lambda turn_db: mark_managed_local_turn_failed(
+                turn_db,
+                session_id=source_session.id,
+                request_id=request_id,
+                error_code="send_failed",
+            ),
+        )
+        error_message = str(send_result.error or "Failed to send text to managed local session")
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "accepted": False,
+                "error": error_message,
+                "session_id": str(source_session.id),
+                "request_id": request_id,
+            },
+        )
+
+    run_best_effort_managed_local_turn_write(
+        db_bind=db.get_bind(),
+        label="send_accepted",
+        fn=lambda turn_db: mark_managed_local_turn_send_accepted(
+            turn_db,
+            session_id=source_session.id,
+            request_id=request_id,
+        ),
+    )
+
+    return JSONResponse(
+        content={
+            "accepted": True,
+            "session_id": str(source_session.id),
+            "request_id": request_id,
+        },
+    )
 
 
 async def _build_cloud_continuation_chat_response(
@@ -1798,7 +1883,7 @@ async def chat_with_session(
 
     try:
         if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
-            return _build_managed_local_chat_response(
+            return await _build_managed_local_chat_response(
                 source_session=source_session,
                 owner_id=current_user.id,
                 message=body.message,
