@@ -69,18 +69,22 @@ def _start_native_codex_bridge(
         payload = json.loads((completed.stdout or "").strip())
     except json.JSONDecodeError as exc:
         raise _NativeBridgeError(f"Failed to parse native Codex bridge output: {exc}") from exc
-    thread_id = str(payload.get("thread_id") or "").strip()
     ws_url = str(payload.get("ws_url") or "").strip()
-    if not thread_id or not ws_url:
-        raise _NativeBridgeError("Native Codex bridge did not return thread_id/ws_url")
+    if not ws_url:
+        raise _NativeBridgeError("Native Codex bridge did not return ws_url")
+    # thread_id may be empty at launch — the TUI creates the thread after attaching.
+    thread_id = str(payload.get("thread_id") or "").strip()
     return thread_id, ws_url
 
 
-def _run_native_codex_tui(*, thread_id: str, ws_url: str, cwd: Path) -> int:
+def _run_native_codex_tui(*, ws_url: str, cwd: Path) -> int:
     codex_bin = _check_codex_binary()
     if not codex_bin:
         typer.secho("Session launch requires the 'codex' CLI but it is not installed.", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+    # Connect TUI to the bridge's app-server. The TUI calls thread/start which
+    # creates the thread; the bridge daemon observes the thread/started notification
+    # and posts idle once it knows which thread to drive.
     completed = subprocess.run(
         [
             codex_bin,
@@ -195,7 +199,8 @@ def codex(
     except _NativeBridgeError as exc:
         typer.secho(f"Codex bridge failed: {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
-    typer.echo(f"Codex thread: {thread_id}")
+    if thread_id:
+        typer.echo(f"Codex thread: {thread_id}")
     typer.echo(f"Remote target: {ws_url}")
 
     if open_browser:
@@ -212,7 +217,7 @@ def codex(
         return
 
     typer.echo("Attaching...")
-    exit_code = _run_native_codex_tui(thread_id=thread_id, ws_url=ws_url, cwd=cwd)
+    exit_code = _run_native_codex_tui(ws_url=ws_url, cwd=cwd)
     if exit_code != 0:
         typer.secho(
             f"Auto-attach exited with code {exit_code}. Run the printed remote resume command manually.",
