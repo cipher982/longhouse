@@ -562,7 +562,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 }
             }
             Some(cmd) = ipc_rx.recv() => {
-                let result = handle_ipc_turn_start(&mut client, &context, &cmd).await;
+                let result = handle_ipc_turn_start(&config, &mut client, &mut context, &cmd).await;
                 let _ = cmd.reply.send(result);
             }
         }
@@ -570,17 +570,20 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
 }
 
 async fn handle_ipc_turn_start(
+    config: &BridgeRunConfig,
     client: &mut RpcClient,
-    context: &BridgeContext,
+    context: &mut BridgeContext,
     cmd: &IpcCommand,
 ) -> Result<BridgeSendSummary> {
-    let response = send_request(
+    let response = send_request_with_runtime(
         client,
         "turn/start",
         json!({
             "threadId": cmd.thread_id,
             "input": [{"type": "text", "text": cmd.text}],
         }),
+        config,
+        context,
     )
     .await?;
     let turn_id = extract_string(&response, &["turn", "id"])
@@ -1141,6 +1144,61 @@ async fn send_request(client: &mut RpcClient, method: &str, params: Value) -> Re
     }
 }
 
+async fn send_request_with_runtime(
+    client: &mut RpcClient,
+    method: &str,
+    params: Value,
+    config: &BridgeRunConfig,
+    context: &mut BridgeContext,
+) -> Result<Value> {
+    let request_id = client.next_request_id;
+    client.next_request_id += 1;
+    client
+        .pending_methods
+        .insert(request_id, method.to_string());
+    let payload = json!({
+        "id": request_id,
+        "method": method,
+        "params": params,
+    });
+    send_payload(client, &payload).await?;
+
+    loop {
+        let event = recv_event(client).await?;
+        match event {
+            StreamEvent::Rpc(value) => {
+                if value.get("id").is_some() && value.get("method").is_some() {
+                    handle_server_request(config, value, client, context).await?;
+                    continue;
+                }
+                if let Some(id) = value.get("id").and_then(Value::as_u64) {
+                    let method_name = client
+                        .pending_methods
+                        .remove(&id)
+                        .unwrap_or_else(|| format!("request#{id}"));
+                    if id == request_id {
+                        if let Some(error) = value.get("error") {
+                            bail!("{method_name} failed: {error}");
+                        }
+                        return value
+                            .get("result")
+                            .cloned()
+                            .ok_or_else(|| anyhow!("response for {method_name} missing result"));
+                    }
+                    continue;
+                }
+                process_notification(&value, config, context).await?;
+            }
+            StreamEvent::Stderr(line) => {
+                eprintln!("[codex-bridge] app-server: {line}");
+            }
+            StreamEvent::StdoutParseError(detail) => {
+                bail!("codex bridge protocol parse error while waiting for {method}: {detail}");
+            }
+        }
+    }
+}
+
 async fn recv_event(client: &mut RpcClient) -> Result<StreamEvent> {
     match client.events_rx.recv().await {
         Some(event) => Ok(event),
@@ -1603,5 +1661,126 @@ mod tests {
         let state = Path::new("/tmp/codex-bridge/session-42.json");
         let sock = ipc_socket_path(state);
         assert_eq!(sock, Path::new("/tmp/codex-bridge/session-42.sock"));
+    }
+
+    #[tokio::test]
+    async fn send_request_with_runtime_handles_interleaved_requests_and_notifications() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let temp = tempfile::tempdir().unwrap();
+        let state_file = temp.path().join("bridge-state.json");
+        let log_file = temp.path().join("bridge.log");
+
+        let mut client = RpcClient {
+            child: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+        let mut context = BridgeContext {
+            state_file: state_file.clone(),
+            state: BridgeStateFile {
+                session_id: "session-123".to_string(),
+                cwd: temp.path().display().to_string(),
+                codex_bin: "codex".to_string(),
+                ws_url: Some("ws://example.test".to_string()),
+                thread_id: Some("thr_test".to_string()),
+                thread_path: None,
+                pid: 42,
+                status: "ready".to_string(),
+                log_file: log_file.display().to_string(),
+                active_turn_id: None,
+                last_turn_status: None,
+                last_error: None,
+                updated_at: Utc::now().to_rfc3339(),
+            },
+            runtime: BridgeRuntimeSink {
+                http: reqwest::Client::new(),
+                api_url: "http://127.0.0.1:9".to_string(),
+                api_token: "token".to_string(),
+                session_id: "session-123".to_string(),
+                machine_name: Some("test-box".to_string()),
+                thread_id: Some("thr_test".to_string()),
+            },
+            current_exe: PathBuf::from("/bin/echo"),
+            last_progress_emit: None,
+        };
+        let config = BridgeRunConfig {
+            session_id: "session-123".to_string(),
+            cwd: temp.path().to_path_buf(),
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            codex_bin: "codex".to_string(),
+            session_source: None,
+            approval_policy: None,
+            sandbox: None,
+            model: None,
+            machine_name: Some("test-box".to_string()),
+            auto_approve: true,
+            state_file,
+            log_file,
+        };
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": "srv-1",
+                "method": "item/tool/requestUserInput",
+                "params": {
+                    "questions": [{
+                        "id": "color",
+                        "options": [{"label": "blue"}, {"label": "red"}],
+                    }]
+                }
+            })))
+            .unwrap();
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "method": "turn/started",
+                "params": {
+                    "threadId": "thr_test",
+                    "turn": {"id": "turn-live", "status": "inProgress", "items": []}
+                }
+            })))
+            .unwrap();
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": 1,
+                "result": {
+                    "turn": {"id": "turn-live", "status": "inProgress"}
+                }
+            })))
+            .unwrap();
+
+        let response = send_request_with_runtime(
+            &mut client,
+            "turn/start",
+            json!({
+                "threadId": "thr_test",
+                "input": [{"type": "text", "text": "continue"}],
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            extract_string(&response, &["turn", "id"]).as_deref(),
+            Some("turn-live")
+        );
+        assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));
+        assert_eq!(
+            context.state.last_turn_status.as_deref(),
+            Some("inProgress")
+        );
+
+        let request_payload: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(request_payload["method"], "turn/start");
+
+        let approval_payload: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(approval_payload["id"], "srv-1");
+        assert_eq!(approval_payload["result"]["answers"]["color"]["answers"][0], "blue");
     }
 }
