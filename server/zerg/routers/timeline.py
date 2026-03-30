@@ -864,9 +864,9 @@ def _load_workspace_signature(
     # Latest presence updated_at across thread
     latest_presence = db.query(func.max(SessionPresence.updated_at)).filter(SessionPresence.session_id.in_(thread_session_ids)).scalar()
 
-    # Latest runtime version across thread
-    latest_runtime_version = (
-        db.query(func.max(SessionRuntimeState.runtime_version)).filter(SessionRuntimeState.session_id.in_(thread_session_ids)).scalar()
+    # Sum of runtime versions — detects any individual session's version bump
+    runtime_version_sum = (
+        db.query(func.sum(SessionRuntimeState.runtime_version)).filter(SessionRuntimeState.session_id.in_(thread_session_ids)).scalar()
     ) or 0
 
     return (
@@ -874,7 +874,7 @@ def _load_workspace_signature(
         latest_session_updated,
         latest_event_id,
         latest_presence,
-        latest_runtime_version,
+        runtime_version_sum,
         len(thread_session_ids),
     )
 
