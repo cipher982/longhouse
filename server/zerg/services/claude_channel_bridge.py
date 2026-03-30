@@ -187,7 +187,7 @@ def build_claude_channel_exec_command(
         claude_command,
         target_flag,
         provider_sid,
-        "--channels",
+        "--dangerously-load-development-channels",
         f"server:{CLAUDE_CHANNEL_SERVER_NAME}",
     ]
     inner = [
