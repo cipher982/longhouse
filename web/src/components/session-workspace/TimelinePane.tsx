@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Button, EmptyState, Spinner } from "../ui";
+import { FunnelIcon } from "../icons";
 import type {
   TimelineSeam,
   TimelineItem,
@@ -300,7 +301,7 @@ export function TimelinePane({
 
   const toolFilterLabel = `Tools (${toolRowCount})`;
   const [filtersExpanded, setFiltersExpanded] = useState(false);
-  const showFilters = filtersExpanded || eventFilter !== "all" || debouncedSearch.trim().length > 0;
+  const showFilters = filtersExpanded || eventFilter !== "all" || searchQuery.trim().length > 0;
 
   const showScopedLoading = loading && filteredItems.length === 0;
   const showScopedError = !loading && !!error && filteredItems.length === 0;
@@ -327,10 +328,8 @@ export function TimelinePane({
             aria-label="Toggle filters"
             title="Toggle filters and search"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" />
-            </svg>
-            {eventFilter !== "all" || debouncedSearch.trim() ? (
+            <FunnelIcon width={14} height={14} />
+            {eventFilter !== "all" || searchQuery.trim() ? (
               <span className="timeline-pane__filter-toggle-dot" />
             ) : null}
           </button>

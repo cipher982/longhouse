@@ -600,33 +600,6 @@
     min-width: 0;
   }
 
-  .session-detail-archive-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-1);
-    padding: 4px 10px;
-    background: none;
-    border: 1px solid var(--color-border-secondary, rgba(158, 124, 90, 0.2));
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-    color: var(--color-text-muted);
-    transition: color var(--motion-duration-fast) var(--motion-easing-standard),
-                border-color var(--motion-duration-fast) var(--motion-easing-standard),
-                background var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .session-detail-archive-btn:hover:not(:disabled) {
-    color: var(--color-intent-error);
-    border-color: color-mix(in srgb, var(--color-intent-error) 40%, transparent);
-    background: color-mix(in srgb, var(--color-intent-error) 8%, transparent);
-  }
-
-  .session-detail-archive-btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-
   .session-detail-archive-confirm {
     display: flex;
     align-items: center;
@@ -637,37 +610,6 @@
     font-size: var(--font-size-xs);
     color: var(--color-text-secondary);
     white-space: nowrap;
-  }
-
-  .session-detail-archive-cancel,
-  .session-detail-archive-ok {
-    padding: 3px 10px;
-    border-radius: var(--radius-sm);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-medium);
-    cursor: pointer;
-    border: 1px solid transparent;
-    transition: background var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .session-detail-archive-cancel {
-    background: var(--surface-glass-2);
-    border-color: var(--border-glass-1);
-    color: var(--color-text-secondary);
-  }
-
-  .session-detail-archive-cancel:hover {
-    background: var(--surface-glass-3);
-  }
-
-  .session-detail-archive-ok {
-    background: color-mix(in srgb, var(--color-intent-error) 15%, transparent);
-    border-color: color-mix(in srgb, var(--color-intent-error) 35%, transparent);
-    color: var(--color-intent-error);
-  }
-
-  .session-detail-archive-ok:hover {
-    background: color-mix(in srgb, var(--color-intent-error) 25%, transparent);
   }
 
   .timeline-pane__title {
