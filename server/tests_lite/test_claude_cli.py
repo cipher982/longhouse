@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 from click.exceptions import Exit as ClickExit
@@ -78,6 +79,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
         loop_mode=SessionLoopMode.ASSIST,
         name="Demo session",
         machine_name="work-laptop",
+        native_claude_channels_available=False,
     )
 
     assert result.session_id == "session-123"
@@ -97,6 +99,7 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
                 "display_name": "Demo session",
                 "loop_mode": "assist",
                 "machine_name": "work-laptop",
+                "native_claude_channels_available": False,
             },
         }
     ]
@@ -111,6 +114,11 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
         claude_cli,
         "_load_api_credentials",
         lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_detect_native_claude_channels_available",
+        lambda: (False, "authMethod=third_party, apiProvider=bedrock"),
     )
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(
@@ -145,6 +153,10 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
 
     assert result.exit_code == 0, result.output
     assert "Longhouse: https://longhouse.test" in result.output
+    assert (
+        "Native Claude channels unavailable (authMethod=third_party, apiProvider=bedrock); using tmux fallback."
+        in result.output
+    )
     assert "Managed local Claude session launched on this device." in result.output
     assert "Session ID: session-123" in result.output
     assert "Provider session ID: provider-123" in result.output
@@ -166,6 +178,11 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
         claude_cli,
         "_load_api_credentials",
         lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_detect_native_claude_channels_available",
+        lambda: (True, "authMethod=claude.ai, apiProvider=firstParty"),
     )
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(
@@ -230,3 +247,37 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
         ("session-123", "provider-123", str(tmp_path), "https://longhouse.test", "zdt_test_token")
     ]
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
+
+
+def test_detect_native_claude_channels_available_true_for_first_party_auth(monkeypatch):
+    monkeypatch.setattr(
+        claude_cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout='{"loggedIn": true, "authMethod": "claude.ai", "apiProvider": "firstParty"}',
+            stderr="",
+        ),
+    )
+
+    available, detail = claude_cli._detect_native_claude_channels_available()
+
+    assert available is True
+    assert detail == "authMethod=claude.ai, apiProvider=firstParty"
+
+
+def test_detect_native_claude_channels_available_false_for_bedrock(monkeypatch):
+    monkeypatch.setattr(
+        claude_cli.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout='{"loggedIn": true, "authMethod": "third_party", "apiProvider": "bedrock"}',
+            stderr="",
+        ),
+    )
+
+    available, detail = claude_cli._detect_native_claude_channels_available()
+
+    assert available is False
+    assert detail == "authMethod=third_party, apiProvider=bedrock"

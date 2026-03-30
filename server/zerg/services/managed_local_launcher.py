@@ -58,6 +58,7 @@ class ManagedLocalLaunchParams:
     hook_url: str | None = None
     hook_token: str | None = None
     machine_name: str | None = None
+    native_claude_channels_available: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -295,7 +296,11 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     provider = params.provider or "claude"
     if provider not in _VALID_PROVIDERS:
         raise ManagedLocalLaunchError(f"Unsupported provider '{provider}' for managed local", status_code=400)
-    transport = ManagedSessionTransport.for_provider(provider, machine_name=params.machine_name)
+    transport = ManagedSessionTransport.for_provider(
+        provider,
+        machine_name=params.machine_name,
+        native_claude_channels_available=params.native_claude_channels_available,
+    )
     provider_name = _PROVIDER_DISPLAY_NAMES.get(provider, provider)
 
     cwd = params.cwd.strip()
