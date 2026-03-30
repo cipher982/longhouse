@@ -230,17 +230,10 @@ coolify deploy name longhouse-control-plane
 
 **3. User instances (reprovision via control plane):**
 ```bash
-# Get admin token
-ssh zerg 'docker exec <control-plane-container> env | grep ADMIN_TOKEN'
-
-# List instances
-curl -s -H "X-Admin-Token: $TOKEN" https://control.longhouse.ai/api/instances
-
-# Reprovision (stops old container, creates new one with latest image + current secrets)
-curl -s -X POST -H "X-Admin-Token: $TOKEN" https://control.longhouse.ai/api/instances/<id>/reprovision
+make reprovision                    # david010 (default) — auto-fetches admin token from zerg
+make reprovision SUBDOMAIN=other    # other instance
 ```
-Note: reprovisioning generates a new password. Data is safe — SQLite lives on a host bind mount at `/var/app-data/longhouse/<subdomain>`, not inside the container.
-For scripted admin calls, prefer `curl` or `scripts/lib/hosted-instance.sh`. Default Python `urllib` user-agents can trip Cloudflare `1010` on `control.longhouse.ai` even when the admin token is valid.
+Data is safe — SQLite lives on a host bind mount at `/var/app-data/longhouse/<subdomain>`. Waits 15s and prints health status. Admin token is auto-fetched from the control-plane container on zerg; set `CONTROL_PLANE_ADMIN_TOKEN` explicitly in CI.
 
 ### Verify Deploy
 ```bash
@@ -268,7 +261,7 @@ For hosted loop / turn-review debugging on a live tenant, start with `scripts/ho
 3. Push to main (triggers GHCR build if code changed)
 4. Wait for GHCR build: `gh run watch <id> --exit-status`
 5. Deploy marketing + control plane (Coolify)
-6. Reprovision user instances via control plane admin API
+6. `make reprovision` (auto-fetches token, waits for health)
 7. `make qa-live` again to verify post-deploy
 8. Brief summary only at end (what shipped, what to manually verify if needed)
 

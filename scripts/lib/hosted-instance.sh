@@ -284,6 +284,19 @@ lh_hosted_default_control_plane_url() {
 lh_hosted_prepare_control_plane_auth() {
   lh_hosted_default_control_plane_url
   CONTROL_PLANE_ADMIN_TOKEN="${CONTROL_PLANE_ADMIN_TOKEN:-${ADMIN_TOKEN:-}}"
+
+  # Auto-fetch from the control-plane container on zerg when running locally.
+  # Silent no-op if SSH or the container is unavailable (e.g. CI with explicit token).
+  if [[ -z "${CONTROL_PLANE_ADMIN_TOKEN:-}" ]] && command -v ssh &>/dev/null; then
+    local _container
+    _container="$(ssh -o ConnectTimeout=3 -o BatchMode=yes zerg \
+      "docker ps --filter label=coolify.serviceName=longhouse-control-plane --format '{{.Names}}' | head -1" 2>/dev/null || true)"
+    if [[ -n "$_container" ]]; then
+      CONTROL_PLANE_ADMIN_TOKEN="$(ssh -o ConnectTimeout=3 -o BatchMode=yes zerg \
+        "docker exec $_container python -c 'from control_plane.config import settings; print(settings.admin_token)'" 2>/dev/null || true)"
+    fi
+  fi
+
   export CONTROL_PLANE_ADMIN_TOKEN
 
   if ! lh_hosted_require_env CONTROL_PLANE_URL CONTROL_PLANE_ADMIN_TOKEN; then
