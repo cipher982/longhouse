@@ -13,6 +13,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useNavigate, useSearchParams, useLocation, Link } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
+import { toast } from "react-hot-toast";
 import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
 import { useClickOutside } from "../hooks/useClickOutside";
@@ -949,9 +950,11 @@ export default function SessionsPage() {
     </div>
   );
 
-  // Archive a session — optimistic remove, restore on failure
-  const handleSessionArchive = useCallback(async (thread: TimelineSessionCard) => {
+  // Archive a session — optimistic remove + undo toast, API fires after 5s
+  const handleSessionArchive = useCallback((thread: TimelineSessionCard) => {
     const sessionId = thread.detail.id;
+
+    // Optimistically remove from list
     queryClient.setQueriesData<{ sessions: TimelineSessionCard[]; total: number }>(
       { queryKey: ["agent-sessions"] },
       (old) => {
@@ -963,11 +966,38 @@ export default function SessionsPage() {
         };
       },
     );
-    try {
-      await setSessionAction(sessionId, "archive");
-    } catch {
-      queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
-    }
+
+    let cancelled = false;
+    const toastId = toast(
+      (t) => (
+        <span style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          Session archived
+          <button
+            type="button"
+            onClick={() => {
+              cancelled = true;
+              toast.dismiss(t.id);
+              queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+            }}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-brand-primary)", fontSize: "13px", fontWeight: 600, padding: 0 }}
+          >
+            Undo
+          </button>
+        </span>
+      ),
+      { duration: 5000 },
+    );
+
+    setTimeout(async () => {
+      if (cancelled) return;
+      toast.dismiss(toastId);
+      try {
+        await setSessionAction(sessionId, "archive");
+      } catch {
+        queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+        toast.error("Failed to archive session");
+      }
+    }, 5000);
   }, [queryClient]);
 
   // Handle session click - preserve current filters in location state

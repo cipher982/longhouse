@@ -8,9 +8,10 @@
  * - Bottom dock: inline live-session / cloud continuation composer
  */
 
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { toast } from "react-hot-toast";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { EventInspectorPane } from "../components/session-workspace/EventInspectorPane";
@@ -22,6 +23,7 @@ import { useLoopModeChange } from "../hooks/useLoopModeChange";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { fetchSessionTurnTelemetry, type SessionTurnReview } from "../services/api/oikos";
+import { setSessionAction } from "../services/api/agents";
 import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
 
@@ -76,6 +78,51 @@ function SessionDetailWorkspaceRoute({
   };
 
   const { effectiveLoopMode, loopModePending, handleLoopModeChange } = useLoopModeChange(session);
+  const queryClient = useQueryClient();
+  const archivePendingRef = useRef(false);
+  const [archiving, setArchiving] = useState(false);
+
+  const handleArchive = useCallback(async () => {
+    if (!session || archivePendingRef.current) return;
+    archivePendingRef.current = true;
+    setArchiving(true);
+
+    let cancelled = false;
+    const toastId = toast(
+      (t) => (
+        <span style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+          Session archived
+          <button
+            type="button"
+            onClick={() => {
+              cancelled = true;
+              archivePendingRef.current = false;
+              setArchiving(false);
+              toast.dismiss(t.id);
+            }}
+            style={{ background: "none", border: "none", cursor: "pointer", color: "var(--color-brand-primary)", fontSize: "13px", fontWeight: 600, padding: 0 }}
+          >
+            Undo
+          </button>
+        </span>
+      ),
+      { duration: 5000 },
+    );
+
+    setTimeout(async () => {
+      if (cancelled) return;
+      toast.dismiss(toastId);
+      try {
+        await setSessionAction(session.id, "archive");
+        queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
+        handleBack();
+      } catch {
+        archivePendingRef.current = false;
+        setArchiving(false);
+        toast.error("Failed to archive session");
+      }
+    }, 5000);
+  }, [session, queryClient, handleBack]);
 
   const workspaceReady = !sessionLoading && !eventsLoading;
 
@@ -199,6 +246,24 @@ function SessionDetailWorkspaceRoute({
                 </Button>
                 <span className="session-workspace-header__name">{title}</span>
               </div>
+            }
+            headerRight={
+              <button
+                type="button"
+                className="session-detail-archive-btn"
+                onClick={handleArchive}
+                disabled={archiving}
+                title="Archive session"
+                aria-label="Archive session"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6" />
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+                  <path d="M10 11v6M14 11v6" />
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+                </svg>
+                Archive
+              </button>
             }
             listRef={registerTimelineList}
             dock={

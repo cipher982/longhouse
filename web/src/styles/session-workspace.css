@@ -586,11 +586,45 @@
     flex: 1 1 280px;
   }
 
+  .timeline-pane__header-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+  }
+
   .timeline-pane__title-group {
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
     min-width: 0;
+  }
+
+  .session-detail-archive-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 4px 10px;
+    background: none;
+    border: 1px solid var(--color-border-secondary, rgba(158, 124, 90, 0.2));
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    transition: color var(--motion-duration-fast) var(--motion-easing-standard),
+                border-color var(--motion-duration-fast) var(--motion-easing-standard),
+                background var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .session-detail-archive-btn:hover:not(:disabled) {
+    color: var(--color-intent-error);
+    border-color: color-mix(in srgb, var(--color-intent-error) 40%, transparent);
+    background: color-mix(in srgb, var(--color-intent-error) 8%, transparent);
+  }
+
+  .session-detail-archive-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   .timeline-pane__title {
