@@ -723,7 +723,7 @@
 
   .timeline-pane--with-dock .timeline-pane__list {
     flex: 0 1 auto;
-    max-height: 35vh;
+    max-height: 25vh;
     padding-bottom: var(--space-2);
   }
 
