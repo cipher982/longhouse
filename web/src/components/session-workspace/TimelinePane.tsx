@@ -39,6 +39,8 @@ interface TimelinePaneProps {
   onVisibleSelectionChange?: (visibleKey: string | null) => void;
   /** Navigation / context content rendered at the start of the header bar. */
   headerLeft?: ReactNode;
+  /** Actions rendered at the far right of the header bar. */
+  headerRight?: ReactNode;
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
 }
@@ -213,6 +215,7 @@ export function TimelinePane({
   onSelectKey,
   onVisibleSelectionChange,
   headerLeft,
+  headerRight,
   dock = null,
   listRef,
 }: TimelinePaneProps) {
@@ -332,6 +335,11 @@ export function TimelinePane({
             ) : null}
           </button>
         </div>
+        {headerRight && (
+          <div className="timeline-pane__header-right">
+            {headerRight}
+          </div>
+        )}
       </div>
 
       {showFilters ? (
