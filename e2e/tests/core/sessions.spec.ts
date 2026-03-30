@@ -881,7 +881,7 @@ test.describe("Session Detail Page", () => {
 
     await expect(page).toHaveURL(`/timeline/${sessionId}`);
     await expect(page.getByTestId("session-timeline-header")).toContainText(
-      "Event Timeline",
+      "entries",
     );
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
       "Cloud continuation starts here",
@@ -1633,6 +1633,82 @@ test.describe("Session Detail Page", () => {
         timeout: 4000,
       })
       .toBeGreaterThan(afterLeft);
+  });
+});
+
+test.describe("SSE Fallback", () => {
+  test("workspace polling resumes after SSE stream disconnects", async ({
+    page,
+    context,
+    request,
+  }) => {
+    // Shorten fallback interval so the test doesn't wait 30s
+    await context.addInitScript(() => {
+      (window as any).__TEST_WORKSPACE_FALLBACK_MS__ = 2_000;
+    });
+
+    const suffix = randomUUID().slice(0, 8);
+    const project = `sse-fallback-${suffix}`;
+    const now = Date.now();
+
+    const sessionId = await ingestSession(request, {
+      project,
+      started_at: new Date(now).toISOString(),
+      events: [
+        {
+          role: "user",
+          content_text: `initial event ${suffix}`,
+          timestamp: new Date(now).toISOString(),
+          source_path: "/tmp/session.jsonl",
+          source_offset: 0,
+        },
+      ],
+    });
+
+    // Navigate and wait for SSE stream to connect
+    const streamConnected = page.waitForResponse((response) =>
+      response.url().includes(`/workspace/stream`) && response.status() === 200,
+    );
+    await page.goto(`/timeline/${sessionId}`);
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+    await streamConnected;
+
+    // Verify initial event is visible
+    await expect(
+      page.getByTestId("session-timeline-list"),
+    ).toContainText(`initial event ${suffix}`);
+
+    // Kill the SSE stream — abort all future workspace/stream requests
+    await page.route(`**/workspace/stream**`, (route) => route.abort());
+
+    // Ingest a new event while SSE is dead
+    const laterTimestamp = new Date(now + 5_000).toISOString();
+    await ingestSession(request, {
+      id: sessionId,
+      project,
+      started_at: new Date(now).toISOString(),
+      events: [
+        {
+          role: "user",
+          content_text: `initial event ${suffix}`,
+          timestamp: new Date(now).toISOString(),
+          source_path: "/tmp/session.jsonl",
+          source_offset: 0,
+        },
+        {
+          role: "assistant",
+          content_text: `fallback-proof event ${suffix}`,
+          timestamp: laterTimestamp,
+          source_path: "/tmp/session.jsonl",
+          source_offset: 1,
+        },
+      ],
+    });
+
+    // The new event should appear via fallback polling (2s interval)
+    await expect(
+      page.getByTestId("session-timeline-list"),
+    ).toContainText(`fallback-proof event ${suffix}`, { timeout: 15000 });
   });
 });
 

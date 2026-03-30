@@ -149,7 +149,7 @@ function clampLayout(
 }
 
 interface WorkspaceShellProps {
-  header: ReactNode;
+  header?: ReactNode;
   sidebar: ReactNode;
   main: ReactNode;
   inspector?: ReactNode;
@@ -163,6 +163,7 @@ export function WorkspaceShell({
   inspector,
   bottom,
 }: WorkspaceShellProps) {
+  const hasHeader = Boolean(header);
   const hasInspector = Boolean(inspector);
   const hasBottom = Boolean(bottom);
   const bodyRef = useRef<HTMLDivElement | null>(null);
@@ -342,10 +343,10 @@ export function WorkspaceShell({
 
   return (
     <div
-      className={`workspace-shell${hasInspector ? "" : " workspace-shell--inspector-collapsed"}${hasBottom ? " workspace-shell--with-bottom" : ""}${activePane ? " workspace-shell--is-resizing" : ""}`}
+      className={`workspace-shell${hasHeader ? "" : " workspace-shell--no-header"}${hasInspector ? "" : " workspace-shell--inspector-collapsed"}${hasBottom ? " workspace-shell--with-bottom" : ""}${activePane ? " workspace-shell--is-resizing" : ""}`}
       style={shellStyle}
     >
-      <div className="workspace-shell__header">{header}</div>
+      {hasHeader ? <div className="workspace-shell__header">{header}</div> : null}
       <div className="workspace-shell__body" ref={bodyRef}>
         <aside className="workspace-shell__pane workspace-shell__pane--sidebar">{sidebar}</aside>
         <div

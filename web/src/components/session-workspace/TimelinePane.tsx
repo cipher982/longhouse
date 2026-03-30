@@ -37,6 +37,8 @@ interface TimelinePaneProps {
   onSelectKey: (key: string) => void;
   /** Called when local filtering hides/reveals the parent-selected key. */
   onVisibleSelectionChange?: (visibleKey: string | null) => void;
+  /** Navigation / context content rendered at the start of the header bar. */
+  headerLeft?: ReactNode;
   dock?: ReactNode;
   listRef?: (node: HTMLDivElement | null) => void;
 }
@@ -210,6 +212,7 @@ export function TimelinePane({
   selectedKey,
   onSelectKey,
   onVisibleSelectionChange,
+  headerLeft,
   dock = null,
   listRef,
 }: TimelinePaneProps) {
@@ -303,8 +306,8 @@ export function TimelinePane({
     >
       <div className="timeline-pane__header timeline-header" data-testid="session-timeline-header">
         <div className="timeline-pane__header-main">
+          {headerLeft}
           <div className="timeline-pane__title-group">
-            <div className="timeline-pane__title">Event Timeline</div>
             <div className="timeline-pane__summary">
               {loadedEntries >= totalEntries
                 ? `${totalEntries} entries`
