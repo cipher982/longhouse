@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -34,6 +35,15 @@ class ManagedLocalLaunchResponse:
 
 class _NativeClaudeError(Exception):
     """Raised when native Claude launch preparation fails."""
+
+
+_CLAUDE_LAUNCH_ENV_KEYS = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "ANTHROPIC_MODEL",
+)
 
 
 def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
@@ -71,6 +81,15 @@ def _detect_native_claude_channels_available() -> tuple[bool, str]:
     if not logged_in:
         return False, "Claude is not logged in with Claude.ai auth"
     return False, f"authMethod={auth_method or 'unknown'}, apiProvider={api_provider or 'unknown'}"
+
+
+def _collect_claude_launch_env() -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in _CLAUDE_LAUNCH_ENV_KEYS:
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            env[key] = value
+    return env
 
 
 def _interactive_stdio() -> bool:
@@ -148,6 +167,7 @@ def _launch_managed_local_from_api(
     name: str | None,
     machine_name: str,
     native_claude_channels_available: bool | None = None,
+    claude_launch_env: dict[str, str] | None = None,
     provider: str = "claude",
 ) -> ManagedLocalLaunchResponse:
     git_repo, git_branch = _infer_git_context(cwd)
@@ -163,6 +183,8 @@ def _launch_managed_local_from_api(
     }
     if provider == "claude":
         payload["native_claude_channels_available"] = native_claude_channels_available
+        if claude_launch_env:
+            payload["claude_launch_env"] = claude_launch_env
 
     try:
         with httpx.Client(timeout=30) as client:
@@ -382,6 +404,7 @@ def claude(
     resolved_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=resolved_config_dir)
     machine_name = get_machine_name_label()
     native_claude_channels_available, native_claude_channels_detail = _detect_native_claude_channels_available()
+    claude_launch_env = _collect_claude_launch_env()
     typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
@@ -392,6 +415,7 @@ def claude(
         name=name,
         machine_name=machine_name,
         native_claude_channels_available=native_claude_channels_available,
+        claude_launch_env=claude_launch_env,
         provider="claude",
     )
     if not native_claude_channels_available and result.managed_transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:

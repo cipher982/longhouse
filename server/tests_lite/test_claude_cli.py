@@ -80,6 +80,12 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
         name="Demo session",
         machine_name="work-laptop",
         native_claude_channels_available=False,
+        claude_launch_env={
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_PROFILE": "zh-qa-engineer",
+            "AWS_REGION": "us-east-1",
+            "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
+        },
     )
 
     assert result.session_id == "session-123"
@@ -100,6 +106,12 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
                 "loop_mode": "assist",
                 "machine_name": "work-laptop",
                 "native_claude_channels_available": False,
+                "claude_launch_env": {
+                    "CLAUDE_CODE_USE_BEDROCK": "1",
+                    "AWS_PROFILE": "zh-qa-engineer",
+                    "AWS_REGION": "us-east-1",
+                    "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
+                },
             },
         }
     ]
@@ -109,6 +121,7 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
     runner = CliRunner()
     attach_calls: list[str] = []
     open_calls: list[str] = []
+    launch_calls: list[dict] = []
 
     monkeypatch.setattr(
         claude_cli,
@@ -120,11 +133,22 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
         "_detect_native_claude_channels_available",
         lambda: (False, "authMethod=third_party, apiProvider=bedrock"),
     )
+    monkeypatch.setattr(
+        claude_cli,
+        "_collect_claude_launch_env",
+        lambda: {
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_PROFILE": "zh-qa-engineer",
+            "AWS_REGION": "us-east-1",
+            "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
+        },
+    )
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(
         claude_cli,
         "_launch_managed_local_from_api",
-        lambda **_kwargs: claude_cli.ManagedLocalLaunchResponse(
+        lambda **kwargs: launch_calls.append(kwargs)
+        or claude_cli.ManagedLocalLaunchResponse(
             session_id="session-123",
             provider_session_id="provider-123",
             attach_command="zsh -lc 'exec tmux attach -t lh-demo'",
@@ -166,6 +190,12 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
     assert "Attaching..." in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
     assert attach_calls == ["zsh -lc 'exec tmux attach -t lh-demo'"]
+    assert launch_calls[0]["claude_launch_env"] == {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_PROFILE": "zh-qa-engineer",
+        "AWS_REGION": "us-east-1",
+        "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
+    }
 
 
 def test_claude_command_starts_native_channel_bridge_when_api_returns_native_transport(monkeypatch, tmp_path):
@@ -266,6 +296,23 @@ def test_run_claude_auth_status_uses_bare_claude(monkeypatch):
 
     assert completed.returncode == 0
     assert calls == [["claude", "auth", "status", "--json"]]
+
+
+def test_collect_claude_launch_env_filters_empty_values(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CODE_USE_BEDROCK", "1")
+    monkeypatch.setenv("AWS_PROFILE", "zh-qa-engineer")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "us.anthropic.claude-sonnet-4-6")
+    monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+    env = claude_cli._collect_claude_launch_env()
+
+    assert env == {
+        "CLAUDE_CODE_USE_BEDROCK": "1",
+        "AWS_PROFILE": "zh-qa-engineer",
+        "AWS_REGION": "us-east-1",
+        "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
+    }
 
 
 def test_detect_native_claude_channels_available_true_for_first_party_auth(monkeypatch):

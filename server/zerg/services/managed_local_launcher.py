@@ -59,6 +59,7 @@ class ManagedLocalLaunchParams:
     hook_token: str | None = None
     machine_name: str | None = None
     native_claude_channels_available: bool | None = None
+    claude_launch_env: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +104,15 @@ _PROVIDER_HOOK_FILES = {
         "marker": "longhouse-codex-hook.sh",
     },
 }
+_ALLOWED_CLAUDE_LAUNCH_ENV_KEYS = frozenset(
+    {
+        "CLAUDE_CODE_USE_BEDROCK",
+        "AWS_PROFILE",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "ANTHROPIC_MODEL",
+    }
+)
 
 
 def _resolve_runner(db: Session, owner_id: int, target: str):
@@ -150,6 +160,21 @@ def _derive_project(cwd: str, project: str | None) -> str:
     return Path(cwd).name or "managed-local"
 
 
+def _sanitize_claude_launch_env(raw: dict[str, str] | None) -> dict[str, str]:
+    sanitized: dict[str, str] = {}
+    if not raw:
+        return sanitized
+    for key, value in raw.items():
+        normalized_key = str(key or "").strip()
+        if normalized_key not in _ALLOWED_CLAUDE_LAUNCH_ENV_KEYS:
+            continue
+        normalized_value = str(value or "").strip()
+        if not normalized_value:
+            continue
+        sanitized[normalized_key] = normalized_value
+    return sanitized
+
+
 def _build_entry_command(
     *,
     provider: str,
@@ -158,6 +183,7 @@ def _build_entry_command(
     managed_session_name: str | None = None,
     hook_url: str | None = None,
     hook_token: str | None = None,
+    claude_launch_env: dict[str, str] | None = None,
 ) -> str:
     env_exports = [f"export LONGHOUSE_SESSION_ID={shlex.quote(provider_session_id)}"]
     if hook_url and hook_url.strip():
@@ -171,6 +197,8 @@ def _build_entry_command(
             managed_session_name=managed_session_name or provider_session_id,
             env_exports=env_exports,
         )
+    for key, value in _sanitize_claude_launch_env(claude_launch_env).items():
+        env_exports.append(f"export {key}={shlex.quote(value)}")
     parts = ["claude", "--session-id", provider_session_id]
     if display_name and display_name.strip():
         parts.extend(["-n", display_name.strip()])
@@ -398,6 +426,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         managed_session_name=managed_session_name,
         hook_url=params.hook_url,
         hook_token=hook_token,
+        claude_launch_env=params.claude_launch_env,
     )
     session = AgentSession(
         id=session_uuid,

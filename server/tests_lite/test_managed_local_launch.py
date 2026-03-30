@@ -218,6 +218,29 @@ def test_build_entry_command_claude_includes_hook_target_overrides():
     assert "claude --session-id abc-123" in inner
 
 
+def test_build_entry_command_claude_includes_allowlisted_launch_env():
+    cmd = _build_entry_command(
+        provider="claude",
+        provider_session_id="abc-123",
+        display_name=None,
+        claude_launch_env={
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_PROFILE": "zh-qa-engineer",
+            "AWS_REGION": "us-east-1",
+            "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
+            "HOME": "/tmp/nope",
+            "AWS_DEFAULT_REGION": "",
+        },
+    )
+    inner = _inner_command(cmd)
+    assert "export CLAUDE_CODE_USE_BEDROCK=1" in inner
+    assert "export AWS_PROFILE=zh-qa-engineer" in inner
+    assert "export AWS_REGION=us-east-1" in inner
+    assert "export ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-6" in inner
+    assert "export HOME=" not in inner
+    assert "export AWS_DEFAULT_REGION=" not in inner
+
+
 def test_build_entry_command_codex_injects_longhouse_session_id():
     cmd = _build_entry_command(
         provider="codex",
@@ -378,7 +401,9 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert "cat > /tmp/longhouse-managed-" in launch_inner
             assert "__LONGHOUSE_MANAGED_LOCAL__" in launch_inner
             assert "export LONGHOUSE_HOOK_URL=http://testserver" in launch_inner
-            assert "if ! command -v claude >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in launch_inner
+            assert (
+                "if ! command -v claude >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi"
+            ) in launch_inner
             token_fragment = launch_inner.split("export LONGHOUSE_HOOK_TOKEN=", 1)[1].split(";", 1)[0].strip()
             hook_token = shlex.split(token_fragment)[0]
             auth = validate_managed_local_hook_token(hook_token)
@@ -672,6 +697,12 @@ def test_launch_managed_local_this_device_falls_back_to_tmux_when_native_channel
                     "display_name": "Hiring session",
                     "loop_mode": "assist",
                     "native_claude_channels_available": False,
+                    "claude_launch_env": {
+                        "CLAUDE_CODE_USE_BEDROCK": "1",
+                        "AWS_PROFILE": "zh-qa-engineer",
+                        "AWS_REGION": "us-east-1",
+                        "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
+                    },
                 },
             )
             assert response.status_code == 200, response.text
@@ -686,6 +717,11 @@ def test_launch_managed_local_this_device_falls_back_to_tmux_when_native_channel
             assert session.managed_transport == "tmux"
             assert session.managed_tmux_tmpdir == "/tmp/lh-managed-launch"
             assert len(dispatcher.calls) == 5
+            launch_inner = _inner_command(dispatcher.calls[2]["command"])
+            assert "export CLAUDE_CODE_USE_BEDROCK=1" in launch_inner
+            assert "export AWS_PROFILE=zh-qa-engineer" in launch_inner
+            assert "export AWS_REGION=us-east-1" in launch_inner
+            assert "export ANTHROPIC_MODEL=us.anthropic.claude-sonnet-4-6" in launch_inner
         finally:
             api_app_ref.dependency_overrides = {}
 
