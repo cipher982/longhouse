@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import shlex
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -22,15 +21,10 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.services.agents_store import AgentsStore
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
-from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_transport import ManagedLocalTransportError
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.presence_cache import get_presence_cache
-from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
-from zerg.services.session_continuity import encode_cwd_for_claude
-from zerg.services.session_continuity import validate_session_id
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 
@@ -39,8 +33,6 @@ logger = logging.getLogger(__name__)
 MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 1.0
 MANAGED_LOCAL_STABLE_POLLS = 1
-MANAGED_LOCAL_RUNNER_RECONNECT_GRACE_SECS = 8.0
-MANAGED_LOCAL_RUNNER_RECONNECT_POLL_INTERVAL_SECS = 0.25
 MANAGED_LOCAL_SYNC_STATUS_PENDING = "pending"
 MANAGED_LOCAL_SYNC_STATUS_COMPLETE = "complete"
 MANAGED_LOCAL_SYNC_STATUS_FAILED = "failed"
@@ -50,12 +42,6 @@ MANAGED_LOCAL_CONTROL_STATUS_BLOCKED = "blocked"
 MANAGED_LOCAL_CONTROL_STATUS_FAILED = "failed"
 _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE = "claude_hook"
 _MANAGED_LOCAL_ACTIVE_HOOK_PHASES = frozenset({"thinking", "running"})
-_MANAGED_LOCAL_TRANSIENT_RUNNER_DISPATCH_ERRORS = frozenset(
-    {
-        "Runner is offline",
-        "Failed to send command to runner",
-    }
-)
 _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS = {
     "idle": MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
     "needs_user": MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER,
@@ -71,13 +57,6 @@ class ManagedLocalSendResult:
     error: str | None = None
     baseline_event_id: int | None = None
     verified_turn_started: bool = False
-
-
-@dataclass(frozen=True)
-class ManagedLocalShipResult:
-    ok: bool
-    exit_code: int | None = None
-    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -136,62 +115,6 @@ def validate_managed_local_chat_done_payload(
     return None
 
 
-def build_managed_local_claude_ship_command(*, session: AgentSession) -> str:
-    """Build a runner-side command that ships the exact managed-local Claude transcript.
-
-    Interactive managed-local chat cannot rely on the background shipper queue for
-    low-latency UX. This command targets the known Claude transcript directly and
-    retries briefly until the current turn produces real shipped events, so we do
-    not exit early on a successful zero-event ship before Claude has flushed the
-    prompt/assistant lines into the transcript.
-    """
-
-    cwd = str(getattr(session, "cwd", "") or "").strip()
-    if not cwd:
-        raise ValueError("Managed local Claude session is missing cwd")
-
-    provider_session_id = str(getattr(session, "provider_session_id", "") or "").strip()
-    if not provider_session_id:
-        raise ValueError("Managed local Claude session is missing provider_session_id")
-    validate_session_id(provider_session_id)
-
-    longhouse_session_id = str(getattr(session, "id", "") or "").strip()
-    validate_session_id(longhouse_session_id)
-
-    encoded_cwd = encode_cwd_for_claude(cwd)
-    transcript_path = f"$HOME/.claude/projects/{encoded_cwd}/{provider_session_id}.jsonl"
-    inner = [
-        build_managed_local_shell_prelude(
-            tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
-            require_tmux=False,
-            required_commands=("longhouse-engine",),
-        ),
-        'engine="$(command -v longhouse-engine || true)"',
-        '[ -n "$engine" ] || { echo "longhouse-engine is not available" >&2; exit 12; }',
-        f'transcript="{transcript_path}"',
-        'tmp_json="$(mktemp)"',
-        "total_shipped=0",
-        f"delays=({MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL})",
-        (
-            'for delay in "${delays[@]}"; do '
-            'if [ "$delay" != "0" ]; then sleep "$delay"; fi; '
-            '[ -f "$transcript" ] || continue; '
-            f'"$engine" ship --file "$transcript" --session-id {shlex.quote(longhouse_session_id)} --require-reply-evidence --json '
-            '>"$tmp_json" 2>/dev/null || true; '
-            'shipped="$(grep -Eo \'"events_shipped"[[:space:]]*:[[:space:]]*[0-9]+\' "$tmp_json" '
-            "| grep -Eo '[0-9]+' | head -1 || true)\"; "
-            '[ -n "$shipped" ] || shipped=0; '
-            "total_shipped=$((total_shipped + shipped)); "
-            "done"
-        ),
-        'rm -f "$tmp_json"',
-        '[ "$total_shipped" -gt 0 ] && exit 0',
-        'echo "Managed local Claude transcript did not ship new events" >&2',
-        "exit 13",
-    ]
-    return f"zsh -lc {shlex.quote('; '.join(inner))}"
-
-
 def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -203,30 +126,6 @@ def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
 def _to_utc_timestamp(value: datetime | None) -> float | None:
     normalized = _normalize_utc_datetime(value)
     return normalized.timestamp() if normalized is not None else None
-
-
-async def _await_managed_local_runner_reconnect(
-    *,
-    owner_id: int,
-    runner_id: int,
-    timeout_secs: float,
-    poll_interval_secs: float = MANAGED_LOCAL_RUNNER_RECONNECT_POLL_INTERVAL_SECS,
-) -> bool:
-    """Wait briefly for a managed-local runner websocket to reconnect."""
-
-    if timeout_secs <= 0:
-        return False
-
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_secs
-    connection_manager = get_runner_connection_manager()
-
-    while loop.time() < deadline:
-        if connection_manager.is_online(owner_id, runner_id):
-            return True
-        await asyncio.sleep(poll_interval_secs)
-
-    return connection_manager.is_online(owner_id, runner_id)
 
 
 def get_managed_local_presence_updated_at(*, session_id: UUID) -> datetime | None:
@@ -595,84 +494,3 @@ async def send_text_to_managed_local_session(
         baseline_event_id=baseline_event_id,
         verified_turn_started=effective_verify,
     )
-
-
-async def ship_managed_local_claude_transcript(
-    *,
-    db: Session,
-    owner_id: int,
-    session: AgentSession,
-    commis_id: str | None = None,
-    timeout_secs: int = 20,
-) -> ManagedLocalShipResult:
-    """Force-ship the exact managed-local Claude transcript via the runner.
-
-    This bypasses background shipper lag for interactive managed-local chat.
-    """
-
-    if str(getattr(session, "provider", "") or "").strip().lower() != "claude":
-        return ManagedLocalShipResult(ok=False, error="Managed local direct ship only supports Claude")
-    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
-        return ManagedLocalShipResult(ok=False, error="Session is not managed_local")
-    runner_id = getattr(session, "source_runner_id", None)
-    if runner_id is None:
-        return ManagedLocalShipResult(ok=False, error="Managed local session is missing source runner metadata")
-
-    try:
-        command = build_managed_local_claude_ship_command(session=session)
-    except Exception as exc:
-        return ManagedLocalShipResult(ok=False, error=str(exc))
-
-    dispatcher = get_runner_job_dispatcher()
-    runner_id = int(runner_id)
-    reconnect_budget_secs = max(0.0, float(MANAGED_LOCAL_RUNNER_RECONNECT_GRACE_SECS))
-    attempt = 0
-    max_attempts = 3
-
-    while attempt < max_attempts:
-        attempt += 1
-        result = await dispatcher.dispatch_job(
-            db=db,
-            owner_id=owner_id,
-            runner_id=runner_id,
-            command=command,
-            timeout_secs=timeout_secs,
-            commis_id=commis_id,
-            run_id=None,
-        )
-        if result.get("ok"):
-            break
-
-        error_detail = result.get("error", {})
-        error_message = str(error_detail.get("message", "Failed to ship managed local Claude transcript"))
-        if error_message not in _MANAGED_LOCAL_TRANSIENT_RUNNER_DISPATCH_ERRORS or reconnect_budget_secs <= 0:
-            return ManagedLocalShipResult(ok=False, error=error_message)
-
-        wait_started = asyncio.get_running_loop().time()
-        reconnected = await _await_managed_local_runner_reconnect(
-            owner_id=owner_id,
-            runner_id=runner_id,
-            timeout_secs=reconnect_budget_secs,
-        )
-        reconnect_budget_secs = max(0.0, reconnect_budget_secs - (asyncio.get_running_loop().time() - wait_started))
-        if not reconnected:
-            return ManagedLocalShipResult(ok=False, error=error_message)
-
-        logger.info(
-            "Managed-local Claude direct ship retrying after runner %s reconnected (attempt %s, session=%s)",
-            runner_id,
-            attempt + 1,
-            getattr(session, "id", None),
-        )
-
-    data = result.get("data", {})
-    exit_code = int(data.get("exit_code", 1))
-    if exit_code != 0:
-        detail = (data.get("stderr") or "").strip() or (data.get("stdout") or "").strip()
-        return ManagedLocalShipResult(
-            ok=False,
-            exit_code=exit_code,
-            error=detail or "Managed local Claude transcript ship command failed",
-        )
-
-    return ManagedLocalShipResult(ok=True, exit_code=0)

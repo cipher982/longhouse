@@ -307,6 +307,29 @@ enum Commands {
         verify_hooks: bool,
     },
 
+    /// Bind a transcript path to a managed Longhouse session ID.
+    ///
+    /// Used by hooks and launchers to tell the daemon which session ID to use
+    /// when shipping a managed-local transcript. Must be called BEFORE the
+    /// transcript has new content to ship.
+    Bind {
+        /// Canonical absolute path to the transcript file
+        #[arg(long)]
+        path: PathBuf,
+
+        /// Managed Longhouse session ID
+        #[arg(long)]
+        session_id: String,
+
+        /// Provider name (claude, codex, gemini)
+        #[arg(long, default_value = "claude")]
+        provider: String,
+
+        /// SQLite DB path override
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
+
     /// Native managed Codex bridge utilities
     CodexBridge {
         #[command(subcommand)]
@@ -738,6 +761,21 @@ fn main() -> anyhow::Result<()> {
                     println!("response_errors: {:?}", summary.response_errors);
                 }
             }
+        }
+        Commands::Bind {
+            path,
+            session_id,
+            provider,
+            db,
+        } => {
+            let conn = open_db(db.as_deref())?;
+            let sb = state::session_binding::SessionBinding::new(&conn);
+            let canonical = std::fs::canonicalize(&path)
+                .unwrap_or_else(|_| path.clone())
+                .to_string_lossy()
+                .to_string();
+            sb.bind(&canonical, &session_id, &provider)?;
+            eprintln!("Bound {} → {}", canonical, session_id);
         }
         Commands::CodexBridge { command } => {
             let rt = tokio::runtime::Runtime::new()?;

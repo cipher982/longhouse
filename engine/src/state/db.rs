@@ -61,7 +61,14 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
         );
 
         CREATE INDEX IF NOT EXISTS idx_spool_status
-        ON spool_queue(status, next_retry_at);",
+        ON spool_queue(status, next_retry_at);
+
+        CREATE TABLE IF NOT EXISTS session_binding (
+            path TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );",
     )?;
 
     // Old builds could create duplicate pending pointers for the same file/range.

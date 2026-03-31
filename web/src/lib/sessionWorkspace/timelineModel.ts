@@ -292,6 +292,9 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     const event = projectionItem.event;
     if (!event) continue;
 
+    // Hide compaction metadata events (internal transcript bookkeeping, not user-facing)
+    if (event.role === "system") continue;
+
     if (event.role === "tool" && absorbedResultIds.has(event.id)) continue;
 
     if (event.role === "user") {

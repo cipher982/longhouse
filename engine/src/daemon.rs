@@ -375,13 +375,19 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
             // Wake the loop when a delayed local retry may now be ready.
             _ = local_retry_timer.tick(), if !deferred_retries.is_empty() => {}
 
-            // Daily: prune stale file_state entries
+            // Daily: prune stale file_state and session_binding entries
             _ = prune_timer.tick() => {
                 let fs = FileState::new(&conn);
                 match fs.prune_stale(30) {
                     Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale file_state entries", n),
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Daily prune error: {}", e),
+                }
+                let sb = crate::state::session_binding::SessionBinding::new(&conn);
+                match sb.prune_stale(30) {
+                    Ok(n) if n > 0 => tracing::info!("Daily prune: removed {} stale session_binding entries", n),
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Session binding prune error: {}", e),
                 }
             }
 
@@ -529,13 +535,20 @@ async fn prepare_file_for_job(
 
     tokio::task::spawn_blocking(move || {
         let conn = open_db(db_path.as_deref())?;
+        // Check session_binding for managed session ID override
+        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+        let canonical = std::fs::canonicalize(&path)
+            .unwrap_or_else(|_| path.clone())
+            .to_string_lossy()
+            .to_string();
+        let session_id_override = binding.get(&canonical)?;
         shipper::prepare_file_batches_with_parse_tracker(
             &path,
             provider,
             algo,
             &conn,
             max_batch_bytes,
-            None,
+            session_id_override.as_deref(),
             Some(&parse_tracker),
         )
     })

@@ -58,7 +58,6 @@ from zerg.services.managed_local_control import get_managed_local_control_status
 from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
 from zerg.services.managed_local_control import get_managed_local_presence_updated_at
 from zerg.services.managed_local_control import send_text_to_managed_local_session
-from zerg.services.managed_local_control import ship_managed_local_claude_transcript
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
@@ -108,9 +107,7 @@ MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS = 300.0
 MANAGED_LOCAL_POLL_INTERVAL_SECS = 0.1
 MANAGED_LOCAL_STABLE_POLLS = 1
-MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS = 0.1
 MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 10.0
-MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS = 1.0
 MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS = 0.5
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
     [
@@ -880,59 +877,6 @@ async def _await_managed_local_turn_events(
     return []
 
 
-async def _force_managed_local_claude_sync(
-    *,
-    db_bind,
-    owner_id: int,
-    source_session,
-    request_id: str,
-):
-    with Session(bind=db_bind) as ship_db:
-        return await ship_managed_local_claude_transcript(
-            db=ship_db,
-            owner_id=owner_id,
-            session=source_session,
-            commis_id=request_id,
-        )
-
-
-def _should_retry_managed_local_claude_sync_after_terminal(ship_result) -> bool:
-    if ship_result is None or getattr(ship_result, "ok", False):
-        return False
-
-    exit_code = getattr(ship_result, "exit_code", None)
-    if exit_code == 13:
-        return True
-
-    error_text = str(getattr(ship_result, "error", "") or "").strip().lower()
-    return "did not ship new events" in error_text or "no new transcript events" in error_text
-
-
-def _detach_managed_local_ship_task(task: asyncio.Task, *, session_id: UUID) -> None:
-    """Let a direct-ship retry continue in the background after the route returns."""
-
-    def _log_completion(done: asyncio.Task) -> None:
-        try:
-            result = done.result()
-        except asyncio.CancelledError:
-            logger.debug("Managed-local Claude direct ship task cancelled for %s", session_id)
-            return
-        except Exception:
-            logger.exception("Managed-local Claude direct ship task crashed for %s", session_id)
-            return
-
-        if getattr(result, "ok", False):
-            logger.info("Managed-local Claude direct ship completed asynchronously for %s", session_id)
-        else:
-            logger.warning(
-                "Managed-local Claude direct ship finished asynchronously without new events for %s: %s",
-                session_id,
-                getattr(result, "error", None) or f"exit_code={getattr(result, 'exit_code', None)}",
-            )
-
-    task.add_done_callback(_log_completion)
-
-
 async def _await_managed_local_events_task(
     events_task: asyncio.Task[list[AgentEvent]],
     *,
@@ -1098,42 +1042,18 @@ async def _stream_managed_local_output(
 
     terminal_result = None
     new_events: list[AgentEvent] = []
-    provider_is_claude = str(getattr(source_session, "provider", "") or "").strip().lower() == "claude"
-    ship_task: asyncio.Task | None = None
-    ship_result = None
 
     try:
-        if provider_is_claude:
-            done, _pending = await asyncio.wait(
-                {terminal_task, events_task},
-                timeout=MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if not done:
-                ship_task = asyncio.create_task(
-                    _force_managed_local_claude_sync(
-                        db_bind=db.get_bind(),
-                        owner_id=owner_id,
-                        source_session=source_session,
-                        request_id=request_id,
-                    )
-                )
-                done, _pending = await asyncio.wait(
-                    {terminal_task, events_task, ship_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-        else:
-            done, _pending = await asyncio.wait(
-                {terminal_task, events_task},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+        # Wait for terminal phase or events — daemon handles shipping for all providers.
+        done, _pending = await asyncio.wait(
+            {terminal_task, events_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
 
         if events_task in done:
             new_events = events_task.result() or []
         if terminal_task in done:
             terminal_result = terminal_task.result()
-        if ship_task is not None and ship_task in done:
-            ship_result = ship_task.result()
 
         if new_events and terminal_result is None:
             terminal_result = await _await_managed_local_terminal_task(
@@ -1148,70 +1068,10 @@ async def _stream_managed_local_output(
                 terminal_result = await terminal_task
 
         if not new_events and terminal_result is not None:
-            if provider_is_claude:
-                initial_grace_secs = MANAGED_LOCAL_PRE_FORCE_SYNC_GRACE_SECS
-            else:
-                initial_grace_secs = MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS
             new_events = await _await_managed_local_events_task(
                 events_task,
-                timeout_secs=initial_grace_secs,
+                timeout_secs=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
             )
-
-            if not new_events and provider_is_claude:
-                if ship_task is not None and ship_task.done() and ship_result is None:
-                    try:
-                        ship_result = ship_task.result()
-                    except asyncio.CancelledError:
-                        ship_result = None
-                    except Exception:
-                        logger.exception(
-                            "Managed-local Claude direct ship task crashed for %s",
-                            source_session.id,
-                        )
-                        ship_result = None
-
-                should_restart_ship = ship_task is None or (
-                    ship_task.done() and _should_retry_managed_local_claude_sync_after_terminal(ship_result)
-                )
-                if should_restart_ship:
-                    ship_task = asyncio.create_task(
-                        _force_managed_local_claude_sync(
-                            db_bind=db.get_bind(),
-                            owner_id=owner_id,
-                            source_session=source_session,
-                            request_id=request_id,
-                        )
-                    )
-                    ship_result = None
-
-                done, _ = await asyncio.wait(
-                    {events_task, ship_task},
-                    timeout=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if events_task in done:
-                    new_events = events_task.result() or []
-                elif ship_task in done:
-                    ship_result = ship_task.result()
-                    new_events = await _await_managed_local_events_task(
-                        events_task,
-                        timeout_secs=MANAGED_LOCAL_POST_FORCE_SYNC_GRACE_SECS,
-                    )
-
-            if ship_result is not None and not ship_result.ok:
-                log_message = ship_result.error or f"exit_code={ship_result.exit_code}"
-                if new_events:
-                    logger.debug(
-                        "Managed-local Claude direct ship found no extra events for %s: %s",
-                        source_session.id,
-                        log_message,
-                    )
-                else:
-                    logger.warning(
-                        "Managed-local Claude direct ship failed for %s: %s",
-                        source_session.id,
-                        log_message,
-                    )
 
         if not new_events and terminal_result is None:
             if not events_task.done():
@@ -1229,21 +1089,6 @@ async def _stream_managed_local_output(
                 continue
             task.cancel()
         await asyncio.gather(terminal_task, events_task, return_exceptions=True)
-        if ship_task is not None:
-            if not ship_task.done():
-                if new_events:
-                    ship_task.cancel()
-                    await asyncio.gather(ship_task, return_exceptions=True)
-                else:
-                    _detach_managed_local_ship_task(ship_task, session_id=source_session.id)
-            elif ship_result is None:
-                try:
-                    ship_result = ship_task.result()
-                except asyncio.CancelledError:
-                    ship_result = None
-                except Exception:
-                    logger.exception("Managed-local Claude direct ship task crashed for %s", source_session.id)
-                    ship_result = None
 
     if terminal_result is not None:
         run_best_effort_managed_local_turn_write(
