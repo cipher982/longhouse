@@ -5,81 +5,123 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 
 # Zerg Ship Cycle
 
-## The Loop
+## Surfaces
 
+- **Public demo runtime** — `https://longhouse.ai` — Coolify app `longhouse-demo`
+- **Control plane** — `https://control.longhouse.ai` — Coolify app `longhouse-control-plane`
+- **Hosted tenant runtime** — `https://david010.longhouse.ai` — reprovisioned runtime container managed by the control plane
+
+`longhouse.ai` is a demo-mode Longhouse runtime, not a static landing page.
+
+## Background Wait Rule
+
+If a tool or workflow already gives you a completion event or a blocking wait primitive, use it once and move on. Do not burn tool calls on `pgrep`, repeated curls, or ad hoc status polling loops while a background task is running.
+
+Good:
+
+```bash
+gh run watch <id> --exit-status
+./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
 ```
-make test            # unit tests (~9s) — fix failures before proceeding, never push a failing suite
-git push origin main # triggers GHCR build if backend/frontend/dockerfile changed
-gh run watch <id>    # wait for runtime image (see below)
-~/git/me/mytech/scripts/coolify-deploy.sh longhouse-demo
-~/git/me/mytech/scripts/coolify-deploy.sh longhouse-control-plane
-# reprovision user instances (see below)
-make qa-live         # 5 Playwright tests against live instance (~5s)
+
+Bad:
+
+```bash
+while pgrep -f playwright; do sleep 5; done
+while true; do curl .../health; sleep 5; done
 ```
+
+## Deploy Lanes
+
+### Runtime lane
+
+Changed paths typically include `server/**`, `web/**`, `engine/**`, `config/**`, `docker/runtime.dockerfile`.
+
+What ships:
+- GHCR runtime image for hosted tenants
+- Public demo runtime via Coolify
+- Hosted canary tenant via reprovision
+
+Primary automation:
+
+```bash
+git push origin main
+gh run watch $(gh run list --workflow runtime-image.yml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status
+```
+
+GitHub then runs:
+- `runtime-image.yml`
+- `deploy-and-verify.yml`
+- `hosted-live-qa.yml`
+
+Manual fallback:
+
+```bash
+./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
+make reprovision
+make qa-live
+make qa-live-conversations
+```
+
+### Control-plane lane
+
+Changed paths typically include `control-plane/**`.
+
+What ships:
+- Control plane only
+
+Primary automation:
+- `deploy-control-plane.yml`
+
+Manual fallback:
+
+```bash
+./scripts/ops/coolify-deploy.sh longhouse-control-plane --timeout 900
+./scripts/qa/smoke-prod.sh --no-llm
+./scripts/ops/check-cp-credentials.sh
+```
+
+### Mixed commits
+
+If a commit touches both runtime and control-plane lanes, expect both workflows to matter. Do not assume the runtime workflow deploys the control plane for you.
 
 ## QA Harness
 
 ```bash
-make qa-live                          # default: david010.longhouse.ai
-QA_INSTANCE_URL=https://other.longhouse.ai make qa-live  # other instance
+make qa-live
+QA_INSTANCE_URL=https://other.longhouse.ai make qa-live
+make qa-live-conversations
 ```
 
-Tests: auth + timeline, forum redirect, session detail, health, agents API, AI search toggle, recall panel, and briefings page.
-Exit 0 = pass. Fail screenshots → `/tmp/qa-live-fail-{test}.png`.
+`qa-live` covers auth + timeline, forum redirect, session detail, health, agents API, AI search toggle, recall, briefings, continuation readiness, and auth refresh.
 
-Auth: `qa-live.sh` delegates to `run-prod-e2e.sh`, resolves the hosted instance by subdomain, and mints a fresh hosted login token through the control plane.
-If `CONTROL_PLANE_ADMIN_TOKEN` is available, the harness also mints and revokes a short-lived device token automatically for `/api/agents/*`; otherwise it falls back to `LONGHOUSE_DEVICE_TOKEN` / `~/.claude/longhouse-device-token`. Browser pages use the hosted session cookie exchanged from `SMOKE_LOGIN_TOKEN`.
-
-**Two auth systems — don't mix them:**
+Two auth systems:
 - Browser pages: hosted login-token → `longhouse_session` cookie
-- `/api/agents/*` endpoints: device token → `X-Agents-Token` header
+- `/api/agents/*`: device token → `X-Agents-Token`
 
-## Reprovision User Instance
-
-```bash
-# Find control plane container by service label (hash changes on every deploy)
-CONTAINER=$(ssh zerg "docker ps --filter label=coolify.serviceName=longhouse-control-plane --format '{{.Names}}' | head -1")
-ADMIN_TOKEN=$(ssh zerg "docker exec $CONTAINER python -c 'from control_plane.config import settings; print(settings.admin_token)'")
-
-# List instances to get the right ID (don't hardcode — use subdomain to find it)
-curl -s -H "X-Admin-Token: $ADMIN_TOKEN" https://control.longhouse.ai/api/instances \
-  | python3 -c "import sys,json; [print(i['id'], i['subdomain']) for i in json.load(sys.stdin)['instances']]"
-
-# Reprovision (stops+removes+recreates with latest image — data is safe, SQLite bind-mounted)
-curl -s -X POST -H "X-Admin-Token: $ADMIN_TOKEN" https://control.longhouse.ai/api/instances/<id>/reprovision
-
-# Verify health
-sleep 15 && curl -s https://david010.longhouse.ai/api/health | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"  # healthy
-```
-
-Data survives reprovision — SQLite at `/var/app-data/longhouse/<subdomain>/longhouse.db` (host bind mount).
-
-## Wait for GHCR Build
+## Reprovision Hosted Tenant
 
 ```bash
-gh run watch $(gh run list --workflow runtime-image.yml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status
+make reprovision
+make reprovision SUBDOMAIN=other
 ```
 
-Path filters: build only triggers if `server/`, `web/`, or `docker/` changed. Docs-only pushes skip it.
+Data survives reprovision. Hosted tenant SQLite lives at `/var/app-data/longhouse/<subdomain>/longhouse.db` on the host and `/data/longhouse.db` in the container.
 
 ## Logs When Things Break
 
 ```bash
-# User instance
 ssh zerg 'docker logs longhouse-david010 --tail 50'
-
-# Marketing site / control plane
 coolify app logs longhouse-demo
 coolify app logs longhouse-control-plane
-
-# Engine daemon (on dev machine)
-tail -f ~/.claude/logs/engine.log.$(date +%Y-%m-%d)
 ```
 
 ## Definition of Done
 
-- [ ] `make test` passes (no failures)
-- [ ] `make qa-live` 5/5 passed
-- [ ] `gh run watch` GHCR build success
-- [ ] `curl -s https://david010.longhouse.ai/api/health | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])"` → `healthy`
-- [ ] Commit message references what shipped
+- [ ] `make test-ci` passed before push
+- [ ] `make test-e2e` passed before push when UI/runtime changed
+- [ ] Correct deploy lane(s) used
+- [ ] Public demo runtime healthy if runtime lane changed
+- [ ] Control plane healthy if control-plane lane changed
+- [ ] Hosted canary healthy if runtime lane changed
+- [ ] `make qa-live` passed after hosted runtime changes

@@ -29,9 +29,42 @@ warn() { echo -e "${YELLOW}!${NC} $*"; }
 # Resolve credentials: env var → coolify → skip
 # ------------------------------------------------------------------
 
+_resolve_coolify_app_uuid() {
+    local app_ref="$1"
+
+    if [[ "$app_ref" =~ ^[a-z0-9]{24}$ ]]; then
+        echo "$app_ref"
+        return
+    fi
+
+    coolify app list --format json 2>/dev/null \
+        | python3 -c '
+import json
+import sys
+
+target = sys.argv[1]
+raw = sys.stdin.read()
+json_start = raw.find("[")
+if json_start == -1:
+    raise SystemExit(0)
+
+try:
+    rows = json.loads(raw[json_start:])
+except Exception:
+    raise SystemExit(0)
+
+for row in rows:
+    if row.get("name") == target:
+        print(row.get("uuid", ""))
+        raise SystemExit(0)
+' "$app_ref"
+}
+
 _get_env_or_coolify() {
     local var_name="$1"
     local coolify_app="${2:-longhouse-control-plane}"
+    local coolify_key="${3:-$var_name}"
+    local coolify_app_id=""
     local value="${!var_name:-}"
 
     if [ -n "$value" ]; then
@@ -41,11 +74,39 @@ _get_env_or_coolify() {
 
     # Try coolify if available (cube runner)
     if command -v coolify &>/dev/null; then
-        value=$(coolify app env list "$coolify_app" 2>/dev/null \
-            | grep -E "^${var_name}=" \
-            | cut -d= -f2- \
-            | tr -d '"' \
-            | head -1 || true)
+        coolify_app_id="$(_resolve_coolify_app_uuid "$coolify_app")"
+        if [ -z "$coolify_app_id" ]; then
+            echo ""
+            return
+        fi
+
+        value=$(coolify app env list "$coolify_app_id" --format json -s 2>/dev/null \
+            | python3 -c '
+import json
+import sys
+
+target_key = sys.argv[1]
+raw = sys.stdin.read()
+json_start = raw.find("[")
+if json_start == -1:
+    raise SystemExit(0)
+
+try:
+    rows = json.loads(raw[json_start:])
+except Exception:
+    raise SystemExit(0)
+
+for row in rows:
+    if row.get("key") != target_key:
+        continue
+    value = row.get("real_value") or row.get("value") or ""
+    if value == "********":
+        continue
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("\"", chr(39)):
+        value = value[1:-1]
+    print(value)
+    raise SystemExit(0)
+' "$coolify_key")
         if [ -n "$value" ]; then
             echo "$value"
             return
@@ -61,7 +122,7 @@ _get_env_or_coolify() {
 
 check_stripe() {
     local key
-    key=$(_get_env_or_coolify "STRIPE_SECRET_KEY")
+    key=$(_get_env_or_coolify "STRIPE_SECRET_KEY" "longhouse-control-plane" "CONTROL_PLANE_STRIPE_SECRET_KEY")
 
     if [ -z "$key" ]; then
         warn "STRIPE_SECRET_KEY not set — skipping Stripe check"
