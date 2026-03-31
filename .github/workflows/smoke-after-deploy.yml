@@ -24,7 +24,7 @@ jobs:
     timeout-minutes: 10
     if: ${{ github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false' }}
     env:
-      MARKETING_URL: https://longhouse.ai
+      PUBLIC_DEMO_URL: https://longhouse.ai
       CONTROL_PLANE_URL: https://control.longhouse.ai
       CP_URL: https://control.longhouse.ai
       INSTANCE_SUBDOMAIN: david010
@@ -85,6 +85,7 @@ jobs:
           echo "- **Instance:** $INSTANCE_SUBDOMAIN" >> $GITHUB_STEP_SUMMARY
           echo "- **Frontend:** $FRONTEND_URL" >> $GITHUB_STEP_SUMMARY
           echo "- **API:** $API_URL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Public demo:** $PUBLIC_DEMO_URL" >> $GITHUB_STEP_SUMMARY
           echo "- **Triggered by:** ${{ github.event_name }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Email routing audit:** runs as a separate non-blocking job" >> $GITHUB_STEP_SUMMARY
@@ -96,7 +97,7 @@ jobs:
     continue-on-error: true
     if: ${{ github.event_name != 'schedule' || vars.SMOKE_AFTER_DEPLOY_ENABLED != 'false' }}
     env:
-      MARKETING_URL: https://longhouse.ai
+      PUBLIC_DEMO_URL: https://longhouse.ai
 
     steps:
       - uses: actions/checkout@v6
@@ -114,5 +115,5 @@ jobs:
         run: |
           echo "## Email Routing Audit" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Site:** $MARKETING_URL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Site:** $PUBLIC_DEMO_URL" >> $GITHUB_STEP_SUMMARY
           echo "- **Result:** ${{ steps.email_routing.outcome }}" >> $GITHUB_STEP_SUMMARY

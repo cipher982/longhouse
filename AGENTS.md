@@ -178,7 +178,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 8. **Stripe key rotation** — Use `~/git/me/mytech/scripts/update-stripe-key.sh sk_live_...`. It validates against Stripe before touching anything, then updates Coolify and redeploys.
 9. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
 10. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `server/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
-11. **Deploy requires GHCR build** — Push triggers `runtime-image.yml` (path-filtered). Must wait for build before pulling on zerg. Use `gh run watch <id>` to wait. Marketing + control plane pull the same image via Coolify.
+11. **Runtime deploys and control-plane deploys are separate lanes** — runtime-path pushes build the GHCR runtime image for hosted tenants, then deploy the public demo runtime and reprovision the hosted canary. `control-plane/**` pushes deploy only the control plane. Do not assume the public demo runtime or control plane pull the GHCR runtime image directly.
 12. **Do not commit valid secret-shaped dummy values** — GitGuardian will flag Fernet-format placeholders even when they are fake. For dev/test/bootstrap paths, generate ephemeral secrets at runtime instead of checking in realistic-looking literals.
 13. **Stage only your changes** — Dirty trees are normal (other agents' WIP). When committing, `git add` specific files — never `git add -A`. If new code depends on unstaged changes from other files, include those files or the deploy will break.
 14. **Do NOT add `extra_body={"metadata": ...}` to LLM calls** — Instance calls go directly to providers (Groq, OpenAI, z.ai), NOT through the LiteLLM proxy. Groq rejects `metadata` with 400. The proxy at `llm.drose.io` is personal-dev only, not used by user instances. New models must be added to `~/git/litellm-proxy/config.yaml` AND `hooks/model_hints.py` (for personal-dev proxy use).
@@ -191,18 +191,21 @@ Import from `../components/ui`. **Check here before building custom UI.**
 21. **Do not write handoff notes into this repo** — session handoffs belong in `~/git/obsidian_vault/AI-Sessions/`, not under `docs/` or other repo-local paths.
 22. **Hosted Longhouse data path is an explicit exception on `zerg`** — do not assume the generic VPS `/var/lib/docker/data/...` layout here. Hosted tenant data lives at `/var/app-data/longhouse/<subdomain>` on the host, mounts to `/data` in the tenant container, and the live DB is `/data/longhouse.db`. Use `scripts/hosted-loop-debug.sh <subdomain>` before improvising nested `ssh` + SQLite commands.
 23. **Claude Code local MCP config lives in `~/.claude.json`, not `.claude/settings.json`** — private per-project MCP servers live under `projects[canonical-workspace-path].mcpServers`; on macOS, canonicalize workspace paths (`/private/tmp/...` vs `/tmp/...`) before wiring native Claude channels.
+24. **Background waits should not turn into polling loops** — if a tool, workflow, or wrapper already gives completion notification or a blocking wait primitive, use that and do other useful work. Do not burn tool calls on `pgrep`, repeated health curls, or status checks unless there is no completion signal available.
 
 ## Pushing Changes
 
-**Three things get deployed — all on the `zerg` server:**
+**There are three deploy surfaces on `zerg`:**
 
 | What | URL | How |
 |------|-----|-----|
-| Marketing site | https://longhouse.ai | Coolify app `longhouse-demo` |
+| Public demo runtime | https://longhouse.ai | Coolify app `longhouse-demo` |
 | Control plane | https://control.longhouse.ai | Coolify app `longhouse-control-plane` |
-| User instances | https://david010.longhouse.ai | Control plane reprovision (pulls latest image) |
+| Hosted tenant runtimes | https://david010.longhouse.ai | Control plane reprovision (pulls latest GHCR runtime image) |
 
-**User instances** are provisioned and managed by the control plane. There is no docker-compose path — all instances are containers created by the provisioner. To update an instance to the latest image, reprovision it via the admin API.
+`longhouse.ai` is not a static landing page. It is a Longhouse demo runtime in demo mode with its own API and SQLite DB.
+
+**Hosted tenant runtimes** are provisioned and managed by the control plane. There is no docker-compose path — all instances are containers created by the provisioner. To update an instance to the latest runtime image, reprovision it via the admin API.
 
 **Dev instances:**
 - **david010.longhouse.ai** — primary dev instance (david010@gmail.com, persistent data). Use for feature dev and prod debugging.
@@ -215,20 +218,36 @@ make test-e2e          # Playwright core + a11y — must pass 100%
 ```
 
 ### After Push
-Push to main triggers `runtime-image.yml` **if backend/frontend/dockerfile changed** (has path filters — docs-only pushes skip it). Builds `ghcr.io/cipher982/longhouse-runtime:latest`. **Does NOT auto-deploy.** Deploy steps:
+Treat deploys as **lanes**, not one linear checklist:
 
-**1. Marketing site (Coolify):**
+- **Runtime lane** (`server/**`, `web/**`, `engine/**`, `config/**`, `docker/runtime.dockerfile`): push triggers `runtime-image.yml`, then `deploy-and-verify.yml`, then `hosted-live-qa.yml`. That path deploys the **public demo runtime** and reprovisions the hosted canary tenant (`david010`).
+- **Control-plane lane** (`control-plane/**`): push triggers `deploy-control-plane.yml`. That path deploys **only** the control plane and runs smoke/credential checks.
+- **Manual ship** is fallback/recovery, not the default path.
+
+Runtime lane builds `ghcr.io/cipher982/longhouse-runtime:latest` for hosted tenants only. The public demo runtime and control plane are separate Coolify builds from this repo; they do **not** pull the GHCR runtime image directly.
+
+If you manually ship, launch independent waits once and move on. Example: start a GHCR watch or a Coolify deploy wait, then do the next independent step. Do **not** sit in `pgrep`/health-check polling loops when a notification or blocking wait already exists.
+
+### Manual Runtime Lane
+
 ```bash
-coolify deploy name longhouse-demo
-# Or with wait: ~/git/me/mytech/scripts/coolify-deploy.sh longhouse-demo
+gh run watch $(gh run list --workflow runtime-image.yml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status
+./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
+make reprovision                    # david010 by default
+make qa-live
+make qa-live-conversations
 ```
 
-**2. Control plane (Coolify):**
+### Manual Control-Plane Lane
+
 ```bash
-coolify deploy name longhouse-control-plane
+./scripts/ops/coolify-deploy.sh longhouse-control-plane --timeout 900
+./scripts/qa/smoke-prod.sh --no-llm
+./scripts/ops/check-cp-credentials.sh
 ```
 
-**3. User instances (reprovision via control plane):**
+### Manual Canary Reprovision
+
 ```bash
 make reprovision                    # david010 (default) — auto-fetches admin token from zerg
 make reprovision SUBDOMAIN=other    # other instance
@@ -238,32 +257,31 @@ Data is safe — SQLite lives on a host bind mount at `/var/app-data/longhouse/<
 ### Verify Deploy
 ```bash
 make verify-prod                                       # API + browser validation
-curl -s https://longhouse.ai | grep '<title>'          # Marketing site content
+curl -s https://longhouse.ai/api/health                # Public demo runtime health
+curl -s https://control.longhouse.ai/health            # Control plane health
 curl -s https://david010.longhouse.ai/api/health       # User instance health
 ```
 
 ### Automation Note
-Pushes to `main` that touch the runtime image paths (`server/**`, `web/**`, `config/**`, `docker/runtime.dockerfile`) now trigger the GitHub Actions runtime-image build and the follow-on deploy workflow. Treat that as the primary path for normal app deploys, and keep the manual Coolify + reprovision steps above as the operator fallback and recovery path.
+Pushes to `main` that touch runtime paths trigger the runtime build and follow-on runtime deploy workflows automatically. Pushes that touch `control-plane/**` trigger the dedicated control-plane deploy workflow. Treat those as the primary path for normal app deploys, and keep the manual commands above as fallback/recovery.
 
 ### If Something Breaks
 ```bash
 ssh zerg 'docker logs longhouse-david010 --tail 50'    # User instance
-coolify app logs longhouse-demo                        # Marketing site
+coolify app logs longhouse-demo                        # Public demo runtime
 coolify app logs longhouse-control-plane               # Control plane
 ```
 
 For hosted loop / turn-review debugging on a live tenant, start with `scripts/hosted-loop-debug.sh <subdomain>`. It resolves the instance through the control plane, authenticates a browser cookie, hits `/api/oikos/loop-inbox` + `/api/oikos/turn-reviews`, and only then falls back to a container-side SQLite probe.
 
 ### Checklist for Agents
-1. `make test-ci` pass locally (validate + all unit tiers + engine + shipper)
-2. `make test-e2e` pass locally (Playwright core + a11y)
-3. `make qa-live` pass (smoke against hosted instance) — `/zerg-ship` skill has full details
-3. Push to main (triggers GHCR build if code changed)
-4. Wait for GHCR build: `gh run watch <id> --exit-status`
-5. Deploy marketing + control plane (Coolify)
-6. `make reprovision` (auto-fetches token, waits for health)
-7. `make qa-live` again to verify post-deploy
-8. Brief summary only at end (what shipped, what to manually verify if needed)
+1. `make test-ci` pass locally (validate + all unit tiers + engine + shipper).
+2. `make test-e2e` pass locally (Playwright core + a11y).
+3. Pick the lane that matches the change: runtime, control-plane, or both.
+4. Prefer the GitHub automation chain over manual operator steps.
+5. If you launch background waits, do other useful work and only block at the real dependency edge.
+6. Verify the affected surface after deploy: public demo runtime, control plane, hosted canary, or all three.
+7. Brief summary only at end (what shipped, what to manually verify if needed).
 
 ## Sauron / External Jobs
 

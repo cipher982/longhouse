@@ -3,7 +3,7 @@
 # Production Smoke Test for Longhouse (split frontend/backend)
 #
 # Usage:
-#   ./scripts/smoke-prod.sh           # default: public + auth + basic LLM
+#   ./scripts/smoke-prod.sh           # default: public demo + auth + basic LLM
 #   ./scripts/smoke-prod.sh --quick   # public health only
 #   ./scripts/smoke-prod.sh --full    # default + CRUD + email + infra
 #   ./scripts/smoke-prod.sh --no-llm  # skip LLM chat test
@@ -51,7 +51,7 @@ FRONTEND_URL="$LH_TARGET_FRONTEND_URL"
 API_URL="$LH_TARGET_API_URL"
 INSTANCE_SUBDOMAIN="${LH_TARGET_SUBDOMAIN:-$INSTANCE_SUBDOMAIN}"
 
-MARKETING_URL="${MARKETING_URL:-https://longhouse.ai}"
+PUBLIC_DEMO_URL="${PUBLIC_DEMO_URL:-${MARKETING_URL:-https://longhouse.ai}}"
 WAIT_SECS="${WAIT_SECS:-90}"
 SMOKE_TEST_EMAIL="${SMOKE_TEST_EMAIL:-david010@gmail.com}"
 INSTANCE_AUTH_ENABLED="unknown"
@@ -494,33 +494,34 @@ run_frontend_checks() {
 }
 
 run_cross_service_checks() {
-    # Marketing site
-    run_test test_http "Marketing site" "$MARKETING_URL" "200"
+    # Public demo runtime
+    run_test test_http "Public demo runtime" "$PUBLIC_DEMO_URL" "200"
+    run_test test_http "Public demo API health" "$PUBLIC_DEMO_URL/api/health" "200"
 
     # Control plane health
     run_test test_http "CP health endpoint" "$CP_URL/health" "200"
     run_test test_json "CP health status" "$CP_URL/health" ".status" "ok"
 
-    # Marketing JS references control plane URL
+    # Public demo JS references control plane URL
     local js_urls
-    js_urls=$(curl -s "$MARKETING_URL" 2>/dev/null | grep -oE 'src="/assets/[^"]+\.js"' | sed 's/src="//;s/"//' || true)
+    js_urls=$(curl -s "$PUBLIC_DEMO_URL" 2>/dev/null | grep -oE 'src="/assets/[^"]+\.js"' | sed 's/src="//;s/"//' || true)
     if [[ -n "$js_urls" ]]; then
         local found_cp=0
         for js_path in $js_urls; do
             local js_content
-            js_content=$(curl -s "${MARKETING_URL}${js_path}" 2>/dev/null || true)
+            js_content=$(curl -s "${PUBLIC_DEMO_URL}${js_path}" 2>/dev/null || true)
             if echo "$js_content" | grep -q "control.longhouse.ai"; then
                 found_cp=1
                 break
             fi
         done
         if [[ $found_cp -eq 1 ]]; then
-            pass "Marketing JS contains CP URL"
+            pass "Public demo JS contains CP URL"
         else
-            warn "Marketing JS does not reference control.longhouse.ai"
+            warn "Public demo JS does not reference control.longhouse.ai"
         fi
     else
-        warn "No JS bundles found on marketing site"
+        warn "No JS bundles found on public demo runtime"
     fi
 }
 
@@ -673,7 +674,7 @@ echo "  Longhouse Production Smoke Test"
 echo "================================================"
 echo "  Frontend:  $FRONTEND_URL"
 echo "  API:       $API_URL"
-echo "  Marketing: $MARKETING_URL"
+echo "  Demo:      $PUBLIC_DEMO_URL"
 echo "  CP:        $CP_URL"
 echo "================================================"
 echo ""

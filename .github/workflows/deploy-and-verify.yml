@@ -13,13 +13,13 @@ concurrency:
 
 jobs:
   deploy:
-    name: "Deploy + Smoke + Rollback"
+    name: "Deploy Demo + Hosted Canary"
     runs-on: cube-deploy
     timeout-minutes: 20
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
 
     env:
-      MARKETING_URL: https://longhouse.ai
+      PUBLIC_DEMO_URL: https://longhouse.ai
       CONTROL_PLANE_URL: https://control.longhouse.ai
       CP_URL: https://control.longhouse.ai
       INSTANCE_SUBDOMAIN: david010
@@ -49,39 +49,25 @@ jobs:
             StrictHostKeyChecking accept-new
           SSHEOF
 
-      - name: Record previous image SHA
+      - name: Make deploy helpers executable
+        run: |
+          chmod +x scripts/ops/coolify-deploy.sh
+          chmod +x scripts/ci/export-hosted-instance-env.sh
+          chmod +x scripts/qa/smoke-prod.sh
+
+      - name: Record previous canary image SHA
         id: prev
         run: |
           CONTAINER_NAME="longhouse-${INSTANCE_SUBDOMAIN}"
           FULL_SHA=$(ssh zerg "docker inspect $CONTAINER_NAME --format '{{index .Config.Labels \"org.opencontainers.image.revision\"}}'" 2>/dev/null || echo "")
           SHORT_SHA="${FULL_SHA:0:7}"
           echo "sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
-          echo "Previous image revision: ${SHORT_SHA:-unknown} (full: ${FULL_SHA:-unknown})"
+          echo "Previous canary image revision: ${SHORT_SHA:-unknown} (full: ${FULL_SHA:-unknown})"
 
-      - name: Deploy Coolify apps (marketing + control plane)
-        env:
-          COOLIFY_DEMO_UUID: ${{ secrets.COOLIFY_DEMO_UUID }}
-          COOLIFY_CP_UUID: ${{ secrets.COOLIFY_CP_UUID }}
-        run: |
-          if [[ -z "$COOLIFY_DEMO_UUID" || -z "$COOLIFY_CP_UUID" ]]; then
-            echo "Skipping Coolify deploy — secrets not configured"
-            exit 0
-          fi
-          ssh clifford "
-            TOKEN=\$(sudo cat /var/lib/docker/data/coolify-api/token.env | cut -d= -f2) && \
-            curl -sf -X POST \
-              -H \"Authorization: Bearer \$TOKEN\" \
-              -H 'Content-Type: application/json' \
-              -d '{\"uuid\":\"$COOLIFY_DEMO_UUID\"}' \
-              'http://localhost:8000/api/v1/deploy' && \
-            curl -sf -X POST \
-              -H \"Authorization: Bearer \$TOKEN\" \
-              -H 'Content-Type: application/json' \
-              -d '{\"uuid\":\"$COOLIFY_CP_UUID\"}' \
-              'http://localhost:8000/api/v1/deploy'
-          "
+      - name: Deploy public demo runtime
+        run: ./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
 
-      - name: Wait for control plane and marketing
+      - name: Wait for public demo and control plane
         run: |
           check_health() {
             local url="$1"
@@ -99,24 +85,22 @@ jobs:
             return 1
           }
 
+          check_health "$PUBLIC_DEMO_URL/api/health" "Public demo runtime"
           check_health "$CONTROL_PLANE_URL/health" "Control plane"
-          check_health "$MARKETING_URL" "Marketing site"
 
-      - name: Resolve hosted instance
+      - name: Resolve hosted canary instance
         env:
           CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
-        run: |
-          chmod +x scripts/ci/export-hosted-instance-env.sh
-          ./scripts/ci/export-hosted-instance-env.sh
+        run: ./scripts/ci/export-hosted-instance-env.sh
 
-      - name: Reprovision user instance
+      - name: Reprovision hosted canary
         env:
           CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
         run: |
           . scripts/lib/hosted-instance.sh
           lh_hosted_reprovision "$INSTANCE_ID"
 
-      - name: Wait for services
+      - name: Wait for hosted canary
         run: |
           check_health() {
             local url="$1"
@@ -134,40 +118,26 @@ jobs:
             return 1
           }
 
-          check_health "$API_URL/api/health" "User instance"
+          check_health "$API_URL/api/health" "Hosted canary"
+          check_health "$PUBLIC_DEMO_URL/api/health" "Public demo runtime"
           check_health "$CONTROL_PLANE_URL/health" "Control plane"
-          check_health "$MARKETING_URL" "Marketing site"
 
       - name: Run smoke tests
         env:
           CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
-        run: |
-          chmod +x scripts/qa/smoke-prod.sh
-          ./scripts/qa/smoke-prod.sh --no-llm
+        run: ./scripts/qa/smoke-prod.sh --no-llm
 
       - name: Summary
         if: always()
         run: |
-          echo "## Deploy + Verify Results" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Runtime Deploy + Verify Results" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Instance:** $INSTANCE_SUBDOMAIN" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Instance URL:** $INSTANCE_URL" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Marketing:** $MARKETING_URL" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Control Plane:** $CONTROL_PLANE_URL" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Previous SHA:** ${{ steps.prev.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
-
-      # Disabled: auto-rollback can fight rapid iteration. Re-enable when stable.
-      # - name: Rollback user instance
-      #   if: failure()
-      #   run: |
-      #     PREV_SHA="${{ steps.prev.outputs.sha }}"
-      #     if [[ -n "$PREV_SHA" ]]; then
-      #       echo "Rolling back to image revision: $PREV_SHA"
-      #       ssh zerg "docker pull ghcr.io/cipher982/longhouse-runtime:${PREV_SHA} && docker stop longhouse-${INSTANCE_SUBDOMAIN} && docker rm longhouse-${INSTANCE_SUBDOMAIN}"
-      #     else
-      #       echo "No previous SHA recorded — cannot rollback"
-      #     fi
+          echo "- **Hosted canary:** $INSTANCE_SUBDOMAIN" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Hosted canary URL:** $INSTANCE_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Public demo:** $PUBLIC_DEMO_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Control plane:** $CONTROL_PLANE_URL" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Previous canary SHA:** ${{ steps.prev.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub issue on failure
         if: failure()
@@ -175,16 +145,18 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           PREV_SHA="${{ steps.prev.outputs.sha }}"
+          COMMIT_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
           gh issue create \
-            --title "Deploy smoke failed for ${GITHUB_SHA:0:7}" \
+            --title "Runtime deploy smoke failed for ${COMMIT_SHA:0:7}" \
             --body "$(cat <<EOF_BODY
-          Smoke tests failed after deploying commit ${{ github.sha }}.
+          Smoke tests failed after deploying runtime commit ${COMMIT_SHA}.
 
-          - Instance: $INSTANCE_URL
-          - Previous image SHA: \`${PREV_SHA:-unknown}\`
+          - Hosted canary: $INSTANCE_URL
+          - Public demo: $PUBLIC_DEMO_URL
+          - Previous canary image SHA: \`${PREV_SHA:-unknown}\`
           - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          Auto-rollback is disabled. Check the workflow logs for which checks failed.
+          Check the workflow logs for which checks failed.
           EOF_BODY
           )" \
             --label "deploy-failure"
