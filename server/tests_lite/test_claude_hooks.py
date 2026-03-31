@@ -33,6 +33,13 @@ def test_claude_hook_script_supports_direct_hook_target_overrides():
     assert '--session-id "$managed_session_id" --require-reply-evidence' in HOOK_SCRIPT
 
 
+def test_claude_stop_hook_forces_sidechain_for_hindsight_workspace():
+    assert 'FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"' in HOOK_SCRIPT
+    assert 'HINDSIGHT_ROOT="$HOME/.claude/hindsight"' in HOOK_SCRIPT
+    assert 'case "$CWD" in' in HOOK_SCRIPT
+    assert 'LONGHOUSE_IS_SIDECHAIN=1 "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true' in HOOK_SCRIPT
+
+
 def test_session_start_hook_prefers_direct_hook_target_overrides():
     assert 'TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"' in SESSION_START_HOOK_SCRIPT
     assert 'URL="${LONGHOUSE_HOOK_URL:-}"' in SESSION_START_HOOK_SCRIPT
