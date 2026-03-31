@@ -535,13 +535,27 @@ async fn prepare_file_for_job(
 
     tokio::task::spawn_blocking(move || {
         let conn = open_db(db_path.as_deref())?;
-        // Check session_binding for managed session ID override
-        let binding = crate::state::session_binding::SessionBinding::new(&conn);
         let canonical = std::fs::canonicalize(&path)
             .unwrap_or_else(|_| path.clone())
             .to_string_lossy()
             .to_string();
-        let session_id_override = binding.get(&canonical)?;
+
+        // Check session_binding for managed session ID override.
+        // For brand-new files (offset 0), the binding may not have landed yet
+        // (e.g. Codex bridge writes it on thread/started, which races with
+        // fsevents). Retry once after a short delay to close the window.
+        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+        let mut session_id_override = binding.get(&canonical)?;
+        if session_id_override.is_none() {
+            let file_state = crate::state::file_state::FileState::new(&conn);
+            let current_offset = file_state.get_offset(&canonical)
+                .or_else(|_| file_state.get_offset(&path.to_string_lossy()))?;
+            if current_offset == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                session_id_override = binding.get(&canonical)?;
+            }
+        }
+
         shipper::prepare_file_batches_with_parse_tracker(
             &path,
             provider,
