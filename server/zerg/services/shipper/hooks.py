@@ -83,6 +83,13 @@ IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE <<< "$(
 TARGET_URL="${LONGHOUSE_HOOK_URL:-}"
 TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
 MANAGED_SESSION_ID="${LONGHOUSE_SESSION_ID:-}"
+FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"
+HINDSIGHT_ROOT="$HOME/.claude/hindsight"
+if [[ "$FORCE_SIDECHAIN" != "1" ]] && [[ -n "$CWD" ]]; then
+  case "$CWD" in
+    "$HINDSIGHT_ROOT"|"$HINDSIGHT_ROOT"/*) FORCE_SIDECHAIN="1" ;;
+  esac
+fi
 
 emit_presence() {
   payload="$1"
@@ -133,6 +140,7 @@ if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
     managed_session_id="$3"
     target_url="$4"
     target_token="$5"
+    force_sidechain="$6"
     ship_args=()
     if [[ -n "$target_url" ]]; then
       ship_args+=(--url "$target_url")
@@ -148,10 +156,14 @@ if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
         sleep "$delay"
       fi
       if [[ -f "$transcript" ]]; then
-        "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true
+        if [[ "$force_sidechain" == "1" ]]; then
+          LONGHOUSE_IS_SIDECHAIN=1 "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true
+        else
+          "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true
+        fi
       fi
     done
-  ' _ "$ENGINE" "$TRANSCRIPT" "$MANAGED_SESSION_ID" "$TARGET_URL" "$TARGET_TOKEN" >/dev/null 2>&1 < /dev/null &
+  ' _ "$ENGINE" "$TRANSCRIPT" "$MANAGED_SESSION_ID" "$TARGET_URL" "$TARGET_TOKEN" "$FORCE_SIDECHAIN" >/dev/null 2>&1 < /dev/null &
 fi
 
 if ! emit_presence "$PAYLOAD"; then

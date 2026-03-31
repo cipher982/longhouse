@@ -380,3 +380,35 @@ def test_insights_create_sets_manual_origin(tmp_path):
             assert insight.origin == "manual"
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_insights_create_accepts_explicit_origin(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+
+    client = _make_client(session_local)
+    api_app.dependency_overrides[verify_agents_token] = lambda: None
+
+    try:
+        with _force_agents_token_mode():
+            response = client.post(
+                "/insights",
+                headers={"X-Agents-Token": "dev"},
+                json={
+                    "insight_type": "learning",
+                    "title": "Created via hindsight",
+                    "project": "zerg",
+                    "description": "Fresh note",
+                    "origin": "hindsight",
+                },
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["origin"] == "hindsight"
+        with session_local() as db:
+            insight = db.query(Insight).filter(Insight.title == "Created via hindsight").first()
+            assert insight is not None
+            assert insight.origin == "hindsight"
+    finally:
+        api_app.dependency_overrides.clear()

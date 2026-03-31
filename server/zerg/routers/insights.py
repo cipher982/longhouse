@@ -57,6 +57,7 @@ class InsightCreateRequest(BaseModel):
     confidence: Optional[float] = Field(None, description="Confidence score 0.0-1.0")
     tags: Optional[List[str]] = Field(None, description="Tags for categorization")
     session_id: Optional[str] = Field(None, description="Source session UUID")
+    origin: Optional[str] = Field(None, description="Origin label for the insight, e.g. manual, reflection, hindsight")
 
 
 class InsightResponse(UTCBaseModel):
@@ -92,6 +93,13 @@ def _get_insight_or_404(db: Session, insight_id: str) -> Insight:
     return insight
 
 
+def _normalize_origin(origin: Optional[str]) -> Optional[str]:
+    if origin is None:
+        return None
+    normalized = origin.strip()
+    return normalized or None
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -111,6 +119,7 @@ async def create_insight(
     """
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=INSIGHT_DEDUP_WINDOW_DAYS)
+        normalized_origin = _normalize_origin(body.origin) or INSIGHT_ORIGIN_MANUAL
 
         # Dedup: look for existing insight with same title + project
         query = db.query(Insight).filter(
@@ -191,7 +200,7 @@ async def create_insight(
             title=body.title,
             description=body.description,
             project=body.project,
-            origin=INSIGHT_ORIGIN_MANUAL,
+            origin=normalized_origin,
             severity=body.severity,
             confidence=body.confidence,
             tags=body.tags,

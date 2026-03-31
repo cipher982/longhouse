@@ -289,6 +289,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         title: str,
         description: str | None = None,
         project: str | None = None,
+        origin: str | None = None,
         severity: str = "info",
         confidence: float | None = None,
         session_id: str | None = None,
@@ -305,6 +306,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             title: Short summary of the insight.
             description: Detailed explanation (optional).
             project: Project name (optional).
+            origin: Origin label for the insight, e.g. hindsight (optional).
             severity: Severity level: info, warning, critical (default info).
             confidence: Confidence score 0.0-1.0 (optional).
             session_id: UUID of the source session (optional).
@@ -319,6 +321,8 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             payload["description"] = description
         if project is not None:
             payload["project"] = project
+        if origin is not None:
+            payload["origin"] = origin
         if confidence is not None:
             payload["confidence"] = confidence
         if session_id is not None:
