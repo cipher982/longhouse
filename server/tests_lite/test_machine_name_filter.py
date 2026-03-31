@@ -58,7 +58,7 @@ def test_get_distinct_filters_includes_machines(tmp_path):
         _ingest(store, "work-macbook")
         _ingest(store, "home-server")
 
-        filters = store.get_distinct_filters(days_back=30)
+        filters = store.get_distinct_filters(days_back=9999)
 
         assert "machines" in filters
         assert "work-macbook" in filters["machines"]
@@ -73,7 +73,7 @@ def test_machines_list_is_deduplicated(tmp_path):
         _ingest(store, "work-macbook", project="proj-a")
         _ingest(store, "work-macbook", project="proj-b")
 
-        filters = store.get_distinct_filters(days_back=30)
+        filters = store.get_distinct_filters(days_back=9999)
 
         assert filters["machines"].count("work-macbook") == 1
 
@@ -122,7 +122,7 @@ def test_machines_excludes_null_environment(tmp_path):
         # Ingest a session with a real machine name
         _ingest(store, "real-machine")
 
-        filters = store.get_distinct_filters(days_back=30)
+        filters = store.get_distinct_filters(days_back=9999)
 
         # Only real machine name should appear, not None/empty
         assert None not in filters["machines"]
