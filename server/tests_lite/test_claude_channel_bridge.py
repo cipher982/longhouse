@@ -183,7 +183,7 @@ def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):
         assert notification["method"] == "notifications/claude/channel"
         assert notification["params"]["content"] == "hello from pytest"
         assert notification["params"]["meta"] == {
-            "source": "longhouse",
+            "injected_by": "longhouse",
             "longhouse_session_id": session_id,
             "user": "pm",
         }
