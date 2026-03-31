@@ -11,8 +11,9 @@ Claude hooks (via settings.json):
   Unified hook. Writes presence events to a local outbox directory
   (~/.claude/outbox/) as small JSON files (<2ms, no network). The
   longhouse-engine daemon drains the outbox on a 1-second poll and POSTs
-  to /api/agents/presence. On Stop, also ships the session transcript via
-  the engine binary. All registrations use async: False — no banners.
+  to /api/agents/presence. On Stop, also seeds the session_binding table
+  so the daemon ships with the correct managed session ID. All
+  registrations use async: False — no banners.
 - **longhouse-session-start.sh** (SessionStart): On fresh session startup,
   queries Longhouse for recent sessions in the current project and injects
   a system message with context. Runs once per session (sync is acceptable).
@@ -21,7 +22,8 @@ Codex hooks (via hooks.json):
 
 - **longhouse-codex-hook.sh** (SessionStart, UserPromptSubmit, Stop):
   Writes presence events to the same ~/.claude/outbox/ directory using
-  Codex's snake_case hook command input fields. On Stop, ships the transcript.
+  Codex's snake_case hook command input fields. Seeds session_binding for
+  managed sessions so the daemon ships with the correct ID.
   Codex has fewer hook events than Claude (no PreToolUse/PostToolUse),
   so tool-level granularity is not available.
 
@@ -43,8 +45,6 @@ import stat
 import tomllib
 from pathlib import Path
 
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
-
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -53,12 +53,12 @@ logger = logging.getLogger(__name__)
 
 HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse unified hook — presence outbox write + transcript ship
+# Longhouse unified hook — presence outbox write + session binding
 # Installed by: longhouse connect --install
 # Registered on: Stop, UserPromptSubmit, PreToolUse, PostToolUse,
 #                PermissionRequest, Notification
 # Presence: no network — writes to local outbox, daemon handles upload.
-# Stop also runs longhouse-engine ship (local binary, ships transcript).
+# Session binding: seeds managed session ID so daemon ships correctly.
 INPUT=$(cat)
 
 # Require jq — exit silently if missing (hook is best-effort)
@@ -124,46 +124,12 @@ PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
       --arg tool "$TOOL" --arg cwd "$CWD" \\
   '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}')
 
-# Stop: also ship the session transcript via engine binary.
-# Kick this off before the presence POST so shipping does not inherit that
-# network round-trip on the managed-local hot path. Presence is still
-# recorded before the hook exits.
-# Detach the ship loop with nohup because Claude can reap hook children as
-# soon as the hook exits, and retry for a few seconds because Stop can fire
-# before the transcript file exists or before the final tail is flushed.
-# Engine path is quoted to handle paths with spaces.
+# Seed session binding so the daemon ships with the correct managed session ID.
+# The daemon (longhouse-engine connect) handles all transcript shipping via its
+# file watcher — hooks no longer ship directly.
 ENGINE="__ENGINE_PATH__"
-if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then
-  nohup /bin/bash -c '
-    engine="$1"
-    transcript="$2"
-    managed_session_id="$3"
-    target_url="$4"
-    target_token="$5"
-    force_sidechain="$6"
-    ship_args=()
-    if [[ -n "$target_url" ]]; then
-      ship_args+=(--url "$target_url")
-    fi
-    if [[ -n "$target_token" ]]; then
-      ship_args+=(--token "$target_token")
-    fi
-    if [[ -n "$managed_session_id" ]]; then
-      ship_args+=(--session-id "$managed_session_id" --require-reply-evidence)
-    fi
-    for delay in __MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__; do
-      if [[ "$delay" != "0" ]]; then
-        sleep "$delay"
-      fi
-      if [[ -f "$transcript" ]]; then
-        if [[ "$force_sidechain" == "1" ]]; then
-          LONGHOUSE_IS_SIDECHAIN=1 "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true
-        else
-          "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true
-        fi
-      fi
-    done
-  ' _ "$ENGINE" "$TRANSCRIPT" "$MANAGED_SESSION_ID" "$TARGET_URL" "$TARGET_TOKEN" "$FORCE_SIDECHAIN" >/dev/null 2>&1 < /dev/null &
+if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
+  "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" >/dev/null 2>&1 || true
 fi
 
 if ! emit_presence "$PAYLOAD"; then
@@ -180,7 +146,7 @@ fi
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
 # instead?" prompt, which interrupts the session.
 exit 0
-""".replace("__MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS__", MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL)
+"""
 
 SESSION_START_HOOK_SCRIPT = """\
 #!/bin/bash
@@ -236,11 +202,11 @@ exit 0
 
 CODEX_HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse Codex hook — presence outbox write + transcript ship
+# Longhouse Codex hook — presence outbox write + session binding
 # Installed by: longhouse connect --install
 # Registered on: SessionStart, UserPromptSubmit, Stop (via ~/.codex/hooks.json)
 # Presence: no network — writes to local outbox, daemon handles upload.
-# Stop also runs longhouse-engine ship (local binary, ships transcript).
+# Session binding: seeds managed session ID so daemon ships correctly.
 INPUT=$(cat)
 
 # Codex command hooks use snake_case field names.
@@ -301,22 +267,10 @@ if ! emit_presence "$PAYLOAD"; then
   mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
 fi
 
-# Stop: ship the session transcript via engine binary.
-# For managed-local sessions, --session-id overrides the ingest UUID so the
-# transcript lands on the Longhouse-owned session, not a duplicate.
+# Seed session binding so the daemon ships with the correct managed session ID.
 ENGINE="__ENGINE_PATH__"
-if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]; then
-  ship_args=()
-  if [ -n "$LONGHOUSE_SESSION_ID" ]; then
-    ship_args+=(--session-id "$LONGHOUSE_SESSION_ID")
-  fi
-  if [ -n "$TARGET_URL" ]; then
-    ship_args+=(--url "$TARGET_URL")
-  fi
-  if [ -n "$TARGET_TOKEN" ]; then
-    ship_args+=(--token "$TARGET_TOKEN")
-  fi
-  "$ENGINE" ship --file "$TRANSCRIPT" "${ship_args[@]}" &>/dev/null &
+if [[ -n "$LONGHOUSE_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
+  "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$LONGHOUSE_SESSION_ID" --provider codex >/dev/null 2>&1 || true
 fi
 
 exit 0
@@ -341,11 +295,11 @@ def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict, dict]:
     hook_path = str(hooks_dir / "longhouse-hook.sh")
     session_start_path = str(hooks_dir / "longhouse-session-start.sh")
 
-    # Stop: async — the hook itself only writes presence and kicks off
-    # background transcript shipping, so Claude should not wait on it.
+    # Stop: sync — hook only writes presence outbox + session binding (<5ms).
+    # The daemon handles all transcript shipping via its file watcher.
     stop_entry = {
         "hooks": [
-            {"type": "command", "command": hook_path, "async": True, "timeout": 30},
+            {"type": "command", "command": hook_path, "async": False, "timeout": 5},
         ],
     }
     # Lifecycle events: outbox write is <2ms, sync is safe and silent.
@@ -710,7 +664,7 @@ def install_codex_hooks(
         "hooks": [{"type": "command", "command": hook_path, "timeout": 5}],
     }
     stop_group = {
-        "hooks": [{"type": "command", "command": hook_path, "timeout": 30}],
+        "hooks": [{"type": "command", "command": hook_path, "timeout": 5}],
     }
 
     for event in ("SessionStart", "UserPromptSubmit"):

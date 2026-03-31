@@ -17,7 +17,6 @@ use uuid::Uuid;
 
 const BRIDGE_RUNTIME_SOURCE: &str = "codex_bridge";
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
-const DEFAULT_SHIP_DELAY_MS: u64 = 150;
 
 #[derive(Debug, Clone)]
 pub struct BridgeStartConfig {
@@ -1263,6 +1262,24 @@ async fn process_notification(
                     context.state.thread_path = thread_path.clone();
                     context.runtime.thread_id = thread_id.clone();
                     write_state_file(&context.state_file, &context.state)?;
+
+                    // Seed session_binding so the daemon ships with the managed session ID.
+                    if let Some(ref tp) = thread_path {
+                        match crate::state::db::open_db(None) {
+                            Ok(conn) => {
+                                let sb = crate::state::session_binding::SessionBinding::new(&conn);
+                                let canonical = std::fs::canonicalize(tp)
+                                    .unwrap_or_else(|_| PathBuf::from(tp))
+                                    .to_string_lossy()
+                                    .to_string();
+                                if let Err(e) = sb.bind(&canonical, &context.state.session_id, "codex") {
+                                    eprintln!("[codex-bridge] session_binding seed failed: {e}");
+                                }
+                            }
+                            Err(e) => eprintln!("[codex-bridge] open shipper DB for binding: {e}"),
+                        }
+                    }
+
                     context
                         .runtime
                         .post_phase(
@@ -1325,26 +1342,7 @@ async fn process_notification(
                     None,
                 )
                 .await;
-            if let Some(thread_path) = context.state.thread_path.clone() {
-                let session_id = context.state.session_id.clone();
-                let api_url = config.api_url.clone();
-                let api_token = config.api_token.clone();
-                let current_exe = context.current_exe.clone();
-                tokio::spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(DEFAULT_SHIP_DELAY_MS)).await;
-                    if let Err(err) = ship_thread_file(
-                        &current_exe,
-                        &thread_path,
-                        &session_id,
-                        &api_url,
-                        &api_token,
-                    )
-                    .await
-                    {
-                        eprintln!("[codex-bridge] per-turn ship failed: {err}");
-                    }
-                });
-            }
+            // Daemon handles shipping — no per-turn ship needed.
         }
         "thread/status/changed" => {
             if let Some(status_type) = extract_string(&params, &["thread", "status", "type"]) {
@@ -1372,40 +1370,6 @@ async fn process_notification(
             }
         }
         _ => {}
-    }
-    Ok(())
-}
-
-async fn ship_thread_file(
-    engine_exe: &Path,
-    thread_path: &str,
-    session_id: &str,
-    api_url: &str,
-    api_token: &str,
-) -> Result<()> {
-    let output = Command::new(engine_exe)
-        .arg("ship")
-        .arg("--file")
-        .arg(thread_path)
-        .arg("--provider")
-        .arg("codex")
-        .arg("--url")
-        .arg(api_url)
-        .arg("--token")
-        .arg(api_token)
-        .arg("--session-id")
-        .arg(session_id)
-        .arg("--require-reply-evidence")
-        .arg("--json")
-        .output()
-        .await
-        .with_context(|| format!("spawning per-turn ship for {}", thread_path))?;
-    if !output.status.success() {
-        bail!(
-            "ship exited with {} stderr={}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr)
-        );
     }
     Ok(())
 }

@@ -1,25 +1,22 @@
-"""Tests for Claude hook installation and Stop shipping behavior."""
+"""Tests for Claude hook installation and session binding behavior."""
 
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
 from zerg.services.shipper.hooks import HOOK_SCRIPT
 from zerg.services.shipper.hooks import SESSION_START_HOOK_SCRIPT
 from zerg.services.shipper.hooks import _make_hook_entries
 
 
-def test_claude_hook_script_detaches_stop_shipping_and_retries_while_file_exists():
-    assert '[[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]' in HOOK_SCRIPT
-    assert "nohup /bin/bash -c" in HOOK_SCRIPT
-    assert f"for delay in {MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL}" in HOOK_SCRIPT
-    assert 'if [[ "$delay" != "0" ]]; then' in HOOK_SCRIPT
-    assert 'if [[ -f "$transcript" ]]' in HOOK_SCRIPT
-    assert 'ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true' in HOOK_SCRIPT
-    assert '[[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]] && [[ -f "$TRANSCRIPT" ]]' not in HOOK_SCRIPT
+def test_claude_hook_seeds_session_binding_on_stop():
+    """Hook seeds session_binding via engine bind instead of shipping directly."""
+    assert '__ENGINE_PATH__' in HOOK_SCRIPT
+    assert 'bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID"' in HOOK_SCRIPT
+    # No direct shipping — daemon handles it
+    assert 'ship --file' not in HOOK_SCRIPT
+    assert 'nohup' not in HOOK_SCRIPT
 
 
-def test_claude_stop_hook_starts_shipping_before_presence_emit():
-    stop_ship_index = HOOK_SCRIPT.index('if [[ "$EVENT" == "Stop" ]] && [[ -n "$TRANSCRIPT" ]]; then')
-    emit_presence_index = HOOK_SCRIPT.index('if ! emit_presence "$PAYLOAD"; then')
-    assert stop_ship_index < emit_presence_index
+def test_claude_hook_writes_presence_to_outbox():
+    assert 'OUTBOX="$HOME/.claude/outbox"' in HOOK_SCRIPT
+    assert 'emit_presence "$PAYLOAD"' in HOOK_SCRIPT
 
 
 def test_claude_hook_script_supports_direct_hook_target_overrides():
@@ -28,16 +25,12 @@ def test_claude_hook_script_supports_direct_hook_target_overrides():
     assert "X-Agents-Token: $TARGET_TOKEN" in HOOK_SCRIPT
     assert "${TARGET_URL%/}/api/agents/presence" in HOOK_SCRIPT
     assert "LONGHOUSE_SESSION_ID" in HOOK_SCRIPT
-    assert '--url "$target_url"' in HOOK_SCRIPT
-    assert '--token "$target_token"' in HOOK_SCRIPT
-    assert '--session-id "$managed_session_id" --require-reply-evidence' in HOOK_SCRIPT
 
 
 def test_claude_stop_hook_forces_sidechain_for_hindsight_workspace():
     assert 'FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"' in HOOK_SCRIPT
     assert 'HINDSIGHT_ROOT="$HOME/.claude/hindsight"' in HOOK_SCRIPT
     assert 'case "$CWD" in' in HOOK_SCRIPT
-    assert 'LONGHOUSE_IS_SIDECHAIN=1 "$engine" ship --file "$transcript" "${ship_args[@]}" --quiet >/dev/null 2>&1 || true' in HOOK_SCRIPT
 
 
 def test_session_start_hook_prefers_direct_hook_target_overrides():
@@ -46,8 +39,9 @@ def test_session_start_hook_prefers_direct_hook_target_overrides():
     assert 'if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]' in SESSION_START_HOOK_SCRIPT
 
 
-def test_claude_stop_hook_entry_is_async(tmp_path):
+def test_claude_stop_hook_entry_is_sync(tmp_path):
+    """Stop hook is now sync (no shipping, just outbox write + binding seed)."""
     stop_entry, _lifecycle_entry, _session_start_entry = _make_hook_entries(tmp_path)
     hook = stop_entry["hooks"][0]
-    assert hook["async"] is True
-    assert hook["timeout"] == 30
+    assert hook["async"] is False
+    assert hook["timeout"] == 5

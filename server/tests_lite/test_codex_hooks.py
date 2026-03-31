@@ -43,8 +43,6 @@ def test_codex_hook_script_supports_direct_hook_target_overrides():
     assert 'TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"' in CODEX_HOOK_SCRIPT
     assert 'X-Agents-Token: $TARGET_TOKEN' in CODEX_HOOK_SCRIPT
     assert '${TARGET_URL%/}/api/agents/presence' in CODEX_HOOK_SCRIPT
-    assert '--url "$TARGET_URL"' in CODEX_HOOK_SCRIPT
-    assert '--token "$TARGET_TOKEN"' in CODEX_HOOK_SCRIPT
 
 
 def test_codex_hook_script_maps_all_events():
@@ -144,8 +142,8 @@ def test_install_codex_hooks_creates_valid_hooks_json(tmp_path, monkeypatch):
         assert handler["type"] == "command"
         assert "longhouse-codex-hook.sh" in handler["command"]
 
-    # Stop should have longer timeout
-    assert hooks["Stop"][0]["hooks"][0]["timeout"] == 30
+    # All hooks use 5s timeout (no shipping, just outbox write + binding)
+    assert hooks["Stop"][0]["hooks"][0]["timeout"] == 5
     assert hooks["SessionStart"][0]["hooks"][0]["timeout"] == 5
 
 

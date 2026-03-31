@@ -27,13 +27,8 @@ from zerg.services.managed_local_control import await_managed_local_hook_phase_u
 from zerg.services.managed_local_control import await_managed_local_presence_update
 from zerg.services.managed_local_control import await_managed_local_turn_events
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
-from zerg.services.managed_local_control import build_managed_local_claude_ship_command
 from zerg.services.managed_local_control import send_text_to_managed_local_session
-from zerg.services.managed_local_control import ship_managed_local_claude_transcript
 from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS
-from zerg.services.managed_local_ship_retry import MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
-from zerg.services.managed_local_ship_retry import get_managed_local_claude_ship_retry_sleep_delays
 from zerg.services.presence_cache import get_presence_cache
 
 
@@ -296,81 +291,6 @@ def test_send_text_to_managed_local_session_uses_claude_channel_bridge_command(m
         assert "continue from loop" in command
 
 
-def test_build_managed_local_claude_ship_command_targets_exact_transcript(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-
-    with SessionLocal() as db:
-        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
-        session.provider_session_id = "b0c72633-c8b1-46a4-a42a-53a388b69147"
-        db.commit()
-
-        command = build_managed_local_claude_ship_command(session=session)
-
-        assert (
-            'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:'
-            "/usr/local/bin:/usr/local/sbin:/home/linuxbrew/.linuxbrew/bin:"
-            '/home/linuxbrew/.linuxbrew/sbin:$PATH"' in command
-        )
-        assert (
-            "if ! command -v longhouse-engine >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi"
-            in command
-        )
-        assert "command -v longhouse-engine" in command
-        assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
-        assert f"--session-id {session.id}" in command
-        assert "--require-reply-evidence" in command
-        assert f"delays=({MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL})" in command
-        assert 'for delay in "${delays[@]}"' in command
-        assert '[ -f "$transcript" ] || continue' in command
-        assert "--json" in command
-        assert "events_shipped" in command
-        assert "Managed local Claude transcript did not ship new events" in command
-
-
-def test_managed_local_claude_ship_retry_schedule_is_dense_in_first_second():
-    assert MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS[:10] == (
-        0.0,
-        0.05,
-        0.1,
-        0.15,
-        0.2,
-        0.25,
-        0.5,
-        0.75,
-        1.0,
-        1.25,
-    )
-    assert get_managed_local_claude_ship_retry_sleep_delays() == (
-        0.0,
-        0.05,
-        0.05,
-        0.05,
-        0.05,
-        0.05,
-        0.25,
-        0.25,
-        0.25,
-        0.25,
-        0.25,
-        0.5,
-        1.0,
-        1.0,
-        2.0,
-        2.0,
-    )
-    assert (
-        MANAGED_LOCAL_CLAUDE_SHIP_RETRY_SLEEP_DELAYS_SHELL
-        == "0 0.05 0.05 0.05 0.05 0.05 0.25 0.25 0.25 0.25 0.25 0.5 1 1 2 2"
-    )
-    post_one_second_attempts = [
-        attempt for attempt in MANAGED_LOCAL_CLAUDE_SHIP_RETRY_ATTEMPT_AT_SECS if attempt >= 1.0
-    ]
-    post_one_second_gaps = [
-        later - earlier for earlier, later in zip(post_one_second_attempts, post_one_second_attempts[1:], strict=False)
-    ]
-    assert max(post_one_second_gaps) <= 2.0
-
-
 def test_validate_managed_local_chat_done_payload_accepts_successful_zero_exit_code():
     session_id = "9aa6380c-ec1d-4a3b-a221-fa7feb96fcb6"
 
@@ -423,100 +343,6 @@ def test_validate_managed_local_chat_done_payload_rejects_nonzero_exit_code():
     )
 
     assert error == "expected exit_code=0, got 3"
-
-
-def test_ship_managed_local_claude_transcript_dispatches_runner_job(monkeypatch, tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    dispatcher = _FakeDispatcher()
-    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
-
-    with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
-        session.provider_session_id = "b0c72633-c8b1-46a4-a42a-53a388b69147"
-        db.commit()
-
-        result = asyncio.run(
-            ship_managed_local_claude_transcript(
-                db=db,
-                owner_id=user.id,
-                session=session,
-                commis_id="managed-local-claude-ship",
-            )
-        )
-
-        assert result.ok is True
-        assert len(dispatcher.calls) == 1
-        assert dispatcher.calls[0]["runner_id"] == runner.id
-        assert dispatcher.calls[0]["commis_id"] == "managed-local-claude-ship"
-        command = str(dispatcher.calls[0]["command"])
-        assert "command -v longhouse-engine" in command
-        assert "$HOME/.claude/projects/-Users-davidrose-git-zerg/b0c72633-c8b1-46a4-a42a-53a388b69147.jsonl" in command
-        assert f"--session-id {session.id}" in command
-        assert "--json" in command
-        assert "total_shipped=0" in command
-
-
-def test_ship_managed_local_claude_transcript_retries_after_transient_runner_disconnect(monkeypatch, tmp_path):
-    SessionLocal = _make_db(tmp_path)
-    reconnect_calls = {"count": 0}
-
-    async def fake_wait_for_reconnect(*, owner_id, runner_id, timeout_secs, poll_interval_secs=0.25):
-        reconnect_calls["count"] += 1
-        assert owner_id > 0
-        assert runner_id > 0
-        assert timeout_secs > 0
-        return True
-
-    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
-    monkeypatch.setattr(
-        "zerg.services.managed_local_control._await_managed_local_runner_reconnect",
-        fake_wait_for_reconnect,
-    )
-
-    with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
-        session.provider_session_id = "b0c72633-c8b1-46a4-a42a-53a388b69147"
-        db.commit()
-
-        for transient_error in ("Runner is offline", "Failed to send command to runner"):
-            dispatcher = _FakeDispatcher()
-            dispatcher.results = deque(
-                [
-                    {
-                        "ok": False,
-                        "error": {
-                            "message": transient_error,
-                        },
-                    },
-                    {
-                        "ok": True,
-                        "data": {
-                            "exit_code": 0,
-                            "stdout": "",
-                            "stderr": "",
-                        },
-                    },
-                ]
-            )
-            monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
-
-            result = asyncio.run(
-                ship_managed_local_claude_transcript(
-                    db=db,
-                    owner_id=user.id,
-                    session=session,
-                    commis_id="managed-local-claude-retry",
-                )
-            )
-
-            assert result.ok is True
-            assert len(dispatcher.calls) == 2
-            assert dispatcher.calls[0]["runner_id"] == runner.id
-            assert dispatcher.calls[1]["runner_id"] == runner.id
-            assert dispatcher.calls[0]["commis_id"] == "managed-local-claude-retry"
-            assert dispatcher.calls[1]["commis_id"] == "managed-local-claude-retry"
-
-        assert reconnect_calls["count"] == 2
 
 
 def test_send_text_to_managed_local_session_can_require_active_hook_phase(monkeypatch, tmp_path):
