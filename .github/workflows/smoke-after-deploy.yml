@@ -26,7 +26,6 @@ jobs:
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
       CONTROL_PLANE_URL: https://control.longhouse.ai
-      CP_URL: https://control.longhouse.ai
       INSTANCE_SUBDOMAIN: david010
 
     steps:
@@ -41,24 +40,8 @@ jobs:
 
       - name: Health check (quick)
         run: |
-          check_health() {
-            local url="$1"
-            local name="$2"
-            local max=10
-            for i in $(seq 1 "$max"); do
-              if curl -sf "$url" > /dev/null; then
-                echo "✓ $name is healthy (attempt $i)"
-                return 0
-              fi
-              echo "Attempt $i/$max: $name not ready, waiting 10s..."
-              sleep 10
-            done
-            echo "✗ $name did not become healthy"
-            return 1
-          }
-
-          check_health "$API_URL/api/health" "API"
-          check_health "$FRONTEND_URL" "Frontend"
+          ./scripts/ci/wait-for-http.sh "$API_URL/api/health" "API" 10 10
+          ./scripts/ci/wait-for-http.sh "$FRONTEND_URL" "Frontend" 10 10
 
       - name: Run smoke tests
         env:

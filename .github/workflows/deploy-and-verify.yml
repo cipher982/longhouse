@@ -21,39 +21,16 @@ jobs:
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
       CONTROL_PLANE_URL: https://control.longhouse.ai
-      CP_URL: https://control.longhouse.ai
       INSTANCE_SUBDOMAIN: david010
       ZERG_HOST: 100.120.197.80
-      ZERG_USER: zerg
 
     steps:
       - uses: actions/checkout@v6
 
       - name: Setup SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ env.ZERG_HOST }} >> ~/.ssh/known_hosts 2>/dev/null || true
-          ssh-keyscan -H clifford >> ~/.ssh/known_hosts 2>/dev/null || true
-          cat >> ~/.ssh/config <<SSHEOF
-          Host zerg
-            HostName 100.120.197.80
-            User zerg
-            IdentityFile ~/.ssh/deploy_key
-            StrictHostKeyChecking accept-new
-          Host clifford
-            HostName clifford
-            User drose
-            IdentityFile ~/.ssh/deploy_key
-            StrictHostKeyChecking accept-new
-          SSHEOF
-
-      - name: Make deploy helpers executable
-        run: |
-          chmod +x scripts/ops/coolify-deploy.sh
-          chmod +x scripts/ci/export-hosted-instance-env.sh
-          chmod +x scripts/qa/smoke-prod.sh
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: ./scripts/ci/setup-deploy-ssh.sh
 
       - name: Record previous canary image SHA
         id: prev
@@ -69,24 +46,8 @@ jobs:
 
       - name: Wait for public demo and control plane
         run: |
-          check_health() {
-            local url="$1"
-            local name="$2"
-            local max=30
-            for i in $(seq 1 "$max"); do
-              if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
-                echo "✓ $name is up (attempt $i)"
-                return 0
-              fi
-              echo "  $name not ready (attempt $i/$max)..."
-              sleep 5
-            done
-            echo "✗ $name did not become healthy"
-            return 1
-          }
-
-          check_health "$PUBLIC_DEMO_URL/api/health" "Public demo runtime"
-          check_health "$CONTROL_PLANE_URL/health" "Control plane"
+          ./scripts/ci/wait-for-http.sh "$PUBLIC_DEMO_URL/api/health" "Public demo runtime"
+          ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
 
       - name: Resolve hosted canary instance
         env:
@@ -102,25 +63,9 @@ jobs:
 
       - name: Wait for hosted canary
         run: |
-          check_health() {
-            local url="$1"
-            local name="$2"
-            local max=30
-            for i in $(seq 1 "$max"); do
-              if curl -sf --max-time 5 "$url" > /dev/null 2>&1; then
-                echo "✓ $name is up (attempt $i)"
-                return 0
-              fi
-              echo "  $name not ready (attempt $i/$max)..."
-              sleep 5
-            done
-            echo "✗ $name did not become healthy"
-            return 1
-          }
-
-          check_health "$API_URL/api/health" "Hosted canary"
-          check_health "$PUBLIC_DEMO_URL/api/health" "Public demo runtime"
-          check_health "$CONTROL_PLANE_URL/health" "Control plane"
+          ./scripts/ci/wait-for-http.sh "$API_URL/api/health" "Hosted canary"
+          ./scripts/ci/wait-for-http.sh "$PUBLIC_DEMO_URL/api/health" "Public demo runtime"
+          ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
 
       - name: Run smoke tests
         env:
