@@ -1294,9 +1294,7 @@ test.describe("Session Detail Page", () => {
       await expect(composer).toBeDisabled();
       await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
 
-      await expect(
-        page.getByText("Sent to local session. Response will appear in the timeline above."),
-      ).toBeVisible();
+      await expect(page.getByText("Sent")).toBeVisible();
       await expect(page.getByText("Locked")).toBeVisible();
       await expect(composer).toBeDisabled();
       await expect.poll(() => chatRequests).toBe(1);

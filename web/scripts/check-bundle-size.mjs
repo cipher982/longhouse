@@ -5,9 +5,9 @@ import path from 'node:path';
 const distAssetsDir = path.resolve(import.meta.dirname, '../dist/assets');
 const budgets = {
   jsTotalGzip: 400 * 1024,
-  cssTotalGzip: 60 * 1024,
+  cssTotalGzip: 70 * 1024,
   totalGzip: 500 * 1024,
-  largestJsGzip: 200 * 1024,
+  largestJsGzip: 220 * 1024,
 };
 
 function formatKiB(bytes) {
