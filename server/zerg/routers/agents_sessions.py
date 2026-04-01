@@ -42,6 +42,8 @@ from zerg.services.session_views import SessionsSummaryResponse
 from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionWorkspaceResponse
+from zerg.services.session_views import WallResponse
+from zerg.services.session_views import WallSessionResponse
 from zerg.services.session_views import _coerce_managed_transport
 from zerg.services.session_views import _coerce_session_loop_mode
 from zerg.services.session_views import build_event_response
@@ -444,6 +446,132 @@ async def list_session_summaries(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list session summaries",
         )
+
+
+@router.get("/sessions/wall", response_model=WallResponse)
+async def wall_query(
+    repo: Optional[str] = Query(None, description="Filter by git_repo (substring match)"),
+    project: Optional[str] = Query(None, description="Filter by project name"),
+    days: int = Query(7, ge=1, le=90, description="Days to look back"),
+    limit: int = Query(50, ge=1, le=200, description="Max results"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> WallResponse:
+    """Wall query: raw signal metadata for sessions on a repo.
+
+    Schema-on-read: returns raw timestamps and facts. The consuming agent
+    or UI decides what's relevant — no status bucketing, no pre-computed summaries.
+    """
+    store = AgentsStore(db)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+
+    sessions, _total = store.list_sessions(
+        project=project,
+        provider=None,
+        environment=None,
+        include_test=False,
+        device_id=None,
+        since=since,
+        query=None,
+        limit=limit,
+        offset=0,
+        anchor_on_activity=True,
+    )
+
+    # Filter by repo if specified (substring match on git_repo)
+    if repo:
+        repo_lower = repo.lower()
+        sessions = [s for s in sessions if s.git_repo and repo_lower in s.git_repo.lower()]
+
+    session_ids = [s.id for s in sessions]
+    last_activity = store.get_last_activity_map(session_ids)
+    last_user_msg = store.get_last_timestamp_by_role_map(session_ids, "user")
+    last_tool_call = store.get_last_tool_call_map(session_ids)
+    presence_map = load_presence_map(db, session_ids)
+
+    now = datetime.now(timezone.utc)
+    PRESENCE_TTL = timedelta(minutes=10)
+
+    items = []
+    for s in sessions:
+        presence = presence_map.get(s.id)
+        has_live = False
+        presence_state = None
+        if presence:
+            presence_updated = getattr(presence, "updated_at", None)
+            if presence_updated:
+                if presence_updated.tzinfo is None:
+                    presence_updated = presence_updated.replace(tzinfo=timezone.utc)
+                has_live = (now - presence_updated) < PRESENCE_TTL
+            presence_state = getattr(presence, "state", None)
+
+        items.append(
+            WallSessionResponse(
+                session_id=str(s.id),
+                device_name=getattr(s, "device_name", None) or (s.device_id.replace("shipper-", "") if s.device_id else None),
+                device_id=s.device_id,
+                git_repo=s.git_repo,
+                git_branch=s.git_branch,
+                project=s.project,
+                provider=s.provider,
+                summary_title=getattr(s, "summary_title", None),
+                started_at=s.started_at,
+                last_event_at=last_activity.get(s.id),
+                last_user_message_at=last_user_msg.get(s.id),
+                last_tool_call_at=last_tool_call.get(s.id),
+                has_live_presence=has_live,
+                presence_state=presence_state if has_live else None,
+                user_messages=s.user_messages or 0,
+                assistant_messages=s.assistant_messages or 0,
+                tool_calls=s.tool_calls or 0,
+            )
+        )
+
+    return WallResponse(sessions=items, total=len(items))
+
+
+@router.get("/sessions/{session_id}/tail")
+async def session_tail(
+    session_id: UUID,
+    limit: int = Query(30, ge=1, le=100, description="Number of recent events to return"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict:
+    """Return the last N events from a session for cross-session reading.
+
+    Tail-biased: most recent events first, which is almost always what matters
+    for understanding another session's current state. The reading agent
+    interprets the raw log — no summary layer in between.
+    """
+    events = (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .filter(AgentEvent.role.in_(["user", "assistant", "tool"]))
+        .filter(AgentEvent.content_text.isnot(None))
+        .order_by(AgentEvent.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    # Reverse to chronological order (oldest first)
+    events.reverse()
+
+    return {
+        "session_id": str(session_id),
+        "events": [
+            {
+                "id": e.id,
+                "role": e.role,
+                "content": (e.content_text or "")[:4000],
+                "tool_name": e.tool_name,
+                "timestamp": e.timestamp.isoformat() if e.timestamp else None,
+            }
+            for e in events
+        ],
+        "total": len(events),
+    }
 
 
 @router.get("/sessions/active", response_model=ActiveSessionsResponse)

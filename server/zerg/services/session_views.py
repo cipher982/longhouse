@@ -273,6 +273,36 @@ class ActiveSessionsResponse(UTCBaseModel):
     last_refresh: datetime
 
 
+class WallSessionResponse(UTCBaseModel):
+    """A session's raw signal for the wall view. Schema-on-read: raw timestamps,
+    no status bucketing. The consuming agent or UI decides relevance."""
+
+    session_id: str
+    device_name: Optional[str] = None
+    device_id: Optional[str] = None
+    git_repo: Optional[str] = None
+    git_branch: Optional[str] = None
+    project: Optional[str] = None
+    provider: str
+    summary_title: Optional[str] = None
+    started_at: Optional[datetime] = None
+    last_event_at: Optional[datetime] = None
+    last_user_message_at: Optional[datetime] = None
+    last_tool_call_at: Optional[datetime] = None
+    has_live_presence: bool = False
+    presence_state: Optional[str] = None
+    user_messages: int = 0
+    assistant_messages: int = 0
+    tool_calls: int = 0
+
+
+class WallResponse(UTCBaseModel):
+    """Wall query response — sessions indexed by raw signal."""
+
+    sessions: List[WallSessionResponse]
+    total: int
+
+
 class EventResponse(UTCBaseModel):
     """Response for a single event."""
 
