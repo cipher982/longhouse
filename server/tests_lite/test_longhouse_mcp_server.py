@@ -21,6 +21,10 @@ def test_create_server_exposes_only_continuity_and_oikos_tools():
         "log_insight",
         "query_insights",
         "recall",
+        "check_wall",
+        "session_tail",
+        "poke",
+        "check_pokes",
     }
 
 

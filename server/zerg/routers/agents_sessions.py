@@ -22,6 +22,7 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionPoke
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_views import ActiveSessionResponse
@@ -53,6 +54,7 @@ from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import resolve_execution_home
 from zerg.services.session_views import resolve_runtime_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
+from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -1305,3 +1307,80 @@ async def export_session(
         media_type="application/x-ndjson",
         headers=headers,
     )
+
+
+# ------------------------------------------------------------------
+# Pokes — lightweight directed pointers between sessions
+# ------------------------------------------------------------------
+
+
+class PokeCreate(UTCBaseModel):
+    """Create a poke from one session to another."""
+
+    from_session_id: UUID
+    to_session_id: UUID
+    note: str
+    source_event_id: Optional[int] = None
+
+
+@router.post("/pokes", status_code=status.HTTP_201_CREATED)
+async def create_poke(
+    payload: PokeCreate,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict:
+    """Create a poke — tap another session on the shoulder."""
+    poke = SessionPoke(
+        from_session_id=payload.from_session_id,
+        to_session_id=payload.to_session_id,
+        note=payload.note[:2000],
+        source_event_id=payload.source_event_id,
+    )
+    db.add(poke)
+    db.commit()
+    db.refresh(poke)
+    return {
+        "id": poke.id,
+        "from_session_id": str(poke.from_session_id),
+        "to_session_id": str(poke.to_session_id),
+        "note": poke.note,
+        "source_event_id": poke.source_event_id,
+        "created_at": poke.created_at.isoformat() if poke.created_at else None,
+    }
+
+
+@router.get("/pokes")
+async def list_pokes(
+    session_id: UUID = Query(..., description="Session ID to check pokes for"),
+    unread_only: bool = Query(True, description="Only return unread pokes"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict:
+    """List pokes directed at a session. Marks them as read."""
+    query = db.query(SessionPoke).filter(SessionPoke.to_session_id == session_id)
+    if unread_only:
+        query = query.filter(SessionPoke.read_at.is_(None))
+    pokes = query.order_by(SessionPoke.created_at.desc()).limit(50).all()
+
+    now = datetime.now(timezone.utc)
+    results = []
+    for p in pokes:
+        results.append(
+            {
+                "id": p.id,
+                "from_session_id": str(p.from_session_id),
+                "note": p.note,
+                "source_event_id": p.source_event_id,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+                "read_at": p.read_at.isoformat() if p.read_at else None,
+            }
+        )
+        if p.read_at is None:
+            p.read_at = now
+
+    if any(p.read_at == now for p in pokes):
+        db.commit()
+
+    return {"pokes": results, "total": len(results)}
