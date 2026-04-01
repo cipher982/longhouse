@@ -2359,6 +2359,37 @@ class AgentsStore:
         )
         return {session_id: ts for session_id, ts in rows}
 
+    def get_last_timestamp_by_role_map(self, session_ids: List[UUID], role: str) -> dict[UUID, datetime]:
+        """Return the timestamp of the last event with the given role, per session."""
+        if not session_ids:
+            return {}
+        from sqlalchemy import func as sa_func
+
+        rows = (
+            self.db.query(AgentEvent.session_id, sa_func.max(AgentEvent.timestamp))
+            .filter(AgentEvent.session_id.in_(session_ids))
+            .filter(AgentEvent.role == role)
+            .group_by(AgentEvent.session_id)
+            .all()
+        )
+        return {session_id: ts for session_id, ts in rows}
+
+    def get_last_tool_call_map(self, session_ids: List[UUID]) -> dict[UUID, datetime]:
+        """Return the timestamp of the last tool-use event per session."""
+        if not session_ids:
+            return {}
+        from sqlalchemy import func as sa_func
+
+        rows = (
+            self.db.query(AgentEvent.session_id, sa_func.max(AgentEvent.timestamp))
+            .filter(AgentEvent.session_id.in_(session_ids))
+            .filter(AgentEvent.role == "assistant")
+            .filter(AgentEvent.tool_name.isnot(None))
+            .group_by(AgentEvent.session_id)
+            .all()
+        )
+        return {session_id: ts for session_id, ts in rows}
+
     def get_session_preview(self, session_id: UUID, last_n: int) -> List[AgentEvent]:
         """Return last N user/assistant messages for preview (chronological)."""
         stmt = (
