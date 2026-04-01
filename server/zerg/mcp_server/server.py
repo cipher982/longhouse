@@ -421,4 +421,75 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         except Exception as exc:
             return json.dumps({"error": str(exc)})
 
+    # ------------------------------------------------------------------
+    # Tool: check_wall
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def check_wall(
+        repo: str | None = None,
+        project: str | None = None,
+        days: int = 7,
+    ) -> str:
+        """Check the Longhouse wall — see what other agents are working on.
+
+        Returns raw signal metadata for active and recent sessions: device,
+        repo, branch, timestamps, presence state. Use at session start to
+        see who's here, or anytime to check for collisions.
+
+        The wall is a locator, not an explainer. To understand what another
+        session is actually doing, read its tail with session_tail().
+
+        Args:
+            repo: Filter by git repo name (substring match, e.g. "zerg").
+            project: Filter by project name.
+            days: Days to look back (default 7).
+        """
+        params: dict = {"days": days}
+        if repo:
+            params["repo"] = repo
+        if project:
+            params["project"] = project
+
+        try:
+            resp = await client.get("/api/agents/sessions/wall", params=params)
+            if resp.status_code != 200:
+                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+            return resp.text
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
+    # ------------------------------------------------------------------
+    # Tool: session_tail
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def session_tail(
+        session_id: str,
+        limit: int = 30,
+    ) -> str:
+        """Read the last N events from another session's transcript.
+
+        Tail-biased: returns the most recent messages and tool calls in
+        chronological order. The tail is almost always what matters — early
+        messages are exploration and wrong turns, conclusions are at the end.
+
+        Use after check_wall() shows a session you want to understand.
+
+        Args:
+            session_id: The session ID to read (from check_wall results).
+            limit: Number of recent events to return (default 30, max 100).
+        """
+        if not _UUID_RE.match(session_id):
+            return json.dumps({"error": "Invalid session_id format — expected UUID"})
+
+        try:
+            resp = await client.get(
+                f"/api/agents/sessions/{session_id}/tail",
+                params={"limit": min(limit, 100)},
+            )
+            if resp.status_code != 200:
+                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+            return resp.text
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
     return server
