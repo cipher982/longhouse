@@ -205,6 +205,7 @@ class SessionIngest(BaseModel):
     environment: str = Field(..., description="Environment: production, development, test, e2e")
     project: Optional[str] = Field(None, description="Project name")
     device_id: Optional[str] = Field(None, description="Device/machine identifier")
+    device_name: Optional[str] = Field(None, description="Human-friendly device label (e.g. 'laptop', 'cube')")
     cwd: Optional[str] = Field(None, description="Working directory")
     git_repo: Optional[str] = Field(None, description="Git remote URL")
     git_branch: Optional[str] = Field(None, description="Git branch name")
@@ -622,6 +623,11 @@ class AgentsStore:
             session.project = data.project
         if data.device_id and not session.device_id:
             session.device_id = data.device_id
+        if not session.device_name:
+            if data.device_name:
+                session.device_name = data.device_name
+            elif data.device_id:
+                session.device_name = data.device_id.replace("shipper-", "")
         if data.cwd and not session.cwd:
             session.cwd = data.cwd
         if data.git_repo and not session.git_repo:
@@ -1483,12 +1489,18 @@ class AgentsStore:
                     .update({AgentSession.is_writable_head: 0}, synchronize_session=False)
                 )
 
+            # Derive device_name from device_id if not explicitly provided
+            device_name = data.device_name
+            if not device_name and data.device_id:
+                device_name = data.device_id.replace("shipper-", "")
+
             session = AgentSession(
                 id=session_id,
                 provider=data.provider,
                 environment=data.environment,
                 project=data.project,
                 device_id=data.device_id,
+                device_name=device_name,
                 cwd=data.cwd,
                 git_repo=data.git_repo,
                 git_branch=data.git_branch,
