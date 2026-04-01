@@ -210,6 +210,18 @@ def test_wall_excludes_old_sessions(tmp_path):
 # ---------------------------------------------------------------------------
 
 
+def test_tail_returns_404_for_missing_session(tmp_path):
+    """GET /agents/sessions/{id}/tail returns 404 for nonexistent session."""
+    SessionLocal = _make_db(tmp_path)
+    client, api_ref = _make_client(SessionLocal)
+    try:
+        fake_id = str(uuid4())
+        resp = client.get(f"/api/agents/sessions/{fake_id}/tail")
+        assert resp.status_code == 404
+    finally:
+        api_ref.dependency_overrides = {}
+
+
 def test_tail_returns_recent_events(tmp_path):
     """GET /agents/sessions/{id}/tail returns last N events in chronological order."""
     SessionLocal = _make_db(tmp_path)

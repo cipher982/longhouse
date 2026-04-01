@@ -468,6 +468,10 @@ async def wall_query(
     store = AgentsStore(db)
     since = datetime.now(timezone.utc) - timedelta(days=days)
 
+    # Over-fetch when repo filter is set since it's applied in Python after
+    # the DB query (list_sessions doesn't support repo substring matching).
+    fetch_limit = limit * 4 if repo else limit
+
     sessions, _total = store.list_sessions(
         project=project,
         provider=None,
@@ -476,15 +480,16 @@ async def wall_query(
         device_id=None,
         since=since,
         query=None,
-        limit=limit,
+        limit=fetch_limit,
         offset=0,
         anchor_on_activity=True,
     )
 
-    # Filter by repo if specified (substring match on git_repo)
+    # Filter by repo if specified (substring match on git_repo), then trim to limit
     if repo:
         repo_lower = repo.lower()
         sessions = [s for s in sessions if s.git_repo and repo_lower in s.git_repo.lower()]
+    sessions = sessions[:limit]
 
     session_ids = [s.id for s in sessions]
     last_activity = store.get_last_activity_map(session_ids)
@@ -543,16 +548,21 @@ async def session_tail(
 ) -> dict:
     """Return the last N events from a session for cross-session reading.
 
-    Tail-biased: most recent events first, which is almost always what matters
-    for understanding another session's current state. The reading agent
-    interprets the raw log — no summary layer in between.
+    Tail-biased: fetches the most recent events, then returns them in
+    chronological order (oldest first). The reading agent interprets the
+    raw log — no summary layer in between.
     """
+    # Verify session exists
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
     events = (
         db.query(AgentEvent)
         .filter(AgentEvent.session_id == session_id)
         .filter(AgentEvent.role.in_(["user", "assistant", "tool"]))
         .filter(AgentEvent.content_text.isnot(None))
-        .order_by(AgentEvent.id.desc())
+        .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
         .limit(limit)
         .all()
     )
