@@ -601,3 +601,24 @@ class SessionTask(AgentsBase):
         # Index for dedup check: find existing active tasks per session
         Index("ix_session_tasks_session_type_status", "session_id", "task_type", "status"),
     )
+
+
+class SessionPoke(AgentsBase):
+    """Lightweight directed pointer between sessions.
+
+    A poke is a tap on the shoulder: "session A wants session B to see something."
+    Not chat — just coordinates pointing back to the source session's transcript.
+    The content lives in the source session, not duplicated here.
+    """
+
+    __tablename__ = "session_pokes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    from_session_id = Column(GUID(), nullable=False, index=True)
+    to_session_id = Column(GUID(), nullable=False, index=True)
+    note = Column(Text, nullable=False)  # Short message ("rotation is broken, don't test auth")
+    source_event_id = Column(Integer, nullable=True)  # Optional pointer to specific event
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    read_at = Column(DateTime(timezone=True), nullable=True)  # NULL until target reads it
+
+    __table_args__ = (Index("ix_pokes_to_unread", "to_session_id", "read_at"),)
