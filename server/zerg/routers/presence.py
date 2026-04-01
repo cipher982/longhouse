@@ -336,6 +336,7 @@ async def upsert_presence(
         payload.session_id,
         payload.state,
         tool_name=insert_tool_name,
+        device_id=getattr(_token, "device_id", None),
         cwd=payload.cwd,
         project=project,
         provider=payload.provider or "claude",

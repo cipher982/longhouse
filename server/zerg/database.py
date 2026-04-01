@@ -621,6 +621,8 @@ def _migrate_agents_columns(engine: Engine) -> None:
             conn.execute(
                 text("CREATE INDEX IF NOT EXISTS ix_sessions_continued_from_started ON sessions(continued_from_session_id, started_at)")
             )
+            if "device_name" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN device_name VARCHAR(255)"))
             if "last_activity_at" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN last_activity_at DATETIME"))
                 events_exists = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events'")).fetchone()
@@ -636,6 +638,17 @@ def _migrate_agents_columns(engine: Engine) -> None:
             conn.commit()
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
+
+    # session_presence table migrations
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_presence)"))}
+            if columns:
+                if "device_id" not in columns:
+                    conn.execute(text("ALTER TABLE session_presence ADD COLUMN device_id VARCHAR(255)"))
+                conn.commit()
+    except Exception:
+        logger.debug("session_presence table migration skipped (table may not exist yet)", exc_info=True)
 
     # session_turn_reviews table migrations
     try:

@@ -35,6 +35,7 @@ class PresenceEntry:
     session_id: str
     state: str
     tool_name: str | None = None
+    device_id: str | None = None
     cwd: str | None = None
     project: str | None = None
     provider: str = "claude"
@@ -58,6 +59,7 @@ class PresenceCache:
         state: str,
         *,
         tool_name: str | None = None,
+        device_id: str | None = None,
         cwd: str | None = None,
         project: str | None = None,
         provider: str = "claude",
@@ -73,6 +75,7 @@ class PresenceCache:
                 session_id=previous.session_id,
                 state=previous.state,
                 tool_name=previous.tool_name,
+                device_id=previous.device_id,
                 cwd=previous.cwd,
                 project=previous.project,
                 provider=previous.provider,
@@ -81,6 +84,8 @@ class PresenceCache:
             )
             previous.state = state
             previous.tool_name = tool_name
+            if device_id is not None:
+                previous.device_id = device_id
             previous.cwd = cwd
             previous.project = project
             previous.provider = provider
@@ -92,6 +97,7 @@ class PresenceCache:
             session_id=session_id,
             state=state,
             tool_name=tool_name,
+            device_id=device_id,
             cwd=cwd,
             project=project,
             provider=provider,
@@ -115,6 +121,7 @@ class PresenceCache:
         obj.session_id = entry.session_id
         obj.state = entry.state
         obj.tool_name = entry.tool_name
+        obj.device_id = entry.device_id
         obj.cwd = entry.cwd
         obj.project = entry.project
         obj.provider = entry.provider
@@ -130,6 +137,7 @@ class PresenceCache:
                 session_id=row.session_id,
                 state=row.state,
                 tool_name=row.tool_name,
+                device_id=getattr(row, "device_id", None),
                 cwd=row.cwd,
                 project=row.project,
                 provider=row.provider or "claude",
@@ -183,6 +191,7 @@ class PresenceCache:
                         session_id=entry.session_id,
                         state=entry.state,
                         tool_name=entry.tool_name,
+                        device_id=entry.device_id,
                         cwd=entry.cwd,
                         project=entry.project,
                         provider=entry.provider,
@@ -193,6 +202,7 @@ class PresenceCache:
                         set_={
                             "state": entry.state,
                             "tool_name": entry.tool_name,
+                            "device_id": entry.device_id,
                             "cwd": entry.cwd,
                             "project": entry.project,
                             "updated_at": entry.updated_at,

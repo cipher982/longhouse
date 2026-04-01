@@ -64,6 +64,7 @@ class AgentSession(AgentsBase):
     # Context
     project = Column(String(255), nullable=True, index=True)  # Project name (parsed from cwd)
     device_id = Column(String(255), nullable=True, index=True)  # Machine identifier
+    device_name = Column(String(255), nullable=True)  # Human-friendly device label (e.g. "laptop", "cube")
     cwd = Column(Text, nullable=True)  # Working directory
     git_repo = Column(String(500), nullable=True)  # Git remote URL
     git_branch = Column(String(255), nullable=True)  # Git branch name
@@ -490,6 +491,7 @@ class SessionPresence(AgentsBase):
     session_id = Column(String(255), primary_key=True)
     state = Column(String(32), nullable=False)  # thinking | running | idle
     tool_name = Column(String(128), nullable=True)  # set when state=running
+    device_id = Column(String(255), nullable=True)  # Machine identifier for cross-device wall
     cwd = Column(String(512), nullable=True)
     project = Column(String(255), nullable=True)  # basename(cwd)
     provider = Column(String(64), nullable=False, default="claude")
