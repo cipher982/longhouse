@@ -108,6 +108,20 @@ def _print_peer_summary(peer: dict) -> None:
         typer.echo(f"  {title}")
 
 
+def _print_tail_event(event: dict) -> None:
+    role = str(event.get("role") or "unknown")
+    timestamp = str(event.get("timestamp") or "-")
+    tool_name = str(event.get("tool_name") or "").strip()
+    content = str(event.get("content") or "").strip()
+
+    header = f"[{role}] {timestamp}"
+    if tool_name:
+        header += f"  tool:{tool_name}"
+    typer.secho(header, fg=typer.colors.CYAN, bold=True)
+    if content:
+        typer.echo(content)
+
+
 @app.command()
 def peers(
     repo: str | None = typer.Option(
@@ -165,7 +179,12 @@ def peers(
         token=resolved_token,
     )
     if not resolved_repo:
-        message = "Could not infer a repo. Pass --repo or run the command from a git repo " "or a session with LONGHOUSE_SESSION_ID."
+        message = "".join(
+            [
+                "Could not infer a repo. Pass --repo or run the command from a git repo ",
+                "or a session with LONGHOUSE_SESSION_ID.",
+            ]
+        )
         typer.secho(message, fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
@@ -333,3 +352,83 @@ def message(
     delivered_via = str(payload.get("delivered_via") or "").strip()
     if delivered_via:
         typer.echo(f"Delivered via: {delivered_via}")
+
+
+@app.command()
+def tail(
+    session_id: str = typer.Argument(..., help="Session UUID."),
+    limit: int = typer.Option(
+        30,
+        "--limit",
+        "-n",
+        help="Number of recent events to return.",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output raw JSON response.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified).",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """Read the recent tail of a session."""
+    config_dir = Path(claude_dir) if claude_dir else None
+    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    resolved_session_id = _parse_uuid_or_exit(session_id, label="session_id")
+
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(
+                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/tail",
+                headers={"X-Agents-Token": resolved_token},
+                params={"limit": limit},
+            )
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException:
+        typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if response.status_code == 401:
+        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if response.status_code == 404:
+        typer.secho(f"Session not found: {resolved_session_id}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if response.status_code != 200:
+        typer.secho(f"API error: {response.status_code} {response.text[:200]}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    payload = response.json()
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    events = list(payload.get("events", []))
+    if not events:
+        typer.echo(f"No tail events found for session {resolved_session_id}")
+        return
+
+    typer.echo(f"Session: {resolved_session_id}")
+    typer.echo(f"Events: {len(events)}")
+    typer.echo("")
+    for event in events:
+        _print_tail_event(event)
+        typer.echo("")

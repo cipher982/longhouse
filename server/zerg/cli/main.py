@@ -7,6 +7,7 @@ Usage:
     longhouse codex         # Launch managed-local Codex on this device
     longhouse peers         # Find live peer sessions for the current repo
     longhouse message       # Send a message to another session
+    longhouse tail          # Read the recent tail of a session
     longhouse config show   # Show effective configuration
     longhouse ship          # One-shot sync
     longhouse connect       # Foreground engine sync (watch + fallback scan)
@@ -29,6 +30,7 @@ from zerg.cli.connect import app as connect_app
 from zerg.cli.coordination import app as coordination_app
 from zerg.cli.coordination import message
 from zerg.cli.coordination import peers
+from zerg.cli.coordination import tail
 from zerg.cli.doctor import doctor
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
@@ -96,6 +98,7 @@ app.command(name="claude")(claude)
 app.command(name="codex")(codex)
 app.command(name="peers")(peers)
 app.command(name="message")(message)
+app.command(name="tail")(tail)
 app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
 app.command(name="connect")(_cmd_lookup["connect"])

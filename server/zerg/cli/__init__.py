@@ -7,6 +7,7 @@ Provides command-line tools for interacting with Longhouse:
 - longhouse codex: Launch a managed-local Codex session on this device
 - longhouse peers: Discover live peer sessions around the current repo
 - longhouse message: Send a directed message to another session
+- longhouse tail: Read the recent event tail for a session
 - longhouse ship: One-shot sync of Claude Code sessions to Longhouse
 - longhouse connect: Foreground engine sync (watch + fallback scan)
 - longhouse auth: Authenticate with remote Longhouse server
