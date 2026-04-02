@@ -326,7 +326,7 @@ Each session is a log in your timeline.
 
 ## Status
 
-**Alpha**. Actively developed. Claude Code, Codex CLI, and Gemini CLI sessions sync today. Claude browser continuation is the most complete path today; hosted beta is live.
+**Alpha**. Actively developed. Claude Code, Codex CLI, and Gemini CLI sessions sync today. Claude is the strongest continuation path today; Codex and Gemini are searchable and inspectable today. Hosted remains the convenience path later, not the required first step.
 
 ## Author
 
