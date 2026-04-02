@@ -10,6 +10,8 @@ Provides command-line tools for interacting with Longhouse:
 - longhouse tail: Read the recent event tail for a session
 - longhouse check-messages: Inspect durable queued messages for a session
 - longhouse ack-message: Mark a durable message as handled
+- longhouse sessions get: Inspect a single session
+- longhouse sessions events: Inspect session events with filters
 - longhouse ship: One-shot sync of Claude Code sessions to Longhouse
 - longhouse connect: Foreground engine sync (watch + fallback scan)
 - longhouse auth: Authenticate with remote Longhouse server

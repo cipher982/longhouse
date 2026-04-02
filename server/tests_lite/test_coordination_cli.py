@@ -10,6 +10,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.cli import coordination as coordination_cli
+from zerg.cli import sessions as sessions_cli
 from zerg.cli.main import app
 
 
@@ -403,5 +404,103 @@ def test_ack_message_command_posts_ack(monkeypatch):
                 "X-Longhouse-Session-Id": "22222222-2222-2222-2222-222222222222",
             },
             "json": {},
+        }
+    ]
+
+
+def test_sessions_get_command_prints_session_summary(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "id": "22222222-2222-2222-2222-222222222222",
+                "provider": "codex",
+                "project": "zerg",
+                "status": "working",
+                "started_at": "2026-04-02T12:50:00+00:00",
+                "git_branch": "main",
+                "git_repo": "git@github.com:cipher982/longhouse.git",
+                "summary_title": "Coordination slice",
+                "first_user_message": "Add CLI session inspection commands.",
+            },
+        )
+    )
+
+    monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(app, ["sessions", "get", "22222222-2222-2222-2222-222222222222"])
+
+    assert result.exit_code == 0, result.output
+    assert "22222222-2222-2222-2222-222222222222" in result.output
+    assert "provider: codex  project: zerg  status: working" in result.output
+    assert "title: Coordination slice" in result.output
+    assert fake_client.calls == [
+        {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "params": None,
+        }
+    ]
+
+
+def test_sessions_events_command_prints_filtered_events(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "events": [
+                    {
+                        "id": 1,
+                        "role": "assistant",
+                        "content_text": "I added the session events command.",
+                        "tool_name": None,
+                        "tool_output_text": None,
+                        "timestamp": "2026-04-02T12:51:00+00:00",
+                    }
+                ],
+                "total": 1,
+                "branch_mode": "head",
+                "abandoned_events": 0,
+            },
+        )
+    )
+
+    monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(
+        app,
+        [
+            "sessions",
+            "events",
+            "22222222-2222-2222-2222-222222222222",
+            "--roles",
+            "assistant",
+            "--limit",
+            "20",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Session: 22222222-2222-2222-2222-222222222222" in result.output
+    assert "I added the session events command." in result.output
+    assert fake_client.calls == [
+        {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/events",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "params": {
+                "context_mode": "forensic",
+                "branch_mode": "head",
+                "limit": 20,
+                "offset": 0,
+                "roles": "assistant",
+            },
         }
     ]
