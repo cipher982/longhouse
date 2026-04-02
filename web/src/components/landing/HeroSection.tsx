@@ -30,29 +30,29 @@ export function HeroSection({
         <div className="landing-hero-text">
           <div className="landing-hero-badge">
             <span className="landing-hero-badge-dot" />
-            Free local wedge first
+            Existing sessions first
           </div>
 
           <h1 className="landing-hero-headline">
-            Find the session. <span className="gradient-text">Ask it. Continue it.</span>
+            Control live sessions <span className="gradient-text">after launch.</span>
           </h1>
 
           <p className="landing-hero-subhead">
-            Longhouse turns Claude Code, Codex, and Gemini sessions into durable objects you can search,
-            inspect, message, and resume.
+            Import existing Claude Code, Codex, and Gemini sessions into one searchable timeline, then
+            start Longhouse sessions you can inspect, message, and continue later.
           </p>
 
           <p className="landing-hero-note">
-            Start free locally. Use hosted beta when you want always-on browser access. Claude remains the
-            strongest direct continuation path today; Codex and Gemini are archive-first for now.
+            Works on your laptop. Shines on a machine that stays on. Self-host free where the work lives,
+            or use hosted later. Claude remains the strongest direct continuation path today.
           </p>
 
           <div className="landing-hero-ctas">
             <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
-              Start Free Locally &rarr;
+              Self-Host Free &rarr;
             </Button>
             <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
-              Hosted Beta
+              Hosted Later
             </Button>
             {config.demoMode && (
               <Button variant="ghost" size="lg" onClick={() => navigate("/timeline")}>
@@ -62,26 +62,26 @@ export function HeroSection({
           </div>
 
           <div className="landing-hero-friction-reducers">
-            <span>No card for first value</span>
+            <span>Import existing sessions first</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>No keys needed for demo</span>
+            <span>Control new Longhouse sessions second</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
             <span>CLI / API first</span>
           </div>
 
           <div className="landing-hero-install" id="landing-install">
-            <p className="landing-hero-install-label">Open the product in under 2 minutes</p>
+            <p className="landing-hero-install-label">Get from install to first useful session in minutes</p>
             <div className="landing-hero-install-grid">
               <pre className="landing-code-block">
                 <code>{"curl -fsSL https://get.longhouse.ai/install.sh | bash\nlonghouse serve --demo"}</code>
               </pre>
               <pre className="landing-code-block">
-                <code>{"longhouse wall --json"}</code>
+                <code>{"longhouse connect --install\nlonghouse wall --json"}</code>
               </pre>
             </div>
             <p className="landing-hero-install-note">
-              The bundled UI is the easiest way to look around, but the same kernel is scriptable from the
-              terminal and from <code>/api/agents/*</code>.
+              Existing sessions become findable immediately. New Longhouse sessions become controllable
+              after launch from the same browser, CLI, and <code>/api/agents/*</code> surface.
             </p>
           </div>
 
@@ -94,20 +94,20 @@ export function HeroSection({
 
         <div className="landing-hero-visual">
           <div className="landing-hero-signal-panel">
-            <p className="landing-hero-signal-label">What the product actually is</p>
-            <h2 className="landing-hero-signal-title">A session kernel with a bundled human view.</h2>
+            <p className="landing-hero-signal-label">Two-beat product loop</p>
+            <h2 className="landing-hero-signal-title">Find old sessions first. Control new ones second.</h2>
             <div className="landing-hero-signal-list">
               <div className="landing-hero-signal-card">
-                <p className="landing-hero-signal-card-title">Continuity</p>
-                <p>Search prior work, inspect the raw session detail, and recover the exact context that matters.</p>
+                <p className="landing-hero-signal-card-title">Findability</p>
+                <p>Search prior work, inspect raw session detail, and recover the exact context that matters.</p>
+              </div>
+              <div className="landing-hero-signal-card">
+                <p className="landing-hero-signal-card-title">Control</p>
+                <p>Start a Longhouse session, then message it or continue it later from browser, CLI, or API.</p>
               </div>
               <div className="landing-hero-signal-card">
                 <p className="landing-hero-signal-card-title">Coordination</p>
                 <p><code>wall</code>, <code>tail</code>, <code>peers</code>, <code>message</code>, and inbox state all live on the same seam.</p>
-              </div>
-              <div className="landing-hero-signal-card">
-                <p className="landing-hero-signal-card-title">Continuation</p>
-                <p>Continue the session from the machine surface or from the integrated web UI.</p>
               </div>
             </div>
           </div>

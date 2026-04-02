@@ -24,7 +24,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   claude: {
     id: "claude",
     marketingName: "Claude Code",
-    cardDescription: "Archive sync, cloud sessions, direct web continuation",
+    cardDescription: "Import, search, and direct web continuation",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
@@ -35,7 +35,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   codex: {
     id: "codex",
     marketingName: "Codex CLI",
-    cardDescription: "Archive sync, managed-local browser driving, and cloud session starts",
+    cardDescription: "Import, search, and Longhouse session starts",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
@@ -46,7 +46,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   gemini: {
     id: "gemini",
     marketingName: "Gemini CLI",
-    cardDescription: "Archive sync and cloud sessions; direct web continuation later",
+    cardDescription: "Import and search today; direct web continuation later",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",

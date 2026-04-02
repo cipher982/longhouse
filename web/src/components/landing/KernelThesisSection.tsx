@@ -15,9 +15,9 @@ const cards: ThesisCard[] = [
       "Longhouse works from terminal and HTTP first. The web UI is the bundled human view on top of the same kernel.",
   },
   {
-    title: "Hosted is the upgrade, not the gate",
+    title: "Works on your laptop. Shines on a machine that stays on.",
     description:
-      "The first proof of value should happen free and locally. Hosted is what you buy when you want always-on access.",
+      "Self-hosted is the free default path. A durable machine makes the product better, but laptop users can still get value immediately.",
   },
 ];
 
@@ -28,8 +28,8 @@ export function KernelThesisSection() {
         <p className="landing-section-label">Kernel Thesis</p>
         <h2 className="landing-section-title">Not another AI dashboard.</h2>
         <p className="landing-section-subtitle">
-          Longhouse should feel like the missing operating system for CLI agent work: searchable, addressable,
-          and resumable from more than one surface.
+          Lead with the outcome: control sessions after launch. Then explain why it works: the session is
+          the durable object, and the machine surface is real.
         </p>
 
         <div className="landing-thesis-grid">

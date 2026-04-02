@@ -14,9 +14,9 @@ describe("landing provider claims", () => {
     );
 
     expect(screen.getByText("Claude Code")).toBeInTheDocument();
-    expect(screen.getByText("Archive sync, cloud sessions, direct web continuation")).toBeInTheDocument();
-    expect(screen.getByText("Archive sync, managed-local browser driving, and cloud session starts")).toBeInTheDocument();
-    expect(screen.getByText("Archive sync and cloud sessions; direct web continuation later")).toBeInTheDocument();
+    expect(screen.getByText("Import, search, and direct web continuation")).toBeInTheDocument();
+    expect(screen.getByText("Import, search, and Longhouse session starts")).toBeInTheDocument();
+    expect(screen.getByText("Import and search today; direct web continuation later")).toBeInTheDocument();
     expect(screen.getAllByText("Live now")).toHaveLength(3);
     expect(
       screen.getByText(/Claude currently has the richest hooks and telemetry/i),
@@ -33,7 +33,7 @@ describe("landing provider claims", () => {
       screen.getByText(/Claude Code currently has the strongest direct web continuation, hooks, and telemetry/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Codex CLI and Gemini CLI already sync into the timeline and can start cloud sessions today/i),
+      screen.getByText(/Codex CLI and Gemini CLI are already searchable and inspectable in the timeline/i),
     ).toBeInTheDocument();
   });
 });
