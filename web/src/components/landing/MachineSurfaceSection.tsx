@@ -36,8 +36,8 @@ export function MachineSurfaceSection() {
         <p className="landing-section-label">Machine Surface</p>
         <h2 className="landing-section-title">Show the terminal seam early.</h2>
         <p className="landing-section-subtitle">
-          The product should not read like “just a website.” The same kernel is reachable from CLI and
-          <code> /api/agents/*</code>.
+          The product should not read like “just a website.” Existing sessions are findable here, and new
+          Longhouse sessions are steerable from the same CLI and <code> /api/agents/*</code> seam.
         </p>
 
         <div className="landing-surface-grid">
@@ -54,7 +54,8 @@ export function MachineSurfaceSection() {
 
         <div className="landing-surface-note">
           <p>
-            <strong>Canonical product line:</strong> Find the session. Ask it. Continue it.
+            <strong>Canonical product line:</strong> Your existing sessions become findable. Your new
+            Longhouse sessions become controllable.
           </p>
           <p>
             The timeline still matters, but it stops pretending to be the entire product boundary.

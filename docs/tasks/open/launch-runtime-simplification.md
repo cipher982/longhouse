@@ -35,7 +35,7 @@ Make the launch story match the real product:
 - [x] Refine the launch spec around the two-beat onramp, `ssh+tmux` differentiation, and outcome-first copy
 - [x] Align README top matter to the same two-beat story and launch-ready provider truth
 - [x] Align the landing-page spec to the same story, capability truth, and launch triage
-- [ ] Align landing copy and section emphasis to the same story
+- [x] Align landing copy and section emphasis to the same story
 - [ ] Publish the canonical proof-of-value demo journey in launch-facing docs and demo scripts
 - [ ] Make the hosted boundary explicit and honest until onboarding friction is reduced
 - [ ] Decide the install/onboarding script changes needed for the story:

@@ -27,31 +27,32 @@ export function PricingSection() {
       name: "Self-Hosted",
       price: "Free",
       period: "forever",
-      description: "The proof-of-value path",
+      description: "Works on your laptop, best on a box that stays on",
       features: [
-        "Local install + demo path",
+        "Self-host on your laptop, VPS, Mac mini, or homelab box",
         "SQLite core, no external services",
-        "Claude Code + Codex + Gemini archive sync",
+        "Import existing Claude Code, Codex, and Gemini sessions",
         "Search, detail, and machine surface",
+        "Start Longhouse sessions you can control after launch",
         "Open source (Apache 2.0)",
       ],
-      ctaText: "Start Free Locally",
+      ctaText: "Self-Host Free",
       ctaAction: handleStartFree,
       highlighted: true,
     },
     {
-      name: "Hosted Beta",
+      name: "Hosted",
       price: "$5",
       period: "/month",
-      description: "The always-on upgrade",
+      description: "We run the box for you",
       features: [
-        "Everything in self-hosted",
-        "Always-on browser access from anywhere",
-        "Managed cloud sessions",
-        "Your own subdomain + automatic updates",
+        "Same core loop as self-hosted",
+        "Browser access from anywhere",
         "Less operator work",
+        "Your own subdomain + automatic updates",
+        "Convenience deployment of the same session model",
       ],
-      ctaText: "Join Hosted Beta",
+      ctaText: "Hosted Later",
       ctaAction: handleGetHosted,
     },
   ];
@@ -59,10 +60,11 @@ export function PricingSection() {
   return (
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Free First</p>
-        <h2 className="landing-section-title">Charge for always-on, not for understanding the product.</h2>
+        <p className="landing-section-label">Run It Where Work Should Live</p>
+        <h2 className="landing-section-title">Works on your laptop. Shines on a machine that stays on.</h2>
         <p className="landing-section-subtitle">
-          The first win should happen locally. Hosted is the paid convenience layer when you already believe.
+          Self-hosted is the free default path. Hosted is the convenience version of the same loop, not a
+          different product category.
         </p>
 
         <div className="landing-pricing-grid">

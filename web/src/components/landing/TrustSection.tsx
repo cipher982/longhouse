@@ -8,15 +8,19 @@ interface FAQ {
 const faqs: FAQ[] = [
   {
     question: "Do I need a credit card to try it?",
-    answer: "No for the core product. The first proof-of-value path is the local installer plus demo or real shipped sessions. Hosted beta is the paid always-on upgrade."
+    answer: "No for the core product. Self-hosting is the free path. Hosted is the convenience path you choose later if you want us to run the box for you."
   },
   {
     question: "Where is my data stored?",
-    answer: "Local-first: your data lives in a SQLite database on your machine when you self-host. Hosted runs the same core product in your isolated runtime. We do not sell or share your data."
+    answer: "When you self-host, your data lives in a SQLite database on your machine. Hosted runs the same core product in your isolated runtime. We do not sell or share your data."
   },
   {
     question: "Is the CLI/API surface real or just landing-page copy?",
     answer: "It is real. The machine-facing surface lives under /api/agents/* and the CLI maps onto the same core flows: wall, peers, tail, message, inbox, and continue."
+  },
+  {
+    question: "Why not just use ssh + tmux?",
+    answer: "If you only need one remote shell, ssh + tmux is simpler. Longhouse is for when you want the session itself to be searchable, addressable, messageable, and continuable from browser, CLI, or API."
   },
   {
     question: "Do you train AI models on my data?",
@@ -24,7 +28,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "What AI coding agents do you support?",
-    answer: "Claude Code currently has the strongest direct web continuation, hooks, and telemetry. Codex CLI and Gemini CLI already sync into the timeline and can start cloud sessions today, but direct web continuation is still Claude-first. OpenCode and Cursor are coming soon."
+    answer: "Claude Code currently has the strongest direct web continuation, hooks, and telemetry. Codex CLI and Gemini CLI are already searchable and inspectable in the timeline, but direct web continuation is still Claude-first. OpenCode and Cursor are coming soon."
   }
 ];
 

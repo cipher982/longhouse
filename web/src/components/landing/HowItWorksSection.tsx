@@ -7,9 +7,9 @@ interface Step {
 const steps: Step[] = [
   {
     number: "1",
-    title: "See sessions immediately",
+    title: "Bring in work you already did",
     description:
-      "Install Longhouse locally and land on demo data or real shipped sessions before billing or account friction.",
+      "Install Longhouse and get immediate value from demo data or, better, real shipped sessions before changing your workflow.",
   },
   {
     number: "2",
@@ -25,15 +25,15 @@ const steps: Step[] = [
   },
   {
     number: "4",
-    title: "Coordinate through the kernel",
+    title: "Start a Longhouse session when you want control",
     description:
-      "Show the wall, tail the session, or send a directed message. The coordination surface matters as much as the search surface.",
+      "New Longhouse sessions are the second beat: they are the ones you can steer after launch from more than one surface.",
   },
   {
     number: "5",
-    title: "Continue and keep going",
+    title: "Coordinate and continue later",
     description:
-      "Resume the current session from the recovered context. Optional final beat: show the same session reachable from another device.",
+      "Show the wall, message the session, or continue it from the recovered context. That is the proof this is more than a dashboard.",
   },
 ];
 
@@ -42,10 +42,10 @@ export function HowItWorksSection() {
     <section id="journey" className="landing-how-it-works landing-proof-journey">
       <div className="landing-section-inner">
         <p className="landing-section-label">Proof Of Value</p>
-        <h2 className="landing-section-title">The demo should feel like recovered leverage.</h2>
+        <h2 className="landing-section-title">The demo should feel like two beats, not one.</h2>
         <p className="landing-section-subtitle">
-          The strongest story is not “look at this website.” It is “I found prior work, recovered context,
-          coordinated through the kernel, and kept going.”
+          First the user finds something they already did. Then they see that a real session can still be
+          steered after launch.
         </p>
 
         <div className="landing-journey-grid">
@@ -65,8 +65,8 @@ export function HowItWorksSection() {
             <p className="landing-journey-note-label">Canonical line</p>
             <blockquote>Find the session. Ask it. Continue it.</blockquote>
             <p>
-              That line is short enough for the hero, concrete enough for the product, and specific enough
-              to differentiate from generic AI workspace tools.
+              Keep this as the mechanic line. The emotional hook is control after launch; this line proves
+              what that control feels like.
             </p>
           </aside>
         </div>

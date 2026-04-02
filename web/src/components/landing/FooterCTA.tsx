@@ -19,14 +19,14 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Start free. Prove it to yourself. Upgrade later.
+            Your existing sessions become findable. Your new Longhouse sessions become controllable.
           </blockquote>
           <div className="landing-footer-cta-buttons">
             <Button variant="primary" size="lg" onClick={handleSelfHost}>
-              Start Free Locally
+              Self-Host Free
             </Button>
             <Button variant="secondary" size="lg" onClick={handleGetHosted}>
-              Join Hosted Beta
+              Hosted Later
             </Button>
           </div>
         </div>

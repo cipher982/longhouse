@@ -69,7 +69,7 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
             Sign In
           </Button>
           <Button variant="primary" size="sm" onClick={onGetStarted}>
-            Start Free
+            Self-Host Free
           </Button>
         </div>
 
@@ -112,7 +112,7 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
             Sign In
           </Button>
           <Button variant="primary" size="md" onClick={() => { onGetStarted?.(); setIsMobileMenuOpen(false); }} tabIndex={isMobileMenuOpen ? 0 : -1}>
-            Start Free
+            Self-Host Free
           </Button>
         </div>
       </div>
