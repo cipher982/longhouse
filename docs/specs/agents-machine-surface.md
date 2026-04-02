@@ -137,6 +137,7 @@ Examples:
 
 The current CLI contract sits directly on the canonical machine surface:
 
+- `longhouse wall`
 - `longhouse peers`
 - `longhouse message`
 - `longhouse tail`
@@ -146,6 +147,67 @@ The current CLI contract sits directly on the canonical machine surface:
 - `longhouse sessions events`
 
 The rule going forward is simple: if a coordination or session-inspection primitive matters, it should be reachable by raw HTTP and `longhouse ...` before treating MCP as complete.
+
+## Common Coordination Flows
+
+These are the shortest useful machine flows for external agents and scripts.
+
+### Read the raw wall
+
+```bash
+curl -s \
+  -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
+  "$LONGHOUSE_URL/api/agents/sessions/wall?repo=longhouse&days=7&limit=20"
+```
+
+```bash
+longhouse wall --repo longhouse --json
+```
+
+### Send a directed session message
+
+```bash
+curl -s \
+  -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
+  -H "X-Longhouse-Session-Id: $LONGHOUSE_SESSION_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"to_session_id":"'"$TARGET_SESSION_ID"'","text":"Please inspect the failing test and report back."}' \
+  "$LONGHOUSE_URL/api/agents/messages"
+```
+
+```bash
+LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
+  longhouse message "$TARGET_SESSION_ID" "Please inspect the failing test and report back." --json
+```
+
+### Read and acknowledge the durable inbox
+
+```bash
+curl -s \
+  -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
+  -H "X-Longhouse-Session-Id: $LONGHOUSE_SESSION_ID" \
+  "$LONGHOUSE_URL/api/agents/messages?direction=inbound&unacknowledged_only=true&limit=20"
+```
+
+```bash
+LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
+  longhouse check-messages --json
+```
+
+```bash
+curl -s \
+  -X POST \
+  -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
+  -H "X-Longhouse-Session-Id: $LONGHOUSE_SESSION_ID" \
+  -H "Content-Type: application/json" \
+  -d '{}' \
+  "$LONGHOUSE_URL/api/agents/messages/$MESSAGE_ID/ack"
+```
+
+```bash
+LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
+  longhouse ack-message "$MESSAGE_ID" --json
+```
 
 ## Non-Goals
 
