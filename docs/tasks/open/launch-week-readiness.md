@@ -31,7 +31,7 @@ This task is about making that loop demoable, installable, and believable in one
 - [x] Lock the canonical demo contract
 - [x] Align installer, onboarding, docs, and landing to the same import-first activation path
 - [x] Freeze hosted beta copy and CTA behavior
-- [ ] Rehearse the canonical 3-minute demo end to end
+- [x] Rehearse the canonical 3-minute demo end to end
 - [x] Run a clean-machine or clean-home smoke of install -> import -> inspect
 - [x] Validate the Claude control-after-launch proof on a real Longhouse session
 - [ ] Freeze the prelaunch validation gate (`make test-ci`, `make test-e2e`, any extra smoke)
@@ -73,3 +73,7 @@ Do the remaining week in this order:
 - The managed-local Claude stress harness now supports `--verification-mode control` for launch-week proof work. This matters in synthetic temp-HOME lanes where Claude can still resolve the real `~/.claude` tree for transcript shipping while hook-driven control stays correctly bound to the temporary Longhouse instance.
 - 2026-04-02 control proof passed against the live temp self-host lane with the new control-mode harness:
   one managed Claude session accepted a post-launch turn and Claude hook phases observed `thinking -> idle`.
+- 2026-04-02 demo rehearsal passed on the live temp self-host lane:
+  timeline search narrowed to the HDR watermark session, raw session detail opened in the UI, `longhouse wall --json`
+  and `longhouse sessions get` both worked from the same temp self-host install, and `longhouse continue` accepted a
+  real managed Claude session after the auth-disabled localhost fix.

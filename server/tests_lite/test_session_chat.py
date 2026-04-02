@@ -293,3 +293,121 @@ def test_agents_continue_route_rejects_other_device(monkeypatch, tmp_path):
         assert response.json()["detail"] == "Authenticated device cannot continue a session from another device"
     finally:
         api_app_ref.dependency_overrides = {}
+
+
+def test_agents_continue_route_allows_auth_disabled_without_device_token(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    project = "agents-continue-auth-disabled"
+    source_session_id = uuid4()
+    provider_session_id = f"resume-send-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="agents-continue-auth-disabled@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project=project,
+                device_id="local-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on a local auth-disabled instance",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_machine_client(session_local, None)
+    monkeypatch.setenv("E2E_FAKE_SESSION_CHAT", "1")
+    monkeypatch.setattr(session_chat, "get_settings", lambda: SimpleNamespace(auth_disabled=True))
+
+    async def fake_resolve(*, original_cwd, git_repo, git_branch, session_id):
+        return SimpleNamespace(path=Path("/tmp"), is_temp=False, error=None)
+
+    async def fake_prepare(*, session_id, workspace_path, db):
+        return provider_session_id
+
+    monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
+    monkeypatch.setattr(session_chat, "prepare_claude_session_for_resume", fake_prepare)
+
+    try:
+        response = client.post(
+            f"/api/agents/sessions/{source_session_id}/continue",
+            json={"message": "continue from localhost without a token"},
+        )
+        assert response.status_code == 200, response.text
+        assert '"created_continuation": true' in response.text
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_agents_continue_route_auth_disabled_still_rejects_wrong_current_session_header(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"resume-send-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="agents-continue-auth-disabled-mismatch@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project="auth-disabled-header-mismatch",
+                device_id="local-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on localhost",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_machine_client(session_local, None)
+    monkeypatch.setattr(session_chat, "get_settings", lambda: SimpleNamespace(auth_disabled=True))
+
+    try:
+        response = client.post(
+            f"/api/agents/sessions/{source_session_id}/continue",
+            headers={"X-Longhouse-Session-Id": str(uuid4())},
+            json={"message": "this header should fail"},
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Current session header does not match the target session"
+    finally:
+        api_app_ref.dependency_overrides = {}
