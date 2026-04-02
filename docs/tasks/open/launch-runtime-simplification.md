@@ -6,16 +6,22 @@ Last updated: 2026-04-02
 
 ## Goal
 
-Make the launch story match the real product: Longhouse as a session kernel with an integrated UI, a free local proof-of-value path, and managed cloud sessions as the paid convenience layer.
+Make the launch story match the real product:
+
+- existing sessions become findable immediately
+- new Longhouse sessions become controllable after launch
+- the session kernel remains the technical identity, not the first emotional hook
+- self-hosted is the free primary path and hosted is the convenience deployment of the same loop
 
 ## Done when
 
-- User-facing prompts, tools, and operator pages describe cloud work as managed CLI sessions.
-- Provider support is documented honestly for archive, cloud start, continuation, hooks, and telemetry.
-- Launch-facing UI/API naming is aligned around `cloud session` and automation-first wording.
-- README / launch copy lead with the free local wedge and session-kernel MVP instead of the hosted funnel.
-- One reusable proof-of-value demo journey is documented: recover context -> coordinate -> continue.
-- The deletion path for the current Oikos harness is explicit and underway.
+- README, landing spec, and launch docs all tell the same two-beat story:
+  existing sessions become findable first; new Longhouse sessions become controllable second.
+- Public copy leads with the outcome (`control sessions after launch`) and uses `session kernel` as the technical identity lower in the page/docs.
+- Provider support is documented honestly enough that demos and launch copy do not drift into parity theater.
+- Launch-facing copy says some version of `Works on your laptop. Shines on a machine that stays on.`
+- Launch-readiness is triaged clearly into must-demo, nice-to-show, and roadmap.
+- Install / onboarding work is sequenced behind the story instead of running ahead of it.
 
 ## Checklist
 
@@ -26,9 +32,61 @@ Make the launch story match the real product: Longhouse as a session kernel with
 - [x] Define the deletion path for `OikosService` / `oikos_react_engine` / runner-facing harness seams
 - [x] Phase 1a: extract dispatch contract into `services/dispatch_contract.py`
 - [x] Phase 1b: commis barrier logic already standalone in `services/commis_barrier.py`
-- [ ] Reframe README / landing / launch docs around the session-kernel MVP and free local wedge
-- [ ] Publish the canonical proof-of-value demo journey in launch-facing docs
-- [ ] Make the hosted-beta boundary explicit and honest until onboarding friction is reduced
+- [x] Refine the launch spec around the two-beat onramp, `ssh+tmux` differentiation, and outcome-first copy
+- [x] Align README top matter to the same two-beat story and launch-ready provider truth
+- [x] Align the landing-page spec to the same story, capability truth, and launch triage
+- [ ] Align landing copy and section emphasis to the same story
+- [ ] Publish the canonical proof-of-value demo journey in launch-facing docs and demo scripts
+- [ ] Make the hosted boundary explicit and honest until onboarding friction is reduced
+- [ ] Decide the install/onboarding script changes needed for the story:
+  import first, start a Longhouse session second, wrappers later
+- [ ] Keep wrapper mode as a follow-on opt-in activation slice, not a launch prerequisite
+
+## Work Order
+
+### Phase 1: Marketing copy and launch docs
+
+Do now.
+
+- tighten launch spec
+- tighten landing spec
+- tighten README top matter
+- align vocabulary across those three
+
+This is the current highest-leverage work because the product story is drifting faster than the runtime.
+
+### Phase 2: Demo contract and launch truth
+
+Do next.
+
+- freeze one canonical demo journey
+- freeze must-demo capability truth
+- ensure the landing and README do not promise more than current provider reality
+
+### Phase 3: Install and onboarding activation
+
+Do after the story is stable.
+
+- onboarding should get users to first value fast
+- import/ship existing sessions first
+- starting a Longhouse session is the second activation beat
+- opt-in wrapper mode belongs here, not before copy is stable
+
+### Phase 4: Public-product cleanup
+
+Do in parallel where easy.
+
+- remove leftover `managed-local` wording from public docs/UI
+- reduce overexposed Oikos naming in launch-facing surfaces
+- keep machine surface visible and legible
+
+### Phase 5: Architectural cleanup
+
+Do separately and do not let it block launch.
+
+- `OikosService` / harness deletion
+- deeper provider parity work
+- broader session-control polish outside the launch-critical loop
 
 ## OikosService / react_engine Deletion Path
 
@@ -78,6 +136,6 @@ Make the launch story match the real product: Longhouse as a session kernel with
 ## Notes
 
 - This task intentionally excludes the browser-vs-machine auth split that was being worked in parallel.
-- The remaining work is now split between launch-story cleanup and architectural boundary cleanup.
-- Phase 1 (extract reusable logic) can be done incrementally without affecting any runtime behavior.
 - The launch story should optimize for first proof of value, not the hosted signup funnel.
+- Story alignment, launch proof, onboarding, and wrapper mode are now the main forward path.
+- Architectural cleanup remains real, but it is not the first thing to do next.
