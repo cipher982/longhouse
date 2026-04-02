@@ -25,15 +25,15 @@ This is the surface agents, CLIs, scripts, CI jobs, and background automations s
 - The normal machine token is a device token (`zdt_*`).
 - The agents surface is single-tenant only for now. Multi-tenant behavior is intentionally not part of this contract yet.
 
-### Managed-local hook token exception
+### Import / presence hook token exception
 
-Managed-local hook tokens are intentionally narrow and are only valid for:
+Shipper and presence hook tokens are intentionally narrow and are only valid for:
 
 - `GET /api/agents/sessions`
 - `POST /api/agents/ingest`
 - `POST /api/agents/presence`
 
-They exist to support managed-local shipping and presence hooks, not to grant broad machine API access.
+They exist to support session import and presence reporting, not to grant broad machine API access.
 
 ## Session Context
 
@@ -99,7 +99,7 @@ Use it for directed session actions such as:
 Current delivery model:
 
 - durable message row first
-- safe-boundary delivery attempt for managed-local sessions
+- safe-boundary delivery attempt when the target session has a live control path
 - drain up to 10 queued messages while the target remains in a deliverable state
 - explicit acknowledgement from the target session
 - non-live sessions can still poll the durable inbox
@@ -109,9 +109,9 @@ Current continuation model:
 
 - browser/Oikos continuation remains at `POST /api/sessions/{session_id}/chat`
 - machine continuation now lives at `POST /api/agents/sessions/{session_id}/continue`
-- the machine route reuses the existing managed-local fast path and cloud continuation path
+- the machine route reuses the current session-control transports under the hood
 - machine callers must present session context or a matching device token for the target session
-- managed-local continuation returns fast JSON acceptance; cloud continuation streams SSE provider output
+- fast local control paths return JSON acceptance immediately; provider-backed continuation paths may stream SSE output
 
 ### Continuity and project context
 
