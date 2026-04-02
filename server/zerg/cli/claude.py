@@ -20,6 +20,7 @@ from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.services.shipper.hooks import install_hooks
+from zerg.services.shipper.wrappers import EXIT_SETUP_FAILED
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 
@@ -122,12 +123,12 @@ def _load_api_credentials(
     resolved_url = (url or get_zerg_url(config_dir) or "").strip()
     if not resolved_url:
         typer.secho("No Longhouse URL configured. Run 'longhouse auth' first.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     resolved_token = (token or load_token(config_dir) or "").strip()
     if not resolved_token:
         typer.secho("No device token found. Run 'longhouse auth' first.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     return resolved_url, resolved_token
 
@@ -195,14 +196,14 @@ def _launch_managed_local_from_api(
             )
     except httpx.ConnectError:
         typer.secho(f"Could not connect to {url}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
     except httpx.TimeoutException:
         typer.secho(f"Request timed out connecting to {url}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     if response.status_code == 401:
         typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     if response.status_code != 200:
         detail = ""
@@ -213,7 +214,7 @@ def _launch_managed_local_from_api(
             detail = response.text.strip()
         message = detail or response.text[:200] or "Managed local launch failed"
         typer.secho(message, fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
 
     body = response.json()
     return ManagedLocalLaunchResponse(

@@ -20,8 +20,8 @@ from zerg.services.shipper.wrappers import uninstall_wrappers
 
 
 def wrap(
-    install: bool = typer.Option(False, "--install", help="Install CLI wrapper shims."),
-    uninstall: bool = typer.Option(False, "--uninstall", help="Remove CLI wrapper shims."),
+    install: bool = typer.Option(False, "--install", help="Install CLI wrapper functions."),
+    uninstall: bool = typer.Option(False, "--uninstall", help="Remove CLI wrapper functions."),
     status: bool = typer.Option(False, "--status", help="Show wrapper status."),
     provider: Optional[str] = typer.Option(
         None,
@@ -29,20 +29,20 @@ def wrap(
         help=f"Limit to a single provider ({', '.join(SUPPORTED_PROVIDERS)}).",
     ),
 ) -> None:
-    """Manage CLI wrapper shims for managed-local sessions.
+    """Manage CLI wrapper functions for managed-local sessions.
 
     Wrapper mode makes bare ``claude`` / ``codex`` invocations go through
-    Longhouse managed-local launch, giving each session first-class identity
-    from the start.
+    Longhouse managed-local launch.  If Longhouse is unreachable, the
+    wrapper falls back to the native CLI automatically.
 
     Default install is non-invasive (sidecar mode only).
     Use ``--install`` to opt in to wrapper mode.
 
+    Inspect with:        type claude
     Bypass at any time:  LONGHOUSE_BYPASS=1 claude ...
     """
     actions = sum([install, uninstall, status])
     if actions == 0:
-        # Default to --status when no flag given
         status = True
     if actions > 1:
         typer.secho("Specify exactly one of --install, --uninstall, or --status.", fg=typer.colors.RED)
@@ -74,8 +74,9 @@ def _do_install(providers: list[str] | None) -> None:
 
     typer.echo("")
     typer.echo("Open a new terminal (or source your shell profile) for wrappers to take effect.")
-    typer.echo("Bypass at any time:  LONGHOUSE_BYPASS=1 claude ...")
-    typer.echo("Remove wrappers:     longhouse wrap --uninstall")
+    typer.echo("Inspect:  type claude")
+    typer.echo("Bypass:   LONGHOUSE_BYPASS=1 claude ...")
+    typer.echo("Remove:   longhouse wrap --uninstall")
 
 
 def _do_uninstall(providers: list[str] | None) -> None:
@@ -103,19 +104,17 @@ def _do_status() -> None:
         real_bin = pinfo.get("real_binary", "not found")
         if installed:
             any_installed = True
-            typer.secho(f"  {provider}: wrapped", fg=typer.colors.GREEN)
-            typer.echo(f"    shim:  {pinfo.get('shim_path')}")
-            typer.echo(f"    real:  {real_bin}")
+            typer.secho(f"  {provider}: wrapped (fallback to native on failure)", fg=typer.colors.GREEN)
+            typer.echo(f"    real: {real_bin}")
         else:
             typer.echo(f"  {provider}: not wrapped  (real: {real_bin})")
 
     profile_info = info.get("profile", {})
-    profile_installed = profile_info.get("installed", False)
     profile_path = profile_info.get("path", "?")
-    if profile_installed:
-        typer.secho(f"  profile: PATH injected in {profile_path}", fg=typer.colors.GREEN)
+    if any_installed:
+        typer.secho(f"  profile: {profile_path}", fg=typer.colors.GREEN)
     else:
-        typer.echo(f"  profile: no PATH block ({profile_path})")
+        typer.echo(f"  profile: {profile_path}")
 
     if not any_installed:
         typer.echo("")
