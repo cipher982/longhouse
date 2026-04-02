@@ -13,6 +13,7 @@ from datetime import timezone
 from typing import Any
 from uuid import UUID
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
@@ -81,6 +82,17 @@ def query_wall_sessions(
     last_user_msg = store.get_last_timestamp_by_role_map(session_ids, "user")
     last_tool_call = store.get_last_tool_call_map(session_ids)
     presence_map = load_presence_map(db, session_ids)
+    pending_inbound_map: dict[UUID, int] = {}
+    if session_ids:
+        pending_rows = (
+            db.query(SessionMessage.to_session_id, func.count(SessionMessage.id))
+            .filter(SessionMessage.to_session_id.in_(session_ids))
+            .filter(SessionMessage.acknowledged_at.is_(None))
+            .filter(SessionMessage.delivery_status != MESSAGE_STATUS_FAILED)
+            .group_by(SessionMessage.to_session_id)
+            .all()
+        )
+        pending_inbound_map = {UUID(str(session_id)): int(count) for session_id, count in pending_rows}
 
     now = datetime.now(timezone.utc)
     items: list[WallSessionResponse] = []
@@ -114,6 +126,7 @@ def query_wall_sessions(
                 last_tool_call_at=last_tool_call.get(session.id),
                 has_live_presence=has_live_presence,
                 presence_state=presence_state,
+                pending_inbound_messages=pending_inbound_map.get(session.id, 0),
                 user_messages=session.user_messages or 0,
                 assistant_messages=session.assistant_messages or 0,
                 tool_calls=session.tool_calls or 0,
@@ -146,6 +159,7 @@ def build_peer_payloads(
                 "device_name": session.device_name,
                 "provider": session.provider,
                 "presence_state": session.presence_state,
+                "pending_inbound_messages": session.pending_inbound_messages,
                 "summary_title": session.summary_title,
                 "git_branch": session.git_branch,
             }

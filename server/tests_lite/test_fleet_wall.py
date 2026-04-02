@@ -23,8 +23,9 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import get_db
 from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
-from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionPoke
 
 # ---------------------------------------------------------------------------
@@ -162,6 +163,48 @@ def test_wall_filters_by_project(tmp_path):
         data = resp.json()
         assert data["total"] == 1
         assert data["sessions"][0]["project"] == "zerg"
+    finally:
+        api_ref.dependency_overrides = {}
+
+
+def test_wall_includes_pending_inbound_message_count(tmp_path):
+    """Wall query surfaces unacknowledged inbound message counts."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        source = _seed_session(db, device_id="shipper-laptop", device_name="laptop", git_repo="repo-a")
+        target = _seed_session(db, device_id="shipper-cube", device_name="cube", git_repo="repo-b")
+        db.add_all(
+            [
+                SessionMessage(
+                    from_session_id=source.id,
+                    to_session_id=target.id,
+                    body="queued work",
+                    delivery_status="stored_only",
+                ),
+                SessionMessage(
+                    from_session_id=source.id,
+                    to_session_id=target.id,
+                    body="already handled",
+                    delivery_status="delivered",
+                    acknowledged_at=datetime.now(timezone.utc),
+                ),
+                SessionMessage(
+                    from_session_id=source.id,
+                    to_session_id=target.id,
+                    body="failed delivery",
+                    delivery_status="failed",
+                ),
+            ]
+        )
+        db.commit()
+
+    client, api_ref = _make_client(SessionLocal)
+    try:
+        resp = client.get("/api/agents/sessions/wall")
+        assert resp.status_code == 200
+        data = resp.json()
+        session = next(s for s in data["sessions"] if s["device_name"] == "cube")
+        assert session["pending_inbound_messages"] == 1
     finally:
         api_ref.dependency_overrides = {}
 

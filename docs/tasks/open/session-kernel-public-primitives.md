@@ -55,6 +55,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - Machine-surface test coverage now includes the canonical `POST /api/agents/insights` write path plus JSON smoke coverage for the core coordination/session CLI commands.
 - Canonical machine surface is now documented in `docs/specs/agents-machine-surface.md`, including the browser veneer split and the `POST /api/agents/insights` canonical write path.
 - `docs/specs/agents-machine-surface.md` now includes copyable HTTP and CLI recipes for the raw wall, directed session messaging, inbox reads, and acknowledgements.
+- The raw wall now includes `pending_inbound_messages`, so coordination clients can see when a session already has unacknowledged inbound work queued.
 - Oikos now has direct session-kernel coordination tools using the canonical names `peers`, `get_session_events`, `session_tail`, `message_session`, `check_messages`, and `ack_message`.
 - API routes and Oikos coordination tools now share `session_coordination.py` for wall/tail/message serialization and inbox acknowledgement semantics, reducing contract drift without a broad router rewrite.
 - Related active tasks:

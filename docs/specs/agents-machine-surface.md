@@ -101,6 +101,7 @@ Current delivery model:
 - drain up to 10 queued messages while the target remains in a deliverable state
 - explicit acknowledgement from the target session
 - non-live sessions can still poll the durable inbox
+- wall entries now surface `pending_inbound_messages` so agents can see which sessions already have unacknowledged inbound work
 
 ### Continuity and project context
 
