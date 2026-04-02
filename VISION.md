@@ -1,6 +1,8 @@
 # Longhouse Vision (2026)
 
-Longhouse is an always-on cloud for your coding agents. Close your laptop — your agents keep running. Pick up from any device. Every session is live, resumable, and can talk to every other session.
+Longhouse is an always-on cloud and session kernel for your coding agents. Close your laptop, your agents keep running. Pick up from any device. Every session is live, resumable, and can talk to every other session.
+
+Longhouse is also the integrated distribution of a broader agent ecosystem. The pieces are designed to work together, but the important ones must also be usable as standalone public interfaces from the terminal or over HTTP.
 
 The product must feel instant, always-on, and magical. Agents run on Longhouse, not on your laptop.
 
@@ -44,11 +46,12 @@ This is a living vision doc. It captures both the direction and the reasoning th
 ## North Star
 
 1. **Always-on agents from anywhere**: Close your laptop, your agents keep working. Resume from phone, tablet, another machine. The cloud is the primary home for agent work.
-2. **Every session is a live endpoint**: Sessions aren't dead transcripts — they're resumable. Send a message, get a response, the agent picks up where it left off with full context.
-3. **Agents talk to each other**: Agent A can resume Agent B's session, ask it a question, and get a real answer in context. No copy-paste, no log scraping — direct inter-agent communication through shared sessions.
-4. **Unified timeline across providers**: Claude Code, Codex, Gemini sessions in one searchable archive. The shipper is the onramp — local sessions appear in Longhouse, then users transition to cloud-native.
-5. **$5/mo and never think about it**: Hosted is the primary product. Self-host is the free tier and onramp.
-6. Fast iteration as a solo founder: avoid multi-tenant security complexity unless required.
+2. **The session is the durable object**: Sessions are not dead transcripts. A session is the live, addressable endpoint with transcript, presence, workspace context, and control path.
+3. **Agents talk to each other through sessions**: Agent A does not scrape Agent B's logs; it addresses Agent B's session and gets a real answer in context.
+4. **CLI/API-first public primitives**: The core surfaces must work from terminal and HTTP first. MCP, web UI, and chat channels are adapters on top, not the foundation.
+5. **Unified timeline across providers**: Claude Code, Codex, Gemini sessions in one searchable archive. The shipper is the onramp — local sessions appear in Longhouse, then users transition to cloud-native.
+6. **$5/mo and never think about it**: Hosted is the primary product. Self-host is the free tier and onramp.
+7. Fast iteration as a solo founder: avoid multi-tenant security complexity unless required.
 
 ---
 
@@ -80,21 +83,36 @@ The shipper is one-directional and that's fine — it's the gateway, not the pro
 
 ---
 
-## Product Surface (2026-02 Decision)
+## Product Surface (2026-04 Direction)
 
-**Primary UX: Timeline + session interaction.** The web UI is the product. Timeline is the live dashboard showing all agent sessions. Click any session to view it, send messages, resume it. This is where 90% of user time is spent.
+**Primary human UX: Timeline + session interaction.** The web UI is the main integrated product. Timeline is the live dashboard showing all agent sessions. Click any session to view it, send messages, resume it, and coordinate work.
 
-**Secondary: Oikos.** A lightweight assistant / receptionist — not a middleman in the session flow. Oikos handles quick questions ("how's the auth refactor going?"), spawns new sessions ("start a Claude session in my zorb repo"), and surfaces insights. It uses a small shared-pool LLM (Groq), not the user's API keys. It does NOT sit between the user and their agent sessions — users interact with sessions directly.
+**Primary machine UX: CLI + API.** Nearly everything important should be operable from the terminal or over HTTP. Agents, scripts, CI, and background automations should not need a browser and should not depend on MCP to get real work done.
 
-**Future: TUI.** `longhouse attach session-123` — feels like tmux into a remote Claude Code session. For users who prefer terminal over browser. Same API, different frontend.
+**Integrated distribution: Longhouse.** Longhouse is the best bundled experience: timeline, session interaction, always-on hosting, search, continuity, Oikos, managed-local control, and future TUI.
 
-**Chat channels (Telegram, etc.) are tertiary.** Thin interface for on-the-go check-ins. Not the primary experience.
+**Public primitives inside the suite:**
+- **Session kernel**: sessions, events, presence, addressing, message delivery
+- **Coordination**: wall, tail, peers, messages
+- **Managed-local control**: launch, resume, and safely inject work into local/remote CLI sessions
+- **Continuity**: search, recall, session detail, insights
+- **Engine / shipper**: get local sessions into the unified archive
+- **Runner**: remote command execution on user infrastructure
+
+These pieces are designed to compose cleanly, but each should also be legible and usable on its own if one of them becomes a distribution wedge.
+
+**Secondary: Oikos.** A lightweight assistant / receptionist, not a middleman in the session flow. Oikos handles quick questions, spawns sessions, and surfaces insights. It does not sit between the user and their sessions.
+
+**Future: TUI.** `longhouse attach session-123` should feel like tmux into a remote Claude Code or Codex session. Same backend, different frontend.
+
+**MCP and chat channels are adapters.** They are useful integration surfaces, but not the canonical contract. The system should still make sense if a user never configures MCP.
 
 **What this means for execution:**
-- Timeline + session resume is the critical path — this IS the product
+- Timeline + session interaction is still the critical path for the integrated product
+- CLI/API contracts come before MCP wrappers
 - Oikos is a convenience layer, not a dependency for the core flow
-- TUI is a high-value future surface (makes cloud-first feel native to terminal users)
-- Channel integration layers on top of a working web experience
+- Separate by capability now; decide branding later, only after real pull exists
+- Build one kernel and expose it through multiple interfaces rather than building separate silos
 
 ---
 
@@ -102,6 +120,9 @@ The shipper is one-directional and that's fine — it's the gateway, not the pro
 
 - **Always-on beats cold start** for paid users. Background agents are core; sleeping instances break the product.
 - **Lossless logs are sacred.** The agent session history is not disposable.
+- **The session is the system of record.** "Agent" is useful product language, but the durable object in the platform is the session.
+- **Canonical interface order**: HTTP/SSE/WebSocket first, CLI second, MCP third, web UI for humans on top.
+- **MCP is an adapter, not the boundary.** If a capability matters, it should exist without requiring a host-managed MCP install.
 - **Cloud-first CTA**: hosted is the primary path; self-hosted remains fully supported for users who want to run their own infra.
 - **Progressive disclosure**: keep primary docs short and link to deeper runbooks; AGENTS.md must point to what else to read.
 - **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
@@ -109,6 +130,7 @@ The shipper is one-directional and that's fine — it's the gateway, not the pro
 - **Users bring their own API keys** for agent execution (cloud sessions use their Claude/OpenAI/etc. key). Longhouse provides a shared Groq pool for Oikos (the assistant) so it works out of the box. Longhouse is not an LLM billing intermediary.
 - **No Postgres in core**. SQLite is the only DB requirement for OSS and hosted runtime instances.
 - **Hosted architecture = control plane + isolated runtimes**. Control plane is multi-tenant; Longhouse app stays single-tenant.
+- **Modules may stand alone later.** Keep capability boundaries clean enough that any strong primitive can be adopted or branded independently without a rewrite.
 
 ---
 
@@ -188,7 +210,16 @@ Delegation modes should be explicit:
 
 ### Longhouse MCP Server (CLI Agent Integration)
 
-Managed CLI workspaces (Claude Code, Codex, Gemini) can call back into Longhouse via MCP. This is the standard industry pattern — teams expose internal tooling as MCP servers so agents can access shared context mid-task. The important boundary is that this is part of Longhouse-managed cloud work, not something shipping install should silently inject into a user's everyday local terminal setup.
+MCP is useful, but it is not the platform boundary.
+
+Managed CLI workspaces (Claude Code, Codex, Gemini) can call back into Longhouse via MCP so agents can access shared context mid-task. That is a strong integration pattern, especially inside Longhouse-managed workspaces. But the important boundary is that MCP wraps canonical Longhouse primitives; it does not define them.
+
+**Canonical contract order:**
+- HTTP / SSE / WebSocket for remote access
+- CLI for terminal-native access
+- MCP as an optional integration veneer
+
+Any important capability exposed via MCP should also exist as an HTTP API and, when practical, a CLI command. A background agent should be able to `curl` an endpoint or run `longhouse ...` without depending on host-managed MCP configuration.
 
 **Longhouse exposes as MCP tools:**
 - `search_sessions` — find past solutions in the session archive
@@ -258,19 +289,28 @@ This keeps the UI snappy while preserving power for complex discovery.
 
 ## Domain Model (Fix the Abstraction)
 
-"An agent session is an agent session" is true only if we preserve structure. We model explicitly:
+The durable object in Longhouse is the **session**, not an abstract agent persona.
+
+We model explicitly:
 
 - **conversation**: user-facing thread (Oikos thread)
 - **run**: orchestration execution (Oikos run / commis job)
-- **session**: provider log stream (Claude/Codex/Gemini/Cursor)
-- **event**: message/tool call within a session
+- **session**: durable provider-backed endpoint with transcript, presence, workspace context, and control path
+- **event**: append-only message/tool call within a session
+- **agent**: ephemeral execution wrapper around a unit of work (provider process, workspace, tools, policies, runtime metadata)
 
 Relations:
 - A conversation can spawn multiple runs.
-- A run can spawn one or more provider sessions.
+- A run can spawn or resume one or more sessions.
 - A session emits many events.
+- An agent may create, resume, or operate on sessions, but it is not the canonical system of record.
 
-This prevents flattening lifecycles and keeps UI semantics intact.
+Addressing rules:
+- Sessions are addressed by `session_id`.
+- Human-facing hints such as device name, title, repo, provider, and presence help discovery, but they are not the primary key.
+- If we later add persistent agent identity, it must layer on top of sessions rather than replacing them.
+
+This keeps the platform aligned with how real CLI agents behave: the wrapper is ephemeral, the session is what compounds.
 
 ---
 
@@ -801,29 +841,34 @@ Based on lab testing:
 
 ## Inter-Agent Communication (The Moat)
 
-The unique capability Longhouse enables: **sessions are live, resumable endpoints — not dead transcripts.** Any agent can talk to any other agent's session by resuming it and sending a message.
+The unique capability Longhouse enables: **sessions are live, addressable endpoints, not dead transcripts.** One session can message another session and get a real answer in context.
 
 ### Why This Matters
 
 Current state of the art for agent-to-agent knowledge sharing:
 - **Copy-paste**: User manually copies context between terminal sessions. Tedious, error-prone.
 - **Log search / RAG**: Agents read other agents' logs via MCP search tools. Better, but read-only — you get stale text, not a live conversation.
-- **Longhouse**: Agent A resumes Agent B's session, asks a question, gets a real answer with full context. Agent B responds as if the user asked it. No human in the loop.
+- **Longhouse**: Session A addresses Session B, Longhouse delivers the message at a safe boundary, and Session B responds with full context of its original work. No human in the loop.
 
 ### How It Works
 
-Built on top of session resume (`POST /api/sessions/{id}/chat`):
+Built on top of session-native addressing and delivery:
 
 ```
 Agent A (working on auth)
-  → "How did you handle token refresh in that OAuth session?"
-  → Longhouse resumes Agent B's session (context restored)
-  → Agent B responds with full context of its original work
+  → addresses Session B: "How did you handle token refresh in that OAuth session?"
+  → Longhouse resolves the target session and delivers immediately or queues until a safe boundary
+  → Session B responds with full context of its original work
   → Response fed back to Agent A
   → Agent A continues with real, contextual knowledge
 ```
 
-The API surface is the same as user session resume — the "user message" just comes from another agent instead of a human. The session doesn't know or care who's asking.
+The key point is that **session identity and delivery semantics belong to Longhouse**. The sender may be a user, an agent, or an automation, but the addressable unit is the session.
+
+**Addressing:**
+- Canonical target = `session_id`
+- Human helpers = device name, repo, title, provider, presence
+- Discovery surfaces = wall for rich visibility, peers for a tight active list
 
 ### Network Effect
 
@@ -835,9 +880,12 @@ This creates a compounding advantage:
 
 ### What Needs to Be Built
 
-- Session resume (core) — the `POST /sessions/{id}/chat` pattern (designed, needs implementation + verification)
-- Agent-to-agent message routing — thin wrapper that lets one session's agent resume another
-- Permissions / scoping — which sessions can be resumed by other agents (default: all within same instance)
+- Session-native message queue and delivery state machine
+- Safe-boundary delivery for live managed sessions, plus `stored_only` fallback for unmanaged ones
+- Discovery and addressing primitives (`wall`, `tail`, `peers`, `message_session`)
+- Acknowledgement and audit semantics distinct from fetch and delivery
+- Permissions / scoping for who can address which sessions (default: same instance)
+- Optional future protocol adapters (A2A, etc.) layered on top of Longhouse addressing rather than replacing it
 
 ---
 
@@ -968,12 +1016,15 @@ Users bring their own LLM API keys. Longhouse stores and uses them securely.
 
 `pip install longhouse` must "just work" for the 90% case. (Homebrew formula planned for future.)
 
+The monorepo ships one integrated product, but the package should expose public primitives cleanly enough that users can adopt narrow slices without buying into all of Longhouse.
+
 **What's in the package:**
 - `longhouse` CLI (Python, via pip)
-- Embeds: FastAPI backend, React frontend (built), shipper
+- Embeds: FastAPI backend, React frontend (built), engine/shipper, coordination surfaces, continuity APIs
 - Default: SQLite for local DB (zero-config). Postgres is not part of core/runtime.
+- MCP remains optional; the core product must still be useful over CLI and HTTP alone.
 
-**Commands:**
+**Core commands:**
 ```bash
 longhouse serve           # Start local server (SQLite, port 8080)
 longhouse connect --url <url>   # Run engine daemon in foreground (watch + fallback scan)
@@ -981,6 +1032,16 @@ longhouse connect --url <url> --install   # Install/start managed engine service
 longhouse ship            # One-time manual sync
 longhouse status          # Show current configuration
 ```
+
+**Target public primitives over time:**
+```bash
+longhouse peers           # Tight active-session discovery
+longhouse tail <session>  # Session tail / recent activity
+longhouse message <session> --from <session> "..."   # Session-to-session messaging
+longhouse search "..."    # Continuity/search entry point
+```
+
+These commands are not just convenience wrappers. They define the agent-native contract for terminal use and should map cleanly onto public HTTP APIs.
 
 **Docker alternative:**
 ```bash
@@ -1884,4 +1945,4 @@ Curated sources we can lean on when pushing SQLite to its limits, plus the concr
 
 ## Summary
 
-Longhouse becomes the canonical home for agent sessions. Life Hub becomes a dashboard consumer. The core product is single-tenant and OSS-friendly, while hosted is per-user, always-on, and simple to explain. This unlocks a clean story and fast iteration without betting the company on multi-tenant security.
+Longhouse becomes the canonical home for agent sessions and the integrated distribution of a broader agent ecosystem. Life Hub becomes a dashboard consumer. The durable kernel is the session. The important primitives must work over CLI and HTTP first, with MCP as an optional adapter. The core product remains single-tenant and OSS-friendly, while hosted is per-user, always-on, and simple to explain. This gives Longhouse a clean story today and preserves the option for breakout standalone surfaces later without rewriting the platform.
