@@ -49,7 +49,11 @@ export function MachineSurfaceSection() {
             <article key={card.title} className="landing-surface-card">
               <h3>{card.title}</h3>
               <p>{card.description}</p>
-              <pre className="landing-code-block">
+              <pre
+                className="landing-code-block"
+                tabIndex={0}
+                aria-label={`${card.title} command example`}
+              >
                 <code>{card.code}</code>
               </pre>
             </article>

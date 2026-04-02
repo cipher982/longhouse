@@ -538,18 +538,9 @@ function SessionCard({
     runtime.tone === "blocked" ? "session-card--blocked" : "",
   ].filter(Boolean).join(" ");
 
-  const handleCardClick = () => {
-    if (confirming) {
-      setConfirming(false);
-    } else {
-      onClick();
-    }
-  };
-
   return (
     <Card
       className={cardClassName}
-      onClick={handleCardClick}
       onMouseEnter={onPrefetch}
       onFocus={onPrefetch}
       onPointerDown={(event) => {
@@ -564,111 +555,152 @@ function SessionCard({
       data-runtime-tone={runtime.tone}
       data-execution-home={session.execution_home || "legacy"}
     >
-      <div className="session-card-header">
-        <div className="session-card-project">{projectLabel}</div>
-        <div className="session-card-header-right">
-          <span className="session-card-time">{formatRelativeTime(getTimelineCardAnchor(thread), relativeNowMs)}</span>
-          {onArchive && !confirming && (
-            <button
-              type="button"
-              className="session-card-archive-btn"
-              onClick={(e) => { e.stopPropagation(); setConfirming(true); }}
-              aria-label="Archive session"
-              title="Archive"
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <polyline points="3 6 5 6 21 6" />
-                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-                <path d="M10 11v6M14 11v6" />
-                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-              </svg>
-            </button>
-          )}
-        </div>
-      </div>
+      {!confirming && (
+        <button
+          type="button"
+          className="session-card-hitbox"
+          onClick={onClick}
+          aria-label={title ? `${primaryActionLabel}: ${title}` : primaryActionLabel}
+        />
+      )}
 
-      <div className="session-card-meta">
-        <span className="session-card-provider-badge">
-          <ProviderIcon provider={session.provider} />
-          <span className="provider-name" style={{ color: getProviderColor(session.provider) }}>{session.provider}</span>
-        </span>
-        {session.git_branch && (
-          <span className="session-card-branch-badge">
-            <span className="branch-icon">&#x2387;</span>
-            {session.git_branch}
-          </span>
-        )}
-        {executionHomeLabel && (
-          <span
+      <div className={`session-card-content${confirming ? "" : " session-card-content--passthrough"}`}>
+        <div className="session-card-header">
+          <div className="session-card-project">{projectLabel}</div>
+          <div
             className={
-              executionHomeLabel === "Legacy"
-                ? "environment-badge environment-badge--secondary"
-                : "environment-badge"
+              onArchive && !confirming
+                ? "session-card-header-right session-card-header-right--with-archive"
+                : "session-card-header-right"
             }
           >
-            {executionHomeLabel}
+            <span className="session-card-time">{formatRelativeTime(getTimelineCardAnchor(thread), relativeNowMs)}</span>
+          </div>
+        </div>
+
+        <div className="session-card-meta">
+          <span className="session-card-provider-badge">
+            <ProviderIcon provider={session.provider} />
+            <span className="provider-name" style={{ color: getProviderColor(session.provider) }}>{session.provider}</span>
           </span>
-        )}
-        {showHeadOriginLabel && (
-          <span className="environment-badge environment-badge--secondary">Head: {thread.head_origin_label}</span>
-        )}
-        {!compatibilityMode &&
-          thread.continuation_count > 1 &&
-          thread.started_origin_label &&
-          thread.started_origin_label !== thread.head_origin_label && (
-          <span className="environment-badge environment-badge--secondary">Started: {thread.started_origin_label}</span>
-        )}
-        {!compatibilityMode && thread.continuation_count > 1 && (
-          <span className="environment-badge environment-badge--secondary">
-            {thread.continuation_count} continuations
-          </span>
+          {session.git_branch && (
+            <span className="session-card-branch-badge">
+              <span className="branch-icon">&#x2387;</span>
+              {session.git_branch}
+            </span>
+          )}
+          {executionHomeLabel && (
+            <span
+              className={
+                executionHomeLabel === "Legacy"
+                  ? "environment-badge environment-badge--secondary"
+                  : "environment-badge"
+              }
+            >
+              {executionHomeLabel}
+            </span>
+          )}
+          {showHeadOriginLabel && (
+            <span className="environment-badge environment-badge--secondary">Head: {thread.head_origin_label}</span>
+          )}
+          {!compatibilityMode &&
+            thread.continuation_count > 1 &&
+            thread.started_origin_label &&
+            thread.started_origin_label !== thread.head_origin_label && (
+            <span className="environment-badge environment-badge--secondary">Started: {thread.started_origin_label}</span>
+          )}
+          {!compatibilityMode && thread.continuation_count > 1 && (
+            <span className="environment-badge environment-badge--secondary">
+              {thread.continuation_count} continuations
+            </span>
+          )}
+        </div>
+
+        <div className="session-card-body">
+          {runtime.hasSignal && (
+            <div className={`session-card-runtime session-card-runtime--${runtime.tone}`}>
+              <PresenceBadge
+                state={runtime.presenceState}
+                tool={runtime.presenceTool}
+                compact
+                heuristicActive={runtime.heuristicActive}
+                showUnknown={runtime.truthTier === "stale"}
+              />
+              <span className="session-card-runtime-phase">{runtime.displayPhase}</span>
+              {runtimeMetaLabel && (
+                <span className="session-card-runtime-meta">{runtimeMetaLabel}</span>
+              )}
+            </div>
+          )}
+          {title && <div className="session-card-title">{title}</div>}
+          {showSummary && (
+            <div className="session-card-summary">{session.summary}</div>
+          )}
+          {showGenerating && (
+            <div className="session-card-summary session-card-summary--pending">
+              Generating summary<span className="session-card-dots" aria-hidden="true" />
+            </div>
+          )}
+          {showKeywordSnippet && (
+            <div className="session-card-snippet">
+              {renderHighlightedText(detailSession.match_snippet!, highlightQuery!)}
+            </div>
+          )}
+          {showSemanticSnippet && (
+            <div className="session-card-snippet session-card-snippet--ai">
+              {detailSession.match_snippet}
+            </div>
+          )}
+          {isSemanticResult && detailSession.match_score != null && detailSession.match_score >= 0.5 && (
+            <div className="session-card-score" title={`Semantic similarity: ${Math.round(detailSession.match_score * 100)}%`}>
+              {Math.round(detailSession.match_score * 100)}% match
+            </div>
+          )}
+        </div>
+
+        {!confirming && (
+          <div className="session-card-footer">
+            <div className="session-card-stats">
+              <div className="session-card-stats-primary">
+                <span className="session-stat" style={{ color: getTurnsColor(turnCount) }}>{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
+                <span className="session-stat-separator">&middot;</span>
+                <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
+              </div>
+              <div className="session-card-stats-secondary">
+                <span className="session-stat session-stat--secondary">
+                  {compatibilityMode
+                    ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
+                    : `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`}
+                </span>
+              </div>
+            </div>
+            <div className="session-card-actions">
+              <span className="session-card-action-label">{primaryActionLabel}</span>
+              <span className="session-card-arrow">&rarr;</span>
+            </div>
+          </div>
         )}
       </div>
 
-      <div className="session-card-body">
-        {runtime.hasSignal && (
-          <div className={`session-card-runtime session-card-runtime--${runtime.tone}`}>
-            <PresenceBadge
-              state={runtime.presenceState}
-              tool={runtime.presenceTool}
-              compact
-              heuristicActive={runtime.heuristicActive}
-              showUnknown={runtime.truthTier === "stale"}
-            />
-            <span className="session-card-runtime-phase">{runtime.displayPhase}</span>
-            {runtimeMetaLabel && (
-              <span className="session-card-runtime-meta">{runtimeMetaLabel}</span>
-            )}
-          </div>
-        )}
-        {title && <div className="session-card-title">{title}</div>}
-        {showSummary && (
-          <div className="session-card-summary">{session.summary}</div>
-        )}
-        {showGenerating && (
-          <div className="session-card-summary session-card-summary--pending">
-            Generating summary<span className="session-card-dots" aria-hidden="true" />
-          </div>
-        )}
-        {showKeywordSnippet && (
-          <div className="session-card-snippet">
-            {renderHighlightedText(detailSession.match_snippet!, highlightQuery!)}
-          </div>
-        )}
-        {showSemanticSnippet && (
-          <div className="session-card-snippet session-card-snippet--ai">
-            {detailSession.match_snippet}
-          </div>
-        )}
-        {isSemanticResult && detailSession.match_score != null && detailSession.match_score >= 0.5 && (
-          <div className="session-card-score" title={`Semantic similarity: ${Math.round(detailSession.match_score * 100)}%`}>
-            {Math.round(detailSession.match_score * 100)}% match
-          </div>
-        )}
-      </div>
+      {onArchive && !confirming && (
+        <button
+          type="button"
+          className="session-card-archive-btn"
+          onClick={() => setConfirming(true)}
+          aria-label="Archive session"
+          title="Archive"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6" />
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+            <path d="M10 11v6M14 11v6" />
+            <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+          </svg>
+        </button>
+      )}
 
-      {confirming ? (
-        <div className="session-card-confirm-row" onClick={(e) => e.stopPropagation()}>
+      {confirming && (
+        <div className="session-card-confirm-row">
           <span className="session-card-confirm-label">Archive this session?</span>
           <button
             type="button"
@@ -684,27 +716,6 @@ function SessionCard({
           >
             Archive
           </button>
-        </div>
-      ) : (
-        <div className="session-card-footer">
-          <div className="session-card-stats">
-            <div className="session-card-stats-primary">
-              <span className="session-stat" style={{ color: getTurnsColor(turnCount) }}>{turnCount} {turnCount === 1 ? 'turn' : 'turns'}</span>
-              <span className="session-stat-separator">&middot;</span>
-              <span className="session-stat">{toolCount} {toolCount === 1 ? 'tool' : 'tools'}</span>
-            </div>
-            <div className="session-card-stats-secondary">
-              <span className="session-stat session-stat--secondary">
-                {compatibilityMode
-                  ? `Matched ${formatRelativeTime(detailSession.started_at, relativeNowMs)}`
-                  : `Started ${formatRelativeTime(thread.root.started_at, relativeNowMs)}`}
-              </span>
-            </div>
-          </div>
-          <div className="session-card-actions">
-            <span className="session-card-action-label">{primaryActionLabel}</span>
-            <span className="session-card-arrow">&rarr;</span>
-          </div>
         </div>
       )}
     </Card>

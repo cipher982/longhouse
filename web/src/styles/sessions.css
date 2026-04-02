@@ -437,10 +437,37 @@
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  .session-card:hover {
+  .session-card:hover,
+  .session-card:focus-within {
     transform: translateY(-2px);
     box-shadow: var(--shadow-lg);
     border-color: var(--color-border-primary);
+  }
+
+  .session-card-hitbox {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border: none;
+    background: none;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    border-radius: inherit;
+  }
+
+  .session-card-hitbox:focus-visible {
+    outline: 2px solid var(--color-brand-primary);
+    outline-offset: 2px;
+  }
+
+  .session-card-content {
+    position: relative;
+    z-index: 2;
+  }
+
+  .session-card-content--passthrough {
+    pointer-events: none;
   }
 
   .session-card-header {
@@ -457,7 +484,15 @@
     flex-shrink: 0;
   }
 
+  .session-card-header-right--with-archive {
+    padding-right: 28px;
+  }
+
   .session-card-archive-btn {
+    position: absolute;
+    top: var(--space-4);
+    right: var(--space-4);
+    z-index: 3;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -476,6 +511,10 @@
   }
 
   .session-card:hover .session-card-archive-btn {
+    opacity: 1;
+  }
+
+  .session-card:focus-within .session-card-archive-btn {
     opacity: 1;
   }
 
@@ -740,6 +779,8 @@
 
   /* Inline archive confirmation row */
   .session-card-confirm-row {
+    position: relative;
+    z-index: 3;
     display: flex;
     align-items: center;
     gap: var(--space-2);
