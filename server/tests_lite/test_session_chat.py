@@ -18,7 +18,10 @@ from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
+from zerg.dependencies.agents_auth import require_single_tenant
+from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.dependencies.oikos_auth import get_current_oikos_user
+from zerg.models.device_token import DeviceToken
 from zerg.models.enums import UserRole
 from zerg.models.user import User
 from zerg.routers import session_chat
@@ -50,6 +53,26 @@ def _make_client(session_local, current_user):
 
     api_app.dependency_overrides[get_db] = override_get_db
     api_app.dependency_overrides[get_current_oikos_user] = override_current_user
+    return TestClient(app, backend="asyncio"), api_app
+
+
+def _make_machine_client(session_local, device_token):
+    from zerg.main import api_app
+    from zerg.main import app
+
+    def override_get_db():
+        db = session_local()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    def override_verify():
+        return device_token
+
+    api_app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify
+    api_app.dependency_overrides[require_single_tenant] = lambda: None
     return TestClient(app, backend="asyncio"), api_app
 
 
@@ -140,5 +163,133 @@ def test_fake_cloud_continuation_persists_turn_for_follow_up_requests(monkeypatc
             assert len(rows) == 1
             assert rows[0][0] == str(source_session_id)
             assert rows[0][1] == str(target_session.id)
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_agents_continue_route_supports_fake_cloud_continuation(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    project = "agents-continue-test"
+    source_session_id = uuid4()
+    provider_session_id = f"resume-send-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="agents-continue@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project=project,
+                device_id="agent-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on agent-device before API continuation",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        db.commit()
+        token = DeviceToken(owner_id=user.id, device_id="agent-device", token_hash="test")
+
+    client, api_app_ref = _make_machine_client(session_local, token)
+    monkeypatch.setenv("E2E_FAKE_SESSION_CHAT", "1")
+
+    async def fake_resolve(*, original_cwd, git_repo, git_branch, session_id):
+        return SimpleNamespace(path=Path("/tmp"), is_temp=False, error=None)
+
+    async def fake_prepare(*, session_id, workspace_path, db):
+        return provider_session_id
+
+    monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
+    monkeypatch.setattr(session_chat, "prepare_claude_session_for_resume", fake_prepare)
+
+    try:
+        response = client.post(
+            f"/api/agents/sessions/{source_session_id}/continue",
+            json={"message": "continue from the API"},
+        )
+        assert response.status_code == 200, response.text
+        assert '"created_continuation": true' in response.text
+        assert '"persisted_events": 2' in response.text
+
+        with session_local() as db:
+            store = AgentsStore(db)
+            source_session = store.get_session(source_session_id)
+            assert source_session is not None
+            target_session = store.get_thread_head(source_session)
+            assert target_session is not None
+            assert target_session.id != source_session_id
+            assert target_session.project == project
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_agents_continue_route_rejects_other_device(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"resume-send-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="agents-continue-denied@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project="auth-test",
+                device_id="device-a",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on device-a",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        db.commit()
+        token = DeviceToken(owner_id=user.id, device_id="device-b", token_hash="test")
+
+    client, api_app_ref = _make_machine_client(session_local, token)
+    monkeypatch.setenv("E2E_FAKE_SESSION_CHAT", "1")
+
+    try:
+        response = client.post(
+            f"/api/agents/sessions/{source_session_id}/continue",
+            json={"message": "should be rejected"},
+        )
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Authenticated device cannot continue a session from another device"
     finally:
         api_app_ref.dependency_overrides = {}

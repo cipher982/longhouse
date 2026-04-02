@@ -81,6 +81,7 @@ from zerg.session_loop_mode import SessionLoopMode
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sessions", tags=["session-chat"])
+agents_router = APIRouter(prefix="/agents/sessions", tags=["agents"])
 
 SESSION_CHAT_BACKEND_ENV = "SESSION_CHAT_BACKEND"
 SESSION_CHAT_MODEL_ENV = "SESSION_CHAT_MODEL"
@@ -133,6 +134,7 @@ _CONTINUATION_EMPTY_EVENTS_ERROR = "".join(
         "timeline events from the continuation transcript.",
     ]
 )
+_CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
 
 
 def _truthy_env(name: str) -> bool:
@@ -396,6 +398,101 @@ def _session_chat_streaming_response(stream: AsyncIterator[str]) -> StreamingRes
             "X-Accel-Buffering": "no",
         },
     )
+
+
+def _load_session_for_continuation(db: Session, session_id: str):
+    try:
+        source_session_uuid = UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid session id: {session_id}",
+        ) from exc
+
+    source_session = AgentsStore(db).get_session(source_session_uuid)
+    if not source_session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+    return source_session
+
+
+def _assert_session_can_continue(source_session) -> None:
+    if source_session.provider not in ("claude", "codex"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only Claude and Codex sessions can be resumed (got {source_session.provider})",
+        )
+
+    is_cloud_resume = source_session.execution_home != SessionExecutionHome.MANAGED_LOCAL.value
+    if is_cloud_resume and source_session.provider not in ("claude", "codex"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cloud continuation is only supported for Claude and Codex (got {source_session.provider})",
+        )
+
+
+def _parse_current_session_header(request: Request) -> UUID | None:
+    raw = str(request.headers.get(_CURRENT_SESSION_HEADER, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        return UUID(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{_CURRENT_SESSION_HEADER} must be a valid UUID",
+        ) from exc
+
+
+def _authorize_agents_session_continue(
+    *,
+    request: Request,
+    device_token: DeviceToken,
+    source_session,
+) -> None:
+    header_session_id = _parse_current_session_header(request)
+    token_session_id: UUID | None = None
+    token_session_raw = str(getattr(device_token, "session_id", "") or "").strip()
+    if token_session_raw:
+        try:
+            token_session_id = UUID(token_session_raw)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Authenticated session context is invalid",
+            ) from exc
+
+    if token_session_id is not None and token_session_id != source_session.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated session context does not match the target session",
+        )
+    if header_session_id is not None and header_session_id != source_session.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Current session header does not match the target session",
+        )
+    if token_session_id is not None and header_session_id is not None and token_session_id != header_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated session context does not match request header",
+        )
+
+    token_device_id = str(getattr(device_token, "device_id", "") or "").strip()
+    session_device_id = str(getattr(source_session, "device_id", "") or "").strip()
+    if token_device_id and session_device_id and token_device_id != session_device_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated device cannot continue a session from another device",
+        )
+
+    if token_session_id is None and header_session_id is None and (not token_device_id or token_device_id != session_device_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Machine continuation requires current session context or a matching device token",
+        )
 
 
 async def _build_managed_local_chat_response(
@@ -1764,45 +1861,16 @@ async def stream_session_continuation_output(
             proc.terminate()
 
 
-@router.post("/{session_id}/chat")
-async def chat_with_session(
-    session_id: str,
-    body: SessionChatRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_oikos_user),
+async def _continue_session_response(
+    *,
+    source_session,
+    message: str,
+    request_id: str,
+    managed_local_owner_id: int,
+    db: Session,
 ):
-    """Chat with a resumable session and stream the response via SSE."""
-    request_id = str(uuid.uuid4())[:8]
-    logger.info(f"[{request_id}] Chat request for session {session_id}")
-
-    try:
-        source_session_uuid = UUID(session_id)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid session id: {session_id}",
-        ) from exc
-
-    source_session = AgentsStore(db).get_session(source_session_uuid)
-    if not source_session:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Session {session_id} not found",
-        )
-
-    if source_session.provider not in ("claude", "codex"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Only Claude and Codex sessions can be resumed (got {source_session.provider})",
-        )
-
-    # Cloud continuation requires Claude or Codex CLI on the server
-    is_cloud_resume = source_session.execution_home != SessionExecutionHome.MANAGED_LOCAL.value
-    if is_cloud_resume and source_session.provider not in ("claude", "codex"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cloud continuation is only supported for Claude and Codex (got {source_session.provider})",
-        )
+    logger.info(f"[{request_id}] Chat request for session {source_session.id}")
+    _assert_session_can_continue(source_session)
 
     lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
     lock = await session_lock_manager.acquire(
@@ -1832,15 +1900,15 @@ async def chat_with_session(
         if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
             return await _build_managed_local_chat_response(
                 source_session=source_session,
-                owner_id=current_user.id,
-                message=body.message,
+                owner_id=managed_local_owner_id,
+                message=message,
                 request_id=request_id,
                 lock_scope_id=lock_scope_id,
                 db=db,
             )
         return await _build_cloud_continuation_chat_response(
             source_session=source_session,
-            message=body.message,
+            message=message,
             request_id=request_id,
             lock_scope_id=lock_scope_id,
             db=db,
@@ -1850,13 +1918,81 @@ async def chat_with_session(
         await session_lock_manager.release(lock_scope_id, request_id)
         raise
 
-    except Exception as e:
+    except Exception:
         await session_lock_manager.release(lock_scope_id, request_id)
+        logger.exception(f"[{request_id}] Error in session continuation")
+        raise
+
+
+@router.post("/{session_id}/chat")
+async def chat_with_session(
+    session_id: str,
+    body: SessionChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_oikos_user),
+):
+    """Chat with a resumable session and stream the response via SSE."""
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    try:
+        return await _continue_session_response(
+            source_session=source_session,
+            message=body.message,
+            request_id=request_id,
+            managed_local_owner_id=current_user.id,
+            db=db,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
         logger.exception(f"[{request_id}] Error in chat_with_session")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Internal error: {str(e)[:200]}",
+            detail=f"Internal error: {str(exc)[:200]}",
+        ) from exc
+
+
+@agents_router.post("/{session_id}/continue")
+async def continue_session(
+    session_id: str,
+    body: SessionChatRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+):
+    """Continue a session through the canonical machine-facing agents surface."""
+    if not isinstance(device_token, DeviceToken):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Machine continuation requires a device token",
         )
+
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    _authorize_agents_session_continue(
+        request=request,
+        device_token=device_token,
+        source_session=source_session,
+    )
+    owner_id = _resolve_agents_owner_id(db, device_token)
+
+    try:
+        return await _continue_session_response(
+            source_session=source_session,
+            message=body.message,
+            request_id=request_id,
+            managed_local_owner_id=owner_id,
+            db=db,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception(f"[{request_id}] Error in continue_session")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error: {str(exc)[:200]}",
+        ) from exc
 
 
 @router.post("/managed-local", response_model=ManagedLocalSessionLaunchResponse)
