@@ -58,6 +58,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - The raw wall now includes `pending_inbound_messages`, so coordination clients can see when a session already has unacknowledged inbound work queued.
 - Oikos now has direct session-kernel coordination tools using the canonical names `peers`, `get_session_events`, `session_tail`, `message_session`, `check_messages`, and `ack_message`.
 - API routes and Oikos coordination tools now share `session_coordination.py` for wall/tail/message serialization and inbox acknowledgement semantics, reducing contract drift without a broad router rewrite.
+- Machine-facing continuation now exists at `POST /api/agents/sessions/{session_id}/continue`, reusing the existing session-chat engine instead of introducing a second continuation stack.
 - Related active tasks:
   - `docs/specs/launch-runtime-simplification.md`
   - `docs/specs/oikos-proactive-operator.md`

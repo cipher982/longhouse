@@ -48,6 +48,7 @@ Use it for directed session actions such as:
 - `POST /api/agents/messages`
 - `GET /api/agents/messages`
 - `POST /api/agents/messages/{id}/ack`
+- `POST /api/agents/sessions/{session_id}/continue`
 
 ### Resolution rules
 
@@ -93,6 +94,7 @@ Use it for directed session actions such as:
 - `POST /api/agents/messages`
 - `GET /api/agents/messages`
 - `POST /api/agents/messages/{message_id}/ack`
+- `POST /api/agents/sessions/{session_id}/continue`
 
 Current delivery model:
 
@@ -102,6 +104,14 @@ Current delivery model:
 - explicit acknowledgement from the target session
 - non-live sessions can still poll the durable inbox
 - wall entries now surface `pending_inbound_messages` so agents can see which sessions already have unacknowledged inbound work
+
+Current continuation model:
+
+- browser/Oikos continuation remains at `POST /api/sessions/{session_id}/chat`
+- machine continuation now lives at `POST /api/agents/sessions/{session_id}/continue`
+- the machine route reuses the existing managed-local fast path and cloud continuation path
+- machine callers must present session context or a matching device token for the target session
+- managed-local continuation returns fast JSON acceptance; cloud continuation streams SSE provider output
 
 ### Continuity and project context
 
