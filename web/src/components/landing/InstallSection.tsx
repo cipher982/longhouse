@@ -50,7 +50,7 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
     <div className={`install-section ${className}`}>
       <div className="install-header">
         <h3>Get started in seconds</h3>
-        <p>One command. No dependencies.</p>
+        <p>One install command. No Docker or external database.</p>
       </div>
 
       <div className="install-tabs" role="tablist" aria-label="Installation platform">

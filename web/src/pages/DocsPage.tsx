@@ -35,7 +35,7 @@ export default function DocsPage() {
       <main className="info-page-content">
         <h1 className="info-page-title">Documentation</h1>
         <p className="info-page-subtitle">
-          Get started with Longhouse fast, then connect your real sessions.
+          Get started fast, import existing sessions, then start Longhouse sessions when you want control.
         </p>
 
         <nav className="docs-nav">
@@ -100,7 +100,7 @@ longhouse codex</code></pre>
 
           <h3>5. Want a safe preview first?</h3>
           <p>
-            Start with demo data instead of your real sessions:
+            Only use demo data when you want a safe preview before importing real sessions:
           </p>
           <pre><code>longhouse serve --demo</code></pre>
           <p>
