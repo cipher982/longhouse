@@ -75,18 +75,26 @@ export default function DocsPage() {
             Data is stored in a SQLite database on your machine.
           </p>
 
-          <h3>3. Connect your local CLIs</h3>
+          <h3>3. Import existing sessions</h3>
           <p>
             If you skipped onboarding or want to reinstall the background shipper and hooks, run:
           </p>
           <pre><code>longhouse connect --install</code></pre>
           <p>
-            Claude Code has the deepest support today. Codex CLI sync is also set up here when Codex is installed. Gemini sessions import from local session files.
+            Then keep using Claude Code, Codex CLI, or Gemini CLI as normal. Longhouse imports their
+            sessions into the timeline so you can browse, search, and inspect them from one place.
           </p>
 
-          <h3>4. Use your AI coding tools as normal</h3>
+          <h3>4. Start a Longhouse session when you want control</h3>
           <p>
-            Keep using Claude Code, Codex CLI, or Gemini CLI. Longhouse imports their sessions into the timeline so you can browse, search, and resume from one place.
+            Existing sessions become findable first. When you want to steer a session after launch, start it
+            through Longhouse:
+          </p>
+          <pre><code>longhouse claude
+longhouse codex</code></pre>
+          <p>
+            Claude is the strongest continuation path today. Codex and Gemini are already useful in the
+            archive and machine surface.
           </p>
 
           <h3>5. Want a safe preview first?</h3>

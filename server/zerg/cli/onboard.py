@@ -1,10 +1,8 @@
 """Onboarding wizard for Longhouse.
 
-Guides new users through initial setup:
-- Verify/install dependencies
-- Configure server
-- Set up shipper for session sync
-- Emit test event to verify pipeline
+Guides new users through the first two beats of value:
+- make existing sessions findable
+- point users at starting a Longhouse session when they want control
 
 Usage:
     longhouse onboard          # Interactive setup
@@ -349,6 +347,24 @@ def _emit_test_event(api_url: str) -> bool:
         return False
 
 
+def _run_initial_import(api_url: str) -> tuple[bool, str]:
+    """Run a one-shot import so existing sessions become visible immediately."""
+    try:
+        result = subprocess.run(
+            ["longhouse", "ship", "--url", api_url],
+            capture_output=True,
+            text=True,
+        )
+    except Exception as e:
+        return False, str(e)
+
+    if result.returncode == 0:
+        return True, ""
+
+    detail = (result.stderr or "").strip() or (result.stdout or "").strip() or "longhouse ship exited non-zero"
+    return False, detail
+
+
 app = typer.Typer(help="Onboarding wizard")
 
 
@@ -390,20 +406,22 @@ def onboard(
     """Run the Longhouse onboarding wizard.
 
     Guides you through initial setup:
-    1. Verify dependencies (Claude Code, etc.)
-    2. Start local server
-    3. Set up session shipping
-    4. Verify with test event
+    1. Verify dependencies
+    2. Start Longhouse
+    3. Import existing sessions
+    4. Verify the pipeline
+    5. Optionally seed demo sessions
 
     Use --quick for automated setup with defaults.
     """
     typer.echo("")
     typer.secho("Welcome to Longhouse", fg=typer.colors.CYAN, bold=True)
+    typer.echo("Make existing sessions findable first. Start Longhouse sessions when you want control.")
     typer.echo("")
 
     # Quick vs Manual mode selection
     if not quick:
-        typer.echo("[1] QuickStart (recommended) - Ready in 30 seconds")
+        typer.echo("[1] QuickStart (recommended) - Find sessions first, control them second")
         typer.echo("[2] Manual Setup - Configure each option")
         typer.echo("")
 
@@ -493,21 +511,22 @@ def onboard(
 
     typer.echo("")
 
-    # Step 3: Shipper setup
-    typer.secho("Step 3: Session shipping", fg=typer.colors.BLUE, bold=True)
+    # Step 3: Import existing sessions
+    typer.secho("Step 3: Import existing sessions", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     if no_shipper:
-        typer.echo("  Skipping shipper setup (--no-shipper)")
+        typer.echo("  Skipping session import setup (--no-shipper)")
     elif not has_any_cli:
-        typer.echo("  Skipping shipper (no supported CLI installed)")
-        typer.echo("  Install a CLI first, then run: longhouse connect --install")
+        typer.echo("  No supported CLI found, so there is nothing to import yet.")
+        typer.echo("  You can still explore demo sessions now.")
+        typer.echo("  Install Claude Code, Codex CLI, or Gemini CLI later, then run: longhouse connect --install")
     else:
         # Check for service manager
         has_service_manager = _has_launchd() or _has_systemd()
 
         if has_service_manager:
-            if quick or typer.confirm("Install background shipper service?", default=True):
+            if quick or typer.confirm("Install background shipper so Longhouse keeps importing sessions?", default=True):
                 try:
                     result = subprocess.run(
                         ["longhouse", "connect", "--install", "--url", api_url],
@@ -516,7 +535,7 @@ def onboard(
                     )
 
                     if result.returncode == 0:
-                        typer.secho("  [OK] Shipper service installed", fg=typer.colors.GREEN)
+                        typer.secho("  [OK] Background session import path installed", fg=typer.colors.GREEN)
                     else:
                         typer.secho("  [WARN] Service install failed", fg=typer.colors.YELLOW)
                         typer.echo(f"         {result.stderr.strip()}")
@@ -526,13 +545,27 @@ def onboard(
                     typer.secho(f"  [WARN] Could not install service: {e}", fg=typer.colors.YELLOW)
         else:
             typer.secho("  [--] No service manager (WSL/SSH environment)", fg=typer.colors.YELLOW)
-            typer.echo("       Run shipper in foreground: longhouse connect")
-            typer.echo("       Or use: longhouse ship (one-shot sync)")
+            typer.echo("       Run shipping in foreground: longhouse connect")
+            typer.echo("       Or use one-shot import: longhouse ship")
+
+        if _check_server_health(host, port):
+            if quick or typer.confirm("Import any existing sessions now?", default=True):
+                typer.echo("  Importing any existing sessions now...")
+                imported, detail = _run_initial_import(api_url)
+                if imported:
+                    typer.secho("  [OK] One-shot import finished", fg=typer.colors.GREEN)
+                else:
+                    typer.secho("  [WARN] Initial import failed", fg=typer.colors.YELLOW)
+                    if detail:
+                        typer.echo(f"         {detail}")
+                    typer.echo("         Retry with: longhouse ship")
+        else:
+            typer.echo("  Skipping initial import (server not running)")
 
     typer.echo("")
 
     # Step 4: Verification
-    typer.secho("Step 4: Verification", fg=typer.colors.BLUE, bold=True)
+    typer.secho("Step 4: Verify the pipeline", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     if _check_server_health(host, port):
@@ -552,25 +585,34 @@ def onboard(
 
     if no_demo:
         typer.echo("  Skipping demo data (--no-demo)")
+    elif has_any_cli and quick:
+        typer.echo("  Skipping demo data (real CLI import path available)")
+        typer.echo("       Run 'longhouse serve --demo' later if you want a safe preview.")
     elif _check_server_health(host, port):
-        typer.echo("  Seeding demo sessions...")
-        try:
-            with httpx.Client(timeout=10) as client:
-                resp = client.post(f"{api_url}/api/agents/demo")
-                if resp.status_code == 200:
-                    result = resp.json()
-                    if result.get("seeded"):
-                        typer.secho(
-                            f"  [OK] Seeded {result['sessions_created']} demo sessions",
-                            fg=typer.colors.GREEN,
-                        )
-                        typer.echo("       Run 'longhouse ship' to sync your real sessions.")
+        should_seed_demo = quick or not has_any_cli
+        if has_any_cli and not quick:
+            should_seed_demo = typer.confirm("Seed demo sessions too?", default=False)
+
+        if should_seed_demo:
+            typer.echo("  Seeding demo sessions...")
+            try:
+                with httpx.Client(timeout=10) as client:
+                    resp = client.post(f"{api_url}/api/agents/demo")
+                    if resp.status_code == 200:
+                        result = resp.json()
+                        if result.get("seeded"):
+                            typer.secho(
+                                f"  [OK] Seeded {result['sessions_created']} demo sessions",
+                                fg=typer.colors.GREEN,
+                            )
+                        else:
+                            typer.secho("  [OK] Demo sessions already present", fg=typer.colors.GREEN)
                     else:
-                        typer.secho("  [OK] Demo sessions already present", fg=typer.colors.GREEN)
-                else:
-                    typer.secho("  [WARN] Could not seed demo data", fg=typer.colors.YELLOW)
-        except Exception as e:
-            typer.secho(f"  [WARN] Demo seeding failed: {e}", fg=typer.colors.YELLOW)
+                        typer.secho("  [WARN] Could not seed demo data", fg=typer.colors.YELLOW)
+            except Exception as e:
+                typer.secho(f"  [WARN] Demo seeding failed: {e}", fg=typer.colors.YELLOW)
+        else:
+            typer.echo("  Skipping demo data")
     else:
         typer.echo("  Skipping demo data (server not running)")
 
@@ -628,14 +670,32 @@ def onboard(
     typer.secho("Setup complete!", fg=typer.colors.GREEN, bold=True)
     typer.echo("=" * 50)
     typer.echo("")
+    typer.echo("First value:")
+    if has_any_cli:
+        typer.echo("  1. Open Longhouse and look for imported sessions")
+        typer.echo("  2. Search one prior solution or inspect one session")
+    else:
+        typer.echo("  1. Open Longhouse and explore demo sessions")
+        typer.echo("  2. Install Claude Code, Codex CLI, or Gemini CLI when you want real imports")
+    typer.echo("")
+    typer.echo("Next, when you want control after launch:")
+    if has_claude:
+        typer.echo("  longhouse claude   Start a Longhouse Claude session")
+    if has_codex:
+        typer.echo("  longhouse codex    Start a Longhouse Codex session")
+    if not (has_claude or has_codex):
+        typer.echo("  Install Claude Code or Codex CLI, then start a Longhouse session")
+    typer.echo("")
     typer.echo("Quick reference:")
     typer.echo(f"  Server:    {api_url}")
     typer.echo(f"  Config:    {config_path}")
     typer.echo(f"  Data:      {_get_longhouse_home()}")
     typer.echo("")
     typer.echo("Commands:")
-    typer.echo("  longhouse status   Show configuration")
-    typer.echo("  longhouse connect  Sync Claude sessions")
+    typer.echo("  longhouse ship             Import existing sessions once")
+    typer.echo("  longhouse connect --install  Keep importing sessions in background")
+    typer.echo("  longhouse wall --json      Read the machine surface")
+    typer.echo("  longhouse status           Show configuration")
     typer.echo("  longhouse serve --stop  Stop server")
     typer.echo("")
 
