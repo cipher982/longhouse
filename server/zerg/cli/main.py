@@ -10,6 +10,8 @@ Usage:
     longhouse tail          # Read the recent tail of a session
     longhouse check-messages  # Inspect the durable session inbox
     longhouse ack-message     # Acknowledge an inbound session message
+    longhouse sessions get    # Inspect one session
+    longhouse sessions events # Inspect session events
     longhouse config show   # Show effective configuration
     longhouse ship          # One-shot sync
     longhouse connect       # Foreground engine sync (watch + fallback scan)
@@ -41,6 +43,7 @@ from zerg.cli.onboard import onboard
 from zerg.cli.serve import app as serve_app
 from zerg.cli.serve import serve
 from zerg.cli.serve import status
+from zerg.cli.sessions import app as sessions_app
 
 # Create main app
 app = typer.Typer(
@@ -86,6 +89,7 @@ def config_show() -> None:
 # Add subcommands from connect module
 app.add_typer(connect_app, name="session", help="Session shipping commands")
 app.add_typer(coordination_app, name="coordination", help="Session coordination commands")
+app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(serve_app, name="server", help="Server management commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)

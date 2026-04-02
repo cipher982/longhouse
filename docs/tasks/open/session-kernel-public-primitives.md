@@ -32,8 +32,8 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - [x] Add the first coordination CLI commands: `longhouse peers` and `longhouse message`
 - [x] Add `longhouse tail` backed by the canonical session tail route
 - [x] Add CLI inbox helpers for non-live sessions: `check-messages` / `ack-message`
+- [x] Add `longhouse sessions get` and `longhouse sessions events`
 - [ ] Declare the canonical machine surface in docs: `/api/agents/*`, auth model, session-context headers, and JSON contracts
-- [ ] Add the remaining coordination/session CLI parity: `longhouse sessions get`, `longhouse sessions events`
 - [ ] Decide and document the browser/timeline relationship to the machine canon (browser veneer vs direct reuse)
 - [ ] Expand `SessionMessage` delivery beyond the current managed-local fast path
 - [ ] Decide whether queued delivery should drain multiple messages at one safe boundary or intentionally stay one-at-a-time
@@ -50,7 +50,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - Do not extract new repos or services yet. First make the primitives obviously canonical inside Longhouse.
 - Current delivery trigger is presence-driven safe-boundary delivery. That is the right default and should stay simple.
 - Known gap: queued delivery currently attempts one message per deliverable presence update.
-- Current CLI progress: `peers`, `message`, `tail`, `check-messages`, and `ack-message` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
+- Current CLI progress: `peers`, `message`, `tail`, `check-messages`, `ack-message`, `sessions get`, and `sessions events` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
 - Related active tasks:
   - `docs/tasks/open/launch-runtime-simplification.md`
   - `docs/tasks/open/oikos-proactive-operator.md`
