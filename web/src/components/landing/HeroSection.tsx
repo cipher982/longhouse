@@ -44,7 +44,8 @@ export function HeroSection({
 
           <p className="landing-hero-note">
             Works on your laptop. Shines on a machine that stays on. Self-host free where the work lives,
-            or use hosted later. Claude remains the strongest direct continuation path today.
+            or use hosted beta later if you want us to run the box. Claude remains the strongest direct
+            continuation path today.
           </p>
 
           <div className="landing-hero-ctas">
@@ -52,7 +53,7 @@ export function HeroSection({
               Self-Host Free &rarr;
             </Button>
             <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
-              Hosted Later
+              Hosted Beta
             </Button>
             {config.demoMode && (
               <Button variant="ghost" size="lg" onClick={() => navigate("/timeline")}>

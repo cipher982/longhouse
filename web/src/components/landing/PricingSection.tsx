@@ -41,18 +41,19 @@ export function PricingSection() {
       highlighted: true,
     },
     {
-      name: "Hosted",
+      name: "Hosted Beta",
       price: "$5",
       period: "/month",
-      description: "We run the box for you",
+      description: "We run the box for you, but self-host is the cleaner first path today",
       features: [
         "Same core loop as self-hosted",
         "Browser access from anywhere",
         "Less operator work",
         "Your own subdomain + automatic updates",
         "Convenience deployment of the same session model",
+        "Best once you already understand the self-hosted loop",
       ],
-      ctaText: "Hosted Later",
+      ctaText: "Hosted Beta",
       ctaAction: handleGetHosted,
     },
   ];
@@ -63,8 +64,8 @@ export function PricingSection() {
         <p className="landing-section-label">Run It Where Work Should Live</p>
         <h2 className="landing-section-title">Works on your laptop. Shines on a machine that stays on.</h2>
         <p className="landing-section-subtitle">
-          Self-hosted is the free default path. Hosted is the convenience version of the same loop, not a
-          different product category.
+          Self-hosted is the free default path. Hosted beta is the convenience version of the same loop,
+          not a different product category or the required first step.
         </p>
 
         <div className="landing-pricing-grid">

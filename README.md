@@ -6,7 +6,7 @@ Import existing sessions into one searchable timeline, then start Longhouse sess
 
 Works on your laptop. Shines on a machine that stays on.
 
-Self-host free on the machine where work should live, or use hosted later when you want the convenience path. Claude is the strongest continuation path today; Codex and Gemini are searchable and inspectable today.
+Self-host free on the machine where work should live, or use hosted beta later when you want the convenience path. Claude is the strongest continuation path today; Codex and Gemini are searchable and inspectable today.
 
 ## Demo
 
@@ -68,9 +68,9 @@ longhouse serve --demo
 5. Show `longhouse wall --json`.
 6. Continue or message a real Claude session after launch.
 
-### Hosted (later)
+### Hosted beta (later)
 
-Sign up at https://longhouse.ai when you want the convenience path. Hosted is "we run the box" for you; the free first-run path is still the self-hosted installer above.
+Sign up at https://longhouse.ai when you want the convenience path. Hosted beta is "we run the box" for you; the free first-run path is still the self-hosted installer above, and it is the recommended way to understand the product loop first.
 
 ## Features
 
@@ -81,7 +81,7 @@ Sign up at https://longhouse.ai when you want the convenience path. Hosted is "w
 - **Search + recall**: Find messages, tool calls, file edits, and session metadata fast
 - **Claude continuation**: Claude Code is the strongest launch-ready continuation path today
 - **Agent-first coordination**: Read the wall, tail sessions, find peers, send directed session messages, and manage inbox state by CLI or API
-- **Hosted or self-hosted**: Self-host free or use hosted later without changing the core loop
+- **Hosted or self-hosted**: Self-host free now or use hosted beta later without changing the core loop
 
 ## Install Options
 
@@ -113,7 +113,7 @@ longhouse onboard
 longhouse serve
 ```
 
-### 2. Hosted (later)
+### 2. Hosted beta (later)
 Get started at https://longhouse.ai when you want the hosted convenience path. Keep the self-hosted installer as the primary free wedge for first use, demos, and durable machine setups.
 
 ### 3. Advanced / contributor paths
