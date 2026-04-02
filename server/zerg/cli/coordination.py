@@ -122,6 +122,27 @@ def _print_tail_event(event: dict) -> None:
         typer.echo(content)
 
 
+def _resolve_session_context(raw: str | None, *, label: str, guidance: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        typer.secho(guidance, fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    return _parse_uuid_or_exit(value, label=label)
+
+
+def _print_message_summary(message: dict) -> None:
+    message_id = str(message.get("id") or "-")
+    from_session_id = str(message.get("from_session_id") or "-")
+    status = str(message.get("delivery_status") or "-")
+    created_at = str(message.get("created_at") or "-")
+    text = str(message.get("text") or "").strip()
+
+    typer.secho(f"#{message_id}  {status}  {created_at}", fg=typer.colors.CYAN, bold=True)
+    typer.echo(f"  from: {from_session_id}")
+    if text:
+        typer.echo(f"  {text}")
+
+
 @app.command()
 def peers(
     repo: str | None = typer.Option(
@@ -293,14 +314,11 @@ def message(
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
     resolved_to_session_id = _parse_uuid_or_exit(to_session_id, label="to_session_id")
-    sender_raw = (from_session_id or os.environ.get(_CURRENT_SESSION_ENV) or "").strip()
-    if not sender_raw:
-        typer.secho(
-            "Provide --from-session or run inside a managed session with LONGHOUSE_SESSION_ID set.",
-            fg=typer.colors.RED,
-        )
-        raise typer.Exit(code=1)
-    resolved_from_session_id = _parse_uuid_or_exit(sender_raw, label="from_session_id")
+    resolved_from_session_id = _resolve_session_context(
+        from_session_id or os.environ.get(_CURRENT_SESSION_ENV),
+        label="from_session_id",
+        guidance="Provide --from-session or run inside a managed session with LONGHOUSE_SESSION_ID set.",
+    )
 
     body: dict[str, object] = {
         "to_session_id": resolved_to_session_id,
@@ -432,3 +450,197 @@ def tail(
     for event in events:
         _print_tail_event(event)
         typer.echo("")
+
+
+@app.command("check-messages")
+def check_messages(
+    session_id: str | None = typer.Option(
+        None,
+        "--session",
+        "-s",
+        help="Session UUID. Defaults to LONGHOUSE_SESSION_ID when available.",
+    ),
+    direction: str = typer.Option(
+        "inbound",
+        "--direction",
+        help="Message direction: inbound, outbound, or all.",
+    ),
+    unacknowledged_only: bool = typer.Option(
+        True,
+        "--unacknowledged-only/--all",
+        help="Show only unacknowledged messages by default.",
+    ),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        "-n",
+        help="Max messages to return.",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output raw JSON response.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified).",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """Inspect the durable message inbox for a session."""
+    config_dir = Path(claude_dir) if claude_dir else None
+    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    resolved_session_id = _resolve_session_context(
+        session_id or os.environ.get(_CURRENT_SESSION_ENV),
+        label="session_id",
+        guidance="Provide --session or run inside a managed session with LONGHOUSE_SESSION_ID set.",
+    )
+
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(
+                f"{base_url.rstrip('/')}/api/agents/messages",
+                headers={
+                    "X-Agents-Token": resolved_token,
+                    _CURRENT_SESSION_HEADER: resolved_session_id,
+                },
+                params={
+                    "direction": direction,
+                    "unacknowledged_only": unacknowledged_only,
+                    "limit": limit,
+                },
+            )
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException:
+        typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if response.status_code == 401:
+        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if response.status_code != 200:
+        detail = response.text[:200]
+        try:
+            payload = response.json()
+            detail = str(payload.get("detail") or detail)
+        except ValueError:
+            pass
+        typer.secho(f"API error: {response.status_code} {detail}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    payload = response.json()
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    messages = list(payload.get("messages", []))
+    if not messages:
+        typer.echo(f"No messages found for session {resolved_session_id}")
+        return
+
+    typer.echo(f"Session: {resolved_session_id}")
+    typer.echo(f"Messages: {len(messages)}")
+    typer.echo("")
+    for item in messages:
+        _print_message_summary(item)
+        typer.echo("")
+
+
+@app.command("ack-message")
+def ack_message(
+    message_id: int = typer.Argument(..., help="Message id to acknowledge."),
+    session_id: str | None = typer.Option(
+        None,
+        "--session",
+        "-s",
+        help="Target session UUID. Defaults to LONGHOUSE_SESSION_ID when available.",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output raw JSON response.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified).",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """Acknowledge an inbound message for the target session."""
+    config_dir = Path(claude_dir) if claude_dir else None
+    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    resolved_session_id = _resolve_session_context(
+        session_id or os.environ.get(_CURRENT_SESSION_ENV),
+        label="session_id",
+        guidance="Provide --session or run inside a managed session with LONGHOUSE_SESSION_ID set.",
+    )
+
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.post(
+                f"{base_url.rstrip('/')}/api/agents/messages/{message_id}/ack",
+                headers={
+                    "X-Agents-Token": resolved_token,
+                    _CURRENT_SESSION_HEADER: resolved_session_id,
+                },
+                json={},
+            )
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException:
+        typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if response.status_code == 401:
+        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if response.status_code != 200:
+        detail = response.text[:200]
+        try:
+            payload = response.json()
+            detail = str(payload.get("detail") or detail)
+        except ValueError:
+            pass
+        typer.secho(f"API error: {response.status_code} {detail}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    payload = response.json()
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    typer.secho("Message acknowledged.", fg=typer.colors.GREEN)
+    typer.echo(f"Message ID: {payload.get('id')}")
+    typer.echo(f"Status: {payload.get('delivery_status')}")
+    acknowledged_at = str(payload.get("acknowledged_at") or "").strip()
+    if acknowledged_at:
+        typer.echo(f"Acknowledged at: {acknowledged_at}")

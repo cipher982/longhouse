@@ -314,3 +314,94 @@ def test_tail_command_json_output(monkeypatch):
     assert result.exit_code == 0, result.output
     assert '"session_id": "22222222-2222-2222-2222-222222222222"' in result.output
     assert '"total": 0' in result.output
+
+
+def test_check_messages_command_prints_inbox(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "messages": [
+                    {
+                        "id": 9,
+                        "from_session_id": "11111111-1111-1111-1111-111111111111",
+                        "to_session_id": "22222222-2222-2222-2222-222222222222",
+                        "text": "Please confirm the migration status.",
+                        "delivery_status": "stored_only",
+                        "created_at": "2026-04-02T12:45:00+00:00",
+                    }
+                ],
+                "total": 1,
+            },
+        )
+    )
+
+    monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
+    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "22222222-2222-2222-2222-222222222222")
+
+    result = runner.invoke(app, ["check-messages"])
+
+    assert result.exit_code == 0, result.output
+    assert "Session: 22222222-2222-2222-2222-222222222222" in result.output
+    assert "Please confirm the migration status." in result.output
+    assert fake_client.calls == [
+        {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/messages",
+            "headers": {
+                "X-Agents-Token": "zdt_test_token",
+                "X-Longhouse-Session-Id": "22222222-2222-2222-2222-222222222222",
+            },
+            "params": {
+                "direction": "inbound",
+                "unacknowledged_only": True,
+                "limit": 50,
+            },
+        }
+    ]
+
+
+def test_ack_message_command_posts_ack(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        post_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "id": 9,
+                "delivery_status": "stored_only",
+                "acknowledged_at": "2026-04-02T12:46:00+00:00",
+            },
+        )
+    )
+
+    monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(
+        app,
+        [
+            "ack-message",
+            "9",
+            "--session",
+            "22222222-2222-2222-2222-222222222222",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Message acknowledged." in result.output
+    assert "Acknowledged at: 2026-04-02T12:46:00+00:00" in result.output
+    assert fake_client.calls == [
+        {
+            "method": "POST",
+            "url": "https://longhouse.test/api/agents/messages/9/ack",
+            "headers": {
+                "X-Agents-Token": "zdt_test_token",
+                "X-Longhouse-Session-Id": "22222222-2222-2222-2222-222222222222",
+            },
+            "json": {},
+        }
+    ]

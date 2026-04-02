@@ -8,6 +8,8 @@ Usage:
     longhouse peers         # Find live peer sessions for the current repo
     longhouse message       # Send a message to another session
     longhouse tail          # Read the recent tail of a session
+    longhouse check-messages  # Inspect the durable session inbox
+    longhouse ack-message     # Acknowledge an inbound session message
     longhouse config show   # Show effective configuration
     longhouse ship          # One-shot sync
     longhouse connect       # Foreground engine sync (watch + fallback scan)
@@ -27,7 +29,9 @@ from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
 from zerg.cli.codex import codex
 from zerg.cli.connect import app as connect_app
+from zerg.cli.coordination import ack_message
 from zerg.cli.coordination import app as coordination_app
+from zerg.cli.coordination import check_messages
 from zerg.cli.coordination import message
 from zerg.cli.coordination import peers
 from zerg.cli.coordination import tail
@@ -99,6 +103,8 @@ app.command(name="codex")(codex)
 app.command(name="peers")(peers)
 app.command(name="message")(message)
 app.command(name="tail")(tail)
+app.command(name="check-messages")(check_messages)
+app.command(name="ack-message")(ack_message)
 app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
 app.command(name="connect")(_cmd_lookup["connect"])
