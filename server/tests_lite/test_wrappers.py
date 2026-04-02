@@ -61,8 +61,13 @@ class TestBuildShimScript:
     def test_bare_invocation_routes_to_longhouse(self):
         """v1: only bare invocations (zero args) go to longhouse."""
         script = _build_shim_script("claude")
-        # The script should have a check that passes through when $# > 0
         assert '$# -gt 0' in script
+
+    def test_self_recursion_guard(self):
+        """Shim should detect and abort if it resolves back to itself."""
+        script = _build_shim_script("claude")
+        assert "_THIS_SCRIPT" in script
+        assert "_REAL_CANON" in script
 
 
 # ------------------------------------------------------------------
@@ -110,6 +115,15 @@ class TestProfileBlock:
 
     def test_has_block_false_on_missing(self, tmp_path: Path):
         assert _profile_has_block(tmp_path / "nope") is False
+
+    def test_posix_block_is_source_safe(self, tmp_path: Path):
+        """The injected block should guard against repeated PATH prepend."""
+        profile = tmp_path / ".zshrc"
+        profile.write_text("# existing\n")
+        _inject_profile_block(profile)
+        text = profile.read_text()
+        # Should use case guard, not raw export
+        assert 'case ":$PATH:"' in text
 
 
 # ------------------------------------------------------------------
@@ -173,6 +187,15 @@ class TestInstallWrappers:
         (fake_home / "fakebin" / "codex").unlink()
         results = install_wrappers()
         assert "skipped" in results["codex"]
+
+    def test_install_skips_profile_when_no_shims(self, fake_home: Path, monkeypatch: pytest.MonkeyPatch):
+        """Profile block should NOT be injected if all providers were skipped."""
+        (fake_home / "fakebin" / "claude").unlink()
+        (fake_home / "fakebin" / "codex").unlink()
+        results = install_wrappers()
+        assert "skipped" in results["profile"]
+        zshrc = fake_home / ".zshrc"
+        assert _MARKER_BEGIN not in zshrc.read_text()
 
     def test_invalid_provider_raises(self, fake_home: Path):
         with pytest.raises(ValueError, match="Unsupported provider"):
