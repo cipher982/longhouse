@@ -29,7 +29,7 @@ Make wrapper mode an explicit, safe activation feature:
 - [x] Update onboarding output to mention wrapper mode as optional
 - [x] Update README / docs to explain the opt-in wrapper flow
 - [x] Run backend wrapper/onboarding tests and frontend docs checks
-- [ ] Decide whether to add an interactive onboarding opt-in for wrapper install
+- [x] Add an interactive onboarding opt-in for wrapper install without changing quick/headless defaults
 - [ ] Decide whether `longhouse wrap` needs a stronger machine-readable status surface
 
 ## Notes
@@ -40,6 +40,9 @@ Make wrapper mode an explicit, safe activation feature:
   - installer no longer auto-installs the old Claude shim path
   - wrapper mode is documented as `longhouse wrap --install`
   - public CLI wording now says "Longhouse session" instead of leaking `managed-local`
+- Second slice landed:
+  - interactive onboarding now offers wrapper install explicitly
+  - `--quick` and headless onboarding still skip wrapper install by default
 - Validation:
   - `make test`
   - `make test-frontend`
