@@ -89,6 +89,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          if ! command -v gh >/dev/null 2>&1; then
+            echo "gh CLI is not installed on this runner; skipping issue creation."
+            exit 0
+          fi
           PREV_SHA="${{ steps.prev.outputs.sha }}"
           COMMIT_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
           gh issue create \
