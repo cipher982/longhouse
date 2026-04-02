@@ -185,6 +185,7 @@ Say this bluntly in docs and on the page:
 - that user performs one real session-level control action after launch
 - demos make Journey 2 legible in under 3 minutes
 
-## Current Prototype
+## Source Of Truth
 
-- HTML prototype: `web/public/landing-session-kernel-v2.html`
+- The live React landing page is now the source of truth.
+- Do not reintroduce a separate static prototype unless the real app cannot carry the experiment.
