@@ -9,7 +9,7 @@ const steps: Step[] = [
     number: "1",
     title: "Bring in work you already did",
     description:
-      "Install Longhouse and get immediate value from demo data or, better, real shipped sessions before changing your workflow.",
+      "Install Longhouse and import real Claude, Codex, or Gemini sessions before changing your workflow. Demo data is only the fallback preview path.",
   },
   {
     number: "2",

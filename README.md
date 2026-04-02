@@ -13,18 +13,26 @@ Self-host free on the machine where work should live, or use hosted later when y
 <!-- Video: Replace this section with a Loom/YouTube embed once the walkthrough is recorded.
      Target: 60-90 second tour covering install -> search/detail -> wall/message -> continue. -->
 
-Video walkthrough coming soon. In the meantime, try it yourself:
+Video walkthrough coming soon. In the meantime, try the real launch loop:
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
-longhouse serve --demo
+longhouse serve
+longhouse connect --install
+longhouse ship
 # Open http://localhost:8080
 ```
 
-The bundled web UI is the easiest way to look around, but the same kernel is scriptable:
+The bundled web UI is the easiest way to look around, but the same session object is scriptable:
 
 ```bash
 longhouse wall --json
+```
+
+If you want a safe preview before importing real work:
+
+```bash
+longhouse serve --demo
 ```
 
 ## Get Started
@@ -38,17 +46,27 @@ longhouse serve
 
 Open `http://localhost:8080`.
 
-The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. If you skipped onboarding or want to re-run the shipper setup, use:
+The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. If you skipped onboarding or want to re-run the import path setup, use:
 
 ```bash
 longhouse connect --install
+longhouse ship
 ```
 
-Want a quick preview before importing real sessions?
+Want a safe preview before importing real sessions?
 
 ```bash
 longhouse serve --demo
 ```
+
+### Canonical proof journey
+
+1. Install and start Longhouse.
+2. Import existing sessions with `longhouse connect --install` and `longhouse ship`.
+3. Search for a real prior topic in the timeline.
+4. Open raw session detail.
+5. Show `longhouse wall --json`.
+6. Continue or message a real Claude session after launch.
 
 ### Hosted (later)
 
@@ -75,7 +93,14 @@ longhouse serve
 
 The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
 
-Preview with sample data:
+Import existing sessions right away:
+
+```bash
+longhouse connect --install
+longhouse ship
+```
+
+Preview with sample data only if you want a safe fallback:
 
 ```bash
 longhouse serve --demo

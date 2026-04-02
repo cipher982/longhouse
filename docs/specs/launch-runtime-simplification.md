@@ -12,7 +12,7 @@ Lock Longhouse's launch story to one honest product loop:
 - make new Longhouse sessions controllable after launch
 - do this from browser, CLI, or API without pretending a transcript is the whole environment
 
-This document tightens the product story around the session kernel work already captured in `VISION.md`, the current landing-page spec and implementation, and the 2026-04-02 landing rewrite note in the Obsidian session log.
+This document tightens the product story around the session kernel work already captured in `VISION.md`, the current landing-page spec and implementation, the launch demo contract, and the 2026-04-02 landing rewrite note in the Obsidian session log.
 
 ## The Decision
 
