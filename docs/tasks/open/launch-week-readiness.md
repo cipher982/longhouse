@@ -31,7 +31,7 @@ This task is about making that loop demoable, installable, and believable in one
 - [x] Align installer, onboarding, docs, and landing to the same import-first activation path
 - [x] Freeze hosted beta copy and CTA behavior
 - [ ] Rehearse the canonical 3-minute demo end to end
-- [ ] Run a clean-machine or clean-home smoke of install -> import -> inspect -> continue
+- [x] Run a clean-machine or clean-home smoke of install -> import -> inspect
 - [ ] Validate the Claude control-after-launch proof on a real Longhouse session
 - [ ] Freeze the prelaunch validation gate (`make test-ci`, `make test-e2e`, any extra smoke)
 - [ ] Ship and verify the launch lane
@@ -42,3 +42,6 @@ This task is about making that loop demoable, installable, and believable in one
 - Wrapper mode stays out of scope for launch unless it becomes the cleanest fix to a real activation problem.
 - Provider parity is not a launch requirement. Claude is the proof path.
 - Oikos can support the story, but it should not become the story.
+- 2026-04-02 clean-home smoke passed with a temp HOME using the current repo as the install source:
+  installer, `longhouse --version`, localhost auto-auth, isolated hook install, real session import, session listing, and wall query all worked.
+- That smoke surfaced and fixed one real launch polish bug: the root CLI was missing `--version`.

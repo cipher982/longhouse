@@ -25,6 +25,7 @@ Usage:
 """
 
 import json
+from importlib import metadata
 
 import typer
 
@@ -56,6 +57,27 @@ app = typer.Typer(
     help="Longhouse AI Agent Platform CLI",
     no_args_is_help=True,
 )
+
+
+def _version_callback(value: bool) -> None:
+    if not value:
+        return
+    typer.echo(f"longhouse {metadata.version('longhouse')}")
+    raise typer.Exit()
+
+
+@app.callback()
+def app_callback(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        help="Show Longhouse version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    """Longhouse AI Agent Platform CLI."""
+
 
 # Config subcommand group
 config_app = typer.Typer(help="Configuration management")
