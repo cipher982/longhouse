@@ -242,3 +242,75 @@ def test_message_command_uses_session_env_when_from_session_omitted(monkeypatch)
     assert result.exit_code == 0, result.output
     assert '"delivery_status": "stored_only"' in result.output
     assert '"delivered_via": "stored_only"' in result.output
+
+
+def test_tail_command_prints_recent_events(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "session_id": "22222222-2222-2222-2222-222222222222",
+                "events": [
+                    {
+                        "id": 1,
+                        "role": "user",
+                        "content": "Investigate the retry bug.",
+                        "tool_name": None,
+                        "timestamp": "2026-04-02T12:00:00+00:00",
+                    },
+                    {
+                        "id": 2,
+                        "role": "assistant",
+                        "content": "I found the stale wait path in the sync loop.",
+                        "tool_name": None,
+                        "timestamp": "2026-04-02T12:00:05+00:00",
+                    },
+                ],
+                "total": 2,
+            },
+        )
+    )
+
+    monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(app, ["tail", "22222222-2222-2222-2222-222222222222", "--limit", "2"])
+
+    assert result.exit_code == 0, result.output
+    assert "Session: 22222222-2222-2222-2222-222222222222" in result.output
+    assert "Investigate the retry bug." in result.output
+    assert "I found the stale wait path in the sync loop." in result.output
+    assert fake_client.calls == [
+        {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/tail",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "params": {"limit": 2},
+        }
+    ]
+
+
+def test_tail_command_json_output(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "session_id": "22222222-2222-2222-2222-222222222222",
+                "events": [],
+                "total": 0,
+            },
+        )
+    )
+
+    monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(app, ["tail", "22222222-2222-2222-2222-222222222222", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert '"session_id": "22222222-2222-2222-2222-222222222222"' in result.output
+    assert '"total": 0' in result.output
