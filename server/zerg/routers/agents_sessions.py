@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from fastapi import Depends
 from fastapi import HTTPException
 from fastapi import Query
+from fastapi import Request
 from fastapi import Response
 from fastapi import status
 from sqlalchemy.orm import Session
@@ -64,6 +65,101 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agents", tags=["agents"])
 
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
+_CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
+
+
+def _serialize_session_message(message: SessionMessage, *, delivery_status: str | None = None) -> dict:
+    return {
+        "id": message.id,
+        "from_session_id": str(message.from_session_id),
+        "to_session_id": str(message.to_session_id),
+        "text": message.body,
+        "source_event_id": message.source_event_id,
+        "delivery_status": delivery_status or message.delivery_status,
+        "delivery_attempts": message.delivery_attempts,
+        "last_error": message.last_error,
+        "delivered_via": message.delivered_via,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
+        "acknowledged_at": message.acknowledged_at.isoformat() if message.acknowledged_at else None,
+    }
+
+
+def _parse_message_session_header(request: Request) -> UUID | None:
+    raw = str(request.headers.get(_CURRENT_SESSION_HEADER, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        return UUID(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{_CURRENT_SESSION_HEADER} must be a valid UUID",
+        ) from exc
+
+
+def _resolve_message_actor_session(
+    *,
+    db: Session,
+    request: Request,
+    token: object | None,
+    declared_session_id: UUID | None,
+) -> AgentSession:
+    header_session_id = _parse_message_session_header(request)
+    token_session_raw = str(getattr(token, "session_id", "") or "").strip()
+    token_session_id: UUID | None = None
+    if token_session_raw:
+        try:
+            token_session_id = UUID(token_session_raw)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Authenticated session context is invalid",
+            ) from exc
+
+    resolved_session_id = declared_session_id
+    if token_session_id is not None:
+        if header_session_id is not None and header_session_id != token_session_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Authenticated session context does not match request header",
+            )
+        if declared_session_id is not None and declared_session_id != token_session_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Authenticated session context does not match request body",
+            )
+        resolved_session_id = token_session_id
+    elif header_session_id is not None:
+        if declared_session_id is not None and declared_session_id != header_session_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Current session header does not match request body",
+            )
+        resolved_session_id = header_session_id
+
+    if resolved_session_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Provide {_CURRENT_SESSION_HEADER} or session_id context for this request",
+        )
+
+    session = db.query(AgentSession).filter(AgentSession.id == resolved_session_id).first()
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {resolved_session_id} not found",
+        )
+
+    token_device_id = str(getattr(token, "device_id", "") or "").strip()
+    session_device_id = str(getattr(session, "device_id", "") or "").strip()
+    if token_device_id and session_device_id and token_device_id != session_device_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated device cannot act as the requested session",
+        )
+
+    return session
 
 
 @router.get("/sessions", response_model=SessionsListResponse)
@@ -1339,10 +1435,16 @@ class PokeCreate(UTCBaseModel):
 class SessionMessageCreate(UTCBaseModel):
     """Create a directed message from one session to another."""
 
-    from_session_id: UUID
+    from_session_id: UUID | None = None
     to_session_id: UUID
     text: str
     source_event_id: Optional[int] = None
+
+
+class SessionMessageAcknowledge(UTCBaseModel):
+    """Acknowledge an inbound session message."""
+
+    session_id: UUID | None = None
 
 
 @router.post("/pokes", status_code=status.HTTP_201_CREATED)
@@ -1410,17 +1512,24 @@ async def list_pokes(
 
 @router.post("/messages", status_code=status.HTTP_201_CREATED)
 async def create_message(
+    request: Request,
     payload: SessionMessageCreate,
     db: Session = Depends(get_db),
     _auth: object = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> dict:
     """Create a directed session message and attempt delivery when safe."""
+    sender_session = _resolve_message_actor_session(
+        db=db,
+        request=request,
+        token=_auth,
+        declared_session_id=payload.from_session_id,
+    )
     try:
         outcome = await create_session_message(
             db=db,
             owner_id=resolve_session_message_owner_id(db, _auth),
-            from_session_id=payload.from_session_id,
+            from_session_id=sender_session.id,
             to_session_id=payload.to_session_id,
             text=payload.text[:4000],
             source_event_id=payload.source_event_id,
@@ -1430,26 +1539,15 @@ async def create_message(
         status_code = status.HTTP_404_NOT_FOUND if detail.endswith("not found") else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
-    message = outcome.message
-    return {
-        "id": message.id,
-        "from_session_id": str(message.from_session_id),
-        "to_session_id": str(message.to_session_id),
-        "text": message.body,
-        "source_event_id": message.source_event_id,
-        "delivery_status": outcome.delivery_status,
-        "delivery_attempts": message.delivery_attempts,
-        "last_error": message.last_error,
-        "delivered_via": message.delivered_via,
-        "created_at": message.created_at.isoformat() if message.created_at else None,
-        "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
-    }
+    return _serialize_session_message(outcome.message, delivery_status=outcome.delivery_status)
 
 
 @router.get("/messages")
 async def list_messages(
-    session_id: UUID = Query(..., description="Session ID to inspect messages for"),
+    request: Request,
+    session_id: UUID | None = Query(None, description="Session ID to inspect messages for"),
     direction: str = Query("inbound", description="Message direction: inbound|outbound|all"),
+    unacknowledged_only: bool = Query(False, description="Only include messages without acknowledged_at"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     db: Session = Depends(get_db),
     _auth: object = Depends(verify_agents_token),
@@ -1459,32 +1557,69 @@ async def list_messages(
     if direction not in {"inbound", "outbound", "all"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="direction must be inbound, outbound, or all")
 
+    actor_session = _resolve_message_actor_session(
+        db=db,
+        request=request,
+        token=_auth,
+        declared_session_id=session_id,
+    )
+    resolved_session_id = actor_session.id
+
     query = db.query(SessionMessage)
     if direction == "inbound":
-        query = query.filter(SessionMessage.to_session_id == session_id)
+        query = query.filter(SessionMessage.to_session_id == resolved_session_id)
     elif direction == "outbound":
-        query = query.filter(SessionMessage.from_session_id == session_id)
+        query = query.filter(SessionMessage.from_session_id == resolved_session_id)
     else:
-        query = query.filter((SessionMessage.to_session_id == session_id) | (SessionMessage.from_session_id == session_id))
+        query = query.filter(
+            (SessionMessage.to_session_id == resolved_session_id) | (SessionMessage.from_session_id == resolved_session_id)
+        )
+    if unacknowledged_only:
+        query = query.filter(SessionMessage.acknowledged_at.is_(None))
 
     messages = query.order_by(SessionMessage.created_at.desc(), SessionMessage.id.desc()).limit(limit).all()
     return {
-        "messages": [
-            {
-                "id": message.id,
-                "from_session_id": str(message.from_session_id),
-                "to_session_id": str(message.to_session_id),
-                "text": message.body,
-                "source_event_id": message.source_event_id,
-                "delivery_status": message.delivery_status,
-                "delivery_attempts": message.delivery_attempts,
-                "last_error": message.last_error,
-                "delivered_via": message.delivered_via,
-                "created_at": message.created_at.isoformat() if message.created_at else None,
-                "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
-                "acknowledged_at": message.acknowledged_at.isoformat() if message.acknowledged_at else None,
-            }
-            for message in messages
-        ],
+        "messages": [_serialize_session_message(message) for message in messages],
         "total": len(messages),
     }
+
+
+@router.post("/messages/{message_id}/ack")
+async def acknowledge_message(
+    message_id: int,
+    request: Request,
+    payload: SessionMessageAcknowledge | None = None,
+    db: Session = Depends(get_db),
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict:
+    """Acknowledge that the target session has handled a delivered message."""
+    actor_session = _resolve_message_actor_session(
+        db=db,
+        request=request,
+        token=_auth,
+        declared_session_id=payload.session_id if payload is not None else None,
+    )
+    message = db.query(SessionMessage).filter(SessionMessage.id == message_id).first()
+    if message is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Message {message_id} not found")
+    if actor_session.id != message.to_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the target session can acknowledge this message",
+        )
+    if message.delivery_status in {"queued", "delivering"}:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Message has not been delivered to the target session yet",
+        )
+    if message.delivery_status == "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Failed messages cannot be acknowledged",
+        )
+    if message.acknowledged_at is None:
+        message.acknowledged_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(message)
+    return _serialize_session_message(message)

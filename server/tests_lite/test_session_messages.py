@@ -31,7 +31,7 @@ def _make_db(tmp_path):
     return make_sessionmaker(engine)
 
 
-def _make_client(session_factory):
+def _make_client(session_factory, *, token_device_id: str = "shipper-laptop"):
     from zerg.main import api_app
     from zerg.main import app
 
@@ -43,7 +43,7 @@ def _make_client(session_factory):
             db.close()
 
     def override_verify_agents_token():
-        return SimpleNamespace(device_id="test-device", id="token-1", owner_id=1)
+        return SimpleNamespace(device_id=token_device_id, id="token-1", owner_id=1)
 
     api_app.dependency_overrides[get_db] = override_get_db
     api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
@@ -348,7 +348,7 @@ def test_list_messages_returns_inbound_rows_without_mutation(tmp_path):
         )
         db.commit()
 
-    client, api_app_ref = _make_client(session_local)
+    client, api_app_ref = _make_client(session_local, token_device_id="shipper-cube")
     try:
         response = client.get("/api/agents/messages", params={"session_id": str(to_session.id)})
         assert response.status_code == 200, response.text
@@ -360,5 +360,153 @@ def test_list_messages_returns_inbound_rows_without_mutation(tmp_path):
             message = verify_db.query(SessionMessage).one()
             assert message.delivery_status == "stored_only"
             assert message.acknowledged_at is None
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_create_message_uses_current_session_header_when_body_omitted(tmp_path):
+    _clear_presence_cache()
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+
+    client, api_app_ref = _make_client(session_local)
+    try:
+        response = client.post(
+            "/api/agents/messages",
+            headers={"X-Longhouse-Session-Id": str(from_session.id)},
+            json={
+                "to_session_id": str(to_session.id),
+                "text": "header-derived sender",
+            },
+        )
+        assert response.status_code == 201, response.text
+        data = response.json()
+        assert data["from_session_id"] == str(from_session.id)
+        assert data["delivery_status"] == "stored_only"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_create_message_rejects_header_body_mismatch(tmp_path):
+    _clear_presence_cache()
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        other_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+
+    client, api_app_ref = _make_client(session_local)
+    try:
+        response = client.post(
+            "/api/agents/messages",
+            headers={"X-Longhouse-Session-Id": str(from_session.id)},
+            json={
+                "from_session_id": str(other_session.id),
+                "to_session_id": str(to_session.id),
+                "text": "should fail",
+            },
+        )
+        assert response.status_code == 403, response.text
+        assert "does not match" in response.text
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_list_messages_rejects_device_session_mismatch(tmp_path):
+    _clear_presence_cache()
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+        db.add(
+            SessionMessage(
+                from_session_id=from_session.id,
+                to_session_id=to_session.id,
+                body="Stored message",
+                delivery_status="stored_only",
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_client(session_local, token_device_id="shipper-laptop")
+    try:
+        response = client.get("/api/agents/messages", params={"session_id": str(to_session.id)})
+        assert response.status_code == 403, response.text
+        assert "Authenticated device cannot act" in response.text
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_acknowledge_message_sets_acknowledged_at_and_filters_unacknowledged(tmp_path):
+    _clear_presence_cache()
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(db, execution_home="legacy", device_id="shipper-cube", device_name="cube")
+        db.add(
+            SessionMessage(
+                from_session_id=from_session.id,
+                to_session_id=to_session.id,
+                body="Stored message",
+                delivery_status="stored_only",
+            )
+        )
+        db.commit()
+        message = db.query(SessionMessage).one()
+        message_id = message.id
+
+    client, api_app_ref = _make_client(session_local, token_device_id="shipper-cube")
+    try:
+        ack_response = client.post(
+            f"/api/agents/messages/{message_id}/ack",
+            headers={"X-Longhouse-Session-Id": str(to_session.id)},
+        )
+        assert ack_response.status_code == 200, ack_response.text
+        assert ack_response.json()["acknowledged_at"] is not None
+
+        unacked_response = client.get(
+            "/api/agents/messages",
+            headers={"X-Longhouse-Session-Id": str(to_session.id)},
+            params={"direction": "inbound", "unacknowledged_only": True},
+        )
+        assert unacked_response.status_code == 200, unacked_response.text
+        assert unacked_response.json()["total"] == 0
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_acknowledge_message_rejects_queued_delivery(tmp_path):
+    _clear_presence_cache()
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(db, execution_home="managed_local", device_id="shipper-cube", device_name="cube")
+        db.add(
+            SessionMessage(
+                from_session_id=from_session.id,
+                to_session_id=to_session.id,
+                body="Queued message",
+                delivery_status="queued",
+            )
+        )
+        db.commit()
+        message = db.query(SessionMessage).one()
+        message_id = message.id
+
+    client, api_app_ref = _make_client(session_local, token_device_id="shipper-cube")
+    try:
+        response = client.post(
+            f"/api/agents/messages/{message_id}/ack",
+            headers={"X-Longhouse-Session-Id": str(to_session.id)},
+        )
+        assert response.status_code == 409, response.text
+        assert "has not been delivered" in response.text
     finally:
         api_app_ref.dependency_overrides = {}

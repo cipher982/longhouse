@@ -21,6 +21,7 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 logger = logging.getLogger(__name__)
 
 _CURRENT_SESSION_ENV = "LONGHOUSE_SESSION_ID"
+_CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
 
 
 def _truncate_event(event: dict, max_chars: int, include_tool_output: bool) -> dict:
@@ -652,7 +653,6 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": "message_session requires LONGHOUSE_SESSION_ID in the current session environment"})
 
         body = {
-            "from_session_id": from_session_id,
             "to_session_id": to_session_id,
             "text": text[:4000],
         }
@@ -660,7 +660,11 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             body["source_event_id"] = source_event_id
 
         try:
-            resp = await client.post("/api/agents/messages", json=body)
+            resp = await client.post(
+                "/api/agents/messages",
+                json=body,
+                headers={_CURRENT_SESSION_HEADER: from_session_id},
+            )
             if resp.status_code not in (200, 201):
                 return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
