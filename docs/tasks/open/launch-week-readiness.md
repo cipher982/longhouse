@@ -34,7 +34,7 @@ This task is about making that loop demoable, installable, and believable in one
 - [x] Rehearse the canonical 3-minute demo end to end
 - [x] Run a clean-machine or clean-home smoke of install -> import -> inspect
 - [x] Validate the Claude control-after-launch proof on a real Longhouse session
-- [ ] Freeze the prelaunch validation gate (`make test-ci`, `make test-e2e`, any extra smoke)
+- [x] Freeze the prelaunch validation gate (`make test-ci`, `make test-e2e`, any extra smoke)
 - [ ] Ship and verify the launch lane
 
 ## Work Order
@@ -81,5 +81,7 @@ Do the remaining week in this order:
   `make test-frontend` passed, targeted accessibility passed, and full `make test-e2e` passed after fixing
   the managed-session detail dock header regression and replacing the timeline card's nested interactive structure
   with a sibling hitbox plus archive control.
-- `make test-ci` is still blocked only by the same known unrelated backend baseline:
-  `tests_lite/test_sessions_search_context_mode.py::test_sessions_query_context_mode_filters_pre_compaction_matches`.
+- 2026-04-02 prelaunch validation gate is now frozen locally:
+  `make test-ci` and `make test-e2e` both passed after fixing the stale
+  `test_sessions_query_context_mode_filters_pre_compaction_matches` fixture to use a relative timestamp instead of a
+  hard-coded date that had drifted outside `days_back=90`.

@@ -1,4 +1,5 @@
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 
@@ -14,8 +15,11 @@ from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 
 
+BASE_TS = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(days=1)
+
+
 def _ts(second: int) -> datetime:
-    return datetime(2026, 1, 1, 0, 0, second, tzinfo=timezone.utc)
+    return BASE_TS + timedelta(seconds=second)
 
 
 def _make_db(tmp_path):
