@@ -38,7 +38,7 @@ Make the launch story match the real product:
 - [x] Align landing copy and section emphasis to the same story
 - [ ] Publish the canonical proof-of-value demo journey in launch-facing docs and demo scripts
 - [ ] Make the hosted boundary explicit and honest until onboarding friction is reduced
-- [ ] Decide the install/onboarding script changes needed for the story:
+- [x] Decide and land the install/onboarding script changes needed for the story:
   import first, start a Longhouse session second, wrappers later
 - [ ] Keep wrapper mode as a follow-on opt-in activation slice, not a launch prerequisite
 
@@ -71,6 +71,7 @@ Do after the story is stable.
 - import/ship existing sessions first
 - starting a Longhouse session is the second activation beat
 - opt-in wrapper mode belongs here, not before copy is stable
+- installer, onboarding, and docs should all point at the same activation order
 
 ### Phase 4: Public-product cleanup
 
@@ -138,4 +139,5 @@ Do separately and do not let it block launch.
 - This task intentionally excludes the browser-vs-machine auth split that was being worked in parallel.
 - The launch story should optimize for first proof of value, not the hosted signup funnel.
 - Story alignment, launch proof, onboarding, and wrapper mode are now the main forward path.
+- The first onboarding pass now matches the launch story: import existing sessions first, then start a Longhouse session when the user wants control.
 - Architectural cleanup remains real, but it is not the first thing to do next.
