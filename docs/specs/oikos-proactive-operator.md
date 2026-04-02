@@ -169,6 +169,15 @@ The default mental model is:
 
 The current v0 dogfood runtime should be thought of as a narrow, explicit contract rather than a vague "autonomy layer."
 
+As of 2026-04-02, Oikos also has direct access to the session-kernel coordination surface through builtin tools:
+
+- list peer sessions around a repo or project
+- inspect filtered session events and recent tails
+- send durable directed session messages
+- inspect and acknowledge session inbox items
+
+That matters because Oikos should act like a deputy on top of the kernel, not a parallel brain with bespoke hidden channels.
+
 ### Current wake sources
 
 The wakeup set should stay intentionally small for now:
