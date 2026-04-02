@@ -382,6 +382,38 @@ def test_insights_create_sets_manual_origin(tmp_path):
         api_app.dependency_overrides.clear()
 
 
+def test_agents_insights_create_works_on_canonical_machine_namespace(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+
+    client = _make_client(session_local)
+    api_app.dependency_overrides[verify_agents_token] = lambda: None
+
+    try:
+        with _force_agents_token_mode():
+            response = client.post(
+                "/agents/insights",
+                headers={"X-Agents-Token": "dev"},
+                json={
+                    "insight_type": "learning",
+                    "title": "Created via canonical machine API",
+                    "project": "zerg",
+                    "description": "Canonical machine write path",
+                },
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["title"] == "Created via canonical machine API"
+        assert payload["origin"] == "manual"
+        with session_local() as db:
+            insight = db.query(Insight).filter(Insight.title == "Created via canonical machine API").first()
+            assert insight is not None
+            assert insight.origin == "manual"
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_insights_create_accepts_explicit_origin(tmp_path):
     session_local = _make_db(tmp_path)
     with session_local() as db:
