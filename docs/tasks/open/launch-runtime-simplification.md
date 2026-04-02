@@ -140,5 +140,8 @@ Do separately and do not let it block launch.
 - The launch story should optimize for first proof of value, not the hosted signup funnel.
 - Story alignment, launch proof, onboarding, and wrapper mode are now the main forward path.
 - The first onboarding pass now matches the launch story: import existing sessions first, then start a Longhouse session when the user wants control.
-- Wrapper-mode activation now has its own tracked task in `docs/tasks/open/opt-in-cli-wrapper-mode.md`.
+- Wrapper-mode activation shipped as an explicit opt-in flow:
+  - installer no longer mutates Claude/Codex launch behavior by default
+  - interactive onboarding offers wrapper install explicitly
+  - `longhouse wrap --json` gives automation a machine-readable status/results surface
 - Architectural cleanup remains real, but it is not the first thing to do next.
