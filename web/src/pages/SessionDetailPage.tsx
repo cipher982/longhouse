@@ -250,9 +250,7 @@ function SessionDetailWorkspaceRoute({
                   session={sessionChatTarget}
                   layout="dock"
                   dockHeaderStyle={
-                    interaction.mode === "head" || interaction.mode === "managed_local"
-                      ? "hidden"
-                      : "divider"
+                    interaction.mode === "head" ? "hidden" : "divider"
                   }
                   introEyebrow={
                     interaction.mode === "managed_local"

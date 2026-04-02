@@ -77,3 +77,9 @@ Do the remaining week in this order:
   timeline search narrowed to the HDR watermark session, raw session detail opened in the UI, `longhouse wall --json`
   and `longhouse sessions get` both worked from the same temp self-host install, and `longhouse continue` accepted a
   real managed Claude session after the auth-disabled localhost fix.
+- 2026-04-02 launch UI validation is back to green:
+  `make test-frontend` passed, targeted accessibility passed, and full `make test-e2e` passed after fixing
+  the managed-session detail dock header regression and replacing the timeline card's nested interactive structure
+  with a sibling hitbox plus archive control.
+- `make test-ci` is still blocked only by the same known unrelated backend baseline:
+  `tests_lite/test_sessions_search_context_mode.py::test_sessions_query_context_mode_filters_pre_compaction_matches`.
