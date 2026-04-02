@@ -18,6 +18,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 - **SQLite-only OSS plan:** this doc (see "SQLite-only OSS Pivot (Consolidated)" below)
 - **OSS onboarding plan:** this doc (see "Onboarding UX" below)
+- **Machine-facing canon:** `docs/specs/agents-machine-surface.md`
 
 ## Naming (2026-02)
 

@@ -1,6 +1,7 @@
 # Session Kernel and Public Primitives
 
 Status: In progress
+Spec: `docs/specs/agents-machine-surface.md`
 Last updated: 2026-04-02
 
 ## Goal
@@ -33,8 +34,8 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - [x] Add `longhouse tail` backed by the canonical session tail route
 - [x] Add CLI inbox helpers for non-live sessions: `check-messages` / `ack-message`
 - [x] Add `longhouse sessions get` and `longhouse sessions events`
-- [ ] Declare the canonical machine surface in docs: `/api/agents/*`, auth model, session-context headers, and JSON contracts
-- [ ] Decide and document the browser/timeline relationship to the machine canon (browser veneer vs direct reuse)
+- [x] Declare the canonical machine surface in docs: `/api/agents/*`, auth model, session-context headers, and JSON contracts
+- [x] Decide and document the browser/timeline relationship to the machine canon (browser veneer vs direct reuse)
 - [ ] Expand `SessionMessage` delivery beyond the current managed-local fast path
 - [ ] Decide whether queued delivery should drain multiple messages at one safe boundary or intentionally stay one-at-a-time
 - [ ] Add machine-contract tests and CLI smoke coverage for the canonical primitives
@@ -51,6 +52,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - Current delivery trigger is presence-driven safe-boundary delivery. That is the right default and should stay simple.
 - Known gap: queued delivery currently attempts one message per deliverable presence update.
 - Current CLI progress: `peers`, `message`, `tail`, `check-messages`, `ack-message`, `sessions get`, and `sessions events` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
+- Canonical machine surface is now documented in `docs/specs/agents-machine-surface.md`, including the browser veneer split and the `POST /api/agents/insights` canonical write path.
 - Related active tasks:
-  - `docs/tasks/open/launch-runtime-simplification.md`
-  - `docs/tasks/open/oikos-proactive-operator.md`
+  - `docs/specs/launch-runtime-simplification.md`
+  - `docs/specs/oikos-proactive-operator.md`
