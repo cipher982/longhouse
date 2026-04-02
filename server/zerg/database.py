@@ -684,6 +684,70 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("session_tasks table migration skipped (table may not exist yet)", exc_info=True)
 
+    # session_messages table migrations
+    try:
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS session_messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        from_session_id CHAR(36) NOT NULL,
+                        to_session_id CHAR(36) NOT NULL,
+                        text TEXT NOT NULL,
+                        source_event_id INTEGER,
+                        delivery_status VARCHAR(32) NOT NULL DEFAULT 'queued',
+                        delivery_attempts INTEGER NOT NULL DEFAULT 0,
+                        last_error TEXT,
+                        delivered_via VARCHAR(32),
+                        delivered_at DATETIME,
+                        acknowledged_at DATETIME,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                    """
+                )
+            )
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_messages)"))}
+            if columns:
+                if "source_event_id" not in columns:
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN source_event_id INTEGER"))
+                if "delivery_status" not in columns:
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_status VARCHAR(32) NOT NULL DEFAULT 'queued'"))
+                if "delivery_attempts" not in columns:
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivery_attempts INTEGER NOT NULL DEFAULT 0"))
+                if "last_error" not in columns:
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN last_error TEXT"))
+                if "delivered_via" not in columns:
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivered_via VARCHAR(32)"))
+                if "delivered_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN delivered_at DATETIME"))
+                if "acknowledged_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN acknowledged_at DATETIME"))
+                if "created_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP"))
+                if "updated_at" not in columns:
+                    conn.execute(text("ALTER TABLE session_messages ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP"))
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_session_messages_to_status_created
+                    ON session_messages(to_session_id, delivery_status, created_at)
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_session_messages_from_created
+                    ON session_messages(from_session_id, created_at)
+                    """
+                )
+            )
+            conn.commit()
+    except Exception:
+        logger.debug("session_messages table migration skipped", exc_info=True)
+
     # insights table migrations
     try:
         with engine.connect() as conn:

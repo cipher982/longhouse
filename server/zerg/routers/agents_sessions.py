@@ -22,8 +22,11 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionPoke
 from zerg.services.agents_store import AgentsStore
+from zerg.services.session_messages import create_session_message
+from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_views import ActiveSessionResponse
 from zerg.services.session_views import ActiveSessionsResponse
@@ -1333,6 +1336,15 @@ class PokeCreate(UTCBaseModel):
     source_event_id: Optional[int] = None
 
 
+class SessionMessageCreate(UTCBaseModel):
+    """Create a directed message from one session to another."""
+
+    from_session_id: UUID
+    to_session_id: UUID
+    text: str
+    source_event_id: Optional[int] = None
+
+
 @router.post("/pokes", status_code=status.HTTP_201_CREATED)
 async def create_poke(
     payload: PokeCreate,
@@ -1394,3 +1406,85 @@ async def list_pokes(
         db.commit()
 
     return {"pokes": results, "total": len(results)}
+
+
+@router.post("/messages", status_code=status.HTTP_201_CREATED)
+async def create_message(
+    payload: SessionMessageCreate,
+    db: Session = Depends(get_db),
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict:
+    """Create a directed session message and attempt delivery when safe."""
+    try:
+        outcome = await create_session_message(
+            db=db,
+            owner_id=resolve_session_message_owner_id(db, _auth),
+            from_session_id=payload.from_session_id,
+            to_session_id=payload.to_session_id,
+            text=payload.text[:4000],
+            source_event_id=payload.source_event_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = status.HTTP_404_NOT_FOUND if detail.endswith("not found") else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+    message = outcome.message
+    return {
+        "id": message.id,
+        "from_session_id": str(message.from_session_id),
+        "to_session_id": str(message.to_session_id),
+        "text": message.body,
+        "source_event_id": message.source_event_id,
+        "delivery_status": outcome.delivery_status,
+        "delivery_attempts": message.delivery_attempts,
+        "last_error": message.last_error,
+        "delivered_via": message.delivered_via,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
+    }
+
+
+@router.get("/messages")
+async def list_messages(
+    session_id: UUID = Query(..., description="Session ID to inspect messages for"),
+    direction: str = Query("inbound", description="Message direction: inbound|outbound|all"),
+    limit: int = Query(50, ge=1, le=200, description="Max results"),
+    db: Session = Depends(get_db),
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> dict:
+    """List durable session messages without mutating delivery or ack state."""
+    if direction not in {"inbound", "outbound", "all"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="direction must be inbound, outbound, or all")
+
+    query = db.query(SessionMessage)
+    if direction == "inbound":
+        query = query.filter(SessionMessage.to_session_id == session_id)
+    elif direction == "outbound":
+        query = query.filter(SessionMessage.from_session_id == session_id)
+    else:
+        query = query.filter((SessionMessage.to_session_id == session_id) | (SessionMessage.from_session_id == session_id))
+
+    messages = query.order_by(SessionMessage.created_at.desc(), SessionMessage.id.desc()).limit(limit).all()
+    return {
+        "messages": [
+            {
+                "id": message.id,
+                "from_session_id": str(message.from_session_id),
+                "to_session_id": str(message.to_session_id),
+                "text": message.body,
+                "source_event_id": message.source_event_id,
+                "delivery_status": message.delivery_status,
+                "delivery_attempts": message.delivery_attempts,
+                "last_error": message.last_error,
+                "delivered_via": message.delivered_via,
+                "created_at": message.created_at.isoformat() if message.created_at else None,
+                "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
+                "acknowledged_at": message.acknowledged_at.isoformat() if message.acknowledged_at else None,
+            }
+            for message in messages
+        ],
+        "total": len(messages),
+    }

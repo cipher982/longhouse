@@ -52,6 +52,9 @@ from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_SUPPRESSED
 from zerg.services.oikos_wakeup_ledger import append_wakeup
 from zerg.services.presence_cache import get_presence_cache
+from zerg.services.session_messages import deliver_next_queued_session_message
+from zerg.services.session_messages import is_session_message_deliverable_state
+from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import coerce_session_uuid
 from zerg.services.session_runtime import ingest_runtime_events
@@ -421,4 +424,16 @@ async def upsert_presence(
             project=project,
             tool_name=effective_tool_name,
         )
+    if is_session_message_deliverable_state(payload.state):
+        try:
+            session_uuid = UUID(payload.session_id)
+        except ValueError:
+            session_uuid = None
+        if session_uuid is not None:
+            await deliver_next_queued_session_message(
+                db=db,
+                owner_id=resolve_session_message_owner_id(db, _token),
+                target_session_id=session_uuid,
+                target_presence_state=payload.state,
+            )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

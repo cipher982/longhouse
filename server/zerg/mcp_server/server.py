@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 
 from mcp.server.fastmcp import FastMCP
@@ -18,6 +19,8 @@ from zerg.mcp_server.api_client import LonghouseAPIClient
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
+
+_CURRENT_SESSION_ENV = "LONGHOUSE_SESSION_ID"
 
 
 def _truncate_event(event: dict, max_chars: int, include_tool_output: bool) -> dict:
@@ -561,6 +564,104 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 params={"session_id": session_id, "unread_only": str(unread_only).lower()},
             )
             if resp.status_code != 200:
+                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+            return resp.text
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
+    # ------------------------------------------------------------------
+    # Tool: peers
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def peers(
+        repo: str | None = None,
+        active_only: bool = True,
+    ) -> str:
+        """List nearby same-repo peer sessions.
+
+        When repo is omitted, the tool tries to infer it from the current
+        LONGHOUSE_SESSION_ID environment variable.
+        """
+        current_session_id = os.getenv(_CURRENT_SESSION_ENV)
+        resolved_repo = repo
+
+        if resolved_repo is None and current_session_id and _UUID_RE.match(current_session_id):
+            try:
+                current_resp = await client.get(f"/api/agents/sessions/{current_session_id}")
+                if current_resp.status_code == 200:
+                    current_data = json.loads(current_resp.text)
+                    git_repo = str(current_data.get("git_repo", "") or "").strip()
+                    if git_repo:
+                        resolved_repo = git_repo
+            except Exception:
+                logger.debug("Failed to resolve current session repo for peers()", exc_info=True)
+
+        if not resolved_repo:
+            return json.dumps(
+                {
+                    "error": "peers requires repo or LONGHOUSE_SESSION_ID for a session with git_repo",
+                }
+            )
+
+        try:
+            resp = await client.get(
+                "/api/agents/sessions/wall",
+                params={"repo": resolved_repo, "days": 7},
+            )
+            if resp.status_code != 200:
+                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
+            payload = json.loads(resp.text)
+            sessions = []
+            for item in payload.get("sessions", []):
+                if current_session_id and str(item.get("session_id")) == current_session_id:
+                    continue
+                if active_only and not item.get("has_live_presence"):
+                    continue
+                sessions.append(
+                    {
+                        "session_id": item.get("session_id"),
+                        "device_name": item.get("device_name"),
+                        "provider": item.get("provider"),
+                        "presence_state": item.get("presence_state"),
+                        "summary_title": item.get("summary_title"),
+                        "git_branch": item.get("git_branch"),
+                    }
+                )
+            return json.dumps({"peers": sessions, "total": len(sessions)})
+        except Exception as exc:
+            return json.dumps({"error": str(exc)})
+
+    # ------------------------------------------------------------------
+    # Tool: message_session
+    # ------------------------------------------------------------------
+    @server.tool()
+    async def message_session(
+        to_session_id: str,
+        text: str,
+        source_event_id: int | None = None,
+    ) -> str:
+        """Send a directed message to another session.
+
+        The sender session id is inferred from LONGHOUSE_SESSION_ID.
+        """
+        if not _UUID_RE.match(to_session_id):
+            return json.dumps({"error": "Invalid to_session_id format — expected UUID"})
+
+        from_session_id = os.getenv(_CURRENT_SESSION_ENV)
+        if not from_session_id or not _UUID_RE.match(from_session_id):
+            return json.dumps({"error": "message_session requires LONGHOUSE_SESSION_ID in the current session environment"})
+
+        body = {
+            "from_session_id": from_session_id,
+            "to_session_id": to_session_id,
+            "text": text[:4000],
+        }
+        if source_event_id is not None:
+            body["source_event_id"] = source_event_id
+
+        try:
+            resp = await client.post("/api/agents/messages", json=body)
+            if resp.status_code not in (200, 201):
                 return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
         except Exception as exc:
