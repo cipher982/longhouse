@@ -171,10 +171,12 @@ The current v0 dogfood runtime should be thought of as a narrow, explicit contra
 
 As of 2026-04-02, Oikos also has direct access to the session-kernel coordination surface through builtin tools:
 
-- list peer sessions around a repo or project
-- inspect filtered session events and recent tails
+- list peer sessions around a repo or project (`peers`)
+- inspect filtered session events and recent tails (`get_session_events`, `session_tail`)
 - send durable directed session messages
-- inspect and acknowledge session inbox items
+- inspect and acknowledge session inbox items (`check_messages`, `ack_message`)
+
+Those names intentionally mirror the public machine surface so Oikos does not drift into a second private coordination dialect.
 
 That matters because Oikos should act like a deputy on top of the kernel, not a parallel brain with bespoke hidden channels.
 

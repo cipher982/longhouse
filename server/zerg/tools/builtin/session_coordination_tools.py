@@ -8,9 +8,6 @@ in-process tools for Oikos and other internal agents.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
-from datetime import timedelta
-from datetime import timezone
 from typing import Any
 from uuid import UUID
 
@@ -18,26 +15,24 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from zerg.database import db_session
-from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionMessage
 from zerg.services.agents_store import AgentsStore
-from zerg.services.session_messages import MESSAGE_STATUS_DELIVERING
-from zerg.services.session_messages import MESSAGE_STATUS_FAILED
-from zerg.services.session_messages import MESSAGE_STATUS_QUEUED
+from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
+from zerg.services.session_coordination import build_peer_payloads
+from zerg.services.session_coordination import list_session_messages
+from zerg.services.session_coordination import load_session_tail
+from zerg.services.session_coordination import query_wall_sessions
+from zerg.services.session_coordination import serialize_session_message
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
-from zerg.services.session_views import load_presence_map
 from zerg.tools.error_envelope import ErrorType
 from zerg.tools.error_envelope import tool_error
 from zerg.tools.error_envelope import tool_success
 from zerg.types.tools import Tool as StructuredTool
 
-_PRESENCE_TTL = timedelta(minutes=10)
-
 
 class SessionPeersInput(BaseModel):
-    """Input schema for list_session_peers."""
+    """Input schema for peers."""
 
     repo: str | None = Field(default=None, description="Repo substring to match against git_repo.")
     project: str | None = Field(default=None, description="Optional project filter.")
@@ -61,7 +56,7 @@ class SessionEventsInput(BaseModel):
 
 
 class SessionTailInput(BaseModel):
-    """Input schema for get_session_tail."""
+    """Input schema for session_tail."""
 
     session_id: str = Field(description="Session UUID.")
     limit: int = Field(default=30, ge=1, le=100, description="Max recent events to return.")
@@ -77,7 +72,7 @@ class MessageSessionInput(BaseModel):
 
 
 class CheckSessionMessagesInput(BaseModel):
-    """Input schema for check_session_messages."""
+    """Input schema for check_messages."""
 
     session_id: str = Field(description="Session UUID to inspect inbox/outbox for.")
     direction: str = Field(default="inbound", description="Direction: inbound, outbound, or all.")
@@ -86,7 +81,7 @@ class CheckSessionMessagesInput(BaseModel):
 
 
 class AcknowledgeSessionMessageInput(BaseModel):
-    """Input schema for acknowledge_session_message."""
+    """Input schema for ack_message."""
 
     message_id: int = Field(description="Numeric message ID.")
     session_id: str = Field(description="Target session UUID acknowledging the message.")
@@ -99,35 +94,7 @@ def _parse_uuid(raw: str, *, field_name: str) -> UUID | None:
         return None
 
 
-def _session_message_payload(message: SessionMessage) -> dict[str, Any]:
-    return {
-        "id": int(message.id),
-        "from_session_id": str(message.from_session_id),
-        "to_session_id": str(message.to_session_id),
-        "text": message.body,
-        "source_event_id": message.source_event_id,
-        "delivery_status": message.delivery_status,
-        "delivery_attempts": int(message.delivery_attempts or 0),
-        "last_error": message.last_error,
-        "delivered_via": message.delivered_via,
-        "created_at": message.created_at.isoformat() if message.created_at else None,
-        "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
-        "acknowledged_at": message.acknowledged_at.isoformat() if message.acknowledged_at else None,
-    }
-
-
-def _session_tail_event_payload(event: AgentEvent) -> dict[str, Any]:
-    content = str(event.content_text or "")[:4000]
-    return {
-        "id": int(event.id),
-        "role": event.role,
-        "content": content,
-        "tool_name": event.tool_name,
-        "timestamp": event.timestamp.isoformat() if event.timestamp else None,
-    }
-
-
-def list_session_peers(
+def peers(
     repo: str | None = None,
     project: str | None = None,
     days: int = 7,
@@ -146,79 +113,28 @@ def list_session_peers(
             return tool_error(ErrorType.VALIDATION_ERROR, "exclude_session_id must be a valid UUID")
 
     with db_session() as db:
-        store = AgentsStore(db)
-        since = datetime.now(timezone.utc) - timedelta(days=days)
-        fetch_limit = limit * 4 if repo else limit
-        sessions, _ = store.list_sessions(
+        sessions = query_wall_sessions(
+            db,
+            repo=repo,
             project=project,
-            provider=None,
-            environment=None,
-            include_test=False,
-            device_id=None,
-            since=since,
-            query=None,
-            limit=fetch_limit,
-            offset=0,
-            anchor_on_activity=True,
+            days=days,
+            limit=limit * 4 if active_only else limit,
         )
 
-        if repo:
-            repo_lower = repo.lower()
-            sessions = [session for session in sessions if session.git_repo and repo_lower in session.git_repo.lower()]
-
-        if excluded_uuid is not None:
-            sessions = [session for session in sessions if session.id != excluded_uuid]
-
-        session_ids = [session.id for session in sessions]
-        presence_map = load_presence_map(db, session_ids)
-        now = datetime.now(timezone.utc)
-
-        peers: list[dict[str, Any]] = []
-        for session in sessions:
-            presence = presence_map.get(session.id)
-            has_live_presence = False
-            presence_state: str | None = None
-            if presence is not None:
-                presence_updated = getattr(presence, "updated_at", None)
-                if presence_updated is not None:
-                    if presence_updated.tzinfo is None:
-                        presence_updated = presence_updated.replace(tzinfo=timezone.utc)
-                    has_live_presence = (now - presence_updated) < _PRESENCE_TTL
-                if has_live_presence:
-                    presence_state = str(getattr(presence, "state", "") or "").strip() or None
-
-            if active_only and not has_live_presence:
-                continue
-
-            peers.append(
-                {
-                    "session_id": str(session.id),
-                    "device_name": getattr(session, "device_name", None)
-                    or (session.device_id.replace("shipper-", "") if session.device_id else None),
-                    "device_id": session.device_id,
-                    "git_repo": session.git_repo,
-                    "git_branch": session.git_branch,
-                    "project": session.project,
-                    "provider": session.provider,
-                    "summary_title": getattr(session, "summary_title", None),
-                    "started_at": session.started_at.isoformat() if session.started_at else None,
-                    "has_live_presence": has_live_presence,
-                    "presence_state": presence_state,
-                    "user_messages": int(session.user_messages or 0),
-                    "assistant_messages": int(session.assistant_messages or 0),
-                    "tool_calls": int(session.tool_calls or 0),
-                }
-            )
-            if len(peers) >= limit:
-                break
+    peer_items = build_peer_payloads(
+        sessions,
+        active_only=active_only,
+        exclude_session_id=excluded_uuid,
+        limit=limit,
+    )
 
     return tool_success(
         {
             "repo": repo,
             "project": project,
             "active_only": active_only,
-            "peers": peers,
-            "total": len(peers),
+            "peers": peer_items,
+            "total": len(peer_items),
         }
     )
 
@@ -291,7 +207,7 @@ def get_session_events(
     )
 
 
-def get_session_tail(
+def session_tail(
     session_id: str,
     limit: int = 30,
 ) -> dict[str, Any]:
@@ -301,25 +217,15 @@ def get_session_tail(
         return tool_error(ErrorType.VALIDATION_ERROR, "session_id must be a valid UUID")
 
     with db_session() as db:
-        session = db.query(AgentSession).filter(AgentSession.id == session_uuid).first()
-        if session is None:
+        try:
+            events = load_session_tail(db, session_id=session_uuid, limit=limit)
+        except ValueError:
             return tool_error(ErrorType.NOT_FOUND, f"Session not found: {session_id}")
-
-        events = (
-            db.query(AgentEvent)
-            .filter(AgentEvent.session_id == session_uuid)
-            .filter(AgentEvent.role.in_(["user", "assistant", "tool"]))
-            .filter(AgentEvent.content_text.isnot(None))
-            .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
-            .limit(limit)
-            .all()
-        )
-        events.reverse()
 
     return tool_success(
         {
             "session_id": session_id,
-            "events": [_session_tail_event_payload(event) for event in events],
+            "events": events,
             "total": len(events),
         }
     )
@@ -360,7 +266,7 @@ async def message_session_async(
             error_type = ErrorType.NOT_FOUND if detail.endswith("not found") else ErrorType.VALIDATION_ERROR
             return tool_error(error_type, detail)
 
-    return tool_success(_session_message_payload(outcome.message))
+    return tool_success(serialize_session_message(outcome.message, delivery_status=outcome.delivery_status))
 
 
 def message_session(
@@ -380,7 +286,7 @@ def message_session(
     )
 
 
-def check_session_messages(
+def check_messages(
     session_id: str,
     direction: str = "inbound",
     unacknowledged_only: bool = True,
@@ -397,31 +303,26 @@ def check_session_messages(
         session = db.query(AgentSession).filter(AgentSession.id == session_uuid).first()
         if session is None:
             return tool_error(ErrorType.NOT_FOUND, f"Session not found: {session_id}")
-
-        query = db.query(SessionMessage)
-        if direction == "inbound":
-            query = query.filter(SessionMessage.to_session_id == session_uuid)
-        elif direction == "outbound":
-            query = query.filter(SessionMessage.from_session_id == session_uuid)
-        else:
-            query = query.filter((SessionMessage.to_session_id == session_uuid) | (SessionMessage.from_session_id == session_uuid))
-        if unacknowledged_only:
-            query = query.filter(SessionMessage.acknowledged_at.is_(None))
-
-        messages = query.order_by(SessionMessage.created_at.desc(), SessionMessage.id.desc()).limit(limit).all()
+        messages = list_session_messages(
+            db,
+            session_id=session_uuid,
+            direction=direction,
+            unacknowledged_only=unacknowledged_only,
+            limit=limit,
+        )
 
     return tool_success(
         {
             "session_id": session_id,
             "direction": direction,
             "unacknowledged_only": unacknowledged_only,
-            "messages": [_session_message_payload(message) for message in messages],
+            "messages": [serialize_session_message(message) for message in messages],
             "total": len(messages),
         }
     )
 
 
-def acknowledge_session_message(
+def ack_message(
     message_id: int,
     session_id: str,
 ) -> dict[str, Any]:
@@ -434,29 +335,24 @@ def acknowledge_session_message(
         session = db.query(AgentSession).filter(AgentSession.id == session_uuid).first()
         if session is None:
             return tool_error(ErrorType.NOT_FOUND, f"Session not found: {session_id}")
+        try:
+            message = acknowledge_session_message_for_session(
+                db,
+                message_id=message_id,
+                target_session_id=session_uuid,
+            )
+        except ValueError as exc:
+            return tool_error(ErrorType.NOT_FOUND, str(exc))
+        except (PermissionError, RuntimeError) as exc:
+            return tool_error(ErrorType.INVALID_STATE, str(exc))
 
-        message = db.query(SessionMessage).filter(SessionMessage.id == message_id).first()
-        if message is None:
-            return tool_error(ErrorType.NOT_FOUND, f"Message {message_id} not found")
-        if session_uuid != message.to_session_id:
-            return tool_error(ErrorType.INVALID_STATE, "Only the target session can acknowledge this message")
-        if message.delivery_status in {MESSAGE_STATUS_QUEUED, MESSAGE_STATUS_DELIVERING}:
-            return tool_error(ErrorType.INVALID_STATE, "Message has not been delivered to the target session yet")
-        if message.delivery_status == MESSAGE_STATUS_FAILED:
-            return tool_error(ErrorType.INVALID_STATE, "Failed messages cannot be acknowledged")
-
-        if message.acknowledged_at is None:
-            message.acknowledged_at = datetime.now(timezone.utc)
-            db.commit()
-            db.refresh(message)
-
-    return tool_success(_session_message_payload(message))
+    return tool_success(serialize_session_message(message))
 
 
 TOOLS = [
     StructuredTool.from_function(
-        func=list_session_peers,
-        name="list_session_peers",
+        func=peers,
+        name="peers",
         description="List recent peer sessions around a repo or project, with live-presence metadata.",
         args_schema=SessionPeersInput,
     ),
@@ -467,8 +363,8 @@ TOOLS = [
         args_schema=SessionEventsInput,
     ),
     StructuredTool.from_function(
-        func=get_session_tail,
-        name="get_session_tail",
+        func=session_tail,
+        name="session_tail",
         description="Read the recent tail of a session in chronological order.",
         args_schema=SessionTailInput,
     ),
@@ -480,14 +376,14 @@ TOOLS = [
         args_schema=MessageSessionInput,
     ),
     StructuredTool.from_function(
-        func=check_session_messages,
-        name="check_session_messages",
+        func=check_messages,
+        name="check_messages",
         description="Inspect inbound/outbound durable session messages for a given session.",
         args_schema=CheckSessionMessagesInput,
     ),
     StructuredTool.from_function(
-        func=acknowledge_session_message,
-        name="acknowledge_session_message",
+        func=ack_message,
+        name="ack_message",
         description="Acknowledge that a target session has handled a delivered message.",
         args_schema=AcknowledgeSessionMessageInput,
     ),
