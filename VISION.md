@@ -117,6 +117,45 @@ These pieces are designed to compose cleanly, but each should also be legible an
 
 ---
 
+## Prelaunch MVP (2026-04)
+
+The launch cut should be narrower than the full vision. Ship the session kernel first.
+
+**What the MVP must prove:**
+
+1. Longhouse can ingest CLI sessions and turn them into durable, addressable objects.
+2. A user can recover context fast: search for a prior solution, inspect the raw session, and resume work without hunting through provider logs.
+3. A user can coordinate work through the kernel itself: inspect the wall, tail a session, send a directed message, and continue a session from terminal/API or the bundled web UI.
+4. First value happens free and locally (or via demo data) before hosted billing, account, or provisioning friction.
+5. Hosted is the monetization and convenience layer, not the only way to understand the product.
+
+**Launch-critical surfaces:**
+
+- free local install + demo path
+- real session ingest for Claude Code, Codex CLI, and Gemini CLI
+- canonical `/api/agents/*` machine surface plus CLI parity for `wall`, `peers`, `tail`, `message`, `continue`, and inbox/session inspection
+- one honest continuation path that is strong enough to demo today (Claude-first is acceptable)
+- timeline, search, and session detail in the web UI as the integrated human surface
+
+**Not launch blockers:**
+
+- proactive Oikos operator mode
+- Gmail / inbox / conversations as a primary wedge
+- broad runner or jobs positioning
+- full continuation parity across every provider
+- perfect hosted self-serve onboarding
+
+**Proof-of-value demo journey:**
+
+1. Install Longhouse free locally and see demo sessions or real shipped sessions immediately.
+2. Find a prior session where auth / retry / refactor logic was solved.
+3. Open the raw session detail and recover the exact context that matters.
+4. Use the kernel primitives to inspect the wall, tail a session, or send a directed session message.
+5. Continue the current session from Longhouse and keep going from the recovered context.
+6. Optional final beat: show the same session reachable from another device or hosted canary to prove the endgame without making hosted signup the first gate.
+
+---
+
 ## Principles & Constraints
 
 - **Always-on beats cold start** for paid users. Background agents are core; sleeping instances break the product.
@@ -124,7 +163,7 @@ These pieces are designed to compose cleanly, but each should also be legible an
 - **The session is the system of record.** "Agent" is useful product language, but the durable object in the platform is the session.
 - **Canonical interface order**: HTTP/SSE/WebSocket first, CLI second, MCP third, web UI for humans on top.
 - **MCP is an adapter, not the boundary.** If a capability matters, it should exist without requiring a host-managed MCP install.
-- **Cloud-first CTA**: hosted is the primary path; self-hosted remains fully supported for users who want to run their own infra.
+- **Free local wedge first, hosted convenience second**: launch onboarding must demonstrate value before billing or provisioning friction. Hosted remains the paid always-on path, but self-hosted/demo is the primary proof gate.
 - **Progressive disclosure**: keep primary docs short and link to deeper runbooks; AGENTS.md must point to what else to read.
 - **Single-tenant core (enforced)**: build fast, keep code simple, avoid multi-tenant security tax. Agents APIs reject instances with >1 user.
 - **Hosted = convenience**: premium support and "don't think about it" operations.
@@ -361,7 +400,7 @@ User signs up → Instance provisioned → Ship local sessions (onramp)
 
 ### OSS Local (free tier / onramp)
 ```bash
-pip install longhouse
+curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve
 ```
 - Local web UI on port 8080
@@ -380,6 +419,7 @@ User -> Control Plane -> Provision Longhouse instance (per-user)
 
 ### Free Trial
 - Optional: provisioned instance for a short trial
+- Not required for the first proof of value
 - Can hibernate after trial, but **paid instances stay hot**
 
 ---
@@ -397,6 +437,12 @@ The first 2 minutes determine adoption. Onboarding must be zero-friction and dem
 - Demo sessions auto-seed on first run (when sessions table is empty); `SKIP_DEMO_SEED=1` to disable
 - Users see the product working before any configuration
 - Chat/LLM features prompt for keys only when actually needed
+
+**Agent-native evaluation requirements (target):**
+- The first successful task should happen before credit card entry
+- The free path should not require email verification before the user can run a meaningful local or demo flow
+- Programmatic use must exist at the free tier through the CLI and `/api/agents/*`
+- If/when hosted trials exist, their limits must be generous enough to complete one real inspect / coordinate / continue loop
 
 **Guided empty state:**
 When Timeline is empty, show a 3-step path:
