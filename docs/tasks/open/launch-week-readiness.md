@@ -1,7 +1,8 @@
 # Launch Week Readiness
 
 Status: In progress
-Spec: `docs/specs/launch-demo-contract.md`
+Specs: `docs/specs/launch-demo-contract.md`, `docs/specs/launch-demo-rehearsal.md`
+Runbook: `docs/specs/launch-demo-rehearsal.md`
 Last updated: 2026-04-02
 
 ## Goal
@@ -35,6 +36,27 @@ This task is about making that loop demoable, installable, and believable in one
 - [x] Validate the Claude control-after-launch proof on a real Longhouse session
 - [ ] Freeze the prelaunch validation gate (`make test-ci`, `make test-e2e`, any extra smoke)
 - [ ] Ship and verify the launch lane
+
+## Work Order
+
+Do the remaining week in this order:
+
+1. **Demo truth**
+   - rehearse the exact install -> import -> find -> wall -> control loop
+   - treat any failure here as a product gap before calling it a copy problem
+2. **Install and onboarding polish**
+   - make the import-first path obvious
+   - remove any confusion around demo mode versus real import
+   - keep wrapper mode out of the launch path unless it fixes a real activation issue
+3. **Public surface cleanup**
+   - tighten README, landing, docs, and onboarding to the same story
+   - only fix drift that affects the demo or first-run understanding
+4. **Targeted feature cleanup**
+   - only do code design or product cleanup when it blocks the demo or onboarding loop
+   - no broad architecture refactors during launch week
+5. **Validation and ship**
+   - freeze the exact prelaunch test gate
+   - push/deploy only after the demo loop and launch truth are stable
 
 ## Notes
 
