@@ -9,6 +9,7 @@ Usage:
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 import typer
@@ -23,6 +24,7 @@ def wrap(
     install: bool = typer.Option(False, "--install", help="Install opt-in default-launcher wrappers."),
     uninstall: bool = typer.Option(False, "--uninstall", help="Remove default-launcher wrappers."),
     status: bool = typer.Option(False, "--status", help="Show wrapper status."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
     provider: Optional[str] = typer.Option(
         None,
         "--provider",
@@ -51,19 +53,23 @@ def wrap(
     providers = [provider] if provider else None
 
     if install:
-        _do_install(providers)
+        _do_install(providers, json_output=json_output)
     elif uninstall:
-        _do_uninstall(providers)
+        _do_uninstall(providers, json_output=json_output)
     else:
-        _do_status()
+        _do_status(json_output=json_output)
 
 
-def _do_install(providers: list[str] | None) -> None:
+def _do_install(providers: list[str] | None, *, json_output: bool) -> None:
     try:
         results = install_wrappers(providers)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+    if json_output:
+        typer.echo(json.dumps({"action": "install", "providers": providers, "results": results}, indent=2))
+        return
 
     typer.secho("Wrapper install results:", bold=True)
     for key, msg in results.items():
@@ -79,12 +85,16 @@ def _do_install(providers: list[str] | None) -> None:
     typer.echo("Remove:   longhouse wrap --uninstall")
 
 
-def _do_uninstall(providers: list[str] | None) -> None:
+def _do_uninstall(providers: list[str] | None, *, json_output: bool) -> None:
     try:
         results = uninstall_wrappers(providers)
     except ValueError as exc:
         typer.secho(str(exc), fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+    if json_output:
+        typer.echo(json.dumps({"action": "uninstall", "providers": providers, "results": results}, indent=2))
+        return
 
     typer.secho("Wrapper uninstall results:", bold=True)
     for key, msg in results.items():
@@ -94,8 +104,12 @@ def _do_uninstall(providers: list[str] | None) -> None:
     typer.echo("Open a new terminal for changes to take effect.")
 
 
-def _do_status() -> None:
+def _do_status(*, json_output: bool) -> None:
     info = get_wrapper_status()
+
+    if json_output:
+        typer.echo(json.dumps(info, indent=2))
+        return
 
     any_installed = False
     for provider in SUPPORTED_PROVIDERS:
