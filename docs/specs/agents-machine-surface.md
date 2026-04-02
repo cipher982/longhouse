@@ -98,12 +98,9 @@ Current delivery model:
 
 - durable message row first
 - safe-boundary delivery attempt for managed-local sessions
+- drain up to 10 queued messages while the target remains in a deliverable state
 - explicit acknowledgement from the target session
 - non-live sessions can still poll the durable inbox
-
-Current known gap:
-
-- presence-triggered delivery currently attempts one queued message per deliverable wakeup
 
 ### Continuity and project context
 
