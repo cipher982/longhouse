@@ -16,19 +16,52 @@ from zerg.cli.main import app
 
 
 class _FakeResponse:
-    def __init__(self, *, status_code: int, json_data: dict | None = None, text: str = ""):
+    def __init__(
+        self,
+        *,
+        status_code: int,
+        json_data: dict | None = None,
+        text: str = "",
+        headers: dict[str, str] | None = None,
+        stream_lines: list[str] | None = None,
+    ):
         self.status_code = status_code
         self._json_data = json_data or {}
         self.text = text
+        self.headers = headers or {}
+        self._stream_lines = stream_lines or []
 
     def json(self) -> dict:
         return self._json_data
 
+    def read(self) -> bytes:
+        if self.text:
+            return self.text.encode()
+        if self._json_data:
+            return json.dumps(self._json_data).encode()
+        return b""
+
+    def iter_lines(self):
+        yield from self._stream_lines
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
 
 class _FakeClient:
-    def __init__(self, *, get_response: _FakeResponse | None = None, post_response: _FakeResponse | None = None):
+    def __init__(
+        self,
+        *,
+        get_response: _FakeResponse | None = None,
+        post_response: _FakeResponse | None = None,
+        stream_response: _FakeResponse | None = None,
+    ):
         self.get_response = get_response
         self.post_response = post_response
+        self.stream_response = stream_response
         self.calls: list[dict] = []
 
     def __enter__(self):
@@ -60,6 +93,18 @@ class _FakeClient:
         )
         assert self.post_response is not None
         return self.post_response
+
+    def stream(self, method: str, url: str, *, headers: dict[str, str], json: dict) -> _FakeResponse:
+        self.calls.append(
+            {
+                "method": method,
+                "url": url,
+                "headers": headers,
+                "json": json,
+            }
+        )
+        assert self.stream_response is not None
+        return self.stream_response
 
 
 def test_peers_command_lists_live_peer_sessions(monkeypatch):
@@ -719,3 +764,92 @@ def test_sessions_events_command_json_output(monkeypatch):
     payload = json.loads(result.output)
     assert payload["total"] == 1
     assert payload["events"][0]["id"] == 1
+
+
+def test_sessions_continue_command_prints_managed_local_acceptance(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        stream_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "accepted": True,
+                "session_id": "22222222-2222-2222-2222-222222222222",
+                "dispatch_ms": 12.4,
+            },
+            headers={"content-type": "application/json"},
+        )
+    )
+
+    monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(
+        app,
+        [
+            "continue",
+            "22222222-2222-2222-2222-222222222222",
+            "follow up on the failing test",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Accepted by session 22222222-2222-2222-2222-222222222222" in result.output
+    assert "dispatch_ms: 12.4" in result.output
+    assert fake_client.calls == [
+        {
+            "method": "POST",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/continue",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "json": {"message": "follow up on the failing test"},
+        }
+    ]
+
+
+def test_sessions_continue_command_streams_cloud_output(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        stream_response=_FakeResponse(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            stream_lines=[
+                'event: assistant_delta',
+                'data: {"text":"hello"}',
+                "",
+                'event: assistant_delta',
+                'data: {"text":" world"}',
+                "",
+                'event: done',
+                'data: {"exit_code":0,"persisted_events":2}',
+                "",
+            ],
+        )
+    )
+
+    monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
+    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+
+    result = runner.invoke(
+        app,
+        [
+            "continue",
+            "22222222-2222-2222-2222-222222222222",
+            "stream the answer",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "hello world" in result.output
+    assert fake_client.calls == [
+        {
+            "method": "POST",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/continue",
+            "headers": {
+                "X-Agents-Token": "zdt_test_token",
+                "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",
+            },
+            "json": {"message": "stream the answer"},
+        }
+    ]

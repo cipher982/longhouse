@@ -12,6 +12,7 @@ Usage:
     longhouse check-messages  # Inspect the durable session inbox
     longhouse ack-message     # Acknowledge an inbound session message
     longhouse sessions get    # Inspect one session
+    longhouse continue        # Continue a session from the terminal
     longhouse sessions events # Inspect session events
     longhouse config show   # Show effective configuration
     longhouse ship          # One-shot sync
@@ -46,6 +47,7 @@ from zerg.cli.serve import app as serve_app
 from zerg.cli.serve import serve
 from zerg.cli.serve import status
 from zerg.cli.sessions import app as sessions_app
+from zerg.cli.sessions import continue_session
 
 # Create main app
 app = typer.Typer(
@@ -112,6 +114,7 @@ app.command(name="message")(message)
 app.command(name="tail")(tail)
 app.command(name="check-messages")(check_messages)
 app.command(name="ack-message")(ack_message)
+app.command(name="continue")(continue_session)
 app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
 app.command(name="connect")(_cmd_lookup["connect"])

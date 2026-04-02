@@ -51,7 +51,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - Do not extract new repos or services yet. First make the primitives obviously canonical inside Longhouse.
 - Current delivery trigger is presence-driven safe-boundary delivery. That is the right default and should stay simple.
 - Queued delivery now drains up to 10 messages per safe-boundary wakeup, but stops immediately if the target session leaves a deliverable state.
-- Current CLI progress: `wall`, `peers`, `message`, `tail`, `check-messages`, `ack-message`, `sessions get`, and `sessions events` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
+- Current CLI progress: `wall`, `peers`, `message`, `continue`, `tail`, `check-messages`, `ack-message`, `sessions get`, and `sessions events` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
 - Machine-surface test coverage now includes the canonical `POST /api/agents/insights` write path plus JSON smoke coverage for the core coordination/session CLI commands.
 - Canonical machine surface is now documented in `docs/specs/agents-machine-surface.md`, including the browser veneer split and the `POST /api/agents/insights` canonical write path.
 - `docs/specs/agents-machine-surface.md` now includes copyable HTTP and CLI recipes for the raw wall, directed session messaging, inbox reads, and acknowledgements.
@@ -59,6 +59,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - Oikos now has direct session-kernel coordination tools using the canonical names `peers`, `get_session_events`, `session_tail`, `message_session`, `check_messages`, and `ack_message`.
 - API routes and Oikos coordination tools now share `session_coordination.py` for wall/tail/message serialization and inbox acknowledgement semantics, reducing contract drift without a broad router rewrite.
 - Machine-facing continuation now exists at `POST /api/agents/sessions/{session_id}/continue`, reusing the existing session-chat engine instead of introducing a second continuation stack.
+- `longhouse continue` now wraps the machine continuation route directly, so terminal users do not need to script SSE by hand.
 - Related active tasks:
   - `docs/specs/launch-runtime-simplification.md`
   - `docs/specs/oikos-proactive-operator.md`
