@@ -143,6 +143,143 @@ def _print_message_summary(message: dict) -> None:
         typer.echo(f"  {text}")
 
 
+def _fetch_wall_payload(
+    *,
+    base_url: str,
+    token: str,
+    repo: str | None = None,
+    project: str | None = None,
+    days: int,
+    limit: int,
+) -> dict:
+    params: dict[str, object] = {"days": days, "limit": limit}
+    if repo:
+        params["repo"] = repo
+    if project:
+        params["project"] = project
+
+    try:
+        with httpx.Client(timeout=15) as client:
+            response = client.get(
+                f"{base_url.rstrip('/')}/api/agents/sessions/wall",
+                headers={"X-Agents-Token": token},
+                params=params,
+            )
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException:
+        typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    if response.status_code == 401:
+        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if response.status_code != 200:
+        typer.secho(f"API error: {response.status_code} {response.text[:200]}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    return response.json()
+
+
+def _print_wall_session_summary(session: dict) -> None:
+    session_id = str(session.get("session_id") or "")
+    provider = str(session.get("provider") or "-")
+    device_name = str(session.get("device_name") or "-")
+    presence_state = str(session.get("presence_state") or "-")
+    branch = str(session.get("git_branch") or "-")
+    repo = str(session.get("git_repo") or "-")
+    last_event_at = str(session.get("last_event_at") or "-")
+    title = str(session.get("summary_title") or "").strip()
+
+    typer.secho(session_id, fg=typer.colors.CYAN, bold=True)
+    typer.echo(f"  provider: {provider}  device: {device_name}  presence: {presence_state}  branch: {branch}")
+    typer.echo(f"  repo: {repo}  last_event_at: {last_event_at}")
+    if title:
+        typer.echo(f"  {title}")
+
+
+@app.command()
+def wall(
+    repo: str | None = typer.Option(
+        None,
+        "--repo",
+        "-r",
+        help="Optional repo filter (substring match on session git_repo).",
+    ),
+    project: str | None = typer.Option(
+        None,
+        "--project",
+        "-p",
+        help="Optional project filter.",
+    ),
+    days: int = typer.Option(
+        7,
+        "--days",
+        help="Days to look back for session activity.",
+    ),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        "-n",
+        help="Max wall sessions to return.",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output raw JSON response.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified).",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """Read the raw wall surface for recent sessions."""
+    config_dir = Path(claude_dir) if claude_dir else None
+    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    payload = _fetch_wall_payload(
+        base_url=base_url,
+        token=resolved_token,
+        repo=repo,
+        project=project,
+        days=days,
+        limit=limit,
+    )
+
+    if output_json:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    sessions = list(payload.get("sessions", []))
+    if not sessions:
+        typer.echo("No wall sessions found.")
+        return
+
+    typer.echo(f"Found {len(sessions)} wall session{'s' if len(sessions) != 1 else ''}")
+    if repo:
+        typer.echo(f"Repo filter: {repo}")
+    if project:
+        typer.echo(f"Project filter: {project}")
+    typer.echo("")
+    for session in sessions:
+        _print_wall_session_summary(session)
+        typer.echo("")
+
+
 @app.command()
 def peers(
     repo: str | None = typer.Option(
@@ -209,28 +346,13 @@ def peers(
         typer.secho(message, fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    try:
-        with httpx.Client(timeout=15) as client:
-            response = client.get(
-                f"{base_url.rstrip('/')}/api/agents/sessions/wall",
-                headers={"X-Agents-Token": resolved_token},
-                params={"repo": resolved_repo, "days": days, "limit": limit},
-            )
-    except httpx.ConnectError:
-        typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    except httpx.TimeoutException:
-        typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-    if response.status_code == 401:
-        typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    if response.status_code != 200:
-        typer.secho(f"API error: {response.status_code} {response.text[:200]}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-    payload = response.json()
+    payload = _fetch_wall_payload(
+        base_url=base_url,
+        token=resolved_token,
+        repo=resolved_repo,
+        days=days,
+        limit=limit,
+    )
     peers_payload: list[dict] = []
     for item in payload.get("sessions", []):
         if current_session_id and str(item.get("session_id")) == current_session_id:
