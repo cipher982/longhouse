@@ -176,11 +176,17 @@ _OIKOS_UTILITY_TOOL_LIST = [
     "send_telegram",
     # Knowledge
     "knowledge_search",
-    # Session discovery
+    # Session discovery and coordination
     "search_sessions",
     "grep_sessions",
     "filter_sessions",
     "get_session_detail",
+    "get_session_events",
+    "get_session_tail",
+    "list_session_peers",
+    "message_session",
+    "check_session_messages",
+    "acknowledge_session_message",
     # Canonical conversation discovery
     "search_conversations",
     "read_conversation",
