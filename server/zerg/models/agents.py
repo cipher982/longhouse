@@ -622,3 +622,28 @@ class SessionPoke(AgentsBase):
     read_at = Column(DateTime(timezone=True), nullable=True)  # NULL until target reads it
 
     __table_args__ = (Index("ix_pokes_to_unread", "to_session_id", "read_at"),)
+
+
+class SessionMessage(AgentsBase):
+    """Durable directed message between sessions with delivery state."""
+
+    __tablename__ = "session_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    from_session_id = Column(GUID(), nullable=False, index=True)
+    to_session_id = Column(GUID(), nullable=False, index=True)
+    body = Column("text", Text, nullable=False)
+    source_event_id = Column(Integer, nullable=True)
+    delivery_status = Column(String(32), nullable=False, server_default=text("'queued'"))
+    delivery_attempts = Column(Integer, nullable=False, server_default=text("0"))
+    last_error = Column(Text, nullable=True)
+    delivered_via = Column(String(32), nullable=True)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index("ix_session_messages_to_status_created", "to_session_id", "delivery_status", "created_at"),
+        Index("ix_session_messages_from_created", "from_session_id", "created_at"),
+    )

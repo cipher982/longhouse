@@ -1,5 +1,6 @@
 """Tests for the public Longhouse MCP tool surface."""
 
+import json
 from unittest.mock import AsyncMock
 from unittest.mock import patch
 
@@ -25,6 +26,8 @@ def test_create_server_exposes_only_continuity_and_oikos_tools():
         "session_tail",
         "poke",
         "check_pokes",
+        "peers",
+        "message_session",
     }
 
 
@@ -45,3 +48,97 @@ async def test_query_insights_uses_machine_agents_route():
         "/api/agents/insights",
         params={"since_hours": 168, "limit": 5, "project": "zerg"},
     )
+
+
+@pytest.mark.asyncio
+async def test_message_session_uses_longhouse_session_env(monkeypatch):
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["message_session"]
+    response = type(
+        "Resp",
+        (),
+        {
+            "status_code": 201,
+            "text": '{"id":1,"delivery_status":"queued"}',
+        },
+    )()
+
+    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.post",
+        new=AsyncMock(return_value=response),
+    ) as mock_post:
+        result = await tool.run({"to_session_id": "22222222-2222-2222-2222-222222222222", "text": "hello"})
+
+    assert result == '{"id":1,"delivery_status":"queued"}'
+    mock_post.assert_awaited_once_with(
+        "/api/agents/messages",
+        json={
+            "from_session_id": "11111111-1111-1111-1111-111111111111",
+            "to_session_id": "22222222-2222-2222-2222-222222222222",
+            "text": "hello",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_peers_infers_repo_from_current_session(monkeypatch):
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["peers"]
+    current_resp = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": '{"id":"11111111-1111-1111-1111-111111111111","git_repo":"git@github.com:cipher982/longhouse.git"}',
+        },
+    )()
+    wall_resp = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": json.dumps(
+                {
+                    "sessions": [
+                        {
+                            "session_id": "11111111-1111-1111-1111-111111111111",
+                            "has_live_presence": True,
+                            "device_name": "laptop",
+                            "provider": "claude",
+                            "presence_state": "idle",
+                            "summary_title": "Current",
+                            "git_branch": "main",
+                        },
+                        {
+                            "session_id": "22222222-2222-2222-2222-222222222222",
+                            "has_live_presence": True,
+                            "device_name": "cube",
+                            "provider": "codex",
+                            "presence_state": "thinking",
+                            "summary_title": "Peer",
+                            "git_branch": "main",
+                        },
+                    ],
+                    "total": 2,
+                }
+            ),
+        },
+    )()
+
+    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(side_effect=[current_resp, wall_resp]),
+    ) as mock_get:
+        result = await tool.run({})
+
+    payload = json.loads(result)
+    assert payload["total"] == 1
+    assert payload["peers"][0]["session_id"] == "22222222-2222-2222-2222-222222222222"
+    assert mock_get.await_args_list[0].args == ("/api/agents/sessions/11111111-1111-1111-1111-111111111111",)
+    assert mock_get.await_args_list[1].args == ("/api/agents/sessions/wall",)
+    assert mock_get.await_args_list[1].kwargs["params"] == {
+        "repo": "git@github.com:cipher982/longhouse.git",
+        "days": 7,
+    }
