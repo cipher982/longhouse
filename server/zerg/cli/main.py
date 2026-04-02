@@ -5,6 +5,8 @@ Usage:
     longhouse status        # Show configuration
     longhouse claude        # Launch managed-local Claude on this device
     longhouse codex         # Launch managed-local Codex on this device
+    longhouse peers         # Find live peer sessions for the current repo
+    longhouse message       # Send a message to another session
     longhouse config show   # Show effective configuration
     longhouse ship          # One-shot sync
     longhouse connect       # Foreground engine sync (watch + fallback scan)
@@ -24,6 +26,9 @@ from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
 from zerg.cli.codex import codex
 from zerg.cli.connect import app as connect_app
+from zerg.cli.coordination import app as coordination_app
+from zerg.cli.coordination import message
+from zerg.cli.coordination import peers
 from zerg.cli.doctor import doctor
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
@@ -74,6 +79,7 @@ def config_show() -> None:
 
 # Add subcommands from connect module
 app.add_typer(connect_app, name="session", help="Session shipping commands")
+app.add_typer(coordination_app, name="coordination", help="Session coordination commands")
 app.add_typer(serve_app, name="server", help="Server management commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
@@ -88,6 +94,8 @@ app.command(name="status")(status)
 _cmd_lookup = {cmd.callback.__name__: cmd.callback for cmd in connect_app.registered_commands}
 app.command(name="claude")(claude)
 app.command(name="codex")(codex)
+app.command(name="peers")(peers)
+app.command(name="message")(message)
 app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
 app.command(name="connect")(_cmd_lookup["connect"])
