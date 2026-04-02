@@ -7,16 +7,16 @@ interface FAQ {
 
 const faqs: FAQ[] = [
   {
-    question: "How does authentication work?",
-    answer: "Self-hosted: use password auth or disable auth entirely for local-only setups. Hosted: sign in with Google OAuth or password. Your credentials are never stored — we use industry-standard JWT tokens for session management."
+    question: "Do I need a credit card to try it?",
+    answer: "No for the core product. The first proof-of-value path is the local installer plus demo or real shipped sessions. Hosted beta is the paid always-on upgrade."
   },
   {
     question: "Where is my data stored?",
-    answer: "Local-first: your data lives in a SQLite database on your machine. Self-host and keep full control. We never sell or share your personal information with third parties."
+    answer: "Local-first: your data lives in a SQLite database on your machine when you self-host. Hosted runs the same core product in your isolated runtime. We do not sell or share your data."
   },
   {
-    question: "Can I delete my data?",
-    answer: "Yes! Full account deletion is available in your profile settings. When you delete your account, all your sessions and data are permanently removed."
+    question: "Is the CLI/API surface real or just landing-page copy?",
+    answer: "It is real. The machine-facing surface lives under /api/agents/* and the CLI maps onto the same core flows: wall, peers, tail, message, inbox, and continue."
   },
   {
     question: "Do you train AI models on my data?",
@@ -38,9 +38,10 @@ export function TrustSection() {
   return (
     <section className="landing-trust">
       <div className="landing-section-inner">
-        <h2 className="landing-section-title">Questions? We've Got Answers.</h2>
+        <p className="landing-section-label">Questions</p>
+        <h2 className="landing-section-title">Answer the obvious objections fast.</h2>
         <p className="landing-section-subtitle">
-          Built with privacy and security in mind.
+          Clear answers matter more than a long enterprise-security theater section at this stage.
         </p>
 
         <div className="landing-faq-list">

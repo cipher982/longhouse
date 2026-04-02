@@ -4,7 +4,7 @@ import { Button } from "../ui";
 
 export function FooterCTA() {
   const handleSelfHost = () => {
-    document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
+    document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleGetHosted = () => {
@@ -19,14 +19,14 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Your coding agents, always on, from anywhere.
+            Start free. Prove it to yourself. Upgrade later.
           </blockquote>
           <div className="landing-footer-cta-buttons">
-            <Button variant="primary" size="lg" onClick={handleGetHosted}>
-              Get Started
+            <Button variant="primary" size="lg" onClick={handleSelfHost}>
+              Start Free Locally
             </Button>
-            <Button variant="secondary" size="lg" onClick={handleSelfHost}>
-              Self-host Free
+            <Button variant="secondary" size="lg" onClick={handleGetHosted}>
+              Join Hosted Beta
             </Button>
           </div>
         </div>
@@ -41,9 +41,10 @@ export function FooterCTA() {
           <nav className="landing-footer-nav">
             <div className="landing-footer-nav-group">
               <h4>Product</h4>
-              <a href="#how-it-works">How It Works</a>
-              <a href="#integrations">Integrations</a>
-              <a href="#pricing">Pricing</a>
+              <a href="#journey">Proof Journey</a>
+              <a href="#surface">Machine Surface</a>
+              <a href="#providers">Provider Truth</a>
+              <a href="#pricing">Hosted</a>
             </div>
             <div className="landing-footer-nav-group">
               <h4>Resources</h4>

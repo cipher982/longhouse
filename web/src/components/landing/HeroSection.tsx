@@ -1,7 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { Button } from "../ui";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
-import { InstallSection } from "./InstallSection";
 import config from "../../lib/config";
 
 interface HeroSectionProps {
@@ -17,8 +16,8 @@ export function HeroSection({
 }: HeroSectionProps) {
   const navigate = useNavigate();
 
-  const handleSelfHost = () => {
-    document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
+  const handleStartFree = () => {
+    document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleHostedBeta = () => {
@@ -28,79 +27,102 @@ export function HeroSection({
   return (
     <section className="landing-hero">
       <div className="landing-hero-split">
-        {/* Left: Text content */}
         <div className="landing-hero-text">
           <div className="landing-hero-badge">
             <span className="landing-hero-badge-dot" />
-            Self-host free forever
+            Free local wedge first
           </div>
 
           <h1 className="landing-hero-headline">
-            Your coding agents, <span className="gradient-text">always on, from anywhere.</span>
+            Find the session. <span className="gradient-text">Ask it. Continue it.</span>
           </h1>
 
           <p className="landing-hero-subhead">
-            Close your laptop. Your agents keep running. Resume from any device.
+            Longhouse turns Claude Code, Codex, and Gemini sessions into durable objects you can search,
+            inspect, message, and resume.
           </p>
 
           <p className="landing-hero-note">
-            Claude Code, Codex, and Gemini in one timeline. Claude continues directly in the browser today; Codex and Gemini sync now and can start cloud sessions.
+            Start free locally. Use hosted beta when you want always-on browser access. Claude remains the
+            strongest direct continuation path today; Codex and Gemini are archive-first for now.
           </p>
 
           <div className="landing-hero-ctas">
-            <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleHostedBeta}>
-              Get Started &rarr;
+            <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
+              Start Free Locally &rarr;
             </Button>
-            {config.demoMode ? (
-              <Button variant="secondary" size="lg" onClick={() => navigate("/timeline")}>
-                Try Live Demo &rarr;
-              </Button>
-            ) : (
-              <Button variant="secondary" size="lg" onClick={handleSelfHost}>
-                Self-host Free
+            <Button variant="secondary" size="lg" onClick={handleHostedBeta}>
+              Hosted Beta
+            </Button>
+            {config.demoMode && (
+              <Button variant="ghost" size="lg" onClick={() => navigate("/timeline")}>
+                Try Live Demo
               </Button>
             )}
           </div>
 
           <div className="landing-hero-friction-reducers">
-            <span>Always-on agents</span>
+            <span>No card for first value</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>&lt;2min setup</span>
+            <span>No keys needed for demo</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>Bring your own API keys</span>
+            <span>CLI / API first</span>
           </div>
 
-          {/* Install command section - self-host path */}
-          <InstallSection className="landing-hero-install" />
+          <div className="landing-hero-install" id="landing-install">
+            <p className="landing-hero-install-label">Open the product in under 2 minutes</p>
+            <div className="landing-hero-install-grid">
+              <pre className="landing-code-block">
+                <code>{"curl -fsSL https://get.longhouse.ai/install.sh | bash\nlonghouse serve --demo"}</code>
+              </pre>
+              <pre className="landing-code-block">
+                <code>{"longhouse wall --json"}</code>
+              </pre>
+            </div>
+            <p className="landing-hero-install-note">
+              The bundled UI is the easiest way to look around, but the same kernel is scriptable from the
+              terminal and from <code>/api/agents/*</code>.
+            </p>
+          </div>
 
           <div className="landing-hero-cta-secondary">
             <Button variant="ghost" size="lg" className="landing-cta-text" onClick={onScrollToHowItWorks}>
-              See How It Works <span className="landing-cta-arrow">↓</span>
+              See The Proof Journey <span className="landing-cta-arrow">↓</span>
             </Button>
           </div>
-
-          <a
-            href="mailto:hello@longhouse.ai?subject=Enterprise%20inquiry"
-            className="landing-hero-enterprise-link"
-          >
-            Enterprise? Contact us &rarr;
-          </a>
         </div>
 
-        {/* Right: Product screenshot */}
         <div className="landing-hero-visual">
+          <div className="landing-hero-signal-panel">
+            <p className="landing-hero-signal-label">What the product actually is</p>
+            <h2 className="landing-hero-signal-title">A session kernel with a bundled human view.</h2>
+            <div className="landing-hero-signal-list">
+              <div className="landing-hero-signal-card">
+                <p className="landing-hero-signal-card-title">Continuity</p>
+                <p>Search prior work, inspect the raw session detail, and recover the exact context that matters.</p>
+              </div>
+              <div className="landing-hero-signal-card">
+                <p className="landing-hero-signal-card-title">Coordination</p>
+                <p><code>wall</code>, <code>tail</code>, <code>peers</code>, <code>message</code>, and inbox state all live on the same seam.</p>
+              </div>
+              <div className="landing-hero-signal-card">
+                <p className="landing-hero-signal-card-title">Continuation</p>
+                <p>Continue the session from the machine surface or from the integrated web UI.</p>
+              </div>
+            </div>
+          </div>
+
           <AppScreenshotFrame
             src="/images/landing/timeline-preview.png"
             alt="Longhouse session timeline showing Claude Code sessions"
-            title="Longhouse"
-            aspectRatio="4/3"
+            title="Bundled Human View"
+            aspectRatio="16/9"
             showChrome={true}
             theme={screenshotTheme}
             className="landing-hero-screenshot"
           />
         </div>
       </div>
-
     </section>
   );
 }

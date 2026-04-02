@@ -404,9 +404,9 @@
   .landing-page .gradient-text {
     background: linear-gradient(
       135deg,
-      var(--color-brand-primary) 0%,
-      #a78bfa 50%,
-      var(--color-brand-secondary) 100%
+      #f0c57d 0%,
+      var(--color-brand-primary) 42%,
+      #7eb49d 100%
     );
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -532,6 +532,282 @@
     flex-shrink: 0;
   }
 
+  .landing-hero-visual {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-5);
+  }
+
+  .landing-hero-install {
+    margin-top: var(--space-8);
+    padding: var(--space-6);
+    background: linear-gradient(180deg, rgba(29, 22, 18, 0.96), rgba(19, 15, 12, 0.94));
+    border: 1px solid rgba(201, 166, 107, 0.18);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 18px 40px rgba(8, 7, 6, 0.25);
+  }
+
+  .landing-hero-install-label {
+    margin: 0 0 var(--space-4);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+  }
+
+  .landing-hero-install-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--space-3);
+  }
+
+  .landing-code-block {
+    margin: 0;
+    padding: var(--space-4) var(--space-5);
+    background: rgba(10, 8, 7, 0.92);
+    border: 1px solid rgba(201, 166, 107, 0.12);
+    border-radius: var(--radius-lg);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.02);
+    color: #f5e6cf;
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    line-height: 1.7;
+    white-space: pre;
+    word-break: normal;
+    overflow-x: auto;
+  }
+
+  .landing-hero-install-note {
+    margin: var(--space-4) 0 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+
+  .landing-hero-install-note code {
+    font-family: var(--font-family-mono);
+    color: var(--color-brand-primary);
+  }
+
+  .landing-hero-signal-panel {
+    padding: var(--space-6);
+    background:
+      radial-gradient(circle at top right, rgba(201, 166, 107, 0.16), transparent 35%),
+      linear-gradient(180deg, rgba(35, 27, 22, 0.96), rgba(21, 17, 14, 0.98));
+    border: 1px solid rgba(201, 166, 107, 0.16);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 18px 40px rgba(8, 7, 6, 0.25);
+  }
+
+  .landing-hero-signal-label {
+    margin: 0 0 var(--space-2);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+  }
+
+  .landing-hero-signal-title {
+    margin: 0 0 var(--space-5);
+    font-family: var(--font-family-display);
+    font-size: clamp(var(--font-size-xl), 2.8vw, var(--font-size-2xl));
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.15;
+  }
+
+  .landing-hero-signal-list {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .landing-hero-signal-card {
+    padding: var(--space-4);
+    background: rgba(255, 248, 239, 0.04);
+    border: 1px solid rgba(255, 235, 204, 0.08);
+    border-radius: var(--radius-lg);
+  }
+
+  .landing-hero-signal-card-title {
+    margin: 0 0 var(--space-2);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--color-brand-primary);
+  }
+
+  .landing-hero-signal-card p:last-child {
+    margin: 0;
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  /* --------------------------------------------------------
+   KERNEL THESIS
+   -------------------------------------------------------- */
+
+  .landing-kernel-thesis {
+    padding: var(--space-16) 0 var(--space-8);
+    text-align: center;
+  }
+
+  .landing-kernel-thesis .landing-section-subtitle {
+    max-width: 760px;
+  }
+
+  .landing-thesis-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-5);
+  }
+
+  .landing-thesis-card {
+    padding: var(--space-7);
+    background:
+      linear-gradient(180deg, rgba(32, 24, 20, 0.96), rgba(20, 16, 13, 0.98));
+    border: 1px solid rgba(201, 166, 107, 0.12);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 16px 36px rgba(8, 7, 6, 0.2);
+    text-align: left;
+  }
+
+  .landing-thesis-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    margin-bottom: var(--space-5);
+    border-radius: 50%;
+    background: rgba(201, 166, 107, 0.14);
+    border: 1px solid rgba(201, 166, 107, 0.24);
+    color: var(--color-brand-primary);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-bold);
+  }
+
+  .landing-thesis-card h3 {
+    margin: 0 0 var(--space-3);
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.2;
+  }
+
+  .landing-thesis-card p {
+    margin: 0;
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  /* --------------------------------------------------------
+   PROOF JOURNEY
+   -------------------------------------------------------- */
+
+  .landing-proof-journey {
+    padding: var(--space-16) 0;
+    background: var(--color-surface-section);
+  }
+
+  .landing-proof-journey .landing-section-title,
+  .landing-proof-journey .landing-section-subtitle {
+    text-align: center;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
+  .landing-journey-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+    gap: var(--space-6);
+    align-items: start;
+  }
+
+  .landing-journey-list {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .landing-journey-step {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: var(--space-4);
+    align-items: start;
+    padding: var(--space-5);
+    background: #1F1912;
+    border: 1px solid #261F18;
+    border-radius: var(--radius-xl);
+    box-shadow: 0 10px 24px rgba(8, 7, 6, 0.18);
+    text-align: left;
+  }
+
+  .landing-step-number {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    margin-bottom: 0;
+    border-radius: 50%;
+    background: rgba(201, 166, 107, 0.14);
+    border: 1px solid rgba(201, 166, 107, 0.24);
+    color: var(--color-brand-primary);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .landing-journey-step-body {
+    min-width: 0;
+  }
+
+  .landing-step-title {
+    margin: 0 0 var(--space-2);
+  }
+
+  .landing-step-description {
+    margin: 0;
+  }
+
+  .landing-journey-note {
+    position: sticky;
+    top: 100px;
+    padding: var(--space-6);
+    background:
+      radial-gradient(circle at top right, rgba(126, 180, 157, 0.16), transparent 30%),
+      linear-gradient(180deg, rgba(25, 35, 30, 0.96), rgba(16, 21, 18, 0.98));
+    border: 1px solid rgba(126, 180, 157, 0.16);
+    border-radius: var(--radius-xl);
+    text-align: left;
+    box-shadow: 0 18px 36px rgba(8, 7, 6, 0.22);
+  }
+
+  .landing-journey-note-label {
+    margin: 0 0 var(--space-3);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-semibold);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-text-secondary);
+  }
+
+  .landing-journey-note blockquote {
+    margin: 0 0 var(--space-4);
+    font-family: var(--font-family-display);
+    font-size: clamp(var(--font-size-xl), 2.4vw, var(--font-size-2xl));
+    font-weight: var(--font-weight-semibold);
+    line-height: 1.15;
+    color: var(--color-text-primary);
+  }
+
+  .landing-journey-note p:last-child {
+    margin: 0;
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
   /* --------------------------------------------------------
    HOW IT WORKS SECTION
    -------------------------------------------------------- */
@@ -615,6 +891,72 @@
     padding: var(--space-16) 0;
     text-align: center;
     background: var(--color-surface-section);
+  }
+
+  /* --------------------------------------------------------
+   MACHINE SURFACE
+   -------------------------------------------------------- */
+
+  .landing-machine-surface {
+    padding: var(--space-16) 0;
+    text-align: center;
+  }
+
+  .landing-machine-surface .landing-section-subtitle {
+    max-width: 760px;
+  }
+
+  .landing-machine-surface .landing-section-subtitle code {
+    font-family: var(--font-family-mono);
+    color: var(--color-brand-primary);
+  }
+
+  .landing-surface-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-4);
+  }
+
+  .landing-surface-card {
+    padding: var(--space-6);
+    background: linear-gradient(180deg, rgba(26, 20, 17, 0.96), rgba(17, 14, 12, 0.98));
+    border: 1px solid rgba(201, 166, 107, 0.12);
+    border-radius: var(--radius-xl);
+    text-align: left;
+    box-shadow: 0 14px 30px rgba(8, 7, 6, 0.2);
+  }
+
+  .landing-surface-card h3 {
+    margin: 0 0 var(--space-2);
+    font-family: var(--font-family-display);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-semibold);
+  }
+
+  .landing-surface-card p {
+    margin: 0 0 var(--space-4);
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .landing-surface-note {
+    max-width: 760px;
+    margin: var(--space-8) auto 0;
+    padding: var(--space-5) var(--space-6);
+    background: rgba(201, 166, 107, 0.08);
+    border: 1px solid rgba(201, 166, 107, 0.14);
+    border-radius: var(--radius-xl);
+    text-align: left;
+  }
+
+  .landing-surface-note p {
+    margin: 0;
+    line-height: var(--font-line-height-relaxed);
+  }
+
+  .landing-surface-note p + p {
+    margin-top: var(--space-2);
+    color: var(--color-text-secondary);
   }
 
 
@@ -1822,6 +2164,17 @@
 
     .landing-hero-install {
       margin: var(--space-8) auto 0;
+    }
+
+    .landing-hero-install-grid,
+    .landing-thesis-grid,
+    .landing-journey-grid,
+    .landing-surface-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .landing-journey-note {
+      position: static;
     }
 
     .install-tabs {

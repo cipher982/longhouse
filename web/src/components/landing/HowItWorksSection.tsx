@@ -1,15 +1,4 @@
-/**
- * HowItWorksSection
- *
- * Simple 3-step explanation of how Longhouse works.
- * Dual-path: Hosted or Self-hosted → Search → Resume.
- */
-
-import { DownloadIcon, SearchIcon, SmartphoneIcon } from "../icons";
-import { Button } from "../ui";
-
 interface Step {
-  icon: React.ReactNode;
   number: string;
   title: string;
   description: string;
@@ -17,55 +6,69 @@ interface Step {
 
 const steps: Step[] = [
   {
-    icon: <DownloadIcon width={32} height={32} />,
     number: "1",
-    title: "Connect",
-    description: "Sign up and install the daemon. Your Claude Code, Codex, and Gemini sessions appear in one live timeline automatically."
+    title: "See sessions immediately",
+    description:
+      "Install Longhouse locally and land on demo data or real shipped sessions before billing or account friction.",
   },
   {
-    icon: <SmartphoneIcon width={32} height={32} />,
     number: "2",
-    title: "Resume Anywhere",
-    description: "Close your laptop. Open any device. Continue Claude directly in the browser, or start a cloud session from the same timeline."
+    title: "Find the prior solution",
+    description:
+      "Search for the session where auth, retries, or a refactor was already solved instead of grepping provider logs by hand.",
   },
   {
-    icon: <SearchIcon width={32} height={32} />,
     number: "3",
-    title: "Agents Talk",
-    description: "Your agents can ask each other questions across sessions. No copy-paste, no log scraping — direct inter-agent communication."
-  }
+    title: "Inspect the raw detail",
+    description:
+      "Open the exact transcript and tool history that matters. The model already did the work; Longhouse makes it reusable.",
+  },
+  {
+    number: "4",
+    title: "Coordinate through the kernel",
+    description:
+      "Show the wall, tail the session, or send a directed message. The coordination surface matters as much as the search surface.",
+  },
+  {
+    number: "5",
+    title: "Continue and keep going",
+    description:
+      "Resume the current session from the recovered context. Optional final beat: show the same session reachable from another device.",
+  },
 ];
 
 export function HowItWorksSection() {
-  const handleGetStarted = () => {
-    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
-  };
-
   return (
-    <section id="how-it-works" className="landing-how-it-works">
+    <section id="journey" className="landing-how-it-works landing-proof-journey">
       <div className="landing-section-inner">
-        <h2 className="landing-section-title">How It Works</h2>
+        <p className="landing-section-label">Proof Of Value</p>
+        <h2 className="landing-section-title">The demo should feel like recovered leverage.</h2>
         <p className="landing-section-subtitle">
-          From local sessions to always-on cloud agents in 2 minutes.
+          The strongest story is not “look at this website.” It is “I found prior work, recovered context,
+          coordinated through the kernel, and kept going.”
         </p>
 
-        <div className="landing-steps-row">
-          {steps.map((step, index) => (
-            <div key={index} className="landing-step" style={{ animationDelay: `${index * 100}ms` }}>
-              <div className="landing-step-icon">
-                {step.icon}
-              </div>
-              <div className="landing-step-number">{step.number}</div>
-              <h3 className="landing-step-title">{step.title}</h3>
-              <p className="landing-step-description">{step.description}</p>
-            </div>
-          ))}
-        </div>
+        <div className="landing-journey-grid">
+          <div className="landing-journey-list">
+            {steps.map((step) => (
+              <article key={step.title} className="landing-journey-step">
+                <div className="landing-step-number">{step.number}</div>
+                <div className="landing-journey-step-body">
+                  <h3 className="landing-step-title">{step.title}</h3>
+                  <p className="landing-step-description">{step.description}</p>
+                </div>
+              </article>
+            ))}
+          </div>
 
-        <div className="landing-steps-cta">
-          <Button variant="primary" size="lg" onClick={handleGetStarted}>
-            See Pricing
-          </Button>
+          <aside className="landing-journey-note">
+            <p className="landing-journey-note-label">Canonical line</p>
+            <blockquote>Find the session. Ask it. Continue it.</blockquote>
+            <p>
+              That line is short enough for the hero, concrete enough for the product, and specific enough
+              to differentiate from generic AI workspace tools.
+            </p>
+          </aside>
         </div>
       </div>
     </section>

@@ -35,8 +35,16 @@ vi.mock("../../components/landing/HeroSection", () => ({
   HeroSection: () => <div>Hero Section</div>,
 }));
 
+vi.mock("../../components/landing/KernelThesisSection", () => ({
+  KernelThesisSection: () => <div>Kernel Thesis</div>,
+}));
+
 vi.mock("../../components/landing/HowItWorksSection", () => ({
   HowItWorksSection: () => <div>How It Works</div>,
+}));
+
+vi.mock("../../components/landing/MachineSurfaceSection", () => ({
+  MachineSurfaceSection: () => <div>Machine Surface</div>,
 }));
 
 vi.mock("../../components/landing/DemoSection", () => ({
@@ -57,10 +65,6 @@ vi.mock("../../components/landing/TrustSection", () => ({
 
 vi.mock("../../components/landing/SocialProof", () => ({
   SocialProof: () => <div>Social Proof</div>,
-}));
-
-vi.mock("../../components/landing/ComparisonTable", () => ({
-  ComparisonTable: () => <div>Comparison Table</div>,
 }));
 
 vi.mock("../../components/landing/FooterCTA", () => ({

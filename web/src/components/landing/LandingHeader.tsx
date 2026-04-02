@@ -21,9 +21,11 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
   }, []);
 
   const navLinks = [
-    { label: "Product", href: "#how-it-works" },
+    { label: "Proof", href: "#journey" },
+    { label: "Surface", href: "#surface" },
+    { label: "Providers", href: "#providers" },
     { label: "Docs", href: "https://github.com/cipher982/longhouse", external: true },
-    { label: "Pricing", href: "#pricing" },
+    { label: "Hosted", href: "#pricing" },
   ];
 
   const handleNavClick = (href: string, external?: boolean) => {
@@ -67,7 +69,7 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
             Sign In
           </Button>
           <Button variant="primary" size="sm" onClick={onGetStarted}>
-            Get Started
+            Start Free
           </Button>
         </div>
 
@@ -110,7 +112,7 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
             Sign In
           </Button>
           <Button variant="primary" size="md" onClick={() => { onGetStarted?.(); setIsMobileMenuOpen(false); }} tabIndex={isMobileMenuOpen ? 0 : -1}>
-            Get Started
+            Start Free
           </Button>
         </div>
       </div>
