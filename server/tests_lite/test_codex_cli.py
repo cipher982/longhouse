@@ -142,7 +142,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "Longhouse: https://longhouse.test" in result.output
-    assert "Managed local Codex session launched on this device." in result.output
+    assert "Longhouse Codex session launched on this machine." in result.output
     assert "Session ID: session-123" in result.output
     assert "Session URL: https://longhouse.test/timeline/session-123" in result.output
     assert "Starting native Codex bridge..." in result.output

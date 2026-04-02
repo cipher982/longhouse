@@ -68,7 +68,7 @@ class TestBuildShellFunction:
         """Should fall back to native CLI when longhouse exits with EXIT_SETUP_FAILED."""
         func = build_shell_function("claude")
         assert str(EXIT_SETUP_FAILED) in func
-        assert "managed launch unavailable" in func
+        assert "Longhouse launch unavailable" in func
 
     def test_defines_function(self):
         func = build_shell_function("claude")

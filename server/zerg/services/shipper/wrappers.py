@@ -1,4 +1,4 @@
-"""CLI wrapper functions for managed-local sessions.
+"""CLI wrapper functions for opt-in Longhouse session launch.
 
 Injects shell functions into the user's profile that intercept bare
 ``claude`` / ``codex`` invocations and route interactive session launches
@@ -36,9 +36,9 @@ logger = logging.getLogger(__name__)
 SUPPORTED_PROVIDERS = ("claude", "codex")
 
 # Exit code used by ``longhouse claude`` / ``longhouse codex`` when
-# Longhouse itself is unavailable (no config, API unreachable, auth
-# failure).  The shell wrapper function checks for this code and falls
-# back to the native CLI.
+# Longhouse launch setup is unavailable (no config, API unreachable,
+# auth failure). The shell wrapper function checks for this code and
+# falls back to the native CLI.
 EXIT_SETUP_FAILED = 78
 
 # Passthrough subcommands per provider.
@@ -131,11 +131,11 @@ def _build_shell_function_posix(provider: str) -> str:
     done
     # Passthrough if not a TTY or any args present (v1: bare invocations only)
     if [ ! -t 0 ] || [ ! -t 1 ] || [ $# -gt 0 ]; then command {provider} "$@"; return; fi
-    # Managed-local launch with fallback to native on setup failure
+    # Longhouse launch with fallback to native on setup failure
     longhouse {provider}
     _lh_rc=$?
     if [ "$_lh_rc" -eq {EXIT_SETUP_FAILED} ]; then
-        echo "longhouse: managed launch unavailable, launching native {provider}" >&2
+        echo "longhouse: Longhouse launch unavailable, launching native {provider}" >&2
         command {provider}
     else
         return "$_lh_rc"
@@ -173,11 +173,11 @@ function {provider}
     if not isatty stdin; or not isatty stdout; or test (count $argv) -gt 0
         command {provider} $argv; return
     end
-    # Managed-local launch with fallback
+    # Longhouse launch with fallback
     longhouse {provider}
     set _lh_rc $status
     if test "$_lh_rc" -eq {EXIT_SETUP_FAILED}
-        echo "longhouse: managed launch unavailable, launching native {provider}" >&2
+        echo "longhouse: Longhouse launch unavailable, launching native {provider}" >&2
         command {provider}
     else
         return "$_lh_rc"

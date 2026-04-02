@@ -98,7 +98,19 @@ longhouse codex</code></pre>
             archive and machine surface.
           </p>
 
-          <h3>5. Want a safe preview first?</h3>
+          <h3>5. Optional: keep typing bare claude or codex</h3>
+          <p>
+            Default install stays non-invasive. If you want bare interactive launches to route through
+            Longhouse by default, opt in explicitly:
+          </p>
+          <pre><code>longhouse wrap --install
+longhouse wrap --status</code></pre>
+          <p>
+            Wrapper mode is passthrough-first and reversible. Help, auth, non-interactive commands, and
+            setup failures still fall back to the native CLI.
+          </p>
+
+          <h3>6. Want a safe preview first?</h3>
           <p>
             Only use demo data when you want a safe preview before importing real sessions:
           </p>
@@ -139,7 +151,7 @@ longhouse codex</code></pre>
           <h3>Current Support</h3>
           <ul>
             <li><strong>Claude Code</strong> — strongest continuation path today: timeline sync, hooks, and direct browser continuation</li>
-            <li><strong>Codex CLI</strong> — timeline sync, search/detail, and Longhouse session starts today; continuation is still Claude-first</li>
+            <li><strong>Codex CLI</strong> — timeline sync, search/detail, Longhouse session starts, and opt-in default-launcher wrappers today; continuation is still Claude-first</li>
             <li><strong>Gemini CLI</strong> — timeline sync and search/detail today; continuation is still Claude-first</li>
           </ul>
 

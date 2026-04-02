@@ -197,57 +197,6 @@ install_longhouse() {
     fi
 }
 
-# Install Claude Code shim
-install_claude_shim() {
-    step "Checking Claude Code integration"
-
-    # Check if claude command exists
-    if ! has_command claude; then
-        warn "Claude Code not found"
-        warn "  Install from: https://docs.anthropic.com/claude-code"
-        warn "  Skipping shim installation (you can still use Longhouse without it)"
-        return 0
-    fi
-
-    # Check if shim already installed
-    local claude_path
-    claude_path=$(which claude)
-
-    if [[ "$claude_path" == *"longhouse"* ]]; then
-        info "Claude shim already installed"
-        return 0
-    fi
-
-    # Look for existing shim installer
-    local shim_script="$HOME/.longhouse/install-claude-shim.sh"
-
-    if [[ -f "$shim_script" ]]; then
-        info "Running Claude shim installer..."
-        bash "$shim_script"
-        success "Claude shim installed"
-    else
-        # Create a simple shim that wraps claude
-        info "Creating Claude shim..."
-
-        local claude_hooks_dir="$HOME/.claude/hooks"
-        mkdir -p "$claude_hooks_dir"
-
-        # Create PostToolUse hook for session shipping
-        cat > "$claude_hooks_dir/post_tool_use.sh" << 'EOF'
-#!/bin/bash
-# Ship session events to Longhouse after each tool use
-# This is a fire-and-forget background call
-if command -v longhouse &>/dev/null; then
-    longhouse ship --quiet &>/dev/null &
-fi
-exit 0
-EOF
-        chmod +x "$claude_hooks_dir/post_tool_use.sh"
-
-        success "Claude hooks installed for session shipping"
-    fi
-}
-
 # Update shell profile for PATH
 update_shell_profile() {
     step "Updating shell PATH"
@@ -516,6 +465,11 @@ run_onboard() {
 
 # Print final instructions
 print_success() {
+    local has_launcher_cli=0
+    if has_command claude || has_command codex; then
+        has_launcher_cli=1
+    fi
+
     echo ""
     echo -e "${GREEN}${BOLD}"
     echo "============================================"
@@ -529,6 +483,11 @@ print_success() {
     echo "  longhouse connect --install Keep importing sessions in background"
     echo "  longhouse claude            Start a Longhouse Claude session"
     echo "  longhouse status            Show configuration"
+    if [[ "$has_launcher_cli" == "1" ]]; then
+        echo ""
+        echo "Optional:"
+        echo "  longhouse wrap --install    Keep typing bare claude/codex through Longhouse"
+    fi
     echo ""
     echo "For help: longhouse --help"
     echo "Docs: https://longhouse.ai/docs"
@@ -561,9 +520,6 @@ main() {
     install_uv
     install_python
     install_longhouse
-
-    # Optional: Claude integration
-    install_claude_shim
 
     # Update PATH in shell profile
     update_shell_profile

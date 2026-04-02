@@ -59,6 +59,14 @@ Want a safe preview before importing real sessions?
 longhouse serve --demo
 ```
 
+If you want bare `claude` / `codex` interactive launches to go through Longhouse by default, opt in explicitly:
+
+```bash
+longhouse wrap --install
+```
+
+Wrapper mode is passthrough-first and reversible. `auth`, `help`, non-interactive flags, and setup failures still fall back to the native CLI.
+
 ### Canonical proof journey
 
 1. Install and start Longhouse.
@@ -111,6 +119,21 @@ longhouse serve --demo
 uv tool install longhouse
 longhouse onboard
 longhouse serve
+```
+
+### Optional: default-launcher wrappers
+
+Keep the default install non-invasive, then opt in when you want bare `claude` / `codex` launches to route through Longhouse:
+
+```bash
+longhouse wrap --install
+longhouse wrap --status
+```
+
+Undo at any time:
+
+```bash
+longhouse wrap --uninstall
 ```
 
 ### 2. Hosted beta (later)

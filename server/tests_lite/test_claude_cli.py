@@ -181,7 +181,7 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
         "Native Claude channels unavailable (authMethod=third_party, apiProvider=bedrock); using tmux fallback."
         in result.output
     )
-    assert "Managed local Claude session launched on this device." in result.output
+    assert "Longhouse Claude session launched on this machine." in result.output
     assert "Session ID: session-123" in result.output
     assert "Provider session ID: provider-123" in result.output
     assert "Session URL: https://longhouse.test/timeline/session-123" in result.output
@@ -264,7 +264,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     )
 
     assert result.exit_code == 0, result.output
-    assert "Managed local Claude session launched on this device." in result.output
+    assert "Longhouse Claude session launched on this machine." in result.output
     assert (
         "Attach: zsh -lc 'exec claude --resume provider-123 "
         "--dangerously-load-development-channels server:longhouse-channel'" in result.output
