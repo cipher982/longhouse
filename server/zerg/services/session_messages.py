@@ -31,6 +31,7 @@ MESSAGE_STATUS_FAILED = "failed"
 
 MESSAGE_DELIVERABLE_STATES = {"idle", "thinking", "needs_user"}
 _PRESENCE_TTL = timedelta(minutes=10)
+MAX_MESSAGES_PER_SAFE_BOUNDARY = 10
 
 
 @dataclass
@@ -219,12 +220,20 @@ async def deliver_next_queued_session_message(
     if from_session is None:
         _mark_message_failed(message, error="Sender session not found")
         db.commit()
-        return SessionMessageDispatchOutcome(message=message, delivery_status=message.delivery_status, error=message.last_error)
+        return SessionMessageDispatchOutcome(
+            message=message,
+            delivery_status=message.delivery_status,
+            error=message.last_error,
+        )
 
     if owner_id is None:
         _mark_message_failed(message, error="No owner available for managed-local delivery")
         db.commit()
-        return SessionMessageDispatchOutcome(message=message, delivery_status=message.delivery_status, error=message.last_error)
+        return SessionMessageDispatchOutcome(
+            message=message,
+            delivery_status=message.delivery_status,
+            error=message.last_error,
+        )
 
     injected_text = _build_injected_message(from_session, message)
     if _use_fake_managed_local_delivery():
@@ -247,7 +256,11 @@ async def deliver_next_queued_session_message(
     if not send_result.ok:
         _mark_message_failed(message, error=send_result.error)
         db.commit()
-        return SessionMessageDispatchOutcome(message=message, delivery_status=message.delivery_status, error=message.last_error)
+        return SessionMessageDispatchOutcome(
+            message=message,
+            delivery_status=message.delivery_status,
+            error=message.last_error,
+        )
 
     message.delivery_status = MESSAGE_STATUS_DELIVERED
     message.delivery_attempts = int(getattr(message, "delivery_attempts", 0) or 0) + 1
@@ -257,6 +270,41 @@ async def deliver_next_queued_session_message(
     db.commit()
     db.refresh(message)
     return SessionMessageDispatchOutcome(message=message, delivery_status=message.delivery_status)
+
+
+async def deliver_queued_session_messages(
+    *,
+    db: Session,
+    owner_id: int | None,
+    target_session_id: UUID,
+    target_presence_state: str | None = None,
+    max_messages: int = MAX_MESSAGES_PER_SAFE_BOUNDARY,
+) -> list[SessionMessageDispatchOutcome]:
+    """Deliver queued messages while the target session stays in a safe state."""
+
+    outcomes: list[SessionMessageDispatchOutcome] = []
+    current_state = target_presence_state
+
+    for _ in range(max_messages):
+        if not is_session_message_deliverable_state(current_state or _current_presence_state(db, target_session_id)):
+            break
+
+        outcome = await deliver_next_queued_session_message(
+            db=db,
+            owner_id=owner_id,
+            target_session_id=target_session_id,
+            target_presence_state=current_state,
+        )
+        if outcome is None:
+            break
+
+        outcomes.append(outcome)
+        if outcome.delivery_status != MESSAGE_STATUS_DELIVERED:
+            break
+
+        current_state = _current_presence_state(db, target_session_id)
+
+    return outcomes
 
 
 async def create_session_message(
@@ -296,14 +344,12 @@ async def create_session_message(
 
     current_state = _current_presence_state(db, to_session_id)
     if is_session_message_deliverable_state(current_state):
-        outcome = await deliver_next_queued_session_message(
+        await deliver_queued_session_messages(
             db=db,
             owner_id=owner_id,
             target_session_id=to_session_id,
             target_presence_state=current_state,
         )
-        if outcome is not None and outcome.message.id == message.id:
-            return outcome
         db.refresh(message)
 
     return SessionMessageDispatchOutcome(message=message, delivery_status=message.delivery_status)

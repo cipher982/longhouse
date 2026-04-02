@@ -52,7 +52,7 @@ from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_SUPPRESSED
 from zerg.services.oikos_wakeup_ledger import append_wakeup
 from zerg.services.presence_cache import get_presence_cache
-from zerg.services.session_messages import deliver_next_queued_session_message
+from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import RuntimeEventIngest
@@ -430,7 +430,7 @@ async def upsert_presence(
         except ValueError:
             session_uuid = None
         if session_uuid is not None:
-            await deliver_next_queued_session_message(
+            await deliver_queued_session_messages(
                 db=db,
                 owner_id=resolve_session_message_owner_id(db, _token),
                 target_session_id=session_uuid,

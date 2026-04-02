@@ -296,6 +296,165 @@ def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tm
         api_app_ref.dependency_overrides = {}
 
 
+def test_presence_safe_transition_drains_multiple_queued_messages(monkeypatch, tmp_path):
+    _clear_presence_cache()
+    session_local = _make_db(tmp_path)
+    send_calls: list[str] = []
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(
+            db,
+            execution_home="managed_local",
+            managed_transport="tmux",
+            source_runner_id=7,
+            source_runner_name="cinder",
+            device_id="cinder",
+            device_name="cinder",
+        )
+        db.add_all(
+            [
+                SessionMessage(
+                    from_session_id=from_session.id,
+                    to_session_id=to_session.id,
+                    body="First queued message.",
+                    delivery_status="queued",
+                ),
+                SessionMessage(
+                    from_session_id=from_session.id,
+                    to_session_id=to_session.id,
+                    body="Second queued message.",
+                    delivery_status="queued",
+                ),
+                SessionMessage(
+                    from_session_id=from_session.id,
+                    to_session_id=to_session.id,
+                    body="Third queued message.",
+                    delivery_status="queued",
+                ),
+            ]
+        )
+        db.commit()
+
+    async def fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
+        send_calls.append(text)
+        return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr("zerg.services.session_messages.send_text_to_managed_local_session", fake_send_text)
+
+    client, api_app_ref = _make_client(session_local)
+    try:
+        response = client.post(
+            "/api/agents/presence",
+            json={
+                "session_id": str(to_session.id),
+                "state": "idle",
+                "cwd": "/Users/davidrose/git/zerg",
+                "provider": "claude",
+            },
+        )
+        assert response.status_code == 204, response.text
+        assert len(send_calls) == 3
+
+        with session_local() as verify_db:
+            messages = verify_db.query(SessionMessage).order_by(SessionMessage.id.asc()).all()
+            assert [message.delivery_status for message in messages] == ["delivered", "delivered", "delivered"]
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(monkeypatch, tmp_path):
+    _clear_presence_cache()
+    session_local = _make_db(tmp_path)
+    send_calls: list[str] = []
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(
+            db,
+            execution_home="managed_local",
+            managed_transport="tmux",
+            source_runner_id=7,
+            source_runner_name="cinder",
+            device_id="cinder",
+            device_name="cinder",
+        )
+        db.add_all(
+            [
+                SessionMessage(
+                    from_session_id=from_session.id,
+                    to_session_id=to_session.id,
+                    body="Deliver once, then stop.",
+                    delivery_status="queued",
+                ),
+                SessionMessage(
+                    from_session_id=from_session.id,
+                    to_session_id=to_session.id,
+                    body="Stay queued because the session is busy.",
+                    delivery_status="queued",
+                ),
+            ]
+        )
+        db.commit()
+
+    async def fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
+        send_calls.append(text)
+        updated_at = datetime.now(timezone.utc)
+        _upsert_presence(db, str(session.id), "running")
+        get_presence_cache().upsert(
+            str(session.id),
+            "running",
+            device_id=str(getattr(session, "device_id", "") or None),
+            cwd=str(getattr(session, "cwd", "") or None),
+            project=str(getattr(session, "project", "") or None),
+            provider=str(getattr(session, "provider", "") or "claude"),
+            updated_at=updated_at,
+        )
+        return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr("zerg.services.session_messages.send_text_to_managed_local_session", fake_send_text)
+
+    client, api_app_ref = _make_client(session_local)
+    try:
+        response = client.post(
+            "/api/agents/presence",
+            json={
+                "session_id": str(to_session.id),
+                "state": "idle",
+                "cwd": "/Users/davidrose/git/zerg",
+                "provider": "claude",
+            },
+        )
+        assert response.status_code == 204, response.text
+        assert len(send_calls) == 1
+
+        with session_local() as verify_db:
+            messages = verify_db.query(SessionMessage).order_by(SessionMessage.id.asc()).all()
+            assert [message.delivery_status for message in messages] == ["delivered", "queued"]
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_create_message_stored_only_for_unmanaged_target(monkeypatch, tmp_path):
     _clear_presence_cache()
     session_local = _make_db(tmp_path)

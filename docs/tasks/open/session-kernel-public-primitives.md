@@ -37,7 +37,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - [x] Declare the canonical machine surface in docs: `/api/agents/*`, auth model, session-context headers, and JSON contracts
 - [x] Decide and document the browser/timeline relationship to the machine canon (browser veneer vs direct reuse)
 - [ ] Expand `SessionMessage` delivery beyond the current managed-local fast path
-- [ ] Decide whether queued delivery should drain multiple messages at one safe boundary or intentionally stay one-at-a-time
+- [x] Decide whether queued delivery should drain multiple messages at one safe boundary or intentionally stay one-at-a-time
 - [ ] Add machine-contract tests and CLI smoke coverage for the canonical primitives
 - [ ] Make Oikos consume canonical primitives as an operator/deputy layer
 - [ ] Split oversized routers/services only where it materially improves contract ownership or unblocks feature work
@@ -50,7 +50,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - Do not build a universal interop framework here. A2A/AGNTCY-style adapters are later, optional layers.
 - Do not extract new repos or services yet. First make the primitives obviously canonical inside Longhouse.
 - Current delivery trigger is presence-driven safe-boundary delivery. That is the right default and should stay simple.
-- Known gap: queued delivery currently attempts one message per deliverable presence update.
+- Queued delivery now drains up to 10 messages per safe-boundary wakeup, but stops immediately if the target session leaves a deliverable state.
 - Current CLI progress: `peers`, `message`, `tail`, `check-messages`, `ack-message`, `sessions get`, and `sessions events` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
 - Canonical machine surface is now documented in `docs/specs/agents-machine-surface.md`, including the browser veneer split and the `POST /api/agents/insights` canonical write path.
 - Related active tasks:
