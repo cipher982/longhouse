@@ -33,6 +33,9 @@ from zerg.services.shipper.token import sanitize_machine_name
 from zerg.services.shipper.token import save_machine_name
 from zerg.services.shipper.token import save_token
 from zerg.services.shipper.token import save_zerg_url
+from zerg.services.shipper.wrappers import get_wrapper_status
+from zerg.services.shipper.wrappers import install_wrappers
+from zerg.services.shipper.wrappers import uninstall_wrappers
 
 __all__ = [
     "clear_token",
@@ -54,4 +57,7 @@ __all__ = [
     "save_zerg_url",
     "uninstall_service",
     "upsert_codex_mcp_toml",
+    "get_wrapper_status",
+    "install_wrappers",
+    "uninstall_wrappers",
 ]
