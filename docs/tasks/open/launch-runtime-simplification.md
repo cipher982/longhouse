@@ -37,7 +37,7 @@ Make the launch story match the real product:
 - [x] Align the landing-page spec to the same story, capability truth, and launch triage
 - [x] Align landing copy and section emphasis to the same story
 - [x] Publish the canonical proof-of-value demo journey in launch-facing docs and demo scripts
-- [ ] Make the hosted boundary explicit and honest until onboarding friction is reduced
+- [x] Make the hosted boundary explicit and honest until onboarding friction is reduced
 - [x] Decide and land the install/onboarding script changes needed for the story:
   import first, start a Longhouse session second, wrappers later
 - [ ] Keep wrapper mode as a follow-on opt-in activation slice, not a launch prerequisite

@@ -26,7 +26,7 @@ export function FooterCTA() {
               Self-Host Free
             </Button>
             <Button variant="secondary" size="lg" onClick={handleGetHosted}>
-              Hosted Later
+              Hosted Beta
             </Button>
           </div>
         </div>

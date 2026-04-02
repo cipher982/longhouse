@@ -8,7 +8,7 @@ interface FAQ {
 const faqs: FAQ[] = [
   {
     question: "Do I need a credit card to try it?",
-    answer: "No for the core product. Self-hosting is the free path. Hosted is the convenience path you choose later if you want us to run the box for you."
+    answer: "No for the core product. Self-hosting is the free path. Hosted beta is the convenience path you choose later if you want us to run the box for you."
   },
   {
     question: "Where is my data stored?",
