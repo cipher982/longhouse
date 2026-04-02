@@ -1,4 +1,4 @@
-"""Managed-local Claude launcher CLI."""
+"""Longhouse Claude session launcher CLI."""
 
 from __future__ import annotations
 
@@ -212,7 +212,7 @@ def _launch_managed_local_from_api(
             detail = str(payload.get("detail") or "").strip()
         except ValueError:
             detail = response.text.strip()
-        message = detail or response.text[:200] or "Managed local launch failed"
+        message = detail or response.text[:200] or "Longhouse session launch failed"
         typer.secho(message, fg=typer.colors.RED)
         raise typer.Exit(code=EXIT_SETUP_FAILED)
 
@@ -235,7 +235,7 @@ def _finalize_managed_local_launch(
     attach: bool,
 ) -> None:
     session_url = _build_session_url(base_url, result.session_id)
-    typer.secho(f"Managed local {provider_label} session launched on this device.", fg=typer.colors.GREEN)
+    typer.secho(f"Longhouse {provider_label} session launched on this machine.", fg=typer.colors.GREEN)
     typer.echo(f"Session ID: {result.session_id}")
     typer.echo(f"Provider session ID: {result.provider_session_id}")
     typer.echo(f"Session URL: {session_url}")
@@ -310,7 +310,7 @@ def _finalize_native_claude_launch(
     attach: bool,
 ) -> None:
     session_url = _build_session_url(base_url, result.session_id)
-    typer.secho("Managed local Claude session launched on this device.", fg=typer.colors.GREEN)
+    typer.secho("Longhouse Claude session launched on this machine.", fg=typer.colors.GREEN)
     typer.echo(f"Session ID: {result.session_id}")
     typer.echo(f"Provider session ID: {result.provider_session_id}")
     typer.echo(f"Session URL: {session_url}")
@@ -367,13 +367,13 @@ def claude(
     loop_mode: SessionLoopMode = typer.Option(
         SessionLoopMode.MANUAL,
         "--loop-mode",
-        help="Loop mode to store on the managed-local session.",
+        help="Loop mode to store on the Longhouse session.",
     ),
     name: str | None = typer.Option(None, "--name", help="Optional display name for the Claude session."),
     attach: bool = typer.Option(
         True,
         "--attach/--no-attach",
-        help="Auto-attach to the managed local session when running interactively.",
+        help="Auto-attach to the Longhouse session when running interactively.",
     ),
     open_browser: bool = typer.Option(
         False,
@@ -399,7 +399,7 @@ def claude(
         help="Longhouse config directory (default: ~/.claude).",
     ),
 ) -> None:
-    """Launch a managed-local Claude Code session on this device via the Longhouse API."""
+    """Launch a Longhouse Claude Code session on this machine via the Longhouse API."""
 
     resolved_config_dir = Path(config_dir) if config_dir else None
     resolved_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=resolved_config_dir)

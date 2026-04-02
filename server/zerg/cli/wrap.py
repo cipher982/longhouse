@@ -1,7 +1,7 @@
 """CLI wrapper management commands.
 
 Usage:
-    longhouse wrap --install               # wrap both claude and codex
+    longhouse wrap --install               # opt in to both default launchers
     longhouse wrap --install --provider claude
     longhouse wrap --uninstall
     longhouse wrap --status
@@ -20,8 +20,8 @@ from zerg.services.shipper.wrappers import uninstall_wrappers
 
 
 def wrap(
-    install: bool = typer.Option(False, "--install", help="Install CLI wrapper functions."),
-    uninstall: bool = typer.Option(False, "--uninstall", help="Remove CLI wrapper functions."),
+    install: bool = typer.Option(False, "--install", help="Install opt-in default-launcher wrappers."),
+    uninstall: bool = typer.Option(False, "--uninstall", help="Remove default-launcher wrappers."),
     status: bool = typer.Option(False, "--status", help="Show wrapper status."),
     provider: Optional[str] = typer.Option(
         None,
@@ -29,11 +29,11 @@ def wrap(
         help=f"Limit to a single provider ({', '.join(SUPPORTED_PROVIDERS)}).",
     ),
 ) -> None:
-    """Manage CLI wrapper functions for managed-local sessions.
+    """Manage opt-in default-launcher wrappers for Longhouse sessions.
 
-    Wrapper mode makes bare ``claude`` / ``codex`` invocations go through
-    Longhouse managed-local launch.  If Longhouse is unreachable, the
-    wrapper falls back to the native CLI automatically.
+    Wrapper mode makes bare ``claude`` / ``codex`` interactive launches go
+    through Longhouse. If Longhouse is unreachable, the wrapper falls back
+    to the native CLI automatically.
 
     Default install is non-invasive (sidecar mode only).
     Use ``--install`` to opt in to wrapper mode.
@@ -104,7 +104,7 @@ def _do_status() -> None:
         real_bin = pinfo.get("real_binary", "not found")
         if installed:
             any_installed = True
-            typer.secho(f"  {provider}: wrapped (fallback to native on failure)", fg=typer.colors.GREEN)
+            typer.secho(f"  {provider}: wrapped (falls back to native on setup failure)", fg=typer.colors.GREEN)
             typer.echo(f"    real: {real_bin}")
         else:
             typer.echo(f"  {provider}: not wrapped  (real: {real_bin})")
@@ -118,4 +118,4 @@ def _do_status() -> None:
 
     if not any_installed:
         typer.echo("")
-        typer.echo("Enable wrapper mode:  longhouse wrap --install")
+        typer.echo("Enable opt-in wrapper mode:  longhouse wrap --install")

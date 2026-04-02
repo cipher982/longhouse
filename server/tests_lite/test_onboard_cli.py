@@ -70,6 +70,7 @@ def test_onboard_quick_imports_existing_sessions_first(monkeypatch, tmp_path):
     assert "Skipping demo data (real CLI import path available)" in result.output
     assert "Open Longhouse and look for imported sessions" in result.output
     assert "longhouse claude" in result.output
+    assert "longhouse wrap --install" in result.output
     assert ["longhouse", "connect", "--install", "--url", "http://127.0.0.1:8080"] in subprocess_calls
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
 

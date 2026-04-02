@@ -40,7 +40,7 @@ Make the launch story match the real product:
 - [x] Make the hosted boundary explicit and honest until onboarding friction is reduced
 - [x] Decide and land the install/onboarding script changes needed for the story:
   import first, start a Longhouse session second, wrappers later
-- [ ] Keep wrapper mode as a follow-on opt-in activation slice, not a launch prerequisite
+- [x] Spin wrapper mode out as a follow-on opt-in activation slice, not a launch prerequisite
 
 ## Work Order
 
@@ -140,4 +140,5 @@ Do separately and do not let it block launch.
 - The launch story should optimize for first proof of value, not the hosted signup funnel.
 - Story alignment, launch proof, onboarding, and wrapper mode are now the main forward path.
 - The first onboarding pass now matches the launch story: import existing sessions first, then start a Longhouse session when the user wants control.
+- Wrapper-mode activation now has its own tracked task in `docs/tasks/open/opt-in-cli-wrapper-mode.md`.
 - Architectural cleanup remains real, but it is not the first thing to do next.

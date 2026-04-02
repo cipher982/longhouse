@@ -329,6 +329,9 @@ Hosted should be explained as "we run the box," not as an entirely different ont
 - full continuation parity beyond Claude
 - TUI attach / remote attach ergonomics
 - richer multi-agent coordination flows
+
+### Activation / polish, not hero copy
+
 - opt-in default wrappers for `claude` / `codex`
 
 ## Product Boundaries

@@ -694,6 +694,8 @@ def onboard(
     typer.echo("Commands:")
     typer.echo("  longhouse ship             Import existing sessions once")
     typer.echo("  longhouse connect --install  Keep importing sessions in background")
+    if has_claude or has_codex:
+        typer.echo("  longhouse wrap --install   Opt in to bare claude/codex default launchers")
     typer.echo("  longhouse wall --json      Read the machine surface")
     typer.echo("  longhouse status           Show configuration")
     typer.echo("  longhouse serve --stop  Stop server")

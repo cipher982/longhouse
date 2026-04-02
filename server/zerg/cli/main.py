@@ -3,8 +3,8 @@
 Usage:
     longhouse serve         # Start the server
     longhouse status        # Show configuration
-    longhouse claude        # Launch managed-local Claude on this device
-    longhouse codex         # Launch managed-local Codex on this device
+    longhouse claude        # Launch a Longhouse Claude session on this machine
+    longhouse codex         # Launch a Longhouse Codex session on this machine
     longhouse wall          # Read the raw coordination wall
     longhouse peers         # Find live peer sessions for the current repo
     longhouse message       # Send a message to another session
@@ -20,6 +20,7 @@ Usage:
     longhouse recall        # Search past sessions
     longhouse migrate       # Plan/apply heavy legacy DB migrations
     longhouse onboard       # Run onboarding wizard
+    longhouse wrap          # Opt-in default-launcher wrappers for claude/codex
     longhouse doctor        # Self-diagnosis
     longhouse --help        # Show help
 """

@@ -177,7 +177,11 @@ Say this bluntly in docs and on the page:
 
 - continuation parity beyond Claude
 - richer multi-agent orchestration
-- TUI attach / default wrapper ergonomics
+- TUI attach ergonomics
+
+### Activation / polish
+
+- opt-in default-launcher wrappers for `claude` / `codex`
 
 ## Success Signals
 
