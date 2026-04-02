@@ -1,11 +1,6 @@
-import { Link } from "react-router-dom";
 import {
   CodeIcon,
   SparklesIcon,
-  LockIcon,
-  ShieldIcon,
-  TrashIcon,
-  BanIcon,
 } from "../icons";
 import { getLaunchProviderSupportList } from "../../lib/providers";
 
@@ -24,36 +19,21 @@ export function IntegrationsSection() {
     gemini: <SparklesIcon width={40} height={40} />,
   };
 
-  const providers: Provider[] = [
-    ...getLaunchProviderSupportList().map((provider) => ({
-      name: provider.marketingName,
-      icon: providerIcons[provider.id],
-      status: "live" as const,
-      description: provider.cardDescription,
-      statusLabel: provider.statusLabel,
-    })),
-    {
-      name: "OpenCode",
-      icon: <CodeIcon width={40} height={40} />,
-      status: "coming",
-      description: "Open-source AI terminal agent",
-      statusLabel: "Coming soon",
-    },
-    {
-      name: "Cursor",
-      icon: <CodeIcon width={40} height={40} />,
-      status: "coming",
-      description: "IDE-integrated AI sessions",
-      statusLabel: "Coming soon",
-    },
-  ];
+  const providers: Provider[] = getLaunchProviderSupportList().map((provider) => ({
+    name: provider.marketingName,
+    icon: providerIcons[provider.id],
+    status: "live" as const,
+    description: provider.cardDescription,
+    statusLabel: provider.statusLabel,
+  }));
 
   return (
-    <section id="integrations" className="landing-integrations">
+    <section id="providers" className="landing-integrations">
       <div className="landing-section-inner">
-        <h2 className="landing-section-title">Session Sources</h2>
+        <p className="landing-section-label">Provider Truth</p>
+        <h2 className="landing-section-title">Be honest about support.</h2>
         <p className="landing-section-subtitle">
-          One timeline for all your AI coding agents.
+          Claude is strongest today. Archive support is broader than continuation parity. That honesty builds trust.
         </p>
 
         <div className="landing-providers-grid">
@@ -76,35 +56,12 @@ export function IntegrationsSection() {
         </div>
 
         <p className="landing-providers-tagline">
-          Find where you solved auth. Resume that refactor. Start cloud work from the same timeline.
+          Longhouse should tell the truth plainly: search and coordination are broad today; direct continuation is still Claude-first.
         </p>
 
         <p className="landing-providers-tagline landing-providers-tagline--subtle">
           Claude currently has the richest hooks and telemetry. Codex and Gemini already sync into the timeline and can start cloud sessions, but direct web continuation is still Claude-first.
         </p>
-
-        {/* Trust badges */}
-        <Link to="/security" className="landing-trust-badges-link">
-          <div className="landing-trust-badges">
-            <div className="landing-trust-badge">
-              <LockIcon width={18} height={18} className="landing-trust-icon-svg" />
-              <span>Credentials encrypted</span>
-            </div>
-            <div className="landing-trust-badge">
-              <ShieldIcon width={18} height={18} className="landing-trust-icon-svg" />
-              <span>HTTPS everywhere</span>
-            </div>
-            <div className="landing-trust-badge">
-              <TrashIcon width={18} height={18} className="landing-trust-icon-svg" />
-              <span>Full data deletion</span>
-            </div>
-            <div className="landing-trust-badge">
-              <BanIcon width={18} height={18} className="landing-trust-icon-svg" />
-              <span>No training on your data</span>
-            </div>
-          </div>
-          <p className="landing-trust-link-text">Learn more about our security practices →</p>
-        </Link>
       </div>
     </section>
   );

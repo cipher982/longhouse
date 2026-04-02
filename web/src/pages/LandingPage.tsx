@@ -10,14 +10,14 @@ import "../styles/landing.css";
 // Section components
 import { LandingHeader } from "../components/landing/LandingHeader";
 import { HeroSection } from "../components/landing/HeroSection";
+import { KernelThesisSection } from "../components/landing/KernelThesisSection";
 import { HowItWorksSection } from "../components/landing/HowItWorksSection";
+import { MachineSurfaceSection } from "../components/landing/MachineSurfaceSection";
 import { DemoSection } from "../components/landing/DemoSection";
 import { IntegrationsSection } from "../components/landing/IntegrationsSection";
 import { PricingSection } from "../components/landing/PricingSection";
 import { TrustSection } from "../components/landing/TrustSection";
 import { SocialProof } from "../components/landing/SocialProof";
-import { ComparisonTable } from "../components/landing/ComparisonTable";
-
 import { FooterCTA } from "../components/landing/FooterCTA";
 import { LandingPerfHud } from "../components/landing/LandingPerfHud";
 
@@ -103,11 +103,11 @@ export default function LandingPage() {
   }
 
   const scrollToHowItWorks = () => {
-    document.getElementById("how-it-works")?.scrollIntoView({ behavior: "smooth" });
+    document.getElementById("journey")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const scrollToDeployment = () => {
-    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+  const scrollToInstall = () => {
+    document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleSignIn = () => {
@@ -134,7 +134,7 @@ export default function LandingPage() {
       data-screenshot-theme={screenshotTheme}
     >
       {/* Sticky Header */}
-      <LandingHeader onSignIn={handleSignIn} onGetStarted={scrollToDeployment} />
+      <LandingHeader onSignIn={handleSignIn} onGetStarted={scrollToInstall} />
 
       {/* Particle background */}
       {particlesEnabled && <div className="particle-bg" />}
@@ -149,10 +149,11 @@ export default function LandingPage() {
           screenshotTheme={screenshotTheme}
         />
         <SocialProof />
+        <KernelThesisSection />
         <HowItWorksSection />
+        <MachineSurfaceSection />
         <DemoSection screenshotTheme={screenshotTheme} />
         <IntegrationsSection />
-        <ComparisonTable />
         <PricingSection />
         <TrustSection />
         <FooterCTA />

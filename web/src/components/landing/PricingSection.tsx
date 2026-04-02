@@ -1,10 +1,3 @@
-/**
- * PricingSection
- *
- * Simple 2-tier pricing: Self-hosted (free) + Hosted (coming soon).
- * Covers both deployment model and pricing in one section.
- */
-
 import { CheckCircleIcon } from "../icons";
 import { Button } from "../ui";
 
@@ -21,8 +14,8 @@ interface PricingTier {
 }
 
 export function PricingSection() {
-  const handleGetStarted = () => {
-    document.querySelector(".install-section")?.scrollIntoView({ behavior: "smooth" });
+  const handleStartFree = () => {
+    document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
 
   const handleGetHosted = () => {
@@ -34,40 +27,43 @@ export function PricingSection() {
       name: "Self-Hosted",
       price: "Free",
       period: "forever",
-      description: "Run it on your own machine",
+      description: "The proof-of-value path",
       features: [
-        "Full timeline and search",
-        "SQLite — no external services",
-        "Claude Code + Codex + Gemini sync",
-        "Works offline, data stays local",
+        "Local install + demo path",
+        "SQLite core, no external services",
+        "Claude Code + Codex + Gemini archive sync",
+        "Search, detail, and machine surface",
         "Open source (Apache 2.0)",
       ],
-      ctaText: "Self-host Free",
-      ctaAction: handleGetStarted,
+      ctaText: "Start Free Locally",
+      ctaAction: handleStartFree,
+      highlighted: true,
     },
     {
-      name: "Hosted",
+      name: "Hosted Beta",
       price: "$5",
       period: "/month",
-      description: "Always-on agents, from anywhere",
+      description: "The always-on upgrade",
       features: [
         "Everything in self-hosted",
-        "Agents keep running when you close your laptop",
-        "Resume sessions from any device",
-        "Inter-agent communication across sessions",
+        "Always-on browser access from anywhere",
+        "Managed cloud sessions",
         "Your own subdomain + automatic updates",
+        "Less operator work",
       ],
-      ctaText: "Get Started",
+      ctaText: "Join Hosted Beta",
       ctaAction: handleGetHosted,
-      highlighted: true,
     },
   ];
 
   return (
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
-        <h2 className="landing-section-title">Simple Pricing</h2>
-        <p className="landing-section-subtitle">Always-on agents for $5/mo. Or self-host free.</p>
+        <p className="landing-section-label">Free First</p>
+        <h2 className="landing-section-title">Charge for always-on, not for understanding the product.</h2>
+        <p className="landing-section-subtitle">
+          The first win should happen locally. Hosted is the paid convenience layer when you already believe.
+        </p>
 
         <div className="landing-pricing-grid">
           {tiers.map((tier, index) => (
