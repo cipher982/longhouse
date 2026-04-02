@@ -24,17 +24,23 @@ class _FakeResponse:
         text: str = "",
         headers: dict[str, str] | None = None,
         stream_lines: list[str] | None = None,
+        require_read_before_json: bool = False,
     ):
         self.status_code = status_code
         self._json_data = json_data or {}
         self.text = text
         self.headers = headers or {}
         self._stream_lines = stream_lines or []
+        self._require_read_before_json = require_read_before_json
+        self._read_called = False
 
     def json(self) -> dict:
+        if self._require_read_before_json and not self._read_called:
+            raise RuntimeError("response.json() requires read() first")
         return self._json_data
 
     def read(self) -> bytes:
+        self._read_called = True
         if self.text:
             return self.text.encode()
         if self._json_data:
@@ -777,6 +783,7 @@ def test_sessions_continue_command_prints_managed_local_acceptance(monkeypatch):
                 "dispatch_ms": 12.4,
             },
             headers={"content-type": "application/json"},
+            require_read_before_json=True,
         )
     )
 
@@ -813,13 +820,13 @@ def test_sessions_continue_command_streams_cloud_output(monkeypatch):
             status_code=200,
             headers={"content-type": "text/event-stream"},
             stream_lines=[
-                'event: assistant_delta',
+                "event: assistant_delta",
                 'data: {"text":"hello"}',
                 "",
-                'event: assistant_delta',
+                "event: assistant_delta",
                 'data: {"text":" world"}',
                 "",
-                'event: done',
+                "event: done",
                 'data: {"exit_code":0,"persisted_events":2}',
                 "",
             ],

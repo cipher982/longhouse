@@ -402,6 +402,7 @@ def continue_session(
 
                 content_type = str(response.headers.get("content-type") or "")
                 if content_type.startswith("application/json"):
+                    response.read()
                     payload = response.json()
                     if payload.get("accepted"):
                         typer.secho(

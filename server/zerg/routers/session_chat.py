@@ -39,6 +39,7 @@ from pydantic import Field
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
+from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
@@ -449,10 +450,24 @@ def _parse_current_session_header(request: Request) -> UUID | None:
 def _authorize_agents_session_continue(
     *,
     request: Request,
-    device_token: DeviceToken,
+    device_token: DeviceToken | None,
     source_session,
+    auth_disabled: bool,
 ) -> None:
     header_session_id = _parse_current_session_header(request)
+    if device_token is None:
+        if auth_disabled:
+            if header_session_id is not None and header_session_id != source_session.id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Current session header does not match the target session",
+                )
+            return
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Machine continuation requires a device token",
+        )
+
     token_session_id: UUID | None = None
     token_session_raw = str(getattr(device_token, "session_id", "") or "").strip()
     if token_session_raw:
@@ -1962,20 +1977,18 @@ async def continue_session(
     _single: None = Depends(require_single_tenant),
 ):
     """Continue a session through the canonical machine-facing agents surface."""
-    if not isinstance(device_token, DeviceToken):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Machine continuation requires a device token",
-        )
+    settings = get_settings()
+    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
 
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
     _authorize_agents_session_continue(
         request=request,
-        device_token=device_token,
+        device_token=resolved_device_token,
         source_session=source_session,
+        auth_disabled=settings.auth_disabled,
     )
-    owner_id = _resolve_agents_owner_id(db, device_token)
+    owner_id = _resolve_agents_owner_id(db, resolved_device_token)
 
     try:
         return await _continue_session_response(
