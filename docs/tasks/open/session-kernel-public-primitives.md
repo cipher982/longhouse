@@ -38,7 +38,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - [x] Decide and document the browser/timeline relationship to the machine canon (browser veneer vs direct reuse)
 - [ ] Expand `SessionMessage` delivery beyond the current managed-local fast path
 - [x] Decide whether queued delivery should drain multiple messages at one safe boundary or intentionally stay one-at-a-time
-- [ ] Add machine-contract tests and CLI smoke coverage for the canonical primitives
+- [x] Add machine-contract tests and CLI smoke coverage for the canonical primitives
 - [ ] Make Oikos consume canonical primitives as an operator/deputy layer
 - [ ] Split oversized routers/services only where it materially improves contract ownership or unblocks feature work
 
@@ -52,6 +52,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - Current delivery trigger is presence-driven safe-boundary delivery. That is the right default and should stay simple.
 - Queued delivery now drains up to 10 messages per safe-boundary wakeup, but stops immediately if the target session leaves a deliverable state.
 - Current CLI progress: `peers`, `message`, `tail`, `check-messages`, `ack-message`, `sessions get`, and `sessions events` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
+- Machine-surface test coverage now includes the canonical `POST /api/agents/insights` write path plus JSON smoke coverage for the core coordination/session CLI commands.
 - Canonical machine surface is now documented in `docs/specs/agents-machine-surface.md`, including the browser veneer split and the `POST /api/agents/insights` canonical write path.
 - Related active tasks:
   - `docs/specs/launch-runtime-simplification.md`

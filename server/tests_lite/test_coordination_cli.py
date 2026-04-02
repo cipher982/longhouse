@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 from cryptography.fernet import Fernet
@@ -365,6 +366,40 @@ def test_check_messages_command_prints_inbox(monkeypatch):
     ]
 
 
+def test_check_messages_command_json_output(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "messages": [
+                    {
+                        "id": 9,
+                        "from_session_id": "11111111-1111-1111-1111-111111111111",
+                        "to_session_id": "22222222-2222-2222-2222-222222222222",
+                        "text": "Please confirm the migration status.",
+                        "delivery_status": "stored_only",
+                        "created_at": "2026-04-02T12:45:00+00:00",
+                    }
+                ],
+                "total": 1,
+            },
+        )
+    )
+
+    monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
+    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "22222222-2222-2222-2222-222222222222")
+
+    result = runner.invoke(app, ["check-messages", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["total"] == 1
+    assert payload["messages"][0]["id"] == 9
+
+
 def test_ack_message_command_posts_ack(monkeypatch):
     runner = CliRunner()
     fake_client = _FakeClient(
@@ -408,6 +443,40 @@ def test_ack_message_command_posts_ack(monkeypatch):
     ]
 
 
+def test_ack_message_command_json_output(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        post_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "id": 9,
+                "delivery_status": "stored_only",
+                "acknowledged_at": "2026-04-02T12:46:00+00:00",
+            },
+        )
+    )
+
+    monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(
+        app,
+        [
+            "ack-message",
+            "9",
+            "--session",
+            "22222222-2222-2222-2222-222222222222",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["id"] == 9
+    assert payload["acknowledged_at"] == "2026-04-02T12:46:00+00:00"
+
+
 def test_sessions_get_command_prints_session_summary(monkeypatch):
     runner = CliRunner()
     fake_client = _FakeClient(
@@ -445,6 +514,32 @@ def test_sessions_get_command_prints_session_summary(monkeypatch):
             "params": None,
         }
     ]
+
+
+def test_sessions_get_command_json_output(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "id": "22222222-2222-2222-2222-222222222222",
+                "provider": "codex",
+                "project": "zerg",
+                "status": "working",
+            },
+        )
+    )
+
+    monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(app, ["sessions", "get", "22222222-2222-2222-2222-222222222222", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["id"] == "22222222-2222-2222-2222-222222222222"
+    assert payload["provider"] == "codex"
 
 
 def test_sessions_events_command_prints_filtered_events(monkeypatch):
@@ -504,3 +599,38 @@ def test_sessions_events_command_prints_filtered_events(monkeypatch):
             },
         }
     ]
+
+
+def test_sessions_events_command_json_output(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "events": [
+                    {
+                        "id": 1,
+                        "role": "assistant",
+                        "content_text": "I added the session events command.",
+                        "tool_name": None,
+                        "tool_output_text": None,
+                        "timestamp": "2026-04-02T12:51:00+00:00",
+                    }
+                ],
+                "total": 1,
+                "branch_mode": "head",
+                "abandoned_events": 0,
+            },
+        )
+    )
+
+    monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(app, ["sessions", "events", "22222222-2222-2222-2222-222222222222", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["total"] == 1
+    assert payload["events"][0]["id"] == 1
