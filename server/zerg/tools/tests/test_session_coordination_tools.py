@@ -161,6 +161,7 @@ def test_peers_returns_live_repo_matches(tmp_path, monkeypatch):
     assert data["total"] == 1
     assert data["peers"][0]["session_id"] == str(peer.id)
     assert data["peers"][0]["presence_state"] == "thinking"
+    assert data["peers"][0]["pending_inbound_messages"] == 0
 
 
 def test_get_session_events_applies_filters(tmp_path, monkeypatch):

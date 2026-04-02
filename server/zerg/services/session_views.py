@@ -291,6 +291,7 @@ class WallSessionResponse(UTCBaseModel):
     last_tool_call_at: Optional[datetime] = None
     has_live_presence: bool = False
     presence_state: Optional[str] = None
+    pending_inbound_messages: int = 0
     user_messages: int = 0
     assistant_messages: int = 0
     tool_calls: int = 0
