@@ -105,6 +105,108 @@ def _normalize_origin(origin: Optional[str]) -> Optional[str]:
 # ---------------------------------------------------------------------------
 
 
+def _create_or_update_insight(
+    *,
+    body: InsightCreateRequest,
+    db: Session,
+) -> InsightResponse:
+    """Create or deduplicate an insight using the shared machine write path."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=INSIGHT_DEDUP_WINDOW_DAYS)
+    normalized_origin = _normalize_origin(body.origin) or INSIGHT_ORIGIN_MANUAL
+
+    # Dedup: look for existing insight with same title + project
+    query = db.query(Insight).filter(
+        user_visible_insight_clause(Insight),
+        Insight.title == body.title,
+        Insight.created_at >= cutoff,
+    )
+    if body.project is not None:
+        query = query.filter(Insight.project == body.project)
+    else:
+        query = query.filter(Insight.project.is_(None))
+
+    existing = query.first()
+
+    if existing:
+        # Update existing insight
+        if body.confidence is not None:
+            existing.confidence = body.confidence
+
+        # Append observation
+        observations = existing.observations or []
+        observation_entry = f"{datetime.now(timezone.utc).isoformat()}: {body.description or body.title}"
+        observations.append(observation_entry)
+        existing.observations = observations
+
+        # Force SQLAlchemy to detect the JSON mutation
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(existing, "observations")
+
+        db.commit()
+        db.refresh(existing)
+
+        return _insight_to_response(existing)
+
+    # Cross-project dedup: check for same title in ANY project within 7 days
+    cross_match = (
+        db.query(Insight)
+        .filter(
+            user_visible_insight_clause(Insight),
+            Insight.title == body.title,
+            Insight.created_at >= cutoff,
+        )
+        .first()
+    )
+
+    if cross_match:
+        # Merge into the cross-project match
+        if body.confidence is not None:
+            cross_match.confidence = body.confidence
+
+        observations = cross_match.observations or []
+        prefix = f"[{body.project}] " if body.project else ""
+        observation_entry = f"{datetime.now(timezone.utc).isoformat()}: {prefix}{body.description or body.title}"
+        observations.append(observation_entry)
+        cross_match.observations = observations
+
+        # Add source project as tag if not already present
+        existing_tags = cross_match.tags or []
+        if body.project and body.project not in existing_tags:
+            cross_match.tags = existing_tags + [body.project]
+            from sqlalchemy.orm.attributes import flag_modified as _flag_modified
+
+            _flag_modified(cross_match, "tags")
+
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(cross_match, "observations")
+
+        db.commit()
+        db.refresh(cross_match)
+
+        return _insight_to_response(cross_match)
+
+    # Create new insight
+    insight = Insight(
+        insight_type=body.insight_type,
+        title=body.title,
+        description=body.description,
+        project=body.project,
+        origin=normalized_origin,
+        severity=body.severity,
+        confidence=body.confidence,
+        tags=body.tags,
+        observations=[],
+        session_id=body.session_id,
+    )
+    db.add(insight)
+    db.commit()
+    db.refresh(insight)
+
+    return _insight_to_response(insight)
+
+
 @router.post("", response_model=InsightResponse)
 async def create_insight(
     body: InsightCreateRequest,
@@ -116,108 +218,38 @@ async def create_insight(
 
     If an insight with the same title AND project exists within the last 7 days,
     updates its confidence and appends to observations instead of creating a new one.
+
+    This legacy machine write path stays for compatibility. The canonical machine
+    namespace is ``POST /api/agents/insights``.
     """
     try:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=INSIGHT_DEDUP_WINDOW_DAYS)
-        normalized_origin = _normalize_origin(body.origin) or INSIGHT_ORIGIN_MANUAL
-
-        # Dedup: look for existing insight with same title + project
-        query = db.query(Insight).filter(
-            user_visible_insight_clause(Insight),
-            Insight.title == body.title,
-            Insight.created_at >= cutoff,
-        )
-        if body.project is not None:
-            query = query.filter(Insight.project == body.project)
-        else:
-            query = query.filter(Insight.project.is_(None))
-
-        existing = query.first()
-
-        if existing:
-            # Update existing insight
-            if body.confidence is not None:
-                existing.confidence = body.confidence
-
-            # Append observation
-            observations = existing.observations or []
-            observation_entry = f"{datetime.now(timezone.utc).isoformat()}: {body.description or body.title}"
-            observations.append(observation_entry)
-            existing.observations = observations
-
-            # Force SQLAlchemy to detect the JSON mutation
-            from sqlalchemy.orm.attributes import flag_modified
-
-            flag_modified(existing, "observations")
-
-            db.commit()
-            db.refresh(existing)
-
-            return _insight_to_response(existing)
-
-        # Cross-project dedup: check for same title in ANY project within 7 days
-        cross_match = (
-            db.query(Insight)
-            .filter(
-                user_visible_insight_clause(Insight),
-                Insight.title == body.title,
-                Insight.created_at >= cutoff,
-            )
-            .first()
-        )
-
-        if cross_match:
-            # Merge into the cross-project match
-            if body.confidence is not None:
-                cross_match.confidence = body.confidence
-
-            observations = cross_match.observations or []
-            prefix = f"[{body.project}] " if body.project else ""
-            observation_entry = f"{datetime.now(timezone.utc).isoformat()}: {prefix}{body.description or body.title}"
-            observations.append(observation_entry)
-            cross_match.observations = observations
-
-            # Add source project as tag if not already present
-            existing_tags = cross_match.tags or []
-            if body.project and body.project not in existing_tags:
-                cross_match.tags = existing_tags + [body.project]
-                from sqlalchemy.orm.attributes import flag_modified as _flag_modified
-
-                _flag_modified(cross_match, "tags")
-
-            from sqlalchemy.orm.attributes import flag_modified
-
-            flag_modified(cross_match, "observations")
-
-            db.commit()
-            db.refresh(cross_match)
-
-            return _insight_to_response(cross_match)
-
-        # Create new insight
-        insight = Insight(
-            insight_type=body.insight_type,
-            title=body.title,
-            description=body.description,
-            project=body.project,
-            origin=normalized_origin,
-            severity=body.severity,
-            confidence=body.confidence,
-            tags=body.tags,
-            observations=[],
-            session_id=body.session_id,
-        )
-        db.add(insight)
-        db.commit()
-        db.refresh(insight)
-
-        return _insight_to_response(insight)
-
+        return _create_or_update_insight(body=body, db=db)
     except HTTPException:
         raise
     except Exception:
         db.rollback()
         logger.exception("Failed to create insight")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create insight",
+        )
+
+
+@machine_router.post("", response_model=InsightResponse)
+async def create_machine_insight(
+    body: InsightCreateRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> InsightResponse:
+    """Create or deduplicate an insight on the canonical machine namespace."""
+    try:
+        return _create_or_update_insight(body=body, db=db)
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to create machine insight")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create insight",
