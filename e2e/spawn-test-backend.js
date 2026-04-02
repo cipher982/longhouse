@@ -123,6 +123,7 @@ const backend = spawn('uv', [
         DATABASE_URL: databaseUrl,
         LLM_TOKEN_STREAM: process.env.LLM_TOKEN_STREAM || 'true',  // Enable token streaming for E2E tests
         E2E_FAKE_SESSION_CHAT: process.env.E2E_FAKE_SESSION_CHAT || '1',  // Deterministic fake Claude session chat for browser E2E
+        E2E_FAKE_SESSION_MESSAGES: process.env.E2E_FAKE_SESSION_MESSAGES || '1',  // Deterministic managed-local message delivery for E2E
         // Force deterministic model for E2E chat flows (UI uses default model id)
         E2E_DEFAULT_MODEL: process.env.E2E_DEFAULT_MODEL || 'gpt-scripted',
         // LONGHOUSE_API_URL inherited from environment (for session continuity tests)

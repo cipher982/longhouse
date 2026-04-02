@@ -1,8 +1,11 @@
 import logging
 import os
+from datetime import datetime
+from datetime import timezone
 from enum import Enum
 from typing import Literal
 from typing import Optional
+from uuid import UUID
 
 # FastAPI helpers
 from fastapi import APIRouter
@@ -25,6 +28,7 @@ from zerg.database import get_session_factory
 from zerg.dependencies.auth import get_current_user
 from zerg.dependencies.auth import require_admin
 from zerg.dependencies.auth import require_super_admin
+from zerg.models.agents import AgentSession
 from zerg.schemas.usage import AdminUserDetailResponse
 from zerg.schemas.usage import AdminUsersResponse
 
@@ -509,6 +513,17 @@ class ConfigureTestModelRequest(BaseModel):
     model: str = "gpt-scripted"
 
 
+class ConfigureTestSessionRuntimeRequest(BaseModel):
+    """Test-only session runtime override for Playwright coverage."""
+
+    execution_home: Literal["legacy", "managed_local", "managed_hosted", "cloud_takeover"] = "managed_local"
+    managed_transport: Optional[Literal["tmux", "claude_channel_bridge", "codex_app_server"]] = None
+    source_runner_id: Optional[int] = None
+    source_runner_name: Optional[str] = None
+    managed_session_name: Optional[str] = None
+    clear_ended_at: bool = True
+
+
 @router.get("/debug/db-schema")
 async def debug_db_schema(
     db: Session = Depends(get_db),
@@ -611,6 +626,57 @@ async def configure_test_model(
     except Exception as e:
         logger.error(f"Error configuring test model: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to configure test model: {str(e)}") from e
+
+
+@router.post("/test/sessions/{session_id}/runtime")
+async def configure_test_session_runtime(
+    session_id: str,
+    request: ConfigureTestSessionRuntimeRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_admin),
+):
+    """Patch session runtime metadata for TESTING-only E2E scenarios."""
+    settings = get_settings()
+    if not settings.testing:
+        raise HTTPException(status_code=403, detail="This endpoint is only available when TESTING=1.")
+
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="session_id must be a valid UUID") from exc
+
+    session = db.query(AgentSession).filter(AgentSession.id == session_uuid).first()
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    session.execution_home = request.execution_home
+    if request.execution_home == "managed_local":
+        session.managed_transport = request.managed_transport or session.managed_transport or "codex_app_server"
+        session.source_runner_id = request.source_runner_id if request.source_runner_id is not None else 1
+        session.source_runner_name = request.source_runner_name or session.source_runner_name or "E2E Runner"
+        session.managed_session_name = request.managed_session_name or session.managed_session_name or f"e2e-{session_id[:8]}"
+        if request.clear_ended_at:
+            session.ended_at = None
+    else:
+        session.managed_transport = request.managed_transport
+        session.source_runner_id = request.source_runner_id
+        session.source_runner_name = request.source_runner_name
+        session.managed_session_name = request.managed_session_name
+    session.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(session)
+
+    logger.info("Configured test runtime for session %s by admin %s", session_id, getattr(current_user, "id", None))
+
+    return {
+        "session_id": str(session.id),
+        "execution_home": session.execution_home,
+        "managed_transport": session.managed_transport,
+        "source_runner_id": session.source_runner_id,
+        "source_runner_name": session.source_runner_name,
+        "managed_session_name": session.managed_session_name,
+        "ended_at": session.ended_at.isoformat() if session.ended_at else None,
+    }
 
 
 # ---------------------------------------------------------------------------

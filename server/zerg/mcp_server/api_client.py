@@ -27,6 +27,7 @@ class LonghouseAPIClient:
         self,
         path: str,
         params: dict | None = None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Send a GET request to the Longhouse API.
 
@@ -37,10 +38,13 @@ class LonghouseAPIClient:
         Returns:
             The httpx Response object.
         """
+        request_headers = dict(self._headers)
+        if headers:
+            request_headers.update(headers)
         async with httpx.AsyncClient(timeout=15) as client:
             return await client.get(
                 f"{self.base_url}{path}",
-                headers=self._headers,
+                headers=request_headers,
                 params=params,
             )
 
@@ -48,6 +52,7 @@ class LonghouseAPIClient:
         self,
         path: str,
         json: dict | None = None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Send a POST request to the Longhouse API.
 
@@ -58,9 +63,12 @@ class LonghouseAPIClient:
         Returns:
             The httpx Response object.
         """
+        request_headers = dict(self._headers)
+        if headers:
+            request_headers.update(headers)
         async with httpx.AsyncClient(timeout=15) as client:
             return await client.post(
                 f"{self.base_url}{path}",
-                headers=self._headers,
+                headers=request_headers,
                 json=json,
             )
