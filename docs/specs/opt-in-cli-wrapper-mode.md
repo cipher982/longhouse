@@ -53,6 +53,8 @@ Wrapper mode is an activation accelerator for the second beat. It reduces the me
 
 These wrappers should only intercept the simple interactive launch path and pass everything else through to the upstream binary.
 
+Interactive onboarding may offer this as an explicit opt-in prompt. Quick/headless onboarding must keep skipping wrapper install by default.
+
 ## What Counts As Pass-Through
 
 The wrapper must defer to the native CLI for:
@@ -80,6 +82,5 @@ The wrapper must defer to the native CLI for:
 
 ## Later
 
-- optional onboarding prompt for wrapper install
 - richer wrapper status output
 - broader provider support if more CLIs gain real Longhouse launch paths
