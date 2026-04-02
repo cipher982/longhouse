@@ -40,7 +40,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - [x] Decide whether queued delivery should drain multiple messages at one safe boundary or intentionally stay one-at-a-time
 - [x] Add machine-contract tests and CLI smoke coverage for the canonical primitives
 - [x] Make Oikos consume canonical primitives as an operator/deputy layer
-- [ ] Split oversized routers/services only where it materially improves contract ownership or unblocks feature work
+- [x] Split oversized routers/services only where it materially improves contract ownership or unblocks feature work
 
 ## Notes
 
@@ -54,7 +54,8 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - Current CLI progress: `peers`, `message`, `tail`, `check-messages`, `ack-message`, `sessions get`, and `sessions events` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
 - Machine-surface test coverage now includes the canonical `POST /api/agents/insights` write path plus JSON smoke coverage for the core coordination/session CLI commands.
 - Canonical machine surface is now documented in `docs/specs/agents-machine-surface.md`, including the browser veneer split and the `POST /api/agents/insights` canonical write path.
-- Oikos now has direct session-kernel coordination tools for peers, filtered events, tail reads, directed messaging, inbox checks, and acknowledgements instead of relying only on search/detail plus continuation.
+- Oikos now has direct session-kernel coordination tools using the canonical names `peers`, `get_session_events`, `session_tail`, `message_session`, `check_messages`, and `ack_message`.
+- API routes and Oikos coordination tools now share `session_coordination.py` for wall/tail/message serialization and inbox acknowledgement semantics, reducing contract drift without a broad router rewrite.
 - Related active tasks:
   - `docs/specs/launch-runtime-simplification.md`
   - `docs/specs/oikos-proactive-operator.md`

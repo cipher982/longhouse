@@ -23,9 +23,13 @@ from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionPoke
 from zerg.services.agents_store import AgentsStore
+from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
+from zerg.services.session_coordination import list_session_messages
+from zerg.services.session_coordination import load_session_tail
+from zerg.services.session_coordination import query_wall_sessions
+from zerg.services.session_coordination import serialize_session_message
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import load_runtime_state_map
@@ -48,7 +52,6 @@ from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import WallResponse
-from zerg.services.session_views import WallSessionResponse
 from zerg.services.session_views import _coerce_managed_transport
 from zerg.services.session_views import _coerce_session_loop_mode
 from zerg.services.session_views import build_event_response
@@ -66,23 +69,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
-
-
-def _serialize_session_message(message: SessionMessage, *, delivery_status: str | None = None) -> dict:
-    return {
-        "id": message.id,
-        "from_session_id": str(message.from_session_id),
-        "to_session_id": str(message.to_session_id),
-        "text": message.body,
-        "source_event_id": message.source_event_id,
-        "delivery_status": delivery_status or message.delivery_status,
-        "delivery_attempts": message.delivery_attempts,
-        "last_error": message.last_error,
-        "delivered_via": message.delivered_via,
-        "created_at": message.created_at.isoformat() if message.created_at else None,
-        "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
-        "acknowledged_at": message.acknowledged_at.isoformat() if message.acknowledged_at else None,
-    }
 
 
 def _parse_message_session_header(request: Request) -> UUID | None:
@@ -168,7 +154,10 @@ async def list_sessions(
     provider: Optional[str] = Query(None, description="Filter by provider"),
     environment: Optional[str] = Query(None, description="Filter by environment (production, development, test, e2e)"),
     include_test: bool = Query(False, description="Include test/e2e sessions (default: False)"),
-    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
+    hide_autonomous: bool = Query(
+        True,
+        description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
+    ),
     device_id: Optional[str] = Query(None, description="Filter by device ID"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
     query: Optional[str] = Query(None, description="Search query for content"),
@@ -383,7 +372,10 @@ async def list_sessions(
             if x_search_mode_header:
                 from fastapi.responses import JSONResponse
 
-                return JSONResponse(content=response.model_dump(mode="json"), headers={"X-Search-Mode": x_search_mode_header})
+                return JSONResponse(
+                    content=response.model_dump(mode="json"),
+                    headers={"X-Search-Mode": x_search_mode_header},
+                )
             return response
 
         store = AgentsStore(db)
@@ -488,7 +480,10 @@ async def list_session_summaries(
     query: Optional[str] = Query(None, description="Search query for content"),
     limit: int = Query(20, ge=1, le=100, description="Max results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    hide_autonomous: bool = Query(True, description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)"),
+    hide_autonomous: bool = Query(
+        True,
+        description="Hide autonomous sessions (Task sub-agents and sessions with no user messages)",
+    ),
     db: Session = Depends(get_db),
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -564,76 +559,7 @@ async def wall_query(
     Schema-on-read: returns raw timestamps and facts. The consuming agent
     or UI decides what's relevant — no status bucketing, no pre-computed summaries.
     """
-    store = AgentsStore(db)
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-
-    # Over-fetch when repo filter is set since it's applied in Python after
-    # the DB query (list_sessions doesn't support repo substring matching).
-    fetch_limit = limit * 4 if repo else limit
-
-    sessions, _total = store.list_sessions(
-        project=project,
-        provider=None,
-        environment=None,
-        include_test=False,
-        device_id=None,
-        since=since,
-        query=None,
-        limit=fetch_limit,
-        offset=0,
-        anchor_on_activity=True,
-    )
-
-    # Filter by repo if specified (substring match on git_repo), then trim to limit
-    if repo:
-        repo_lower = repo.lower()
-        sessions = [s for s in sessions if s.git_repo and repo_lower in s.git_repo.lower()]
-    sessions = sessions[:limit]
-
-    session_ids = [s.id for s in sessions]
-    last_activity = store.get_last_activity_map(session_ids)
-    last_user_msg = store.get_last_timestamp_by_role_map(session_ids, "user")
-    last_tool_call = store.get_last_tool_call_map(session_ids)
-    presence_map = load_presence_map(db, session_ids)
-
-    now = datetime.now(timezone.utc)
-    PRESENCE_TTL = timedelta(minutes=10)
-
-    items = []
-    for s in sessions:
-        presence = presence_map.get(s.id)
-        has_live = False
-        presence_state = None
-        if presence:
-            presence_updated = getattr(presence, "updated_at", None)
-            if presence_updated:
-                if presence_updated.tzinfo is None:
-                    presence_updated = presence_updated.replace(tzinfo=timezone.utc)
-                has_live = (now - presence_updated) < PRESENCE_TTL
-            presence_state = getattr(presence, "state", None)
-
-        items.append(
-            WallSessionResponse(
-                session_id=str(s.id),
-                device_name=getattr(s, "device_name", None) or (s.device_id.replace("shipper-", "") if s.device_id else None),
-                device_id=s.device_id,
-                git_repo=s.git_repo,
-                git_branch=s.git_branch,
-                project=s.project,
-                provider=s.provider,
-                summary_title=getattr(s, "summary_title", None),
-                started_at=s.started_at,
-                last_event_at=last_activity.get(s.id),
-                last_user_message_at=last_user_msg.get(s.id),
-                last_tool_call_at=last_tool_call.get(s.id),
-                has_live_presence=has_live,
-                presence_state=presence_state if has_live else None,
-                user_messages=s.user_messages or 0,
-                assistant_messages=s.assistant_messages or 0,
-                tool_calls=s.tool_calls or 0,
-            )
-        )
-
+    items = query_wall_sessions(db, repo=repo, project=project, days=days, limit=limit)
     return WallResponse(sessions=items, total=len(items))
 
 
@@ -651,44 +577,22 @@ async def session_tail(
     chronological order (oldest first). The reading agent interprets the
     raw log — no summary layer in between.
     """
-    # Verify session exists
-    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    try:
+        events = load_session_tail(db, session_id=session_id, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    events = (
-        db.query(AgentEvent)
-        .filter(AgentEvent.session_id == session_id)
-        .filter(AgentEvent.role.in_(["user", "assistant", "tool"]))
-        .filter(AgentEvent.content_text.isnot(None))
-        .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
-        .limit(limit)
-        .all()
-    )
-
-    # Reverse to chronological order (oldest first)
-    events.reverse()
-
-    return {
-        "session_id": str(session_id),
-        "events": [
-            {
-                "id": e.id,
-                "role": e.role,
-                "content": (e.content_text or "")[:4000],
-                "tool_name": e.tool_name,
-                "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-            }
-            for e in events
-        ],
-        "total": len(events),
-    }
+    return {"session_id": str(session_id), "events": events, "total": len(events)}
 
 
 @router.get("/sessions/active", response_model=ActiveSessionsResponse)
 async def list_active_sessions(
     project: Optional[str] = Query(None, description="Filter by project"),
-    status_filter: Optional[str] = Query(None, alias="status", description="Filter by status (working, active, idle, completed)"),
+    status_filter: Optional[str] = Query(
+        None,
+        alias="status",
+        description="Filter by status (working, active, idle, completed)",
+    ),
     attention: Optional[str] = Query(None, description="Filter by attention (auto)"),
     limit: int = Query(50, ge=1, le=200, description="Max results"),
     days_back: int = Query(14, ge=1, le=90, description="Days to look back"),
@@ -1244,7 +1148,9 @@ async def get_session_workspace(
         thread_sessions = [session]
 
     with timing.span("load_head"):
-        head = next((item for item in thread_sessions if bool(item.is_writable_head)), None) or store.get_thread_head(session)
+        head = next((item for item in thread_sessions if bool(item.is_writable_head)), None)
+        if head is None:
+            head = store.get_thread_head(session)
 
     thread_session_ids = [item.id for item in thread_sessions]
     with timing.span("load_activity"):
@@ -1539,7 +1445,7 @@ async def create_message(
         status_code = status.HTTP_404_NOT_FOUND if detail.endswith("not found") else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
-    return _serialize_session_message(outcome.message, delivery_status=outcome.delivery_status)
+    return serialize_session_message(outcome.message, delivery_status=outcome.delivery_status)
 
 
 @router.get("/messages")
@@ -1555,7 +1461,10 @@ async def list_messages(
 ) -> dict:
     """List durable session messages without mutating delivery or ack state."""
     if direction not in {"inbound", "outbound", "all"}:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="direction must be inbound, outbound, or all")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="direction must be inbound, outbound, or all",
+        )
 
     actor_session = _resolve_message_actor_session(
         db=db,
@@ -1565,21 +1474,15 @@ async def list_messages(
     )
     resolved_session_id = actor_session.id
 
-    query = db.query(SessionMessage)
-    if direction == "inbound":
-        query = query.filter(SessionMessage.to_session_id == resolved_session_id)
-    elif direction == "outbound":
-        query = query.filter(SessionMessage.from_session_id == resolved_session_id)
-    else:
-        query = query.filter(
-            (SessionMessage.to_session_id == resolved_session_id) | (SessionMessage.from_session_id == resolved_session_id)
-        )
-    if unacknowledged_only:
-        query = query.filter(SessionMessage.acknowledged_at.is_(None))
-
-    messages = query.order_by(SessionMessage.created_at.desc(), SessionMessage.id.desc()).limit(limit).all()
+    messages = list_session_messages(
+        db,
+        session_id=resolved_session_id,
+        direction=direction,
+        unacknowledged_only=unacknowledged_only,
+        limit=limit,
+    )
     return {
-        "messages": [_serialize_session_message(message) for message in messages],
+        "messages": [serialize_session_message(message) for message in messages],
         "total": len(messages),
     }
 
@@ -1600,26 +1503,16 @@ async def acknowledge_message(
         token=_auth,
         declared_session_id=payload.session_id if payload is not None else None,
     )
-    message = db.query(SessionMessage).filter(SessionMessage.id == message_id).first()
-    if message is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Message {message_id} not found")
-    if actor_session.id != message.to_session_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the target session can acknowledge this message",
+    try:
+        message = acknowledge_session_message_for_session(
+            db,
+            message_id=message_id,
+            target_session_id=actor_session.id,
         )
-    if message.delivery_status in {"queued", "delivering"}:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Message has not been delivered to the target session yet",
-        )
-    if message.delivery_status == "failed":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Failed messages cannot be acknowledged",
-        )
-    if message.acknowledged_at is None:
-        message.acknowledged_at = datetime.now(timezone.utc)
-        db.commit()
-        db.refresh(message)
-    return _serialize_session_message(message)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return serialize_session_message(message)

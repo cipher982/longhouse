@@ -1,0 +1,235 @@
+"""Shared coordination helpers for the session kernel.
+
+These helpers keep the machine-facing API routes and in-process agent tools on
+the same wall/tail/message semantics without forcing a broad router rewrite.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy.orm import Session
+
+from zerg.models.agents import AgentEvent
+from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionMessage
+from zerg.services.agents_store import AgentsStore
+from zerg.services.session_messages import MESSAGE_STATUS_DELIVERING
+from zerg.services.session_messages import MESSAGE_STATUS_FAILED
+from zerg.services.session_messages import MESSAGE_STATUS_QUEUED
+from zerg.services.session_views import WallSessionResponse
+from zerg.services.session_views import load_presence_map
+
+_PRESENCE_TTL = timedelta(minutes=10)
+
+
+def serialize_session_message(message: SessionMessage, *, delivery_status: str | None = None) -> dict[str, Any]:
+    return {
+        "id": message.id,
+        "from_session_id": str(message.from_session_id),
+        "to_session_id": str(message.to_session_id),
+        "text": message.body,
+        "source_event_id": message.source_event_id,
+        "delivery_status": delivery_status or message.delivery_status,
+        "delivery_attempts": message.delivery_attempts,
+        "last_error": message.last_error,
+        "delivered_via": message.delivered_via,
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "delivered_at": message.delivered_at.isoformat() if message.delivered_at else None,
+        "acknowledged_at": message.acknowledged_at.isoformat() if message.acknowledged_at else None,
+    }
+
+
+def query_wall_sessions(
+    db: Session,
+    *,
+    repo: str | None = None,
+    project: str | None = None,
+    days: int = 7,
+    limit: int = 50,
+) -> list[WallSessionResponse]:
+    """Return raw wall sessions for repo/project coordination queries."""
+    store = AgentsStore(db)
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    fetch_limit = limit * 4 if repo else limit
+
+    sessions, _total = store.list_sessions(
+        project=project,
+        provider=None,
+        environment=None,
+        include_test=False,
+        device_id=None,
+        since=since,
+        query=None,
+        limit=fetch_limit,
+        offset=0,
+        anchor_on_activity=True,
+    )
+
+    if repo:
+        repo_lower = repo.lower()
+        sessions = [session for session in sessions if session.git_repo and repo_lower in session.git_repo.lower()]
+    sessions = sessions[:limit]
+
+    session_ids = [session.id for session in sessions]
+    last_activity = store.get_last_activity_map(session_ids)
+    last_user_msg = store.get_last_timestamp_by_role_map(session_ids, "user")
+    last_tool_call = store.get_last_tool_call_map(session_ids)
+    presence_map = load_presence_map(db, session_ids)
+
+    now = datetime.now(timezone.utc)
+    items: list[WallSessionResponse] = []
+    for session in sessions:
+        presence = presence_map.get(session.id)
+        has_live_presence = False
+        presence_state = None
+        if presence is not None:
+            presence_updated = getattr(presence, "updated_at", None)
+            if presence_updated is not None:
+                if presence_updated.tzinfo is None:
+                    presence_updated = presence_updated.replace(tzinfo=timezone.utc)
+                has_live_presence = (now - presence_updated) < _PRESENCE_TTL
+            if has_live_presence:
+                presence_state = getattr(presence, "state", None)
+
+        items.append(
+            WallSessionResponse(
+                session_id=str(session.id),
+                device_name=getattr(session, "device_name", None)
+                or (session.device_id.replace("shipper-", "") if session.device_id else None),
+                device_id=session.device_id,
+                git_repo=session.git_repo,
+                git_branch=session.git_branch,
+                project=session.project,
+                provider=session.provider,
+                summary_title=getattr(session, "summary_title", None),
+                started_at=session.started_at,
+                last_event_at=last_activity.get(session.id),
+                last_user_message_at=last_user_msg.get(session.id),
+                last_tool_call_at=last_tool_call.get(session.id),
+                has_live_presence=has_live_presence,
+                presence_state=presence_state,
+                user_messages=session.user_messages or 0,
+                assistant_messages=session.assistant_messages or 0,
+                tool_calls=session.tool_calls or 0,
+            )
+        )
+
+    return items
+
+
+def build_peer_payloads(
+    sessions: Sequence[WallSessionResponse],
+    *,
+    active_only: bool = True,
+    exclude_session_id: UUID | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Project wall sessions into the narrower peer payload used by agents."""
+    excluded_session_id = str(exclude_session_id) if exclude_session_id is not None else None
+    peers: list[dict[str, Any]] = []
+
+    for session in sessions:
+        if excluded_session_id and session.session_id == excluded_session_id:
+            continue
+        if active_only and not session.has_live_presence:
+            continue
+
+        peers.append(
+            {
+                "session_id": session.session_id,
+                "device_name": session.device_name,
+                "provider": session.provider,
+                "presence_state": session.presence_state,
+                "summary_title": session.summary_title,
+                "git_branch": session.git_branch,
+            }
+        )
+        if limit is not None and len(peers) >= limit:
+            break
+
+    return peers
+
+
+def load_session_tail(
+    db: Session,
+    *,
+    session_id: UUID,
+    limit: int = 30,
+) -> list[dict[str, Any]]:
+    """Return the recent tail of a session in chronological order."""
+    session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if session is None:
+        raise ValueError("Session not found")
+
+    events = (
+        db.query(AgentEvent)
+        .filter(AgentEvent.session_id == session_id)
+        .filter(AgentEvent.role.in_(["user", "assistant", "tool"]))
+        .filter(AgentEvent.content_text.isnot(None))
+        .order_by(AgentEvent.timestamp.desc(), AgentEvent.id.desc())
+        .limit(limit)
+        .all()
+    )
+    events.reverse()
+
+    return [
+        {
+            "id": event.id,
+            "role": event.role,
+            "content": (event.content_text or "")[:4000],
+            "tool_name": event.tool_name,
+            "timestamp": event.timestamp.isoformat() if event.timestamp else None,
+        }
+        for event in events
+    ]
+
+
+def list_session_messages(
+    db: Session,
+    *,
+    session_id: UUID,
+    direction: str = "inbound",
+    unacknowledged_only: bool = False,
+    limit: int = 50,
+) -> list[SessionMessage]:
+    """List durable session messages for a specific session."""
+    query = db.query(SessionMessage)
+    if direction == "inbound":
+        query = query.filter(SessionMessage.to_session_id == session_id)
+    elif direction == "outbound":
+        query = query.filter(SessionMessage.from_session_id == session_id)
+    else:
+        query = query.filter((SessionMessage.to_session_id == session_id) | (SessionMessage.from_session_id == session_id))
+    if unacknowledged_only:
+        query = query.filter(SessionMessage.acknowledged_at.is_(None))
+
+    return query.order_by(SessionMessage.created_at.desc(), SessionMessage.id.desc()).limit(limit).all()
+
+
+def acknowledge_session_message(
+    db: Session,
+    *,
+    message_id: int,
+    target_session_id: UUID,
+) -> SessionMessage:
+    """Acknowledge a delivered message for the target session."""
+    message = db.query(SessionMessage).filter(SessionMessage.id == message_id).first()
+    if message is None:
+        raise ValueError(f"Message {message_id} not found")
+    if target_session_id != message.to_session_id:
+        raise PermissionError("Only the target session can acknowledge this message")
+    if message.delivery_status in {MESSAGE_STATUS_QUEUED, MESSAGE_STATUS_DELIVERING}:
+        raise RuntimeError("Message has not been delivered to the target session yet")
+    if message.delivery_status == MESSAGE_STATUS_FAILED:
+        raise RuntimeError("Failed messages cannot be acknowledged")
+    if message.acknowledged_at is None:
+        message.acknowledged_at = datetime.now(timezone.utc)
+        db.commit()
+        db.refresh(message)
+    return message

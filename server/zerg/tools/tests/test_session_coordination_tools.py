@@ -139,7 +139,7 @@ def _seed_presence(db, *, session: AgentSession, state: str) -> None:
     )
 
 
-def test_list_session_peers_returns_live_repo_matches(tmp_path, monkeypatch):
+def test_peers_returns_live_repo_matches(tmp_path, monkeypatch):
     engine = _make_engine(tmp_path, "peers.db")
     SessionLocal = _patch_db_session(monkeypatch, engine)
 
@@ -150,7 +150,7 @@ def test_list_session_peers_returns_live_repo_matches(tmp_path, monkeypatch):
         _seed_presence(db, session=source, state="idle")
         _seed_presence(db, session=peer, state="thinking")
 
-    result = session_coordination_tools.list_session_peers(
+    result = session_coordination_tools.peers(
         repo="longhouse",
         exclude_session_id=str(source.id),
         active_only=True,
@@ -194,7 +194,7 @@ def test_get_session_events_applies_filters(tmp_path, monkeypatch):
     assert data["events"][0]["role"] == "tool"
 
 
-def test_get_session_tail_returns_recent_events_in_order(tmp_path, monkeypatch):
+def test_session_tail_returns_recent_events_in_order(tmp_path, monkeypatch):
     engine = _make_engine(tmp_path, "tail.db")
     SessionLocal = _patch_db_session(monkeypatch, engine)
 
@@ -205,7 +205,7 @@ def test_get_session_tail_returns_recent_events_in_order(tmp_path, monkeypatch):
         _seed_event(db, session=session, role="assistant", content_text="third", minutes_offset=0)
         session_id = str(session.id)
 
-    result = session_coordination_tools.get_session_tail(session_id=session_id, limit=2)
+    result = session_coordination_tools.session_tail(session_id=session_id, limit=2)
 
     assert result["ok"] is True
     data = result["data"]
@@ -239,7 +239,7 @@ def test_message_session_creates_stored_only_message_for_legacy_target(tmp_path,
         assert message.delivery_status == "stored_only"
 
 
-def test_check_session_messages_filters_unacknowledged(tmp_path, monkeypatch):
+def test_check_messages_filters_unacknowledged(tmp_path, monkeypatch):
     engine = _make_engine(tmp_path, "check_messages.db")
     SessionLocal = _patch_db_session(monkeypatch, engine)
 
@@ -265,7 +265,7 @@ def test_check_session_messages_filters_unacknowledged(tmp_path, monkeypatch):
         )
         db.commit()
 
-    result = session_coordination_tools.check_session_messages(session_id=str(to_session.id))
+    result = session_coordination_tools.check_messages(session_id=str(to_session.id))
 
     assert result["ok"] is True
     data = result["data"]
@@ -273,7 +273,7 @@ def test_check_session_messages_filters_unacknowledged(tmp_path, monkeypatch):
     assert data["messages"][0]["text"] == "unacked"
 
 
-def test_acknowledge_session_message_marks_target_message(tmp_path, monkeypatch):
+def test_ack_message_marks_target_message(tmp_path, monkeypatch):
     engine = _make_engine(tmp_path, "ack_message.db")
     SessionLocal = _patch_db_session(monkeypatch, engine)
 
@@ -292,7 +292,7 @@ def test_acknowledge_session_message_marks_target_message(tmp_path, monkeypatch)
         message_id = int(message.id)
         to_session_id = str(to_session.id)
 
-    result = session_coordination_tools.acknowledge_session_message(message_id=message_id, session_id=to_session_id)
+    result = session_coordination_tools.ack_message(message_id=message_id, session_id=to_session_id)
 
     assert result["ok"] is True
     data = result["data"]
@@ -301,3 +301,13 @@ def test_acknowledge_session_message_marks_target_message(tmp_path, monkeypatch)
     with SessionLocal() as db:
         refreshed = db.query(SessionMessage).filter(SessionMessage.id == message_id).one()
         assert refreshed.acknowledged_at is not None
+
+
+def test_tool_registry_uses_canonical_coordination_names():
+    names = {tool.name for tool in session_coordination_tools.TOOLS}
+
+    assert {"peers", "get_session_events", "session_tail", "message_session", "check_messages", "ack_message"} <= names
+    assert "list_session_peers" not in names
+    assert "get_session_tail" not in names
+    assert "check_session_messages" not in names
+    assert "acknowledge_session_message" not in names
