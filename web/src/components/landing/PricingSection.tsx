@@ -27,7 +27,7 @@ export function PricingSection() {
       name: "Self-Hosted",
       price: "Free",
       period: "forever",
-      description: "Works on your laptop, best on a box that stays on",
+      description: "Run it on the machine where work should live",
       features: [
         "Self-host on your laptop, VPS, Mac mini, or homelab box",
         "SQLite core, no external services",
@@ -44,7 +44,7 @@ export function PricingSection() {
       name: "Hosted Beta",
       price: "$5",
       period: "/month",
-      description: "We run the box for you, but self-host is the cleaner first path today",
+      description: "We run the box for you later; self-host is still the cleaner first path today",
       features: [
         "Same core loop as self-hosted",
         "Browser access from anywhere",

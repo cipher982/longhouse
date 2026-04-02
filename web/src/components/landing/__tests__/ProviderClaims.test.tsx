@@ -30,10 +30,10 @@ describe("landing provider claims", () => {
     await user.click(screen.getByRole("button", { name: /What AI coding agents do you support\?/i }));
 
     expect(
-      screen.getByText(/Claude Code currently has the strongest direct web continuation, hooks, and telemetry/i),
+      screen.getByText(/Claude Code currently has the strongest continuation path, hooks, and telemetry/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Codex CLI and Gemini CLI are already searchable and inspectable in the timeline/i),
+      screen.getByText(/Codex CLI and Gemini CLI are already findable and inspectable in the timeline/i),
     ).toBeInTheDocument();
   });
 });

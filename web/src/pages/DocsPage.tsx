@@ -104,7 +104,7 @@ longhouse codex</code></pre>
           </p>
           <pre><code>longhouse serve --demo</code></pre>
           <p>
-            This is the fastest way to see the product before importing anything.
+            Use this only when you want a safe preview before importing real work.
           </p>
         </section>
 
@@ -138,9 +138,9 @@ longhouse codex</code></pre>
 
           <h3>Current Support</h3>
           <ul>
-            <li><strong>Claude Code</strong> — strongest support today: timeline sync, hooks, and direct browser continuation</li>
-            <li><strong>Codex CLI</strong> — timeline sync, search/detail, and Longhouse session starts today; direct browser continuation is still Claude-first</li>
-            <li><strong>Gemini CLI</strong> — timeline sync and search/detail today; direct browser continuation is still Claude-first</li>
+            <li><strong>Claude Code</strong> — strongest continuation path today: timeline sync, hooks, and direct browser continuation</li>
+            <li><strong>Codex CLI</strong> — timeline sync, search/detail, and Longhouse session starts today; continuation is still Claude-first</li>
+            <li><strong>Gemini CLI</strong> — timeline sync and search/detail today; continuation is still Claude-first</li>
           </ul>
 
           <h3>Coming Soon</h3>
