@@ -1,13 +1,15 @@
 # Longhouse
 
-Keep Claude Code, Codex CLI, and Gemini CLI sessions in one searchable timeline.
+Longhouse is a session kernel for Claude Code, Codex CLI, and Gemini CLI.
 
-Self-host locally or use Longhouse hosted. Claude continues directly in the browser today; Codex and Gemini sync into the timeline today and can start cloud sessions.
+Keep sessions in one searchable timeline and expose them as durable objects you can inspect, message, and continue from the web UI, CLI, or HTTP.
+
+Start free locally. Use hosted beta when you want always-on access. Claude continues directly in the browser today; Codex and Gemini sync into the timeline today and can start cloud sessions.
 
 ## Demo
 
 <!-- Video: Replace this section with a Loom/YouTube embed once the walkthrough is recorded.
-     Target: 60-90 second tour covering install -> timeline -> search. -->
+     Target: 60-90 second tour covering install -> search/detail -> wall/message -> continue. -->
 
 Video walkthrough coming soon. In the meantime, try it yourself:
 
@@ -17,11 +19,13 @@ longhouse serve --demo
 # Open http://localhost:8080
 ```
 
+The bundled web UI is the easiest way to look around, but the same kernel is scriptable:
+
+```bash
+longhouse wall --json
+```
+
 ## Get Started
-
-### Hosted (beta)
-
-Sign up at https://longhouse.ai. Hosted gives you the fastest path to always-on sessions, browser access, and cloud-managed continuation.
 
 ### Self-host (local)
 
@@ -44,20 +48,22 @@ Want a quick preview before importing real sessions?
 longhouse serve --demo
 ```
 
+### Hosted (beta)
+
+Sign up at https://longhouse.ai when you want always-on browser access and managed cloud sessions. Hosted is the paid convenience path; the free first-run path is still the local installer above.
+
 ## Features
 
+- **Session kernel**: Sessions become durable objects you can inspect, address, and continue
 - **One timeline**: Claude Code, Codex CLI, and Gemini CLI sessions in one place
 - **Search + recall**: Find messages, tool calls, file edits, and session metadata fast
 - **Claude continuation**: Continue Claude Code sessions from the web today
-- **Agent-first coordination**: Read the wall, find peers, send directed session messages, and manage inbox state by CLI or API
+- **Agent-first coordination**: Read the wall, tail sessions, find peers, send directed session messages, and manage inbox state by CLI or API
 - **Hosted or self-hosted**: Start local with SQLite, or use hosted for always-on access
 
 ## Install Options
 
-### 0. Hosted (beta)
-Get started at https://longhouse.ai (Google OAuth + Stripe checkout).
-
-### 1. Self-host with the installer (recommended)
+### 0. Self-host with the installer (recommended)
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve
@@ -71,12 +77,15 @@ Preview with sample data:
 longhouse serve --demo
 ```
 
-### 2. Self-host with `uv`
+### 1. Self-host with `uv`
 ```bash
 uv tool install longhouse
 longhouse onboard
 longhouse serve
 ```
+
+### 2. Hosted (beta)
+Get started at https://longhouse.ai when you want the always-on hosted path. Keep the local installer as the primary free wedge for first use, demos, and self-hosted setups.
 
 ### 3. Advanced / contributor paths
 
