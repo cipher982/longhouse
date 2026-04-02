@@ -1,10 +1,12 @@
 # Longhouse
 
-Longhouse is a session kernel for Claude Code, Codex CLI, and Gemini CLI.
+Longhouse makes Claude Code, Codex CLI, and Gemini CLI sessions findable now and controllable after launch.
 
-Keep sessions in one searchable timeline and expose them as durable objects you can inspect, message, and continue from the web UI, CLI, or HTTP.
+Import existing sessions into one searchable timeline, then start Longhouse sessions you can inspect, message, and continue from the web UI, CLI, or HTTP.
 
-Start free locally. Use hosted beta when you want always-on access. Claude continues directly in the browser today; Codex and Gemini sync into the timeline today and can start cloud sessions.
+Works on your laptop. Shines on a machine that stays on.
+
+Self-host free on the machine where work should live, or use hosted later when you want the convenience path. Claude is the strongest continuation path today; Codex and Gemini are searchable and inspectable today.
 
 ## Demo
 
@@ -27,7 +29,7 @@ longhouse wall --json
 
 ## Get Started
 
-### Self-host (local)
+### Self-host free
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
@@ -48,18 +50,20 @@ Want a quick preview before importing real sessions?
 longhouse serve --demo
 ```
 
-### Hosted (beta)
+### Hosted (later)
 
-Sign up at https://longhouse.ai when you want always-on browser access and managed cloud sessions. Hosted is the paid convenience path; the free first-run path is still the local installer above.
+Sign up at https://longhouse.ai when you want the convenience path. Hosted is "we run the box" for you; the free first-run path is still the self-hosted installer above.
 
 ## Features
 
-- **Session kernel**: Sessions become durable objects you can inspect, address, and continue
+- **Find existing sessions fast**: Import and search old Claude, Codex, and Gemini work immediately
+- **Control after launch**: Start Longhouse sessions you can inspect, address, message, and continue later
+- **Session kernel**: The technical model is a durable session object, not a dead transcript
 - **One timeline**: Claude Code, Codex CLI, and Gemini CLI sessions in one place
 - **Search + recall**: Find messages, tool calls, file edits, and session metadata fast
-- **Claude continuation**: Continue Claude Code sessions from the web today
+- **Claude continuation**: Claude Code is the strongest launch-ready continuation path today
 - **Agent-first coordination**: Read the wall, tail sessions, find peers, send directed session messages, and manage inbox state by CLI or API
-- **Hosted or self-hosted**: Start local with SQLite, or use hosted for always-on access
+- **Hosted or self-hosted**: Self-host free or use hosted later without changing the core loop
 
 ## Install Options
 
@@ -84,8 +88,8 @@ longhouse onboard
 longhouse serve
 ```
 
-### 2. Hosted (beta)
-Get started at https://longhouse.ai when you want the always-on hosted path. Keep the local installer as the primary free wedge for first use, demos, and self-hosted setups.
+### 2. Hosted (later)
+Get started at https://longhouse.ai when you want the hosted convenience path. Keep the self-hosted installer as the primary free wedge for first use, demos, and durable machine setups.
 
 ### 3. Advanced / contributor paths
 

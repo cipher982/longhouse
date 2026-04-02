@@ -8,9 +8,8 @@ Updated: 2026-04-02
 
 Lock Longhouse's launch story to one honest product loop:
 
-- start a real Claude or Codex session
-- find that session later
-- message it or continue it after launch
+- make existing sessions findable immediately
+- make new Longhouse sessions controllable after launch
 - do this from browser, CLI, or API without pretending a transcript is the whole environment
 
 This document tightens the product story around the session kernel work already captured in `VISION.md`, the current landing-page spec and implementation, and the 2026-04-02 landing rewrite note in the Obsidian session log.
@@ -49,6 +48,20 @@ But the launch story is still at risk of drifting into two bad frames:
 
 The first is dishonest for real development. The second is not enough to beat `ssh` + `tmux`.
 
+## Current Pain
+
+The product needs one explicit "why now" before it explains architecture.
+
+Today, the typical user is doing some ugly mix of:
+
+- Claude history / provider UIs that do not make sessions addressable
+- `.resume` and provider-local session recovery
+- manual `rg` / JSONL grepping through old logs
+- `ssh` + `tmux` for keeping one shell alive
+- copy-pasting between sessions or between devices
+
+All of those solve a slice of the problem. None of them turn the session into a durable object that can be found, inspected, messaged, and continued from more than one surface.
+
 ## Product Truth
 
 ### What Longhouse actually controls
@@ -70,9 +83,21 @@ Longhouse should assume:
 
 - sessions run on the machine where Longhouse is installed
 - users may install Longhouse on a laptop, VPS, Mac mini, homelab box, or future hosted instance
-- users can still ship/import existing sessions, but imported sessions are a compatibility path, not the hero
+- users can still ship/import existing sessions, and that is often the fastest first-value path
+- Longhouse-started sessions are the controllable second beat that turns first value into the real product loop
 
 This keeps the environment honest. It avoids promising that untracked files, `.env`, local networking, ports, or machine-specific setup somehow moved just because the transcript did.
+
+## Outcome First, Identity Second
+
+Two statements are both true, but they should not be used in the same place:
+
+- **Outcome statement:** `Control your Claude/Codex sessions after launch.`
+- **Identity statement:** `Longhouse is a session kernel.`
+
+The outcome statement belongs in the hero, README top matter, and launch demos.
+
+The identity statement belongs in technical docs, the second scroll of the landing page, README explanation sections, and the developer mental model.
 
 ## Relationship To `VISION.md`
 
@@ -132,9 +157,22 @@ That makes the "find / ask / continue" loop feel like proof instead of abstracti
 
 ## The Launch Story
 
-### One hero story
+### Two-beat onramp
 
-Start a real Claude or Codex session on a machine you control. Later, find it, message it, and continue it from anywhere.
+**Beat 1: your existing sessions become findable**
+
+Install Longhouse and immediately get value from sessions you already have:
+
+- one searchable timeline
+- session detail and raw transcript
+- recall / search / wall / tail
+- no workflow change required
+
+This is the fastest "oh cool" moment and should remain a co-equal first beat, not a fallback.
+
+**Beat 2: new Longhouse sessions become controllable**
+
+Start a real Claude or Codex session through Longhouse on the machine where work should live. Later, find it, message it, and continue it from anywhere.
 
 That machine might be:
 
@@ -146,11 +184,9 @@ That machine might be:
 
 The machine choice is secondary. The session loop is the product.
 
-### One fallback story
+### One honest sentence
 
-Already using normal Claude/Codex sessions?
-
-Longhouse can still import and index them so you can search, inspect, and learn from them. That is the compatibility onramp, not the hero.
+**Your existing sessions become findable. Your new Longhouse sessions become controllable.**
 
 ## Public Vocabulary
 
@@ -184,6 +220,7 @@ Good phrasing:
 - `Run it on your laptop, your machine, or ours.`
 - `Install Longhouse where your sessions should live.`
 - `Self-host free or use hosted later.`
+- `Works on your laptop. Shines on a machine that stays on.`
 
 Bad phrasing:
 
@@ -213,6 +250,22 @@ Longhouse keeps the **session addressable and steerable** after launch.
 
 That is the moat. The ability to inject and continue real Claude/Codex sessions after launch is the core hack and must remain central to the story.
 
+## Launch-Ready Capability Truth
+
+The launch story only works if capability truth is blunt.
+
+### What we can say confidently
+
+- Claude Code sessions are the strongest launch-ready continuation path.
+- Claude, Codex, and Gemini sessions can all be shipped/imported into the archive and inspected through the timeline plus machine surface.
+- The machine surface for search, session inspection, wall/tail, messaging, and inbox state is real and should be shown early.
+
+### What we should not overstate
+
+- Codex and Gemini continuation should not be sold as equal to Claude until parity and polish are actually there.
+- Transcript import alone should not be sold as if it grants full remote control.
+- Hosted should not be sold as the thing that makes the core loop possible; it is the convenience deployment of the same loop.
+
 ## What To De-Emphasize
 
 For launch, push the following down the page or out of the first impression:
@@ -232,7 +285,7 @@ These things can still exist, but they should not define the first 30 seconds.
 ### Journey 1: laptop tryout
 
 - install Longhouse
-- start or import a session
+- import or ship existing sessions
 - find it later
 - continue or inspect it from the UI or CLI
 
@@ -255,6 +308,29 @@ This is the strongest real-world loop and should anchor demos and launch videos.
 
 Hosted should be explained as "we run the box," not as an entirely different ontology.
 
+## Launch Feature Triage
+
+### Must demo
+
+- import or ship existing sessions into the timeline
+- search and session detail
+- one real control-after-launch proof on a Claude session
+- one machine-surface proof such as `wall`, `tail`, `message`, or `continue`
+
+### Should work, but not hero
+
+- Oikos as an operator/deputy layer
+- insights / recall depth
+- jobs / runner / broader orchestration
+- hosted provisioning flow
+
+### Mention as roadmap, not launch promise
+
+- full continuation parity beyond Claude
+- TUI attach / remote attach ergonomics
+- richer multi-agent coordination flows
+- opt-in default wrappers for `claude` / `codex`
+
 ## Product Boundaries
 
 ### What we should promise
@@ -271,6 +347,19 @@ Hosted should be explained as "we run the box," not as an entirely different ont
 - that transcript sync alone equals continuation
 - that hosted is required for first value
 
+## Success Signals
+
+The launch story is working if users do both beats:
+
+1. **Findable first value**
+   A new user gets a session into Longhouse and reaches session detail/search quickly.
+
+2. **Controllable second value**
+   That same user performs at least one real control action after launch:
+   continue, message, or another explicit session-level interaction.
+
+The activation signal to care about is not just install count. It is the conversion from imported/shipped session visibility into one controlled Longhouse session or one real post-launch control action.
+
 ## Concrete Guidance For Landing / README / Demos
 
 ### Hero
@@ -280,7 +369,9 @@ Lead with control, not taxonomy.
 Recommended direction:
 
 - headline about controlling live Claude/Codex sessions after launch
+- supporting line that says existing sessions become findable immediately
 - supporting line that says the session can live on your laptop, your machine, or hosted later
+- use `Works on your laptop. Shines on a machine that stays on.` somewhere high on the page
 - keep `Find the session. Ask it. Continue it.` as the proof loop
 
 ### Machine seam
@@ -303,19 +394,20 @@ Over:
 
 The canonical demo should prove:
 
-1. a real session exists
-2. Longhouse can find it later
-3. Longhouse can steer it after launch
+1. an existing session becomes visible and useful immediately
+2. Longhouse can find and inspect it later
+3. Longhouse can steer a real session after launch
 
 That beats both dashboard theater and remote-shell theater.
 
 ## Immediate Implications For Product Work
 
 1. Keep the machine surface and session-kernel work as the canonical seam.
-2. Keep imported sessions as the onramp, not the hero.
+2. Treat imported sessions as the first hit of value, not as a mere fallback.
 3. Reframe `longhouse claude` / `longhouse codex` as "start a Longhouse session" rather than "managed-local launcher" in public copy.
 4. Keep wrapper mode as an ergonomic accelerator, not the definition of the product.
 5. Keep hosted as a convenience layer that can arrive later without changing the product truth.
+6. Keep Oikos out of the hero, but do show browser proof that a session can be messaged or continued after launch.
 
 ## Summary
 
