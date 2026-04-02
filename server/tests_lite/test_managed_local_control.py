@@ -146,6 +146,7 @@ def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude
         assert dispatcher.calls[0]["commis_id"] == "managed-local-control-test"
         assert "export TMUX_TMPDIR=/tmp/lh-managed-control" in str(dispatcher.calls[0]["command"])
         assert "send-keys -t lh-zerg-managed-local -l -- continue" in str(dispatcher.calls[0]["command"])
+        assert "send-keys -t lh-zerg-managed-local C-m" in str(dispatcher.calls[0]["command"])
 
 
 def test_await_managed_local_turn_events_returns_new_persisted_events(tmp_path):
@@ -255,8 +256,10 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
         first_command = str(dispatcher.calls[0]["command"])
         second_command = str(dispatcher.calls[1]["command"])
         assert "send-keys -t lh-zerg-managed-local -l --" in first_command
+        assert "send-keys -t lh-zerg-managed-local C-m" in first_command
         assert "continue alpha" in first_command
         assert "send-keys -t lh-zerg-managed-local -l --" in second_command
+        assert "send-keys -t lh-zerg-managed-local C-m" in second_command
         assert "status? [ok]" in second_command
 
 

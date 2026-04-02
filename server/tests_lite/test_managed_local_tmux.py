@@ -2,14 +2,14 @@
 
 import shlex
 
-from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_HISTORY_LIMIT
-from zerg.services.managed_local_tmux import build_tmux_attach_command
-from zerg.services.managed_local_tmux import build_tmux_capture_command
-from zerg.services.managed_local_tmux import build_tmux_current_command_command
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 from zerg.services.managed_local_tmux import build_managed_local_conditional_zshrc_source
 from zerg.services.managed_local_tmux import build_managed_local_path_export
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
+from zerg.services.managed_local_tmux import build_tmux_attach_command
+from zerg.services.managed_local_tmux import build_tmux_capture_command
+from zerg.services.managed_local_tmux import build_tmux_current_command_command
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
 from zerg.services.managed_local_tmux import build_tmux_kill_session_command
 from zerg.services.managed_local_tmux import build_tmux_launch_command
@@ -31,8 +31,6 @@ def test_normalize_tmux_session_name_sanitizes_and_prefixes():
 
 def test_normalize_tmux_session_name_rewrites_tmux_target_separator():
     assert normalize_tmux_session_name("colon:test") == "lh-colon-test"
-
-
 
 def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
     command = build_tmux_launch_command(
@@ -126,18 +124,23 @@ def test_build_tmux_send_text_command_handles_multiline_reply():
     assert (
         f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo -l -- continue"
         " && "
-        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo Enter"
+        "sleep 1"
+        " && "
+        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo C-m"
         " && "
         f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo -l -- 'and run tests'"
         " && "
-        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo Enter"
+        "sleep 1"
+        " && "
+        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo C-m"
     ) in inner
 
 
 def test_build_tmux_send_text_command_sends_enter_literal_before_keypress():
     inner = _wrapped_inner(build_tmux_send_text_command(session_name="lh-demo", text="Enter"))
     assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo -l -- Enter" in inner
-    assert inner.count(f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo Enter") == 1
+    assert "sleep 1" in inner
+    assert inner.count(f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} send-keys -t lh-demo C-m") == 1
 
 
 def test_build_tmux_paste_text_command_uses_named_buffer_and_bracketed_paste():
