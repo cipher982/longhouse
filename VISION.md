@@ -1036,6 +1036,7 @@ longhouse status          # Show current configuration
 
 **Target public primitives over time:**
 ```bash
+longhouse wall            # Raw session wall / coordination metadata
 longhouse peers           # Tight active-session discovery
 longhouse tail <session>  # Session tail / recent activity
 longhouse message <session> --from <session> "..."   # Session-to-session messaging

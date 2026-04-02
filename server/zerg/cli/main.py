@@ -5,6 +5,7 @@ Usage:
     longhouse status        # Show configuration
     longhouse claude        # Launch managed-local Claude on this device
     longhouse codex         # Launch managed-local Codex on this device
+    longhouse wall          # Read the raw coordination wall
     longhouse peers         # Find live peer sessions for the current repo
     longhouse message       # Send a message to another session
     longhouse tail          # Read the recent tail of a session
@@ -37,6 +38,7 @@ from zerg.cli.coordination import check_messages
 from zerg.cli.coordination import message
 from zerg.cli.coordination import peers
 from zerg.cli.coordination import tail
+from zerg.cli.coordination import wall
 from zerg.cli.doctor import doctor
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
@@ -104,6 +106,7 @@ app.command(name="status")(status)
 _cmd_lookup = {cmd.callback.__name__: cmd.callback for cmd in connect_app.registered_commands}
 app.command(name="claude")(claude)
 app.command(name="codex")(codex)
+app.command(name="wall")(wall)
 app.command(name="peers")(peers)
 app.command(name="message")(message)
 app.command(name="tail")(tail)

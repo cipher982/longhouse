@@ -127,6 +127,91 @@ def test_peers_command_lists_live_peer_sessions(monkeypatch):
     ]
 
 
+def test_wall_command_prints_raw_sessions(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "sessions": [
+                    {
+                        "session_id": "22222222-2222-2222-2222-222222222222",
+                        "device_name": "cube",
+                        "provider": "codex",
+                        "presence_state": "thinking",
+                        "summary_title": "Peer",
+                        "git_branch": "feature/messaging",
+                        "git_repo": "git@github.com:cipher982/longhouse.git",
+                        "last_event_at": "2026-04-02T12:00:00+00:00",
+                    }
+                ],
+                "total": 1,
+            },
+        )
+    )
+
+    monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(app, ["wall", "--repo", "longhouse"])
+
+    assert result.exit_code == 0, result.output
+    assert "Found 1 wall session" in result.output
+    assert "22222222-2222-2222-2222-222222222222" in result.output
+    assert "git@github.com:cipher982/longhouse.git" in result.output
+    assert fake_client.calls == [
+        {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/sessions/wall",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "params": {"repo": "longhouse", "days": 7, "limit": 50},
+        }
+    ]
+
+
+def test_wall_command_json_output(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "sessions": [
+                    {
+                        "session_id": "22222222-2222-2222-2222-222222222222",
+                        "device_name": "cube",
+                        "provider": "codex",
+                        "presence_state": "thinking",
+                        "summary_title": "Peer",
+                        "git_branch": "main",
+                        "git_repo": "git@github.com:cipher982/longhouse.git",
+                        "last_event_at": "2026-04-02T12:00:00+00:00",
+                    }
+                ],
+                "total": 1,
+            },
+        )
+    )
+
+    monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
+
+    result = runner.invoke(app, ["wall", "--project", "zerg", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert '"total": 1' in result.output
+    assert '"session_id": "22222222-2222-2222-2222-222222222222"' in result.output
+    assert fake_client.calls == [
+        {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/sessions/wall",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "params": {"project": "zerg", "days": 7, "limit": 50},
+        }
+    ]
+
+
 def test_peers_command_json_output(monkeypatch):
     runner = CliRunner()
     fake_client = _FakeClient(
