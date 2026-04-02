@@ -116,18 +116,31 @@ def _build_shim_script(provider: str) -> str:
 set -euo pipefail
 
 # --- Resolve the real upstream binary (skip this shim) ---
-_SHIMS_DIR="$HOME/.longhouse/shims"
+# Canonicalize shims dir to handle symlinks / trailing slashes
+_SHIMS_DIR="$(cd "$HOME/.longhouse/shims" 2>/dev/null && pwd -P || echo "$HOME/.longhouse/shims")"
+_THIS_SCRIPT="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
 _clean_path() {{
     local IFS=':'
     local _out=""
     for _d in $PATH; do
-        [ "$_d" = "$_SHIMS_DIR" ] && continue
+        # Canonicalize each PATH entry before comparing
+        local _canon
+        _canon="$(cd "$_d" 2>/dev/null && pwd -P || echo "$_d")"
+        [ "$_canon" = "$_SHIMS_DIR" ] && continue
         _out="${{_out:+$_out:}}$_d"
     done
     echo "$_out"
 }}
 _CLEAN_PATH="$(_clean_path)"
 _REAL_BINARY="$(PATH="$_CLEAN_PATH" command -v {provider} 2>/dev/null || true)"
+
+# Guard against self-resolution (symlink, hardlink, etc.)
+if [ -n "$_REAL_BINARY" ]; then
+    _REAL_CANON="$(cd "$(dirname "$_REAL_BINARY")" 2>/dev/null && pwd -P)/$(basename "$_REAL_BINARY")"
+    if [ "$_REAL_CANON" = "$_THIS_SCRIPT" ]; then
+        _REAL_BINARY=""
+    fi
+fi
 
 if [ -z "$_REAL_BINARY" ]; then
     echo "longhouse-wrap: cannot find real '{provider}' binary on PATH" >&2
@@ -179,10 +192,12 @@ exec longhouse {provider}
 
 
 def _build_profile_block_posix(shims_dir: Path) -> str:
-    return f"{_MARKER_BEGIN}\n" f'export PATH="{shims_dir}:$PATH"\n' f"{_MARKER_END}\n"
+    # Guard: only prepend if not already present (prevents unbounded PATH growth on re-source)
+    return f"{_MARKER_BEGIN}\n" f'case ":$PATH:" in *":{shims_dir}:"*) ;; *) export PATH="{shims_dir}:$PATH" ;; esac\n' f"{_MARKER_END}\n"
 
 
 def _build_profile_block_fish(shims_dir: Path) -> str:
+    # fish_add_path is already idempotent
     return f"{_MARKER_BEGIN}\n" f"fish_add_path --prepend {shims_dir}\n" f"{_MARKER_END}\n"
 
 
@@ -249,18 +264,29 @@ def _validate_providers(providers: list[str] | None) -> list[str]:
 
 
 def _find_real_binary(provider: str) -> str | None:
-    """Find the upstream binary, ignoring our shims dir."""
-    shims = str(_shims_dir())
-    original_path = os.environ.get("PATH", "")
-    clean_dirs = [d for d in original_path.split(":") if d != shims]
-    clean_path = ":".join(clean_dirs)
-    old = os.environ.get("PATH")
+    """Find the upstream binary, ignoring our shims dir.
+
+    Does not mutate ``os.environ`` — uses ``shutil.which(path=...)`` instead.
+    Canonicalizes the shims dir to handle symlinks / trailing slashes.
+    """
+    shims_dir = _shims_dir()
     try:
-        os.environ["PATH"] = clean_path
-        return shutil.which(provider)
-    finally:
-        if old is not None:
-            os.environ["PATH"] = old
+        shims_canon = str(shims_dir.resolve())
+    except OSError:
+        shims_canon = str(shims_dir)
+
+    original_path = os.environ.get("PATH", "")
+    clean_dirs: list[str] = []
+    for d in original_path.split(":"):
+        try:
+            d_canon = str(Path(d).resolve())
+        except OSError:
+            d_canon = d
+        if d_canon == shims_canon:
+            continue
+        clean_dirs.append(d)
+    clean_path = ":".join(clean_dirs)
+    return shutil.which(provider, path=clean_path)
 
 
 def install_wrappers(providers: list[str] | None = None) -> dict[str, str]:
@@ -285,16 +311,20 @@ def install_wrappers(providers: list[str] | None = None) -> dict[str, str]:
         shim_path.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)  # 0o755
         results[provider] = f"installed → {shim_path}  (real: {real_bin})"
 
-    # Inject PATH into shell profile
-    profile = _get_shell_profile_path()
-    if profile:
-        modified = _inject_profile_block(profile)
-        if modified:
-            results["profile"] = f"PATH prepended in {profile}"
+    # Only inject PATH if at least one shim was actually installed
+    any_installed = any("installed" in msg for msg in results.values())
+    if any_installed:
+        profile = _get_shell_profile_path()
+        if profile:
+            modified = _inject_profile_block(profile)
+            if modified:
+                results["profile"] = f"PATH prepended in {profile}"
+            else:
+                results["profile"] = f"PATH block already present in {profile}"
         else:
-            results["profile"] = f"PATH block already present in {profile}"
+            results["profile"] = "unknown shell — add ~/.longhouse/shims to PATH manually"
     else:
-        results["profile"] = "unknown shell — add ~/.longhouse/shims to PATH manually"
+        results["profile"] = "skipped — no shims installed"
 
     return results
 
