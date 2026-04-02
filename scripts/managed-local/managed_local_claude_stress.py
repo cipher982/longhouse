@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
+# ruff: noqa: E402
 """Stress a real managed-local Claude session through the local dev API.
 
 This harness is intentionally narrow:
-- local-dev only (`AUTH_DISABLED=1` expected on the target API)
+- prefers local-dev (`AUTH_DISABLED=1`) but can also hit the machine route with
+  an explicit device token
 - simple one-line prompts only
 - repeated serial sends through the real `/api/sessions/{id}/chat` route
 - DB-side verification that each prompt appears exactly once as a user event
@@ -45,6 +47,14 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.session_continuity import get_machine_name_label
+
+_CLAUDE_LAUNCH_ENV_KEYS = (
+    "CLAUDE_CODE_USE_BEDROCK",
+    "AWS_PROFILE",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "ANTHROPIC_MODEL",
+)
 
 
 @dataclass(frozen=True)
@@ -167,6 +177,16 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--project", default="managed-local-claude-stress", help="Project label for launch mode.")
     parser.add_argument("--display-name", default="Managed Local Claude Stress", help="Display name for launch mode.")
     parser.add_argument("--machine-name", default=get_machine_name_label(), help="Runner/machine label for launch mode.")
+    parser.add_argument(
+        "--device-token",
+        help="Optional agents device token for `/managed-local/this-device` when auth is enabled.",
+    )
+    parser.add_argument(
+        "--native-claude-channels",
+        choices=("auto", "true", "false"),
+        default="auto",
+        help="Launch hint for native Claude channel availability (default: auto / omit hint).",
+    )
     parser.add_argument("--count", type=int, default=6, help="Number of stress turns to send.")
     parser.add_argument("--delay-secs", type=float, default=0.0, help="Delay between turns.")
     parser.add_argument("--prompt-prefix", default="lh-claude-stress", help="Prompt prefix for generated messages.")
@@ -191,6 +211,30 @@ def _parse_args() -> argparse.Namespace:
 def _build_session_factory(database_url: str):
     engine = make_engine(database_url)
     return make_sessionmaker(engine)
+
+
+def _collect_claude_launch_env() -> dict[str, str]:
+    env: dict[str, str] = {}
+    for key in _CLAUDE_LAUNCH_ENV_KEYS:
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            env[key] = value
+    return env
+
+
+def _launch_headers(device_token: str | None) -> dict[str, str]:
+    if not device_token:
+        return {}
+    return {"X-Agents-Token": device_token}
+
+
+def _native_channels_hint(raw_value: str) -> bool | None:
+    normalized = str(raw_value or "").strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    return None
 
 
 def _fetch_managed_local_claude_session(db: Session, session_id: str) -> AgentSession:
@@ -237,17 +281,37 @@ def _fetch_new_events(db: Session, session_id: UUID, after_event_id: int) -> lis
     )
 
 
-def _launch_managed_local_session(client: httpx.Client, *, base_url: str, cwd: str, project: str, display_name: str, machine_name: str) -> dict[str, object]:
+def _launch_managed_local_session(
+    client: httpx.Client,
+    *,
+    base_url: str,
+    cwd: str,
+    project: str,
+    display_name: str,
+    machine_name: str,
+    device_token: str | None,
+    native_claude_channels: str,
+) -> dict[str, object]:
+    launch_body: dict[str, object] = {
+        "cwd": cwd,
+        "provider": "claude",
+        "project": project,
+        "display_name": display_name,
+        "loop_mode": "assist",
+        "machine_name": machine_name,
+    }
+    native_hint = _native_channels_hint(native_claude_channels)
+    if native_hint is not None:
+        launch_body["native_claude_channels_available"] = native_hint
+
+    claude_launch_env = _collect_claude_launch_env()
+    if claude_launch_env:
+        launch_body["claude_launch_env"] = claude_launch_env
+
     response = client.post(
         f"{base_url.rstrip('/')}/api/sessions/managed-local/this-device",
-        json={
-            "cwd": cwd,
-            "provider": "claude",
-            "project": project,
-            "display_name": display_name,
-            "loop_mode": "assist",
-            "machine_name": machine_name,
-        },
+        headers=_launch_headers(device_token),
+        json=launch_body,
     )
     if response.status_code != 200:
         raise SystemExit(f"Managed-local launch failed ({response.status_code}): {response.text[:400]}")
@@ -380,6 +444,8 @@ def main() -> int:
                 project=args.project,
                 display_name=args.display_name,
                 machine_name=args.machine_name,
+                device_token=str(args.device_token or "").strip() or None,
+                native_claude_channels=args.native_claude_channels,
             )
             session_id = str(launch_payload["session_id"])
             print(f"Launched session: {session_id}")
