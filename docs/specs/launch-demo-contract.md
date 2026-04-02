@@ -87,7 +87,7 @@ Say:
 - existing sessions visible quickly
 - one raw session detail view
 - one CLI machine-surface proof
-- one real Claude control-after-launch proof
+- one real Claude control-after-launch proof (accepted turn plus Claude hook phases observed)
 - the laptop-friendly but durable-machine-better framing
 
 ## Must Not Imply
@@ -100,6 +100,7 @@ Say:
 ## Launch-Ready Truth
 
 - Claude Code is the strongest continuation path today.
+- Launch proof for Claude means a managed Longhouse session accepts a turn and Claude hook phases confirm the session actually worked that turn.
 - Claude, Codex, and Gemini all import into the archive and machine surface today.
 - Codex and Gemini continuation are roadmap, not the launch promise.
 

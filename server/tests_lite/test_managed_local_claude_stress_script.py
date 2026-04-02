@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 
@@ -23,10 +23,10 @@ def test_build_stress_prompts_are_unique_and_single_line():
     prompts = module.build_stress_prompts(count=4, prefix="lh-test", nonce="abc123")
 
     assert prompts == [
-        "lh-test-01-abc123",
-        "lh-test-02-abc123",
-        "lh-test-03-abc123",
-        "lh-test-04-abc123",
+        "Reply with exactly lh-test-01-abc123 and nothing else. Do not use any tools.",
+        "Reply with exactly lh-test-02-abc123 and nothing else. Do not use any tools.",
+        "Reply with exactly lh-test-03-abc123 and nothing else. Do not use any tools.",
+        "Reply with exactly lh-test-04-abc123 and nothing else. Do not use any tools.",
     ]
     assert len(set(prompts)) == 4
     assert all("\n" not in prompt for prompt in prompts)
@@ -90,3 +90,41 @@ def test_assess_prompt_delivery_rejects_missing_or_duplicate_user_events():
     assert success.exact_user_events_before == 2
     assert success.exact_user_events_after == 3
     assert success.assistant_messages == ("received hello",)
+
+
+def test_assess_control_flow_requires_claude_hook_active_and_terminal_phases():
+    module = _load_script_module()
+
+    missing_active = module.assess_control_flow(
+        new_runtime_events=[
+            SimpleNamespace(source="managed_local_transport", phase="idle"),
+        ]
+    )
+    missing_terminal = module.assess_control_flow(
+        new_runtime_events=[
+            SimpleNamespace(source="claude_hook", phase="thinking"),
+        ]
+    )
+    success = module.assess_control_flow(
+        new_runtime_events=[
+            SimpleNamespace(source="managed_local_transport", phase="idle"),
+            SimpleNamespace(source="claude_hook", phase="thinking"),
+            SimpleNamespace(source="claude_hook", phase="idle"),
+        ]
+    )
+
+    assert missing_active.ok is False
+    assert missing_active.error == "Claude hook never reported an active phase"
+
+    assert missing_terminal.ok is False
+    assert missing_terminal.active_phase == "thinking"
+    assert missing_terminal.error == "Claude hook never reported a terminal phase"
+
+    assert success.ok is True
+    assert success.active_phase == "thinking"
+    assert success.terminal_phase == "idle"
+    assert success.observed_phases == (
+        "managed_local_transport:idle",
+        "claude_hook:thinking",
+        "claude_hook:idle",
+    )

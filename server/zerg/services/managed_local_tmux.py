@@ -216,7 +216,14 @@ def build_tmux_attach_command(*, session_name: str, tmux_tmpdir: str | None = No
 
 
 def build_tmux_send_text_command(*, session_name: str, text: str, tmux_tmpdir: str | None = None) -> str:
-    """Build a tmux command that sends text followed by Enter."""
+    """Build a tmux command that sends text followed by submit.
+
+    Claude's TUI reliably accepts `C-m` from tmux for turn submission, but it
+    needs a real gap after the literal text send. In real managed-local
+    canaries, `Enter` left the prompt sitting in the input box, and even `C-m`
+    could be dropped when sent back-to-back with the text. A one-second sleep
+    proved reliable while still keeping the control loop responsive.
+    """
     name = normalize_tmux_session_name(session_name, prefix="")
     raw = str(text or "")
     if not raw.strip():
@@ -229,7 +236,8 @@ def build_tmux_send_text_command(*, session_name: str, text: str, tmux_tmpdir: s
     for line in lines:
         if line:
             commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} -l -- {_quote(line)}")
-        commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} Enter")
+        commands.append("sleep 1")
+        commands.append(f"{_tmux_prefix()} send-keys -t {_quote(name)} C-m")
     return _wrap_managed_local_shell_command(" && ".join(commands), tmux_tmpdir=tmux_tmpdir)
 
 
