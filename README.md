@@ -170,6 +170,7 @@ longhouse ship                # One-time import pass
 longhouse wall --json         # Read raw coordination signals
 longhouse peers --json        # Find nearby live peer sessions
 longhouse message ...         # Send a durable directed session message
+longhouse continue ...        # Continue a session from the machine surface
 longhouse check-messages      # Read the durable inbox
 longhouse ack-message ...     # Acknowledge a delivered message
 longhouse status              # Show effective configuration

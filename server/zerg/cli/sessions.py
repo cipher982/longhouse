@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 import typer
@@ -44,6 +46,85 @@ def _print_event(event: dict) -> None:
         typer.echo(content_text)
     if tool_output_text:
         typer.echo(tool_output_text)
+
+
+def _parse_uuid_or_exit(raw: str, *, label: str) -> str:
+    value = str(raw or "").strip()
+    if not value:
+        typer.secho(f"{label} is required.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    try:
+        return str(UUID(value))
+    except ValueError:
+        typer.secho(f"{label} must be a valid UUID.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+
+def _print_continuation_stream(response: httpx.Response) -> int:
+    saw_text = False
+    exit_code = 0
+
+    event_name: str | None = None
+    data_lines: list[str] = []
+
+    def _flush_event() -> int | None:
+        nonlocal saw_text, exit_code, event_name, data_lines
+        if event_name is None:
+            data_lines = []
+            return None
+
+        raw_data = "\n".join(data_lines)
+        payload: dict[str, object] = {}
+        if raw_data:
+            try:
+                payload = json.loads(raw_data)
+            except json.JSONDecodeError:
+                payload = {"raw": raw_data}
+
+        if event_name == "assistant_delta":
+            text = str(payload.get("text") or "")
+            if text:
+                typer.echo(text, nl=False)
+                saw_text = True
+        elif event_name == "tool_use":
+            if saw_text:
+                typer.echo("")
+                saw_text = False
+            tool_name = str(payload.get("name") or "tool")
+            typer.secho(f"[tool] {tool_name}", fg=typer.colors.YELLOW)
+        elif event_name == "error":
+            if saw_text:
+                typer.echo("")
+                saw_text = False
+            typer.secho(str(payload.get("error") or raw_data or "Continuation failed"), fg=typer.colors.RED)
+            exit_code = 1
+        elif event_name == "done":
+            if saw_text:
+                typer.echo("")
+                saw_text = False
+            if payload.get("persistence_error"):
+                typer.secho(str(payload["persistence_error"]), fg=typer.colors.YELLOW)
+            if int(payload.get("exit_code") or 0) != 0:
+                exit_code = 1
+
+        event_name = None
+        data_lines = []
+        return None
+
+    for raw_line in response.iter_lines():
+        line = raw_line.decode() if isinstance(raw_line, bytes) else str(raw_line)
+        if not line:
+            _flush_event()
+            continue
+        if line.startswith("event:"):
+            event_name = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].strip())
+
+    _flush_event()
+    if saw_text:
+        typer.echo("")
+    return exit_code
 
 
 @app.command()
@@ -258,3 +339,90 @@ def events(
     for event in events_payload:
         _print_event(event)
         typer.echo("")
+
+
+@app.command(name="continue")
+def continue_session(
+    session_id: str = typer.Argument(..., help="Session UUID to continue."),
+    message: str = typer.Argument(..., help="Follow-up message."),
+    current_session_id: str | None = typer.Option(
+        None,
+        "--current-session",
+        help="Current session UUID. Defaults to LONGHOUSE_SESSION_ID when set.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified).",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """Continue a session through the canonical machine-facing route."""
+    config_dir = Path(claude_dir) if claude_dir else None
+    base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
+    resolved_session_id = _parse_uuid_or_exit(session_id, label="session_id")
+
+    headers = {"X-Agents-Token": resolved_token}
+    resolved_current_session_id = (current_session_id or os.environ.get("LONGHOUSE_SESSION_ID") or "").strip()
+    if resolved_current_session_id:
+        headers["X-Longhouse-Session-Id"] = _parse_uuid_or_exit(
+            resolved_current_session_id,
+            label="current_session_id",
+        )
+
+    try:
+        with httpx.Client(timeout=None) as client:
+            with client.stream(
+                "POST",
+                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/continue",
+                headers=headers,
+                json={"message": message},
+            ) as response:
+                if response.status_code == 401:
+                    typer.secho("Authentication failed. Run 'longhouse auth' to re-authenticate.", fg=typer.colors.RED)
+                    raise typer.Exit(code=1)
+                if response.status_code == 404:
+                    typer.secho(f"Session not found: {resolved_session_id}", fg=typer.colors.RED)
+                    raise typer.Exit(code=1)
+                if response.status_code != 200:
+                    detail = response.read().decode(errors="replace")[:200]
+                    typer.secho(f"API error: {response.status_code} {detail}", fg=typer.colors.RED)
+                    raise typer.Exit(code=1)
+
+                content_type = str(response.headers.get("content-type") or "")
+                if content_type.startswith("application/json"):
+                    payload = response.json()
+                    if payload.get("accepted"):
+                        typer.secho(
+                            f"Accepted by session {payload.get('session_id')}",
+                            fg=typer.colors.CYAN,
+                            bold=True,
+                        )
+                        dispatch_ms = payload.get("dispatch_ms")
+                        if dispatch_ms is not None:
+                            typer.echo(f"dispatch_ms: {dispatch_ms}")
+                        return
+
+                    typer.secho(json.dumps(payload, indent=2), fg=typer.colors.RED)
+                    raise typer.Exit(code=1)
+
+                exit_code = _print_continuation_stream(response)
+                if exit_code:
+                    raise typer.Exit(code=exit_code)
+    except httpx.ConnectError:
+        typer.secho(f"Could not connect to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    except httpx.TimeoutException:
+        typer.secho(f"Request timed out connecting to {base_url}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)

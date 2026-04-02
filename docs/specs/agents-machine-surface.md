@@ -151,6 +151,7 @@ The current CLI contract sits directly on the canonical machine surface:
 - `longhouse wall`
 - `longhouse peers`
 - `longhouse message`
+- `longhouse continue`
 - `longhouse tail`
 - `longhouse check-messages`
 - `longhouse ack-message`
@@ -189,6 +190,22 @@ curl -s \
 ```bash
 LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
   longhouse message "$TARGET_SESSION_ID" "Please inspect the failing test and report back." --json
+```
+
+### Continue a session from the machine surface
+
+```bash
+curl -N \
+  -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
+  -H "X-Longhouse-Session-Id: $LONGHOUSE_SESSION_ID" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Continue from the API route and keep going."}' \
+  "$LONGHOUSE_URL/api/agents/sessions/$TARGET_SESSION_ID/continue"
+```
+
+```bash
+LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
+  longhouse continue "$TARGET_SESSION_ID" "Continue from the terminal wrapper and keep going."
 ```
 
 ### Read and acknowledge the durable inbox
