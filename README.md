@@ -49,6 +49,7 @@ longhouse serve --demo
 - **One timeline**: Claude Code, Codex CLI, and Gemini CLI sessions in one place
 - **Search + recall**: Find messages, tool calls, file edits, and session metadata fast
 - **Claude continuation**: Continue Claude Code sessions from the web today
+- **Agent-first coordination**: Read the wall, find peers, send directed session messages, and manage inbox state by CLI or API
 - **Hosted or self-hosted**: Start local with SQLite, or use hosted for always-on access
 
 ## Install Options
@@ -166,10 +167,17 @@ longhouse serve --demo-fresh  # Rebuild demo data on start
 longhouse connect             # Run the shipper/watch process in foreground
 longhouse connect --install   # Install hooks + background engine service
 longhouse ship                # One-time import pass
+longhouse wall --json         # Read raw coordination signals
+longhouse peers --json        # Find nearby live peer sessions
+longhouse message ...         # Send a durable directed session message
+longhouse check-messages      # Read the durable inbox
+longhouse ack-message ...     # Acknowledge a delivered message
 longhouse status              # Show effective configuration
 longhouse doctor              # Self-diagnosis
 longhouse onboard             # Re-run setup wizard
 ```
+
+For the canonical machine-facing API and copyable coordination recipes, see `docs/specs/agents-machine-surface.md`.
 
 ## Troubleshooting
 
