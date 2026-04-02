@@ -93,7 +93,7 @@ resolve_app_uuid() {
   local applications_json
   applications_json="$(api_get "/applications")"
 
-  python3 - "$candidate" <<'PY' <<<"$applications_json"
+  python3 -c '
 import json
 import sys
 
@@ -104,7 +104,7 @@ for app in json.load(sys.stdin):
         raise SystemExit(0)
 
 raise SystemExit(f"Could not find Coolify application named {target!r}")
-PY
+' "$candidate" <<<"$applications_json"
 }
 
 extract_deploy_uuid() {
