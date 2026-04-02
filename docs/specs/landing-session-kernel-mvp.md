@@ -62,6 +62,7 @@ Make the pain concrete before explaining the architecture:
 ## Demo Journey To Sell
 
 This should be the canonical demo story for videos, README, and landing copy.
+See `docs/specs/launch-demo-contract.md` for the concrete launch walkthrough.
 
 1. Install Longhouse locally or on a box you control.
 2. Open the timeline with demo sessions or, preferably, shipped real sessions.

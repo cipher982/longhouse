@@ -79,7 +79,8 @@ export default function DocsPage() {
           <p>
             If you skipped onboarding or want to reinstall the background shipper and hooks, run:
           </p>
-          <pre><code>longhouse connect --install</code></pre>
+          <pre><code>longhouse connect --install
+longhouse ship</code></pre>
           <p>
             Then keep using Claude Code, Codex CLI, or Gemini CLI as normal. Longhouse imports their
             sessions into the timeline so you can browse, search, and inspect them from one place.

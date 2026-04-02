@@ -73,15 +73,16 @@ export function HeroSection({
             <p className="landing-hero-install-label">Get from install to first useful session in minutes</p>
             <div className="landing-hero-install-grid">
               <pre className="landing-code-block">
-                <code>{"curl -fsSL https://get.longhouse.ai/install.sh | bash\nlonghouse serve --demo"}</code>
+                <code>{"curl -fsSL https://get.longhouse.ai/install.sh | bash\nlonghouse serve"}</code>
               </pre>
               <pre className="landing-code-block">
-                <code>{"longhouse connect --install\nlonghouse wall --json"}</code>
+                <code>{"longhouse connect --install\nlonghouse ship"}</code>
               </pre>
             </div>
             <p className="landing-hero-install-note">
               Existing sessions become findable immediately. New Longhouse sessions become controllable
-              after launch from the same browser, CLI, and <code>/api/agents/*</code> surface.
+              after launch from the same browser, CLI, and <code>/api/agents/*</code> surface. Use
+              <code> longhouse serve --demo</code> only when you want a safe preview before importing real work.
             </p>
           </div>
 
