@@ -280,6 +280,7 @@ class WallSessionResponse(UTCBaseModel):
     session_id: str
     device_name: Optional[str] = None
     device_id: Optional[str] = None
+    cwd: Optional[str] = None
     git_repo: Optional[str] = None
     git_branch: Optional[str] = None
     project: Optional[str] = None
@@ -356,6 +357,7 @@ class SessionProjectionResponse(BaseModel):
     path_session_ids: List[str]
     items: List[SessionProjectionItemResponse]
     total: int
+    page_offset: int = Field(0, description="Offset of the first item in this page within the full projection")
     branch_mode: str = Field("head", description="Branch projection mode: head|all")
     abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
 

@@ -250,6 +250,7 @@ class SessionProjectionPage:
     total: int
     abandoned_events: int
     branch_mode: str
+    page_offset: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -421,6 +422,7 @@ class AgentsStore:
         branch_mode: str = "head",
         limit: int = 100,
         offset: int = 0,
+        load_from_end: bool = False,
     ) -> SessionProjectionPage:
         path_sessions = self.get_session_lineage_path(session_or_id)
         if not path_sessions:
@@ -430,6 +432,7 @@ class AgentsStore:
                 total=0,
                 abandoned_events=0,
                 branch_mode=branch_mode,
+                page_offset=0,
             )
 
         event_counts: list[int] = []
@@ -445,6 +448,9 @@ class AgentsStore:
             if branch_mode == "head":
                 forensic_total = self.count_session_events(path_session.id, branch_mode="all")
                 abandoned_events += max(0, forensic_total - visible_count)
+
+        if load_from_end:
+            offset = max(0, total - limit)
 
         items: list[SessionProjectionItem] = []
         remaining_offset = offset
@@ -508,6 +514,7 @@ class AgentsStore:
             total=total,
             abandoned_events=abandoned_events,
             branch_mode=branch_mode,
+            page_offset=offset,
         )
 
     def create_continuation_session(
