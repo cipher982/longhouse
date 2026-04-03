@@ -4,7 +4,7 @@ import pytest
 from fastapi import WebSocketDisconnect
 
 from zerg.database import Base, make_engine, make_sessionmaker
-from zerg.routers.runners import runner_websocket
+from zerg.routers.runners import _runner_websocket_with_db
 
 
 def _make_db(tmp_path):
@@ -54,7 +54,7 @@ async def test_runner_disconnect_before_hello_is_quiet(tmp_path, caplog):
     caplog.set_level(logging.INFO, logger="zerg.routers.runners")
 
     with SessionLocal() as db:
-        await runner_websocket(websocket, db)
+        await _runner_websocket_with_db(websocket, db)
 
     assert websocket.accepted is True
     assert "Runner disconnected before hello" in caplog.text
@@ -70,7 +70,7 @@ async def test_runner_invalid_hello_close_race_is_swallowed(tmp_path, caplog):
     caplog.set_level(logging.WARNING, logger="zerg.routers.runners")
 
     with SessionLocal() as db:
-        await runner_websocket(websocket, db)
+        await _runner_websocket_with_db(websocket, db)
 
     assert websocket.accepted is True
     assert "Failed to receive hello message: boom" in caplog.text

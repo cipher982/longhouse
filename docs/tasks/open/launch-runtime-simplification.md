@@ -43,6 +43,8 @@ Make the launch story match the real product:
 - [x] Spin wrapper mode out as a follow-on opt-in activation slice, not a launch prerequisite
 - [x] Remove leftover `managed-local` wording from public docs/UI
 - [x] Expose the second activation beat directly inside Timeline with runner-aware `Start Longhouse Session` / runner setup CTAs
+- [x] Add launch-critical activation coverage for the three Timeline states:
+  no runner, one ready runner, multiple ready runners
 
 ## Work Order
 
@@ -153,4 +155,7 @@ Do separately and do not let it block launch.
   users can start a Longhouse session directly when one runner is ready, or jump to runners/setup when it is not.
 - The runners grid now participates in that loop too:
   ready machines expose `Start Longhouse Session` directly instead of forcing a runner-detail detour first.
+- The empty Timeline CTA is now honest end-to-end:
+  `Add Runner` opens runner setup immediately, `Start Longhouse Session` opens launch directly, and `Choose Runner` routes to the ready-machine grid.
+- Playwright now covers that activation matrix directly, and the runner websocket route honors `commis` routing so runner presence works against the per-worker SQLite E2E harness instead of the default DB.
 - Architectural cleanup remains real, but it is not the first thing to do next.

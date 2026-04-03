@@ -282,6 +282,7 @@ export default function RunnersPage() {
                 key={runner.id}
                 className={`runner-card runner-card--${runner.status}`}
                 onClick={() => navigate(`/runners/${runner.id}`)}
+                data-testid={`runner-card-${runner.id}`}
               >
                 <Card.Header className="runner-card-header">
                   <div className="runner-card-title-group">
@@ -405,6 +406,7 @@ export default function RunnersPage() {
                         <Button
                           variant="primary"
                           size="sm"
+                          data-testid={`runner-launch-button-${runner.id}`}
                           onClick={(event) => {
                             event.stopPropagation();
                             setLaunchRunner(runner);

@@ -29,6 +29,9 @@ from sqlalchemy.orm import Session
 
 from zerg.crud import runner_crud
 from zerg.database import get_db
+from zerg.database import get_session_factory
+from zerg.database import reset_test_commis_id
+from zerg.database import set_test_commis_id
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import User
 from zerg.request_urls import get_request_public_base_url
@@ -1033,10 +1036,9 @@ async def rotate_runner_secret(
 # ---------------------------------------------------------------------------
 
 
-@router.websocket("/ws")
-async def runner_websocket(
+async def _runner_websocket_with_db(
     websocket: WebSocket,
-    db: Session = Depends(get_db),
+    db: Session,
 ) -> None:
     """WebSocket endpoint for runner connections.
 
@@ -1202,3 +1204,22 @@ async def runner_websocket(
             await _safe_close_runner_websocket(websocket)
         except Exception:
             pass  # Already closed
+
+
+@router.websocket("/ws")
+async def runner_websocket(
+    websocket: WebSocket,
+) -> None:
+    commis_id = websocket.query_params.get("commis")
+    commis_token = set_test_commis_id(commis_id) if commis_id else None
+    db = get_session_factory()()
+
+    try:
+        await _runner_websocket_with_db(websocket, db)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+        if commis_token is not None:
+            reset_test_commis_id(commis_token)
