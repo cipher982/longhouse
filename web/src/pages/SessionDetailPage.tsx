@@ -162,14 +162,11 @@ function SessionDetailWorkspaceRoute({
     headThreadSession,
   });
 
-  const sessionChatTarget: SessionChatTarget | null =
-    interaction.canChatFromBrowser
-    ? {
-        id: continuationSourceSession.id,
-        project: continuationSourceSession.project,
-        provider: continuationSourceSession.provider,
-      }
-    : null;
+  const sessionChatTarget: SessionChatTarget = {
+    id: continuationSourceSession.id,
+    project: continuationSourceSession.project,
+    provider: continuationSourceSession.provider,
+  };
 
   const inspectorSelection =
     selectedSelection && selectedSelection.kind !== "message" ? selectedSelection : null;
@@ -244,39 +241,42 @@ function SessionDetailWorkspaceRoute({
             }
             listRef={registerTimelineList}
             dock={
-              sessionChatTarget ? (
-                <SessionChat
-                  key={`${sessionChatTarget.id}:${interaction.mode}`}
-                  session={sessionChatTarget}
-                  layout="dock"
-                  dockHeaderStyle={
-                    interaction.mode === "head" ? "hidden" : "divider"
-                  }
-                  introEyebrow={
-                    interaction.mode === "managed_local"
-                      ? "Live session"
-                      : interaction.mode === "branch"
-                        ? "Cloud branch"
-                        : "Cloud continuation"
-                  }
-                  introTitle={interaction.title}
-                  introDescription={interaction.description}
-                  chatMode={interaction.mode === "managed_local" ? "managed_local" : "cloud"}
-                  composerPlaceholder={interaction.placeholder}
-                  submitLabel={interaction.submitLabel}
-                  requireClickForFirstSend={
-                    interaction.mode === "branch" || interaction.mode === "promote"
-                  }
-                  keyboardHintText={interaction.keyboardHint}
-                  onSessionChanged={(nextSessionId) => {
-                    if (!nextSessionId || nextSessionId === session.id) return;
-                    navigate(`/timeline/${nextSessionId}`, {
-                      replace: true,
-                      state: { from: returnTo },
-                    });
-                  }}
-                />
-              ) : null
+              <SessionChat
+                key={`${sessionChatTarget.id}:${interaction.mode}`}
+                session={sessionChatTarget}
+                layout="dock"
+                dockHeaderStyle={
+                  interaction.mode === "head" ? "hidden" : "divider"
+                }
+                introEyebrow={
+                  interaction.mode === "managed_local"
+                    ? "Live session"
+                    : interaction.mode === "managed_local_unavailable"
+                      ? "Host session"
+                      : interaction.mode === "unsupported"
+                        ? "Session history"
+                        : interaction.mode === "branch"
+                          ? "Cloud branch"
+                          : "Cloud continuation"
+                }
+                introTitle={interaction.title}
+                introDescription={interaction.description}
+                chatMode={interaction.mode === "managed_local" ? "managed_local" : "cloud"}
+                composerPlaceholder={interaction.placeholder}
+                composerDisabledReason={interaction.composerDisabledReason}
+                submitLabel={interaction.submitLabel}
+                requireClickForFirstSend={
+                  interaction.mode === "branch" || interaction.mode === "promote"
+                }
+                keyboardHintText={interaction.keyboardHint}
+                onSessionChanged={(nextSessionId) => {
+                  if (!nextSessionId || nextSessionId === session.id) return;
+                  navigate(`/timeline/${nextSessionId}`, {
+                    replace: true,
+                    state: { from: returnTo },
+                  });
+                }}
+              />
             }
           />
         }

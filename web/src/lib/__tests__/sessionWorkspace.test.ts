@@ -94,6 +94,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("managed_local");
     expect(capabilities.canChatFromBrowser).toBe(true);
     expect(capabilities.capabilityLabel).toBe("Live control");
+    expect(capabilities.composerDisabledReason).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Drive live session");
     expect(capabilities.submitLabel).toBe("Send");
   });
@@ -110,6 +111,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("managed_local_unavailable");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.capabilityLabel).toBe("Reattach on host");
+    expect(capabilities.composerDisabledReason).toMatch(/host control channel/i);
     expect(capabilities.primaryActionLabel).toBe("Reattach on host");
     expect(capabilities.notice?.title).toMatch(/Codex session needs host attach/i);
   });
@@ -136,6 +138,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.capabilityLabel).toBe("History only");
+    expect(capabilities.composerDisabledReason).toMatch(/currently wired for Claude sessions only/i);
     expect(capabilities.primaryActionLabel).toBe("Latest context");
   });
 });

@@ -75,6 +75,7 @@ interface SessionChatProps {
   keyboardHintText?: string;
   /** Managed-local sessions use fire-and-forget dispatch (response arrives via SSE stream). */
   chatMode?: "cloud" | "managed_local";
+  composerDisabledReason?: string | null;
 }
 
 export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider">;
@@ -112,9 +113,11 @@ export function SessionChat({
   requireClickForFirstSend = false,
   keyboardHintText,
   chatMode = "cloud",
+  composerDisabledReason = null,
 }: SessionChatProps) {
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
+  const isComposerDisabled = Boolean(composerDisabledReason);
   const queryClient = useQueryClient();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
@@ -443,7 +446,7 @@ export function SessionChat({
       e.preventDefault();
 
       const message = draft.trim();
-      if (!message || isSubmitting) return;
+      if (!message || isSubmitting || isComposerDisabled) return;
 
       setDraft("");
       setError(null);
@@ -462,7 +465,7 @@ export function SessionChat({
         await handleCloudSend(message);
       }
     },
-    [draft, isSubmitting, isManagedLocal, handleManagedLocalSend, handleCloudSend],
+    [draft, isSubmitting, isManagedLocal, handleManagedLocalSend, handleCloudSend, isComposerDisabled],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -481,11 +484,13 @@ export function SessionChat({
     }
   };
 
-  const statusBadge = isStreaming
+  const statusBadge = isComposerDisabled
+    ? { variant: "warning" as const, label: "Unavailable" }
+    : isStreaming
     ? { variant: "success" as const, label: "Streaming" }
     : isSubmitting
       ? { variant: "warning" as const, label: "Sending" }
-    : lockInfo?.locked
+      : lockInfo?.locked
       ? { variant: "warning" as const, label: "Locked" }
       : { variant: "neutral" as const, label: "Ready" };
 
@@ -622,6 +627,7 @@ export function SessionChat({
       <form
         className={`session-chat-composer${isDock ? " session-chat-composer--dock" : ""}`}
         onSubmit={handleSend}
+        title={composerDisabledReason ?? undefined}
       >
         {blockedKeyboardSubmit ? (
           <div className="session-chat-confirmation" data-testid="session-chat-explicit-submit-hint">
@@ -647,8 +653,9 @@ export function SessionChat({
               }}
               onKeyDown={handleKeyDown}
               placeholder={composerPlaceholder || "Type a message..."}
-              disabled={isSubmitting || lockInfo?.locked}
+              disabled={isComposerDisabled || isSubmitting || lockInfo?.locked}
               rows={1}
+              title={composerDisabledReason ?? undefined}
             />
             {isManagedLocal && sentConfirmation ? (
               <span className="session-chat-sent-notice">Sent</span>
@@ -662,7 +669,8 @@ export function SessionChat({
                 type="submit"
                 variant="primary"
                 size="sm"
-                disabled={!draft.trim() || isSubmitting || lockInfo?.locked}
+                disabled={isComposerDisabled || !draft.trim() || isSubmitting || lockInfo?.locked}
+                title={composerDisabledReason ?? undefined}
               >
                 {submitLabel}
               </Button>
@@ -675,8 +683,9 @@ export function SessionChat({
               onChange={(e) => handleDraftChange(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder={composerPlaceholder || "Type a message..."}
-              disabled={isSubmitting || lockInfo?.locked}
+              disabled={isComposerDisabled || isSubmitting || lockInfo?.locked}
               rows={2}
+              title={composerDisabledReason ?? undefined}
             />
             <div className="session-chat-actions">
               {isStreaming ? (
@@ -688,7 +697,8 @@ export function SessionChat({
                   type="submit"
                   variant="primary"
                   size="sm"
-                  disabled={!draft.trim() || isSubmitting || lockInfo?.locked}
+                  disabled={isComposerDisabled || !draft.trim() || isSubmitting || lockInfo?.locked}
+                  title={composerDisabledReason ?? undefined}
                 >
                   {submitLabel}
                 </Button>
@@ -696,6 +706,14 @@ export function SessionChat({
             </div>
           </>
         )}
+        {composerDisabledReason ? (
+          <div
+            className="session-chat-disabled-reason"
+            data-testid="session-chat-disabled-reason"
+          >
+            {composerDisabledReason}
+          </div>
+        ) : null}
       </form>
     </div>
   );
