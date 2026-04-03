@@ -211,6 +211,7 @@ install-engine: ## Build + sign the Rust engine binary (run after any engine sou
 
 test-engine: ## Rust engine unit + golden + adversarial tests (use when changing engine/)
 	@echo "🦀 Running engine unit + golden + adversarial tests..."
+	cd engine && cargo build --release
 	cd engine && cargo test --bin longhouse-engine --test golden_parser_contract --test adversarial_parser
 
 test-zerg-ops-backup: ## Backup/restore retention contract test for scripts/zerg-ops.sh
