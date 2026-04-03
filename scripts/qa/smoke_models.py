@@ -44,12 +44,20 @@ def classify_smoke_exception(exc: Exception) -> tuple[str, str]:
 
     Live provider quota exhaustion should not make unrelated product changes
     look broken in CI. We still surface the detail, but treat explicit
-    rate-limit responses as skipped/transient instead of hard failures.
+    rate-limit or exhausted-credit responses as skipped/transient instead of
+    hard failures.
     """
     detail = str(exc)
     lower = detail.lower()
     if "429" in detail and ("rate limit" in lower or "too many requests" in lower):
         return "skipped", f"rate limited: {detail}"
+    if "429" in detail and (
+        "resource has been exhausted" in lower
+        or "used all available credits" in lower
+        or "monthly spending limit" in lower
+        or "raise your spending limit" in lower
+    ):
+        return "skipped", f"provider quota exhausted: {detail}"
     # Some OpenAI-compatible providers occasionally return a malformed payload
     # (for example `choices: null`) that trips the SDK/client-side indexing path.
     # That is a provider-side transient, not a product regression.

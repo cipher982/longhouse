@@ -773,7 +773,7 @@ trace-coverage: ## @internal Trace coverage report (usage: make trace-coverage [
 		$(if $(JSON),--json,) \
 		$(if $(NO_EVENTS),--no-events,)
 
-test-e2e-onboarding: ## @internal Run onboarding browser ring (Playwright + demo server)
+test-e2e-onboarding: ## @internal Run onboarding browser ring (Playwright + local serve)
 	@echo "🎭 Running onboarding browser ring..."
 	@ONBOARDING_PLAYWRIGHT_PROJECT="$(PROJECT)" ./scripts/qa/qa-oss.sh --workdir $(CURDIR) --no-unit --no-e2e
 
@@ -792,7 +792,7 @@ onboarding-sqlite: ## SQLite-only onboarding smoke test (no Docker)
 	uv run --extra dev pytest tests_lite/test_onboarding_sqlite.py -v --tb=short -p no:warnings
 	@echo "SQLite onboarding smoke test passed"
 
-qa-oss: ## Full OSS QA (isolated clone + UI gate)
+qa-oss: ## Full OSS QA (isolated clone + onboarding UI gate)
 	@./scripts/qa/qa-oss.sh $(ARGS)
 
 # ---------------------------------------------------------------------------

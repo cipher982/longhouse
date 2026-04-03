@@ -223,7 +223,7 @@ jobs:
   oss-qa:
     runs-on: ubuntu-latest
     # No dependency on validate - can run immediately on GitHub-hosted runners
-    name: "📦 oss-qa--fresh-clone--sqlite--demo-serve"
+    name: "📦 oss-qa--fresh-clone--sqlite--onboarding-ui"
 
     steps:
     - uses: actions/checkout@v6
