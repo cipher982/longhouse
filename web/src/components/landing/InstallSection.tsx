@@ -51,8 +51,8 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
       <div className="install-header">
         <h3>Get started in seconds</h3>
         <p>
-          One install command. The installer runs onboarding so you can import existing sessions first,
-          then start a Longhouse session when you want control.
+          One install command. The installer runs onboarding so your timeline fills first, then you can
+          start through Longhouse or enable wrappers when you want live control later.
         </p>
       </div>
 

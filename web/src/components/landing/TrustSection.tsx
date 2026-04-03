@@ -28,7 +28,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "What AI coding agents do you support?",
-    answer: "Claude Code currently has the strongest continuation path, hooks, and telemetry. Codex CLI and Gemini CLI are already findable and inspectable in the timeline and machine surface today, but direct continuation is still Claude-first. OpenCode and Cursor are coming soon."
+    answer: "Claude Code currently has the strongest continuation path, hooks, and telemetry. Codex CLI and Gemini CLI already land in the same timeline and machine surface today, but direct continuation is still Claude-first. OpenCode and Cursor are coming soon."
   }
 ];
 

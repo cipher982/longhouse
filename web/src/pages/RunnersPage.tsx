@@ -412,7 +412,7 @@ export default function RunnersPage() {
                             setLaunchRunner(runner);
                           }}
                         >
-                          Start Longhouse Session
+                          Start Session
                         </Button>
                       </div>
                     )}

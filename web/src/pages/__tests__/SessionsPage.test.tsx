@@ -145,7 +145,7 @@ function makeRunner(overrides: Partial<Runner> = {}): Runner {
     capabilities: ["exec.full"],
     status: "online",
     status_reason: null,
-    status_summary: "Ready to launch Longhouse sessions.",
+    status_summary: "Ready to start sessions.",
     last_seen_at: now,
     last_seen_age_seconds: 3,
     heartbeat_interval_ms: 30_000,
@@ -467,11 +467,11 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
-    await user.click(await screen.findByRole("button", { name: "Start Longhouse Session" }));
+    await user.click(await screen.findByRole("button", { name: "Start Session" }));
 
     expect(screen.getByTestId("launch-session-modal")).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "Launch Longhouse session" })).toBeInTheDocument();
-    expect(screen.getByText(/Longhouse will launch the CLI inside tmux/i)).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Start session" })).toBeInTheDocument();
+    expect(screen.getByText(/keep the same session available from the timeline later/i)).toBeInTheDocument();
   });
 
   it("sends users to runners when they need to choose a launch target", async () => {
@@ -512,7 +512,7 @@ describe("SessionsPage", () => {
     expect(await screen.findByText("These are demo sessions.")).toBeInTheDocument();
     expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
     expect(screen.getByText("longhouse ship")).toBeInTheDocument();
-    expect(screen.getByText(/start a Longhouse session when you want control after launch/i)).toBeInTheDocument();
+    expect(screen.getByText(/start through longhouse or wrappers when you want control after launch/i)).toBeInTheDocument();
   });
 
   it("renders query compatibility cards from the matched detail session instead of speculative head state", async () => {
@@ -828,7 +828,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Longhouse session")).toBeInTheDocument();
+    expect(await screen.findByText("Live control")).toBeInTheDocument();
     expect(screen.getByText("Cloud")).toBeInTheDocument();
     expect(screen.getByText("Head: cinder")).toBeInTheDocument();
     expect(screen.queryByText("Head: Cloud")).not.toBeInTheDocument();

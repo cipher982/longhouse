@@ -33,7 +33,7 @@ function makeRunner(overrides: Partial<Runner> = {}): Runner {
     capabilities: ["exec.full"],
     status: "online",
     status_reason: null,
-    status_summary: "Ready to launch Longhouse sessions.",
+    status_summary: "Ready to start sessions.",
     last_seen_at: now,
     last_seen_age_seconds: 3,
     heartbeat_interval_ms: 30_000,
@@ -124,9 +124,9 @@ describe("RunnersPage", () => {
 
     renderRunnersPage();
 
-    await user.click(screen.getByRole("button", { name: "Start Longhouse Session" }));
+    await user.click(screen.getByRole("button", { name: "Start Session" }));
 
-    expect(screen.getByRole("dialog", { name: "Launch Longhouse session" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Start session" })).toBeInTheDocument();
     expect(screen.getByTestId("location-probe")).toHaveTextContent("/runners");
     expect(navigateMock).not.toHaveBeenCalled();
   });
@@ -148,7 +148,7 @@ describe("RunnersPage", () => {
 
     renderRunnersPage();
 
-    expect(screen.getAllByRole("button", { name: "Start Longhouse Session" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Start Session" })).toHaveLength(1);
     expect(screen.getByText("laptop")).toBeInTheDocument();
   });
 

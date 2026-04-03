@@ -33,7 +33,7 @@ export function PricingSection() {
         "SQLite core, no external services",
         "Import existing Claude Code, Codex, and Gemini sessions",
         "Search, detail, and machine surface",
-        "Start Longhouse sessions you can control after launch",
+        "Keep a control channel open by starting sessions through Longhouse",
         "Open source (Apache 2.0)",
       ],
       ctaText: "Self-Host Free",

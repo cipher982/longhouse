@@ -35,7 +35,7 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   codex: {
     id: "codex",
     marketingName: "Codex CLI",
-    cardDescription: "Import, search, and Longhouse session starts",
+    cardDescription: "Import, search, and control-ready launches through Longhouse",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",

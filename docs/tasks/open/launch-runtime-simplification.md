@@ -8,16 +8,17 @@ Last updated: 2026-04-03
 
 Make the launch story match the real product:
 
-- existing sessions become findable immediately
-- new Longhouse sessions become controllable after launch
+- every session lands in one timeline immediately
+- Longhouse keeps a control channel open when it is in the launch path
 - the session kernel remains the technical identity, not the first emotional hook
 - self-hosted is the free primary path and hosted is the convenience deployment of the same loop
 
 ## Done when
 
 - README, landing spec, and launch docs all tell the same two-beat story:
-  existing sessions become findable first; new Longhouse sessions become controllable second.
+  every session lands in one timeline first; Longhouse keeps control attached when it is in the launch path.
 - Public copy leads with the outcome (`control sessions after launch`) and uses `session kernel` as the technical identity lower in the page/docs.
+- The product model is one session object in one timeline; launch path changes capability, not object type.
 - Provider support is documented honestly enough that demos and launch copy do not drift into parity theater.
 - Launch-facing copy says some version of `Works on your laptop. Shines on a machine that stays on.`
 - Launch-readiness is triaged clearly into must-demo, nice-to-show, and roadmap.
@@ -39,10 +40,10 @@ Make the launch story match the real product:
 - [x] Publish the canonical proof-of-value demo journey in launch-facing docs and demo scripts
 - [x] Make the hosted boundary explicit and honest until onboarding friction is reduced
 - [x] Decide and land the install/onboarding script changes needed for the story:
-  import first, start a Longhouse session second, wrappers later
+  import first, start through Longhouse second, wrappers later
 - [x] Spin wrapper mode out as a follow-on opt-in activation slice, not a launch prerequisite
 - [x] Remove leftover `managed-local` wording from public docs/UI
-- [x] Expose the second activation beat directly inside Timeline with runner-aware `Start Longhouse Session` / runner setup CTAs
+- [x] Expose the second activation beat directly inside Timeline with runner-aware `Start Session` / runner setup CTAs
 - [x] Add launch-critical activation coverage for the three Timeline states:
   no runner, one ready runner, multiple ready runners
 
@@ -73,7 +74,7 @@ Do after the story is stable.
 
 - onboarding should get users to first value fast
 - import/ship existing sessions first
-- starting a Longhouse session is the second activation beat
+- starting through Longhouse is the second activation beat
 - opt-in wrapper mode belongs here, not before copy is stable
 - installer, onboarding, and docs should all point at the same activation order
 
@@ -142,21 +143,21 @@ Do separately and do not let it block launch.
 - This task intentionally excludes the browser-vs-machine auth split that was being worked in parallel.
 - The launch story should optimize for first proof of value, not the hosted signup funnel.
 - Story alignment, launch proof, onboarding, and wrapper mode are now the main forward path.
-- The first onboarding pass now matches the launch story: import existing sessions first, then start a Longhouse session when the user wants control.
+- The first onboarding pass now matches the launch story: import existing sessions first, then start through Longhouse when the user wants control.
 - Wrapper-mode activation shipped as an explicit opt-in flow:
   - installer no longer mutates Claude/Codex launch behavior by default
   - interactive onboarding offers wrapper install explicitly
   - `longhouse wrap --json` gives automation a machine-readable status/results surface
-- Runtime/session UI copy now uses `Longhouse session`, `host machine`, and `Live on host` language instead of leaking `managed-local` into user-facing surfaces.
+- Runtime/session UI copy now uses capability language like `Live control`, `host machine`, and `Live on host` instead of implying separate session classes.
 - Session-facing activation and navigation now talk about `machines` instead of `runners`; `runner` stays as the connector/install term inside explicit machine setup and diagnostics.
 - Onboarding verification no longer creates a fake visible timeline session; the verification ingest is now hidden as a sidechain session.
 - Installer success output and the landing install block now present the same activation order:
-  start Longhouse, import existing sessions, then start a Longhouse session when the user wants control.
+  start Longhouse, import existing sessions, then start through Longhouse when the user wants control.
 - Timeline now carries that same second beat in-product:
-  users can start a Longhouse session directly when one runner is ready, or jump to runners/setup when it is not.
+  users can start a session directly when one machine is ready, or jump to runners/setup when it is not.
 - The runners grid now participates in that loop too:
-  ready machines expose `Start Longhouse Session` directly instead of forcing a runner-detail detour first.
+  ready machines expose `Start Session` directly instead of forcing a runner-detail detour first.
 - The empty Timeline CTA is now honest end-to-end:
-  `Connect Machine` opens setup immediately, `Start Longhouse Session` opens launch directly, and `Choose Machine` routes to the ready-machine grid.
+  `Connect Machine` opens setup immediately, `Start Session` opens launch directly, and `Choose Machine` routes to the ready-machine grid.
 - Playwright now covers that activation matrix directly, and the runner websocket route honors `commis` routing so runner presence works against the per-worker SQLite E2E harness instead of the default DB.
 - Architectural cleanup remains real, but it is not the first thing to do next.

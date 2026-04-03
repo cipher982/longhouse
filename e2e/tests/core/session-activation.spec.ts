@@ -210,7 +210,7 @@ test.describe("Session activation surfaces", () => {
       await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
       const runnerAction = page.getByTestId("timeline-empty-runner-action");
-      await expect(runnerAction).toHaveText("Start Longhouse Session");
+      await expect(runnerAction).toHaveText("Start Session");
       await runnerAction.click();
 
       const modal = page.getByTestId("launch-session-modal");
@@ -221,7 +221,7 @@ test.describe("Session activation surfaces", () => {
       await page.locator("#launch-display-name").fill("Activation E2E");
       await page.getByRole("button", { name: "Launch" }).click();
 
-      await expect(modal).toContainText(`Longhouse session launched on ${runner.name}`);
+      await expect(modal).toContainText(`Session started on ${runner.name}`);
       await expect(modal).toContainText(`ssh ${runner.name}`);
       expect(launchBody).toMatchObject({
         runner_target: `runner:${runner.id}`,
@@ -266,7 +266,7 @@ test.describe("Session activation surfaces", () => {
 
       const modal = page.getByTestId("launch-session-modal");
       await expect(modal).toBeVisible();
-      await expect(modal).toContainText(`Start a Longhouse session on ${secondRunner.name}.`);
+      await expect(modal).toContainText(`Start a session on ${secondRunner.name}.`);
     } finally {
       await disconnectSecond();
       await disconnectFirst();

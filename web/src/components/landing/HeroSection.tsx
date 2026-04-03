@@ -30,7 +30,7 @@ export function HeroSection({
         <div className="landing-hero-text">
           <div className="landing-hero-badge">
             <span className="landing-hero-badge-dot" />
-            Existing sessions first
+            One timeline for every session
           </div>
 
           <h1 className="landing-hero-headline">
@@ -38,8 +38,9 @@ export function HeroSection({
           </h1>
 
           <p className="landing-hero-subhead">
-            Import existing Claude Code, Codex, and Gemini sessions into one searchable timeline, then
-            start Longhouse sessions you can inspect, message, and continue later.
+            Bring Claude Code, Codex, and Gemini sessions into one searchable timeline. Start through
+            Longhouse or enable wrappers when you want the same session to stay messageable and
+            continuable later.
           </p>
 
           <p className="landing-hero-note">
@@ -63,9 +64,9 @@ export function HeroSection({
           </div>
 
           <div className="landing-hero-friction-reducers">
-            <span>Import existing sessions first</span>
+            <span>One timeline first</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>Control new Longhouse sessions second</span>
+            <span>Control channel when Longhouse is in the loop</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
             <span>CLI / API first</span>
           </div>
@@ -81,9 +82,9 @@ export function HeroSection({
               </pre>
             </div>
             <p className="landing-hero-install-note">
-              Existing sessions become findable immediately. New Longhouse sessions become controllable
-              after launch from the same browser, CLI, and <code>/api/agents/*</code> surface. Use
-              <code> longhouse serve --demo</code> only when you want a safe preview before importing real work.
+              Every session lands in the same timeline. When a session starts through Longhouse or its
+              wrappers, browser, CLI, and <code>/api/agents/*</code> all share the same control path later.
+              Use <code> longhouse serve --demo</code> only when you want a safe preview before importing real work.
             </p>
           </div>
 
@@ -97,15 +98,15 @@ export function HeroSection({
         <div className="landing-hero-visual">
           <div className="landing-hero-signal-panel">
             <p className="landing-hero-signal-label">How people get value fast</p>
-            <h2 className="landing-hero-signal-title">Find old sessions first. Control new ones second.</h2>
+            <h2 className="landing-hero-signal-title">One timeline first. Then keep control.</h2>
             <div className="landing-hero-signal-list">
               <div className="landing-hero-signal-card">
-                <p className="landing-hero-signal-card-title">Findability</p>
+                <p className="landing-hero-signal-card-title">Timeline</p>
                 <p>Search prior work, inspect raw session detail, and recover the exact context that matters.</p>
               </div>
               <div className="landing-hero-signal-card">
-                <p className="landing-hero-signal-card-title">Control</p>
-                <p>Start a Longhouse session, then message it or continue it later from browser, CLI, or API.</p>
+                <p className="landing-hero-signal-card-title">Control channel</p>
+                <p>Start through Longhouse or wrappers so the same session can still be messaged or continued later.</p>
               </div>
               <div className="landing-hero-signal-card">
                 <p className="landing-hero-signal-card-title">Coordination</p>
@@ -116,7 +117,7 @@ export function HeroSection({
 
           <AppScreenshotFrame
             src="/images/landing/timeline-preview.png"
-            alt="Longhouse session timeline showing Claude Code sessions"
+            alt="Longhouse timeline showing Claude Code sessions"
             title="Session Timeline"
             aspectRatio="16/9"
             showChrome={true}

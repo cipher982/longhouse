@@ -214,12 +214,12 @@ describe("LoopInboxPage", () => {
     });
   });
 
-  it("shows the Longhouse-session venue label and sends a quick reply", async () => {
+  it("shows the machine venue label and sends a quick reply", async () => {
     const user = userEvent.setup();
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getAllByText("Longhouse session")).toHaveLength(2);
+      expect(screen.getAllByText("This machine")).toHaveLength(2);
     });
 
     await user.type(screen.getByTestId("loop-reply-input"), "continue with the hiring shortlist");

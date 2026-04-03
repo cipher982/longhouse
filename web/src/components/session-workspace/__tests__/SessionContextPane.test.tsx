@@ -130,11 +130,11 @@ describe("SessionContextPane", () => {
     });
 
     expect(screen.getAllByText("Running bash")).toHaveLength(2);
-    expect(screen.getByText("Longhouse session")).toBeInTheDocument();
+    expect(screen.getByText("Live control")).toBeInTheDocument();
     expect(screen.queryByText("Completed")).not.toBeInTheDocument();
   });
 
-  it("shows the host reattach command for Longhouse sessions", () => {
+  it("shows the host reattach command for live-controlled sessions", () => {
     renderPane({
       session: makeSession({
         execution_home: "managed_local",
