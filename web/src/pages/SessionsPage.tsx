@@ -45,6 +45,7 @@ import {
   Input,
 } from "../components/ui";
 import { PresenceBadge } from "../components/PresenceBadge";
+import AddRunnerModal from "../components/AddRunnerModal";
 import LaunchSessionModal from "../components/LaunchSessionModal";
 import { parseUTC } from "../lib/dateUtils";
 import { getExecutionHomeLabel } from "../lib/sessionExecutionHome";
@@ -843,6 +844,7 @@ export default function SessionsPage() {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const filterBtnRef = useRef<HTMLButtonElement>(null);
   const [recallOpen, setRecallOpen] = useState(false);
+  const [showAddRunnerModal, setShowAddRunnerModal] = useState(false);
   const queryClient = useQueryClient();
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
   const { data: runnersData } = useRunners();
@@ -865,8 +867,12 @@ export default function SessionsPage() {
       setLaunchRunner(singleLaunchReadyRunner);
       return;
     }
+    if (runners.length === 0) {
+      setShowAddRunnerModal(true);
+      return;
+    }
     navigate("/runners");
-  }, [navigate, singleLaunchReadyRunner]);
+  }, [navigate, runners.length, singleLaunchReadyRunner]);
   const handleLaunchModalClose = useCallback(() => {
     setLaunchRunner(null);
   }, []);
@@ -875,6 +881,12 @@ export default function SessionsPage() {
       isOpen
       onClose={handleLaunchModalClose}
       runner={launchRunner}
+    />
+  ) : null;
+  const addRunnerModal = showAddRunnerModal ? (
+    <AddRunnerModal
+      isOpen
+      onClose={() => setShowAddRunnerModal(false)}
     />
   ) : null;
 
@@ -1028,6 +1040,7 @@ export default function SessionsPage() {
         variant={singleLaunchReadyRunner ? "primary" : "secondary"}
         size="sm"
         onClick={handleRunnerAction}
+        data-testid="timeline-runner-action"
       >
         {runnerActionLabel}
       </Button>
@@ -1185,6 +1198,7 @@ export default function SessionsPage() {
                   variant="secondary"
                   size="md"
                   onClick={handleRunnerAction}
+                  data-testid="timeline-empty-runner-action"
                 >
                   {runnerActionLabel}
                 </Button>
@@ -1220,6 +1234,7 @@ export default function SessionsPage() {
             </p>
           </div>
           {launchModal}
+          {addRunnerModal}
         </div>
       </PageShell>
     );
@@ -1474,6 +1489,7 @@ export default function SessionsPage() {
         )}
       </div>
       {launchModal}
+      {addRunnerModal}
     </PageShell>
   );
 }
