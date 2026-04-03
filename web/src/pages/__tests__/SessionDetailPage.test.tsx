@@ -287,7 +287,7 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "This Gemini transcript is still fully searchable here, but direct cloud continuation is currently wired for Claude sessions only.",
+      "This Gemini session is still fully searchable here, but browser continuation is currently wired for Claude sessions only.",
     );
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
       "Web continuation unavailable for Gemini",

@@ -125,7 +125,7 @@ export function getSessionInteractionCapabilities({
       : mode === "unsupported"
         ? {
             title: `Web continuation unavailable for ${providerLabel}`,
-            body: `This ${providerLabel} transcript is still fully searchable here, but direct cloud continuation is currently wired for Claude sessions only.`,
+            body: `This ${providerLabel} session is still fully searchable here, but browser continuation is currently wired for Claude sessions only.`,
           }
         : null;
 
