@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { EmptyState, Spinner } from "../ui";
 import { FunnelIcon } from "../icons";
 import type {
@@ -238,6 +238,27 @@ export function TimelinePane({
     loading: isFetchingNextPage,
     onLoad: onFetchNextPage,
   });
+
+  // Scroll anchoring: when a new page prepends items, preserve the user's
+  // visual position by offsetting scrollTop by the added height. This moves
+  // the sentinel off-screen so the observer can fire again on the next
+  // scroll-up — no "scroll down to reset" needed.
+  const prevScrollHeightRef = useRef(0);
+  const prevLoadedEntriesRef = useRef(0);
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const newScrollHeight = container.scrollHeight;
+    const prevLoaded = prevLoadedEntriesRef.current;
+    prevLoadedEntriesRef.current = loadedEntries;
+    // Only anchor after the initial load (prevLoaded > 0), not on first render.
+    if (prevLoaded > 0 && loadedEntries > prevLoaded) {
+      const diff = newScrollHeight - prevScrollHeightRef.current;
+      if (diff > 0) container.scrollTop += diff;
+    }
+    prevScrollHeightRef.current = newScrollHeight;
+  }, [loadedEntries]);
+
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const messageCount = useMemo(
     () => items.filter((item) => item.kind === "message").length,
