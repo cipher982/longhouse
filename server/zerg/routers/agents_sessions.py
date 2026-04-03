@@ -1106,6 +1106,7 @@ async def get_session_projection(
             path_session_ids=[str(path_session.id) for path_session in projection.path_sessions],
             items=items,
             total=projection.total,
+            page_offset=projection.page_offset,
             branch_mode=projection.branch_mode,
             abandoned_events=projection.abandoned_events,
         )
@@ -1166,7 +1167,7 @@ async def get_session_workspace(
             session,
             branch_mode=branch_mode,
             limit=limit,
-            offset=0,
+            load_from_end=True,
         )
 
     thread_cache: dict[str, tuple[str, int]] = {}
@@ -1272,6 +1273,7 @@ async def get_session_workspace(
                 path_session_ids=[str(path_session.id) for path_session in projection.path_sessions],
                 items=projection_items,
                 total=projection.total,
+                page_offset=projection.page_offset,
                 branch_mode=projection.branch_mode,
                 abandoned_events=projection.abandoned_events,
             ),

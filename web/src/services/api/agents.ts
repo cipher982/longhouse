@@ -120,6 +120,7 @@ export interface AgentSessionProjectionResponse {
   path_session_ids: string[];
   items: AgentSessionProjectionItem[];
   total: number;
+  page_offset?: number;
   branch_mode?: "head" | "all";
   abandoned_events?: number;
 }

@@ -691,6 +691,18 @@
     padding: 0 var(--space-4) var(--space-3);
   }
 
+  /* Top sentinel for auto-fetching older messages on scroll. Has a minimum
+     height so the IntersectionObserver fires before the user reaches the very
+     top edge of the list. Shows a spinner while the fetch is in flight. */
+  .timeline-pane__load-older {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 48px;
+    padding: var(--space-2) var(--space-4);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  }
+
   .timeline-pane__filter-toggle {
     display: inline-flex;
     align-items: center;

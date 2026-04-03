@@ -117,10 +117,12 @@ export function useSessionWorkspace(
     setTimelineListElement((current) => (current === node ? current : node));
   }, []);
 
-  const projectionItems = useMemo(
-    () => projectionPagesData?.pages.flatMap((page) => page.items) || [],
-    [projectionPagesData],
-  );
+  const projectionItems = useMemo(() => {
+    if (!projectionPagesData) return [];
+    // Pages are ordered [newest, older, even_older, ...] since we paginate backward.
+    // Reverse so the timeline renders oldest-at-top, newest-at-bottom.
+    return [...projectionPagesData.pages].reverse().flatMap((page) => page.items);
+  }, [projectionPagesData]);
 
   const totalEntries = useMemo(
     () => projectionPagesData?.pages[0]?.total ?? projectionItems.length,

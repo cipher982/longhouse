@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Button, EmptyState, Spinner } from "../ui";
+import { EmptyState, Spinner } from "../ui";
 import { FunnelIcon } from "../icons";
 import type {
   TimelineSeam,
@@ -223,6 +223,24 @@ export function TimelinePane({
   // Filter and search state — owned here, not passed in
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
+
+  // Auto-fetch older events when the top sentinel scrolls into view.
+  const topSentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!hasNextPage) return;
+    const sentinel = topSentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting && !isFetchingNextPage) {
+          onFetchNextPage();
+        }
+      },
+      { threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasNextPage, isFetchingNextPage, onFetchNextPage]);
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const messageCount = useMemo(
     () => items.filter((item) => item.kind === "message").length,
@@ -376,7 +394,7 @@ export function TimelinePane({
               <input
                 type="text"
                 className="timeline-pane__search-input"
-                placeholder="Search events..."
+                placeholder="Search messages..."
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
               />
@@ -401,6 +419,12 @@ export function TimelinePane({
               {showAbandonedBranches ? "Showing head + abandoned branches" : `${abandonedEvents} abandoned branch events hidden`}
             </button>
           ) : null}
+        </div>
+      ) : null}
+
+      {hasNextPage || isFetchingNextPage ? (
+        <div ref={topSentinelRef} className="timeline-pane__load-older">
+          {isFetchingNextPage ? <Spinner size="sm" /> : null}
         </div>
       ) : null}
 
@@ -430,10 +454,10 @@ export function TimelinePane({
             title="No events"
             description={
               debouncedSearch.trim()
-                ? `No events match "${debouncedSearch}".`
+                ? `No messages match "${debouncedSearch}".`
                 : eventFilter !== "all"
-                  ? "No timeline entries match the selected filter."
-                  : "This session has no recorded timeline entries."
+                  ? "No messages match the selected filter."
+                  : "This session has no recorded messages."
             }
           />
         ) : (
@@ -477,14 +501,6 @@ export function TimelinePane({
           })
         )}
       </div>
-
-      {hasNextPage ? (
-        <div className="timeline-pane__footer">
-          <Button variant="ghost" size="sm" onClick={onFetchNextPage} disabled={isFetchingNextPage}>
-            {isFetchingNextPage ? "Loading more..." : "Load older events"}
-          </Button>
-        </div>
-      ) : null}
 
       {dock ? <div className="timeline-pane__dock">{dock}</div> : null}
     </div>

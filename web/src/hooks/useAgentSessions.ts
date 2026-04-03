@@ -159,12 +159,17 @@ export function useAgentSessionProjectionInfinite(
         branch_mode,
       }),
     initialPageParam: 0,
-    getNextPageParam: (lastPage, pages) => {
-      const loaded = pages.reduce((sum, page) => sum + page.items.length, 0);
-      return loaded < lastPage.total ? loaded : undefined;
+    // Backward pagination: each "next" page loads events that come before the
+    // oldest page currently loaded. page_offset=0 means we've reached the start.
+    getNextPageParam: (lastPage) => {
+      const currentOffset = lastPage.page_offset ?? 0;
+      return currentOffset > 0 ? Math.max(0, currentOffset - limit) : undefined;
     },
     enabled: !!sessionId && enabled,
-    initialData: initialPage ? { pages: [initialPage], pageParams: [0] } : undefined,
+    // Seed page params from page_offset so backward pagination works correctly.
+    initialData: initialPage
+      ? { pages: [initialPage], pageParams: [initialPage.page_offset ?? 0] }
+      : undefined,
     staleTime: 10_000,
     gcTime: 5 * 60_000,
   });
