@@ -427,7 +427,7 @@ function RunnerStatusIndicator() {
         }}
       />
       <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-        Runners {runnerStatus.online}/{runnerStatus.total}
+        Machines {runnerStatus.online}/{runnerStatus.total}
       </span>
     </span>
   );

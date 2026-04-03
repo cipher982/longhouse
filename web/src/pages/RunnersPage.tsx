@@ -232,8 +232,8 @@ export default function RunnersPage() {
       <div className="runners-page-container">
         <EmptyState
           icon={<Spinner size="lg" />}
-          title="Loading runners..."
-          description="Fetching your connected infrastructure."
+          title="Loading machines..."
+          description="Fetching your connected machines."
         />
       </div>
     );
@@ -244,7 +244,7 @@ export default function RunnersPage() {
       <div className="runners-page-container">
         <EmptyState
           variant="error"
-          title="Error loading runners"
+          title="Error loading machines"
           description={error instanceof Error ? error.message : "Unknown error"}
         />
       </div>
@@ -255,23 +255,23 @@ export default function RunnersPage() {
     <PageShell size="wide" className="runners-page-container">
       <div className="runners-page">
         <SectionHeader
-          title="Runners"
-          description="Choose the machine that should execute commands and host your Longhouse sessions."
+          title="Machines"
+          description="Choose where Longhouse should start sessions and execute commands."
           actions={
             <Button variant="primary" data-testid="runners-add-button" onClick={() => setShowAddModal(true)}>
               <PlusIcon />
-              Add Runner
+              Connect Machine
             </Button>
           }
         />
 
         {runners && runners.length === 0 ? (
           <EmptyState
-            title="No runners yet"
-            description="Runners let Longhouse execute commands and start sessions on machines you control."
+            title="No machines connected yet"
+            description="Connect a laptop, homelab box, Mac mini, or VPS so Longhouse can start sessions and run commands where your work lives."
             action={
               <Button variant="primary" size="lg" data-testid="runners-add-first-button" onClick={() => setShowAddModal(true)}>
-                Add your first runner
+                Connect your first machine
               </Button>
             }
           />

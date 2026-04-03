@@ -75,14 +75,14 @@ describe("RunnerSetupCard", () => {
 
     const queryClient = renderCard();
 
-    expect(await screen.findByText("Waiting for connection...")).toBeInTheDocument();
+    expect(await screen.findByText("Waiting for machine...")).toBeInTheDocument();
     await waitFor(() => expect(apiMocks.fetchRunners).toHaveBeenCalledTimes(1));
 
     await queryClient.refetchQueries({
       queryKey: ["runner-setup-enrollment", "token-123", "2100-03-21T22:10:00Z"],
     });
     await waitFor(() => expect(apiMocks.fetchRunners).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.getByText("Runner Connected!")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Machine Connected!")).toBeInTheDocument());
     expect(screen.getByText(/Fresh Runner/)).toBeInTheDocument();
   });
 });

@@ -7,13 +7,13 @@ describe("Header", () => {
     window.history.replaceState({}, "", "/chat");
   });
 
-  it("keeps the launch nav centered on timeline, Oikos, integrations, and runners", () => {
+  it("keeps the launch nav centered on timeline, Oikos, integrations, and machines", () => {
     render(<Header onSync={() => {}} />);
 
     expect(screen.getByRole("link", { name: "Timeline" })).toHaveAttribute("href", "/timeline");
     expect(screen.getByRole("link", { name: "Oikos" })).toHaveAttribute("href", "/chat");
     expect(screen.getByRole("link", { name: "Integrations" })).toHaveAttribute("href", "/settings/integrations");
-    expect(screen.getByRole("link", { name: "Runners" })).toHaveAttribute("href", "/runners");
+    expect(screen.getByRole("link", { name: "Machines" })).toHaveAttribute("href", "/runners");
     expect(screen.queryByRole("link", { name: "Dashboard" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Chat" })).not.toBeInTheDocument();
   });

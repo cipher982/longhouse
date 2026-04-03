@@ -177,7 +177,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
       <div className="runner-setup-card runner-setup-card-success">
         <div className="runner-setup-header">
           <span className="runner-setup-icon"><CheckCircleIcon width={20} height={20} /></span>
-          <span className="runner-setup-title">Runner Connected!</span>
+          <span className="runner-setup-title">Machine Connected!</span>
         </div>
         <div className="runner-setup-body">
           <div className="runner-connected-info">
@@ -200,7 +200,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
               href={`/runners/${connectedRunner.id}`}
               className="runner-action-button runner-action-secondary"
             >
-              Configure Runner
+              Configure Machine
             </a>
           </div>
         </div>
@@ -212,7 +212,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
     <div className={`runner-setup-card ${status === "expired" ? "runner-setup-card-expired" : ""}`}>
       <div className="runner-setup-header">
         <span className="runner-setup-icon"><MonitorIcon width={20} height={20} /></span>
-        <span className="runner-setup-title">Connect Your Infrastructure</span>
+        <span className="runner-setup-title">Connect a Machine</span>
       </div>
 
       <div className="runner-setup-body">
@@ -293,7 +293,7 @@ export function RunnerSetupCard({ data, rawContent }: RunnerSetupCardProps) {
             <>
               <span className="runner-status-waiting">
                 <span className="runner-status-spinner">⏳</span>
-                Waiting for connection...
+                Waiting for machine...
               </span>
               <span className="runner-status-timer">
                 Token expires in: <strong>{timeRemaining}</strong>

@@ -111,7 +111,7 @@ describe("RunnersPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens the launch modal from a ready runner card without leaving the grid", async () => {
+  it("opens the launch modal from a ready machine card without leaving the grid", async () => {
     const user = userEvent.setup();
     const navigateMock = vi.fn();
     vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigateMock);
