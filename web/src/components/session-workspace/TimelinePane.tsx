@@ -226,13 +226,28 @@ export function TimelinePane({
 
   // Auto-fetch older events when the top sentinel scrolls into view.
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
+  // Skip the very first intersection notification (fires on mount before
+  // auto-scroll has a chance to push the sentinel off-screen).
+  const skipFirstIntersectionRef = useRef(true);
+  // Keep mutable fetch state in a ref so the observer callback always sees the
+  // latest value without the effect needing to re-run (and re-fire) on changes.
+  const isFetchingRef = useRef(isFetchingNextPage);
+  useEffect(() => { isFetchingRef.current = isFetchingNextPage; }, [isFetchingNextPage]);
+
   useEffect(() => {
     if (!hasNextPage) return;
     const sentinel = topSentinelRef.current;
     if (!sentinel) return;
+    // Reset skip flag each time the observer is (re)attached so the first
+    // intersection on the new element is always skipped.
+    skipFirstIntersectionRef.current = true;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && !isFetchingNextPage) {
+        if (skipFirstIntersectionRef.current) {
+          skipFirstIntersectionRef.current = false;
+          return;
+        }
+        if (entry.isIntersecting && !isFetchingRef.current) {
           onFetchNextPage();
         }
       },
@@ -240,7 +255,9 @@ export function TimelinePane({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, onFetchNextPage]);
+    // isFetchingNextPage intentionally excluded — tracked via ref to avoid
+    // recreating the observer (which would re-fire on an already-visible sentinel).
+  }, [hasNextPage, onFetchNextPage]);
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const messageCount = useMemo(
     () => items.filter((item) => item.kind === "message").length,
