@@ -50,7 +50,10 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
     <div className={`install-section ${className}`}>
       <div className="install-header">
         <h3>Get started in seconds</h3>
-        <p>One install command. No Docker or external database.</p>
+        <p>
+          One install command. The installer runs onboarding so you can import existing sessions first,
+          then start a Longhouse session when you want control.
+        </p>
       </div>
 
       <div className="install-tabs" role="tablist" aria-label="Installation platform">
@@ -99,6 +102,10 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
       {currentCommand.note && (
         <p className="install-note">{currentCommand.note}</p>
       )}
+
+      <p className="install-note">
+        Safe demo mode is optional. The default path is real onboarding with your own sessions.
+      </p>
 
       <div className="install-features">
         <span className="install-feature">
