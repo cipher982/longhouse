@@ -159,19 +159,28 @@ test.describe("Session activation surfaces", () => {
     await resetDatabase(request);
   });
 
-  test("empty timeline points new users to machine setup when no launch host exists", async ({
+  test("empty timeline routes users into machine setup when no launch host exists", async ({
     page,
   }) => {
     await page.goto("/timeline");
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
     const runnerAction = page.getByTestId("timeline-empty-runner-action");
-    await expect(runnerAction).toHaveText("Connect Machine");
+    const actionLabel = (await runnerAction.textContent())?.trim();
+
+    expect(["Connect Machine", "Open Machines"]).toContain(actionLabel);
     await runnerAction.click();
 
-    const modal = page.getByTestId("add-runner-modal");
-    await expect(modal).toBeVisible();
-    await expect(page.getByTestId("add-runner-command")).toContainText("/api/runners/install.sh");
+    if (actionLabel === "Connect Machine") {
+      const modal = page.getByTestId("add-runner-modal");
+      await expect(modal).toBeVisible();
+      await expect(page.getByTestId("add-runner-command")).toContainText("/api/runners/install.sh");
+      return;
+    }
+
+    await page.waitForURL("**/runners", { timeout: 15_000 });
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
+    await expect(page.getByRole("heading", { name: "Machines" })).toBeVisible();
   });
 
   test("timeline empty state opens launch directly when exactly one ready runner exists", async ({

@@ -173,23 +173,21 @@ export function DebugPanel({ isOpen, onToggle, onReset, isResetting = false }: D
             >
               Thread →
             </a>
-            {threadInfo?.canonical_conversation && (
-              <a
-                href={`${config.apiBaseUrl}/conversations/${threadInfo.canonical_conversation.id}/messages?limit=10`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="debug-link"
-              >
-                Conversation →
-              </a>
-            )}
             <a
-              href={`${config.apiBaseUrl}/conversations/activity?limit=10`}
+              href={`${config.apiBaseUrl}/oikos/history?limit=10&surface_id=web`}
               target="_blank"
               rel="noopener noreferrer"
               className="debug-link"
             >
-              Activity →
+              Web History →
+            </a>
+            <a
+              href={`${config.apiBaseUrl}/oikos/history?limit=10&view=all`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="debug-link"
+            >
+              All Activity →
             </a>
           </div>
         </div>

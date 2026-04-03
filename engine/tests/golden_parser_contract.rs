@@ -47,7 +47,15 @@ struct Snapshot {
 
 fn engine_bin() -> PathBuf {
     // Always use the repo-local binary — never the one on PATH.
-    // This ensures golden tests catch stale-binary regressions.
+    // Prefer Cargo's freshly-built test binary, but fall back to the
+    // release artifact for standalone snapshot refresh/debug flows.
+    if let Some(bin) = option_env!("CARGO_BIN_EXE_longhouse-engine") {
+        let path = PathBuf::from(bin);
+        if path.exists() {
+            return path;
+        }
+    }
+
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("release")
@@ -64,7 +72,7 @@ fn parse_to_snapshot(input_path: &Path) -> Snapshot {
     let bin = engine_bin();
     assert!(
         bin.exists(),
-        "Engine binary not found at {}. Run: cargo build --release",
+        "Engine binary not found at {}. Run `cargo test --bin longhouse-engine --test golden_parser_contract` or `cargo build --release`.",
         bin.display()
     );
 

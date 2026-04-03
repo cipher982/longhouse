@@ -884,7 +884,7 @@ test.describe("Session Detail Page", () => {
       "entries",
     );
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
-      "Cloud continuation starts here",
+      "Your next message below keeps this session going from Longhouse.",
     );
     await expect(page.getByTestId("session-chat-divider")).toHaveCount(1);
     await expect(
@@ -1094,7 +1094,7 @@ test.describe("Session Detail Page", () => {
     await expect(page.getByTestId("session-timeline-seam")).toHaveCount(0);
     await expect(page.getByTestId("session-lineage-panel")).toBeVisible();
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
-      "New cloud branch starts here",
+      "Your next message starts a new continuation from this point and leaves the latest Cloud head untouched.",
     );
     await expect(
       page.getByRole("button", { name: "Branch in Cloud" }),

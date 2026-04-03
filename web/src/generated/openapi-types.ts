@@ -516,6 +516,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/test/sessions/{session_id}/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Configure Test Session Runtime
+         * @description Patch session runtime metadata for TESTING-only E2E scenarios.
+         */
+        post: operations["configure_test_session_runtime_admin_test_sessions__session_id__runtime_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/users": {
         parameters: {
             query?: never;
@@ -746,108 +766,6 @@ export interface paths {
         post?: never;
         /** Delete Connector */
         delete: operations["delete_connector_connectors__connector_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/conversations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Conversations */
-        get: operations["list_conversations_conversations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/conversations/activity": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Activity Messages */
-        get: operations["list_activity_messages_conversations_activity_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/conversations/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Search Conversations */
-        get: operations["search_conversations_conversations_search_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/conversations/{conversation_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Conversation */
-        get: operations["get_conversation_conversations__conversation_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/conversations/{conversation_id}/messages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Messages */
-        get: operations["list_messages_conversations__conversation_id__messages_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/conversations/{conversation_id}/reply": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Reply To Conversation */
-        post: operations["reply_to_conversation_conversations__conversation_id__reply_post"];
-        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -2080,86 +1998,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/oikos/conversations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Oikos Conversations
-         * @deprecated
-         */
-        get: operations["list_oikos_conversations_oikos_conversations_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/conversations/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search Oikos Conversations
-         * @deprecated
-         */
-        get: operations["search_oikos_conversations_oikos_conversations_search_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/conversations/{conversation_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Oikos Conversation
-         * @deprecated
-         */
-        get: operations["get_oikos_conversation_oikos_conversations__conversation_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/oikos/conversations/{conversation_id}/messages": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Oikos Conversation Messages
-         * @deprecated
-         */
-        get: operations["list_oikos_conversation_messages_oikos_conversations__conversation_id__messages_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/oikos/history": {
         parameters: {
             query?: never;
@@ -2169,7 +2007,6 @@ export interface paths {
         };
         /**
          * Oikos History
-         * @deprecated
          * @description Get conversation history from Oikos thread.
          */
         get: operations["oikos_history_oikos_history_get"];
@@ -2177,7 +2014,6 @@ export interface paths {
         post?: never;
         /**
          * Oikos Clear History
-         * @deprecated
          * @description Compatibility alias for resetting Oikos memory.
          */
         delete: operations["oikos_clear_history_oikos_history_delete"];
@@ -4167,9 +4003,7 @@ export interface paths {
         put?: never;
         /**
          * Chat With Session
-         * @description Chat with a Claude Code session.
-         *
-         *     Resumes an existing session and streams the response via SSE.
+         * @description Chat with a resumable session and stream the response via SSE.
          */
         post: operations["chat_with_session_sessions__session_id__chat_post"];
         delete?: never;
@@ -4265,6 +4099,26 @@ export interface paths {
         get: operations["continuation_readiness_sessions_continuation_readiness_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/continue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Continue Session
+         * @description Continue a session through the canonical machine-facing agents surface.
+         */
+        post: operations["continue_session_agents_sessions__session_id__continue_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4560,6 +4414,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/workspace/stream": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Session Workspace
+         * @description SSE stream that emits workspace_changed when the session's data mutates.
+         *
+         *     The browser subscribes on session detail page load and uses each event to
+         *     invalidate React Query caches — replacing the 5-second polling interval
+         *     with event-driven refresh.
+         */
+        get: operations["stream_session_workspace_timeline_sessions__session_id__workspace_stream_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/ingest": {
         parameters: {
             query?: never;
@@ -4662,6 +4540,53 @@ export interface paths {
          * @description List session summaries for picker UI.
          */
         get: operations["list_session_summaries_agents_sessions_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/wall": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Wall Query
+         * @description Wall query: raw signal metadata for sessions on a repo.
+         *
+         *     Schema-on-read: returns raw timestamps and facts. The consuming agent
+         *     or UI decides what's relevant — no status bucketing, no pre-computed summaries.
+         */
+        get: operations["wall_query_agents_sessions_wall_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/tail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Session Tail
+         * @description Return the last N events from a session for cross-session reading.
+         *
+         *     Tail-biased: fetches the most recent events, then returns them in
+         *     chronological order (oldest first). The reading agent interprets the
+         *     raw log — no summary layer in between.
+         */
+        get: operations["session_tail_agents_sessions__session_id__tail_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4884,6 +4809,74 @@ export interface paths {
         get: operations["export_session_agents_sessions__session_id__export_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/pokes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Pokes
+         * @description List pokes directed at a session. Marks them as read.
+         */
+        get: operations["list_pokes_agents_pokes_get"];
+        put?: never;
+        /**
+         * Create Poke
+         * @description Create a poke — tap another session on the shoulder.
+         */
+        post: operations["create_poke_agents_pokes_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Messages
+         * @description List durable session messages without mutating delivery or ack state.
+         */
+        get: operations["list_messages_agents_messages_get"];
+        put?: never;
+        /**
+         * Create Message
+         * @description Create a directed session message and attempt delivery when safe.
+         */
+        post: operations["create_message_agents_messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/messages/{message_id}/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge Message
+         * @description Acknowledge that the target session has handled a delivered message.
+         */
+        post: operations["acknowledge_message_agents_messages__message_id__ack_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5221,6 +5214,9 @@ export interface paths {
          *
          *     If an insight with the same title AND project exists within the last 7 days,
          *     updates its confidence and appends to observations instead of creating a new one.
+         *
+         *     This legacy machine write path stays for compatibility. The canonical machine
+         *     namespace is ``POST /api/agents/insights``.
          */
         post: operations["create_insight_insights_post"];
         delete?: never;
@@ -5282,7 +5278,11 @@ export interface paths {
          */
         get: operations["list_machine_insights_agents_insights_get"];
         put?: never;
-        post?: never;
+        /**
+         * Create Machine Insight
+         * @description Create or deduplicate an insight on the canonical machine namespace.
+         */
+        post: operations["create_machine_insight_agents_insights_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6293,6 +6293,31 @@ export interface components {
             model: string;
         };
         /**
+         * ConfigureTestSessionRuntimeRequest
+         * @description Test-only session runtime override for Playwright coverage.
+         */
+        ConfigureTestSessionRuntimeRequest: {
+            /**
+             * Execution Home
+             * @default managed_local
+             * @enum {string}
+             */
+            execution_home: "legacy" | "managed_local" | "managed_hosted" | "cloud_takeover";
+            /** Managed Transport */
+            managed_transport?: ("tmux" | "claude_channel_bridge" | "codex_app_server") | null;
+            /** Source Runner Id */
+            source_runner_id?: number | null;
+            /** Source Runner Name */
+            source_runner_name?: string | null;
+            /** Managed Session Name */
+            managed_session_name?: string | null;
+            /**
+             * Clear Ended At
+             * @default true
+             */
+            clear_ended_at: boolean;
+        };
+        /**
          * ConnectorConfigureRequest
          * @description Request to configure (create or update) connector credentials.
          */
@@ -6525,270 +6550,6 @@ export interface components {
             context: {
                 [key: string]: unknown;
             };
-        };
-        /** ConversationBindingInfo */
-        ConversationBindingInfo: {
-            /** Id */
-            id: number;
-            /** Surface Id */
-            surface_id: string;
-            /** Provider */
-            provider: string;
-            /** Binding Scope */
-            binding_scope: string;
-            /** Connector Id */
-            connector_id?: number | null;
-            /** External Conversation Id */
-            external_conversation_id: string;
-            /** Binding Metadata */
-            binding_metadata?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /** ConversationBindingResponse */
-        ConversationBindingResponse: {
-            /** Id */
-            id: number;
-            /** Surface Id */
-            surface_id: string;
-            /** Provider */
-            provider: string;
-            /** Binding Scope */
-            binding_scope: string;
-            /** Connector Id */
-            connector_id?: number | null;
-            /** External Conversation Id */
-            external_conversation_id: string;
-            /** Binding Metadata */
-            binding_metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** ConversationDetail */
-        ConversationDetail: {
-            /** Id */
-            id: number;
-            /** Kind */
-            kind: string;
-            /** Title */
-            title?: string | null;
-            /** Status */
-            status: string;
-            /** Last Message At */
-            last_message_at?: string | null;
-            /** Conversation Metadata */
-            conversation_metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Message Count */
-            message_count: number;
-            /** Bindings */
-            bindings?: components["schemas"]["ConversationBindingInfo"][];
-        };
-        /** ConversationDetailResponse */
-        ConversationDetailResponse: {
-            /** Id */
-            id: number;
-            /** Kind */
-            kind: string;
-            /** Title */
-            title?: string | null;
-            /** Status */
-            status: string;
-            /** Last Message At */
-            last_message_at?: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Message Count */
-            message_count: number;
-            /** Binding Count */
-            binding_count: number;
-            /** Conversation Metadata */
-            conversation_metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Bindings */
-            bindings: components["schemas"]["ConversationBindingResponse"][];
-        };
-        /** ConversationListResponse */
-        ConversationListResponse: {
-            /** Conversations */
-            conversations: components["schemas"]["ConversationSummaryResponse"][];
-            /** Total */
-            total: number;
-        };
-        /** ConversationMessageInfo */
-        ConversationMessageInfo: {
-            /** Id */
-            id: number;
-            /** Role */
-            role: string;
-            /** Direction */
-            direction: string;
-            /** Sender Kind */
-            sender_kind: string;
-            /** Sender Display */
-            sender_display?: string | null;
-            /** Content */
-            content: string;
-            /** External Message Id */
-            external_message_id?: string | null;
-            /** Archive Relpath */
-            archive_relpath?: string | null;
-            /** Internal */
-            internal: boolean;
-            /**
-             * Timestamp
-             * Format: date-time
-             */
-            timestamp: string;
-            /** Message Metadata */
-            message_metadata?: {
-                [key: string]: unknown;
-            } | null;
-        };
-        /** ConversationMessageResponse */
-        ConversationMessageResponse: {
-            /** Id */
-            id: number;
-            /** Conversation Id */
-            conversation_id: number;
-            /** Role */
-            role: string;
-            /** Direction */
-            direction: string;
-            /** Sender Kind */
-            sender_kind: string;
-            /** Sender Display */
-            sender_display?: string | null;
-            /** Content */
-            content: string;
-            /** Content Blocks */
-            content_blocks?: unknown[] | null;
-            /** External Message Id */
-            external_message_id?: string | null;
-            /** Parent Message Id */
-            parent_message_id?: number | null;
-            /** Archive Relpath */
-            archive_relpath?: string | null;
-            /** Message Metadata */
-            message_metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Internal */
-            internal: boolean;
-            /**
-             * Sent At
-             * Format: date-time
-             */
-            sent_at: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** ConversationMessagesResponse */
-        ConversationMessagesResponse: {
-            /** Messages */
-            messages: components["schemas"]["ConversationMessageResponse"][];
-            /** Total */
-            total: number;
-        };
-        /** ConversationReplyRequest */
-        ConversationReplyRequest: {
-            /** Body */
-            body: string;
-            /**
-             * Reply All
-             * @default false
-             */
-            reply_all: boolean;
-        };
-        /** ConversationReplyResponse */
-        ConversationReplyResponse: {
-            /** Conversation Id */
-            conversation_id: number;
-            /** Provider */
-            provider: string;
-            /** Thread Id */
-            thread_id: string;
-            /** Subject */
-            subject: string;
-            /** Reply All */
-            reply_all: boolean;
-            /** To Emails */
-            to_emails: string[];
-            /** Cc Emails */
-            cc_emails: string[];
-            message: components["schemas"]["ConversationMessageResponse"];
-        };
-        /** ConversationSummary */
-        ConversationSummary: {
-            /** Id */
-            id: number;
-            /** Kind */
-            kind: string;
-            /** Title */
-            title?: string | null;
-            /** Status */
-            status: string;
-            /** Last Message At */
-            last_message_at?: string | null;
-        };
-        /** ConversationSummaryResponse */
-        ConversationSummaryResponse: {
-            /** Id */
-            id: number;
-            /** Kind */
-            kind: string;
-            /** Title */
-            title?: string | null;
-            /** Status */
-            status: string;
-            /** Last Message At */
-            last_message_at?: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Message Count */
-            message_count: number;
-            /** Binding Count */
-            binding_count: number;
-            /** Conversation Metadata */
-            conversation_metadata?: {
-                [key: string]: unknown;
-            } | null;
         };
         /**
          * CreateTokenRequest
@@ -7355,6 +7116,11 @@ export interface components {
              * @description Source session UUID
              */
             session_id?: string | null;
+            /**
+             * Origin
+             * @description Origin label for the insight, e.g. manual, reflection, hindsight
+             */
+            origin?: string | null;
         };
         /**
          * InsightListResponse
@@ -8243,15 +8009,27 @@ export interface components {
              * @description Optional local Longhouse machine label override used to resolve this device's runner
              */
             machine_name?: string | null;
+            /**
+             * Native Claude Channels Available
+             * @description Optional CLI capability hint for whether native Claude channels are available on this device
+             */
+            native_claude_channels_available?: boolean | null;
+            /**
+             * Claude Launch Env
+             * @description Optional allowlisted Claude launch env overrides to apply on the local runner
+             */
+            claude_launch_env?: {
+                [key: string]: string;
+            } | null;
         };
         /**
          * ManagedSessionTransport
          * @description Execution transport for Longhouse-managed sessions.
          *
-         *     Transport is auto-determined by provider — not user-selectable.
+         *     Transport is auto-determined by launch context — not user-selectable.
          * @enum {string}
          */
-        ManagedSessionTransport: "tmux" | "codex_app_server";
+        ManagedSessionTransport: "tmux" | "claude_channel_bridge" | "codex_app_server";
         /** MessageCreate */
         MessageCreate: {
             /** Role */
@@ -8734,6 +8512,26 @@ export interface components {
             phone?: string | null;
             /** Notes */
             notes?: string | null;
+        };
+        /**
+         * PokeCreate
+         * @description Create a poke from one session to another.
+         */
+        PokeCreate: {
+            /**
+             * From Session Id
+             * Format: uuid
+             */
+            from_session_id: string;
+            /**
+             * To Session Id
+             * Format: uuid
+             */
+            to_session_id: string;
+            /** Note */
+            note: string;
+            /** Source Event Id */
+            source_event_id?: number | null;
         };
         /**
          * PresenceIn
@@ -9748,6 +9546,31 @@ export interface components {
             loop_mode: components["schemas"]["SessionLoopMode"];
         };
         /**
+         * SessionMessageAcknowledge
+         * @description Acknowledge an inbound session message.
+         */
+        SessionMessageAcknowledge: {
+            /** Session Id */
+            session_id?: string | null;
+        };
+        /**
+         * SessionMessageCreate
+         * @description Create a directed message from one session to another.
+         */
+        SessionMessageCreate: {
+            /** From Session Id */
+            from_session_id?: string | null;
+            /**
+             * To Session Id
+             * Format: uuid
+             */
+            to_session_id: string;
+            /** Text */
+            text: string;
+            /** Source Event Id */
+            source_event_id?: number | null;
+        };
+        /**
          * SessionPreviewMessage
          * @description Preview message entry for session picker.
          */
@@ -9861,6 +9684,12 @@ export interface components {
             items: components["schemas"]["SessionProjectionItemResponse"][];
             /** Total */
             total: number;
+            /**
+             * Page Offset
+             * @description Offset of the first item in this page within the full projection
+             * @default 0
+             */
+            page_offset: number;
             /**
              * Branch Mode
              * @description Branch projection mode: head|all
@@ -10126,7 +9955,7 @@ export interface components {
             source_runner_name?: string | null;
             /**
              * Attach Command
-             * @description Local reattach command for managed local tmux sessions
+             * @description Local reattach command for managed-local sessions
              */
             attach_command?: string | null;
             /**
@@ -10134,6 +9963,12 @@ export interface components {
              * @default manual
              */
             loop_mode: components["schemas"]["SessionLoopMode"];
+            /**
+             * User State
+             * @description User classification: active|parked|snoozed|archived
+             * @default active
+             */
+            user_state: string;
         };
         /**
          * SessionSummaryResponse
@@ -11224,6 +11059,76 @@ export interface components {
             success: boolean;
             /** Message */
             message: string;
+        };
+        /**
+         * WallResponse
+         * @description Wall query response — sessions indexed by raw signal.
+         */
+        WallResponse: {
+            /** Sessions */
+            sessions: components["schemas"]["WallSessionResponse"][];
+            /** Total */
+            total: number;
+        };
+        /**
+         * WallSessionResponse
+         * @description A session's raw signal for the wall view. Schema-on-read: raw timestamps,
+         *     no status bucketing. The consuming agent or UI decides relevance.
+         */
+        WallSessionResponse: {
+            /** Session Id */
+            session_id: string;
+            /** Device Name */
+            device_name?: string | null;
+            /** Device Id */
+            device_id?: string | null;
+            /** Cwd */
+            cwd?: string | null;
+            /** Git Repo */
+            git_repo?: string | null;
+            /** Git Branch */
+            git_branch?: string | null;
+            /** Project */
+            project?: string | null;
+            /** Provider */
+            provider: string;
+            /** Summary Title */
+            summary_title?: string | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Last Event At */
+            last_event_at?: string | null;
+            /** Last User Message At */
+            last_user_message_at?: string | null;
+            /** Last Tool Call At */
+            last_tool_call_at?: string | null;
+            /**
+             * Has Live Presence
+             * @default false
+             */
+            has_live_presence: boolean;
+            /** Presence State */
+            presence_state?: string | null;
+            /**
+             * Pending Inbound Messages
+             * @default 0
+             */
+            pending_inbound_messages: number;
+            /**
+             * User Messages
+             * @default 0
+             */
+            user_messages: number;
+            /**
+             * Assistant Messages
+             * @default 0
+             */
+            assistant_messages: number;
+            /**
+             * Tool Calls
+             * @default 0
+             */
+            tool_calls: number;
         };
         /**
          * WhoopCredentials
@@ -12459,6 +12364,43 @@ export interface operations {
             };
         };
     };
+    configure_test_session_runtime_admin_test_sessions__session_id__runtime_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConfigureTestSessionRuntimeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_users_with_usage_admin_users_get: {
         parameters: {
             query?: {
@@ -12799,215 +12741,6 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_conversations_conversations_get: {
-        parameters: {
-            query?: {
-                kind?: string | null;
-                status?: string | null;
-                limit?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_activity_messages_conversations_activity_get: {
-        parameters: {
-            query?: {
-                include_internal?: boolean;
-                kind?: string | null;
-                limit?: number;
-                offset?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationMessagesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    search_conversations_conversations_search_get: {
-        parameters: {
-            query: {
-                q: string;
-                kind?: string | null;
-                limit?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationListResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_conversation_conversations__conversation_id__get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                conversation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationDetailResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_messages_conversations__conversation_id__messages_get: {
-        parameters: {
-            query?: {
-                include_internal?: boolean;
-                limit?: number;
-                offset?: number;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                conversation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationMessagesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reply_to_conversation_conversations__conversation_id__reply_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                conversation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ConversationReplyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationReplyResponse"];
-                };
             };
             /** @description Validation Error */
             422: {
@@ -15265,151 +14998,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_oikos_conversations_oikos_conversations_get: {
-        parameters: {
-            query?: {
-                kind?: string | null;
-                status_filter?: string | null;
-                limit?: number;
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationSummary"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    search_oikos_conversations_oikos_conversations_search_get: {
-        parameters: {
-            query: {
-                q: string;
-                kind?: string | null;
-                limit?: number;
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationSummary"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_oikos_conversation_oikos_conversations__conversation_id__get: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path: {
-                conversation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_oikos_conversation_messages_oikos_conversations__conversation_id__messages_get: {
-        parameters: {
-            query?: {
-                include_internal?: boolean;
-                limit?: number;
-                offset?: number;
-                session_factory?: unknown;
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path: {
-                conversation_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ConversationMessageInfo"][];
                 };
             };
             /** @description Validation Error */
@@ -18937,6 +18525,43 @@ export interface operations {
             };
         };
     };
+    continue_session_agents_sessions__session_id__continue_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionChatRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_briefing_timeline_briefing_get: {
         parameters: {
             query: {
@@ -19146,6 +18771,8 @@ export interface operations {
                 mode?: string | null;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
+                /** @description When true, subscribe without immediately replaying the already-fresh default timeline snapshot. */
+                skip_initial_replay?: boolean;
                 session_factory?: unknown;
             };
             header?: never;
@@ -19518,6 +19145,8 @@ export interface operations {
             query?: {
                 /** @description Branch projection mode: head|all */
                 branch_mode?: string;
+                /** @description Page anchor: start|tail */
+                anchor?: string;
                 /** @description Max projected items */
                 limit?: number;
                 /** @description Offset within the stitched projection */
@@ -19594,6 +19223,41 @@ export interface operations {
             query?: {
                 /** @description Branch projection mode for export: head|all */
                 branch_mode?: string;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    stream_session_workspace_timeline_sessions__session_id__workspace_stream_get: {
+        parameters: {
+            query?: {
+                /** @description When true, wait for first change before emitting workspace_changed. */
+                skip_initial?: boolean;
                 session_factory?: unknown;
             };
             header?: never;
@@ -19838,6 +19502,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionsSummaryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    wall_query_agents_sessions_wall_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by git_repo (substring match) */
+                repo?: string | null;
+                /** @description Filter by project name */
+                project?: string | null;
+                /** @description Days to look back */
+                days?: number;
+                /** @description Max results */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WallResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_tail_agents_sessions__session_id__tail_get: {
+        parameters: {
+            query?: {
+                /** @description Number of recent events to return */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -20152,6 +19892,8 @@ export interface operations {
             query?: {
                 /** @description Branch projection mode: head|all */
                 branch_mode?: string;
+                /** @description Page anchor: start|tail */
+                anchor?: string;
                 /** @description Max projected items */
                 limit?: number;
                 /** @description Offset within the stitched projection */
@@ -20245,6 +19987,197 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_pokes_agents_pokes_get: {
+        parameters: {
+            query: {
+                /** @description Session ID to check pokes for */
+                session_id: string;
+                /** @description Only return unread pokes */
+                unread_only?: boolean;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_poke_agents_pokes_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PokeCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_messages_agents_messages_get: {
+        parameters: {
+            query?: {
+                /** @description Session ID to inspect messages for */
+                session_id?: string | null;
+                /** @description Message direction: inbound|outbound|all */
+                direction?: string;
+                /** @description Only include messages without acknowledged_at */
+                unacknowledged_only?: boolean;
+                /** @description Max results */
+                limit?: number;
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_message_agents_messages_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionMessageCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acknowledge_message_agents_messages__message_id__ack_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                message_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["SessionMessageAcknowledge"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
@@ -21068,6 +21001,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InsightListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_machine_insight_agents_insights_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InsightCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InsightResponse"];
                 };
             };
             /** @description Validation Error */

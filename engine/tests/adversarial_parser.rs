@@ -10,6 +10,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn engine_bin() -> PathBuf {
+    if let Some(bin) = option_env!("CARGO_BIN_EXE_longhouse-engine") {
+        let path = PathBuf::from(bin);
+        if path.exists() {
+            return path;
+        }
+    }
+
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("target")
         .join("release")
@@ -28,7 +35,8 @@ fn parse_events(input_path: &Path) -> (usize, bool) {
     let bin = engine_bin();
     assert!(
         bin.exists(),
-        "Engine binary not found. Run: cargo build --release"
+        "Engine binary not found at {}. Run `cargo test --bin longhouse-engine --test adversarial_parser` or `cargo build --release`.",
+        bin.display()
     );
 
     let output = Command::new(&bin)
