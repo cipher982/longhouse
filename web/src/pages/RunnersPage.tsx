@@ -3,7 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { useRunners } from "../hooks/useRunners";
 import type { Runner } from "../services/api";
 import AddRunnerModal from "../components/AddRunnerModal";
+import LaunchSessionModal from "../components/LaunchSessionModal";
 import { useReadinessFlag } from "../lib/readiness-contract";
+import { isRunnerSessionLaunchReady } from "../lib/runnerSessions";
 import {
   Button,
   Badge,
@@ -220,6 +222,7 @@ export default function RunnersPage() {
   const navigate = useNavigate();
   const { data: runners, isLoading, error } = useRunners({ refetchInterval: 10_000 });
   const [showAddModal, setShowAddModal] = useState(false);
+  const [launchRunner, setLaunchRunner] = useState<Runner | null>(null);
 
   // Ready signal - indicates page is interactive (even if empty)
   useReadinessFlag({ ready: !isLoading });
@@ -252,8 +255,8 @@ export default function RunnersPage() {
     <PageShell size="wide" className="runners-page-container">
       <div className="runners-page">
         <SectionHeader
-        title="Runners"
-          description="Infrastructure nodes that execute commands for your automations."
+          title="Runners"
+          description="Choose the machine that should execute commands and host your Longhouse sessions."
           actions={
             <Button variant="primary" data-testid="runners-add-button" onClick={() => setShowAddModal(true)}>
               <PlusIcon />
@@ -265,7 +268,7 @@ export default function RunnersPage() {
         {runners && runners.length === 0 ? (
           <EmptyState
             title="No runners yet"
-            description="Runners let you execute commands on your own infrastructure securely."
+            description="Runners let Longhouse execute commands and start sessions on machines you control."
             action={
               <Button variant="primary" size="lg" data-testid="runners-add-first-button" onClick={() => setShowAddModal(true)}>
                 Add your first runner
@@ -396,6 +399,21 @@ export default function RunnersPage() {
                         </div>
                       </div>
                     )}
+
+                    {isRunnerSessionLaunchReady(runner) && (
+                      <div className="runner-card-actions">
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setLaunchRunner(runner);
+                          }}
+                        >
+                          Start Longhouse Session
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </Card.Body>
               </Card>
@@ -408,6 +426,14 @@ export default function RunnersPage() {
         <AddRunnerModal
           isOpen={showAddModal}
           onClose={() => setShowAddModal(false)}
+        />
+      )}
+
+      {launchRunner && (
+        <LaunchSessionModal
+          isOpen
+          onClose={() => setLaunchRunner(null)}
+          runner={launchRunner}
         />
       )}
     </PageShell>

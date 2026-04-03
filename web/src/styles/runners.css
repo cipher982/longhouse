@@ -257,6 +257,18 @@
     font-weight: 500;
   }
 
+  .runner-card-actions {
+    display: flex;
+    margin-top: 0.9rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
+  .runner-card-actions .ui-button {
+    width: 100%;
+    justify-content: center;
+  }
+
   /* Responsive */
 
   @media (max-width: 768px) {

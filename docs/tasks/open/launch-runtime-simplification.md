@@ -151,4 +151,6 @@ Do separately and do not let it block launch.
   start Longhouse, import existing sessions, then start a Longhouse session when the user wants control.
 - Timeline now carries that same second beat in-product:
   users can start a Longhouse session directly when one runner is ready, or jump to runners/setup when it is not.
+- The runners grid now participates in that loop too:
+  ready machines expose `Start Longhouse Session` directly instead of forcing a runner-detail detour first.
 - Architectural cleanup remains real, but it is not the first thing to do next.
