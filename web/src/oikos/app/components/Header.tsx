@@ -12,7 +12,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Timeline', href: '/timeline' },
   { label: 'Oikos', href: '/chat' },
   { label: 'Integrations', href: '/settings/integrations' },
-  { label: 'Runners', href: '/runners' },
+  { label: 'Machines', href: '/runners' },
 ]
 
 interface HeaderProps {

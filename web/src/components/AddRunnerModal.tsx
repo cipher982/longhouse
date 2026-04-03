@@ -61,7 +61,7 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-container add-runner-modal" data-testid="add-runner-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>Add Runner</h2>
+          <h2>Connect Machine</h2>
           <button
             type="button"
             className="modal-close-button"
@@ -76,13 +76,13 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
           {createTokenMutation.isPending && (
             <div className="modal-loading">
               <Spinner size="lg" />
-              <p>Generating enrollment token...</p>
+              <p>Generating setup command...</p>
             </div>
           )}
 
           {createTokenMutation.error && (
             <div className="modal-error">
-              <p>Failed to create enrollment token</p>
+              <p>Failed to create setup command</p>
               <Button variant="secondary" size="sm" onClick={() => createTokenMutation.mutate()}>
                 Retry
               </Button>
@@ -92,9 +92,10 @@ export default function AddRunnerModal({ isOpen, onClose }: AddRunnerModalProps)
           {createTokenMutation.data && (
             <>
               <p className="enrollment-description">
-                Run this on the machine you want to connect. Choose <strong>Desktop / Laptop</strong> for
-                personal machines, or <strong>Always-on Linux Server</strong> when the runner should stay
-                up after logout and reboot.
+                Run this on the machine you want Longhouse to reach. It installs the Longhouse runner there
+                so Longhouse can start sessions and run commands on that machine. Choose <strong>Desktop / Laptop</strong> for
+                personal machines, or <strong>Always-on Linux Server</strong> when the machine should stay
+                available after logout and reboot.
               </p>
 
               <div className="install-tabs">

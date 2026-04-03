@@ -159,14 +159,14 @@ test.describe("Session activation surfaces", () => {
     await resetDatabase(request);
   });
 
-  test("empty timeline points new users to runner setup when no launch host exists", async ({
+  test("empty timeline points new users to machine setup when no launch host exists", async ({
     page,
   }) => {
     await page.goto("/timeline");
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
     const runnerAction = page.getByTestId("timeline-empty-runner-action");
-    await expect(runnerAction).toHaveText("Add Runner");
+    await expect(runnerAction).toHaveText("Connect Machine");
     await runnerAction.click();
 
     const modal = page.getByTestId("add-runner-modal");
@@ -235,7 +235,7 @@ test.describe("Session activation surfaces", () => {
     }
   });
 
-  test("multiple ready runners send users to the runners grid, where launch stays one click away", async ({
+  test("multiple ready machines send users to the machines grid, where launch stays one click away", async ({
     page,
     request,
     backendUrl,
@@ -254,7 +254,7 @@ test.describe("Session activation surfaces", () => {
       await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
       const runnerAction = page.getByTestId("timeline-empty-runner-action");
-      await expect(runnerAction).toHaveText("Choose Runner");
+      await expect(runnerAction).toHaveText("Choose Machine");
       await runnerAction.click();
 
       await page.waitForURL("**/runners", { timeout: 15_000 });

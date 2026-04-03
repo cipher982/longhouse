@@ -148,6 +148,7 @@ Do separately and do not let it block launch.
   - interactive onboarding offers wrapper install explicitly
   - `longhouse wrap --json` gives automation a machine-readable status/results surface
 - Runtime/session UI copy now uses `Longhouse session`, `host machine`, and `Live on host` language instead of leaking `managed-local` into user-facing surfaces.
+- Session-facing activation and navigation now talk about `machines` instead of `runners`; `runner` stays as the connector/install term inside explicit machine setup and diagnostics.
 - Onboarding verification no longer creates a fake visible timeline session; the verification ingest is now hidden as a sidechain session.
 - Installer success output and the landing install block now present the same activation order:
   start Longhouse, import existing sessions, then start a Longhouse session when the user wants control.
@@ -156,6 +157,6 @@ Do separately and do not let it block launch.
 - The runners grid now participates in that loop too:
   ready machines expose `Start Longhouse Session` directly instead of forcing a runner-detail detour first.
 - The empty Timeline CTA is now honest end-to-end:
-  `Add Runner` opens runner setup immediately, `Start Longhouse Session` opens launch directly, and `Choose Runner` routes to the ready-machine grid.
+  `Connect Machine` opens setup immediately, `Start Longhouse Session` opens launch directly, and `Choose Machine` routes to the ready-machine grid.
 - Playwright now covers that activation matrix directly, and the runner websocket route honors `commis` routing so runner presence works against the per-worker SQLite E2E harness instead of the default DB.
 - Architectural cleanup remains real, but it is not the first thing to do next.

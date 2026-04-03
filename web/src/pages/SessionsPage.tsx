@@ -685,10 +685,6 @@ function SessionCard({
                 </span>
               </div>
             </div>
-            <div className="session-card-actions">
-              <span className="session-card-action-label">{primaryActionLabel}</span>
-              <span className="session-card-arrow">&rarr;</span>
-            </div>
           </div>
         )}
       </div>
@@ -858,10 +854,10 @@ export default function SessionsPage() {
     singleLaunchReadyRunner != null
       ? "Start Longhouse Session"
       : launchReadyRunners.length > 1
-        ? "Choose Runner"
+        ? "Choose Machine"
         : runners.length > 0
-          ? "Open Runners"
-          : "Add Runner";
+          ? "Open Machines"
+          : "Connect Machine";
   const handleRunnerAction = useCallback(() => {
     if (singleLaunchReadyRunner) {
       setLaunchRunner(singleLaunchReadyRunner);

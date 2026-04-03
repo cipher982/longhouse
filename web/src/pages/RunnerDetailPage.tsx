@@ -477,8 +477,8 @@ export default function RunnerDetailPage() {
       <PageShell size="wide" className="runner-detail-container">
         <EmptyState
           icon={<Spinner size="lg" />}
-          title="Loading runner..."
-          description="Fetching runner details."
+          title="Loading machine..."
+          description="Fetching machine details."
         />
       </PageShell>
     );
@@ -489,11 +489,11 @@ export default function RunnerDetailPage() {
       <PageShell size="wide" className="runner-detail-container">
         <EmptyState
           variant="error"
-          title="Runner not found"
-          description="This runner might have been revoked or removed."
+          title="Machine not found"
+          description="This machine might have been disconnected, revoked, or removed."
           action={
             <Button variant="secondary" onClick={() => navigate("/runners")}>
-              Back to Runners
+              Back to Machines
             </Button>
           }
         />
@@ -506,7 +506,7 @@ export default function RunnerDetailPage() {
       <div className="runner-detail-page">
         <SectionHeader
           title={runner.name}
-          description={runner.status_summary ?? "Manage runner capabilities, secrets, and status."}
+          description={runner.status_summary ?? "Manage this machine's connection, capabilities, secrets, and status."}
           actions={
             <div className="runner-detail-header-actions">
               <Badge variant={getStatusVariant(runner.status)}>{runner.status}</Badge>
@@ -546,7 +546,7 @@ export default function RunnerDetailPage() {
             <div className="section-header">
               <div>
                 <h2 className="ui-section-title">Health</h2>
-                <p className="detail-help-text">Derived from runner heartbeats, reported metadata, and Longhouse policy.</p>
+                <p className="detail-help-text">Derived from machine heartbeats, reported metadata, and Longhouse policy.</p>
               </div>
             </div>
 

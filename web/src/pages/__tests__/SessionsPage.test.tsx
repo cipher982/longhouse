@@ -194,7 +194,7 @@ function renderSessionsPage(initialEntry = "/timeline", queryClient = createQuer
             path="/runners"
             element={
               <>
-                <div>Runners</div>
+                <div>Machines</div>
                 <LocationProbe />
               </>
             }
@@ -448,7 +448,7 @@ describe("SessionsPage", () => {
     expect(await screen.findByText("Import sessions you already have")).toBeInTheDocument();
     expect(screen.getByText(/Longhouse gets useful once it can see real Claude Code, Codex, or Gemini work/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "See import steps" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Add Runner" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect Machine" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Load demo sessions instead" })).toBeInTheDocument();
     expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
     expect(screen.getByText("longhouse ship")).toBeInTheDocument();
@@ -490,7 +490,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
-    await user.click(await screen.findByRole("button", { name: "Choose Runner" }));
+    await user.click(await screen.findByRole("button", { name: "Choose Machine" }));
 
     expect(navigateMock).toHaveBeenCalledWith("/runners");
   });
@@ -586,7 +586,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByText(/^Head:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Started:/)).not.toBeInTheDocument();
     expect(screen.queryByText(/continuations/)).not.toBeInTheDocument();
-    expect(screen.getByText("Open match")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open match: Matched continuation" })).toBeInTheDocument();
     expect(screen.getByText(/^Matched .*ago$/)).toBeInTheDocument();
   });
 
