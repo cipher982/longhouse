@@ -133,14 +133,14 @@ PY
 fi
 
 BASE_URL="http://127.0.0.1:${PORT}"
-DEMO_DB_PATH="${QA_HOME}/.longhouse/demo.db"
-mkdir -p "$(dirname "$DEMO_DB_PATH")"
+QA_DB_PATH="${QA_HOME}/.longhouse/qa.db"
+mkdir -p "$(dirname "$QA_DB_PATH")"
 
-echo "🚀 Starting Longhouse (demo) at ${BASE_URL}"
+echo "🚀 Starting Longhouse at ${BASE_URL}"
 (
   cd "$WORKDIR/server"
-  HOME="$QA_HOME" AUTH_DISABLED=1 ENVIRONMENT="test:e2e" DATABASE_URL="sqlite:///${DEMO_DB_PATH}" \
-    uv run longhouse serve --demo-fresh --host 127.0.0.1 --port "$PORT"
+  HOME="$QA_HOME" AUTH_DISABLED=1 ENVIRONMENT="test:e2e" SKIP_DEMO_SEED=1 DATABASE_URL="sqlite:///${QA_DB_PATH}" \
+    uv run longhouse serve --host 127.0.0.1 --port "$PORT"
 ) >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 
