@@ -376,6 +376,13 @@ describe("SessionsPage", () => {
     );
   });
 
+  it("keeps the timeline card action semantically honest", async () => {
+    renderSessionsPage("/timeline");
+
+    expect(await screen.findByRole("button", { name: "Open session: Cleanup sessions page" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Continue here: Cleanup sessions page" })).not.toBeInTheDocument();
+  });
+
   it("uses honest grouped-results copy in query compatibility mode", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
