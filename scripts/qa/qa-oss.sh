@@ -134,6 +134,7 @@ fi
 
 BASE_URL="http://127.0.0.1:${PORT}"
 QA_DB_PATH="${QA_HOME}/.longhouse/qa.db"
+rm -rf "$QA_HOME"
 mkdir -p "$(dirname "$QA_DB_PATH")"
 
 echo "🚀 Starting Longhouse at ${BASE_URL}"
