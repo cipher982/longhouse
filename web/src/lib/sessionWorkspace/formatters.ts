@@ -54,8 +54,14 @@ export function truncatePath(path: string | null, maxLen: number = 50): string {
   return "~/" + parts.slice(-3).join("/");
 }
 
+export function normalizeSessionOriginLabel(label: string | null | undefined): string | null {
+  if (!label) return null;
+  if (label === "On this Mac") return "This machine";
+  return label;
+}
+
 export function getSessionOriginLabel(session: Pick<AgentSession, "origin_label" | "environment">): string {
-  return session.origin_label || session.environment || "Local";
+  return normalizeSessionOriginLabel(session.origin_label) || session.environment || "Local";
 }
 
 /** Strip <channel ...>...</channel> wrapper injected by Claude channel bridge. */

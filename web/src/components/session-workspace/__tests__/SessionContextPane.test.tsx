@@ -130,11 +130,11 @@ describe("SessionContextPane", () => {
     });
 
     expect(screen.getAllByText("Running bash")).toHaveLength(2);
-    expect(screen.getByText("On this Mac")).toBeInTheDocument();
+    expect(screen.getByText("Longhouse session")).toBeInTheDocument();
     expect(screen.queryByText("Completed")).not.toBeInTheDocument();
   });
 
-  it("shows the local reattach command for managed-local sessions", () => {
+  it("shows the host reattach command for Longhouse sessions", () => {
     renderPane({
       session: makeSession({
         execution_home: "managed_local",
@@ -144,7 +144,7 @@ describe("SessionContextPane", () => {
       }),
     });
 
-    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach locally");
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach on the host machine");
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("running on cinder");
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
       "tmux -L longhouse-managed attach -t lh-codex",
@@ -166,7 +166,7 @@ describe("SessionContextPane", () => {
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach the live Codex terminal");
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("send prompts from Longhouse below");
     expect(
-      screen.getByText(/Keep driving the live session from Longhouse below or by reattaching locally/i),
+      screen.getByText(/Keep driving the live session from Longhouse below or by reattaching on the host machine/i),
     ).toBeInTheDocument();
   });
 

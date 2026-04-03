@@ -41,6 +41,7 @@ Make the launch story match the real product:
 - [x] Decide and land the install/onboarding script changes needed for the story:
   import first, start a Longhouse session second, wrappers later
 - [x] Spin wrapper mode out as a follow-on opt-in activation slice, not a launch prerequisite
+- [x] Remove leftover `managed-local` wording from public docs/UI
 
 ## Work Order
 
@@ -77,7 +78,6 @@ Do after the story is stable.
 
 Do in parallel where easy.
 
-- remove leftover `managed-local` wording from public docs/UI
 - reduce overexposed Oikos naming in launch-facing surfaces
 - keep machine surface visible and legible
 
@@ -144,4 +144,5 @@ Do separately and do not let it block launch.
   - installer no longer mutates Claude/Codex launch behavior by default
   - interactive onboarding offers wrapper install explicitly
   - `longhouse wrap --json` gives automation a machine-readable status/results surface
+- Runtime/session UI copy now uses `Longhouse session`, `host machine`, and `Live on host` language instead of leaking `managed-local` into user-facing surfaces.
 - Architectural cleanup remains real, but it is not the first thing to do next.

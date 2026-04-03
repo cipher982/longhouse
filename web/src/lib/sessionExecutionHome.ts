@@ -1,9 +1,15 @@
 import type { SessionExecutionHome } from "../services/api/agents";
 
+export function normalizeExecutionVenueLabel(label: string | null | undefined): string | null {
+  if (!label) return null;
+  if (label === "On this Mac") return "Longhouse session";
+  return label;
+}
+
 export function getExecutionHomeLabel(home: SessionExecutionHome | null | undefined): string | null {
   switch (home) {
     case "managed_local":
-      return "On this Mac";
+      return "Longhouse session";
     case "managed_hosted":
       return "Hosted";
     case "cloud_takeover":

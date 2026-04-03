@@ -51,14 +51,14 @@ export function getSessionInteractionCapabilities({
           : mode === "branch"
             ? "New cloud branch starts here"
             : mode === "managed_local_unavailable" && isManagedLocalCodex
-              ? "Drive this session from the attached Codex terminal"
+              ? "Drive this session from the host Codex terminal"
               : mode === "managed_local_unavailable"
-                ? "Drive this session from the attached terminal"
+                ? "Drive this session from the host terminal"
                 : `This ${providerLabel} transcript is synced, but not resumable from the web yet`;
 
   const description =
     mode === "managed_local"
-      ? `This session is still running on ${sourceOriginLabel}. Messages below are injected into the live local ${providerLabel} session and sync back into the timeline here.`
+      ? `This session is still running on ${sourceOriginLabel}. Messages below are injected into the live ${providerLabel} session on its host and sync back into the timeline here.`
       : mode === "head"
         ? `Earlier turns were synced from ${sourceOriginLabel}. New messages below keep extending this cloud session.`
         : mode === "promote"
@@ -66,7 +66,7 @@ export function getSessionInteractionCapabilities({
           : mode === "branch"
             ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts a new cloud branch from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
             : mode === "managed_local_unavailable"
-              ? `This managed-local ${providerLabel} session is still visible here, but Longhouse cannot inject prompts because the live runner bridge metadata is missing. Reattach locally to continue.`
+              ? `This live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts because the runner bridge metadata is missing. Reattach on the host machine to continue.`
               : `Direct cloud continuation is currently wired for Claude sessions only. This ${providerLabel} transcript is still searchable and auditable here while we close that provider gap.`;
 
   const placeholder =
@@ -89,9 +89,9 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local_unavailable"
       ? {
           title: isManagedLocalCodex
-            ? "Managed-local Codex needs local attach"
-            : "Managed-local session needs local attach",
-          body: `This live ${providerLabel} session is still searchable here, but Longhouse cannot inject prompts until the local runner bridge is present. Reattach locally to continue.`,
+            ? "Codex session needs host attach"
+            : "Live session needs host attach",
+          body: `This live ${providerLabel} session is still searchable here, but Longhouse cannot inject prompts until the runner bridge is present. Reattach on the host machine to continue.`,
         }
       : mode === "unsupported"
         ? {
@@ -104,7 +104,7 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? "Drive live session"
       : mode === "managed_local_unavailable"
-        ? "Reattach locally"
+        ? "Reattach on host"
         : canContinueInCloud
           ? "Continue in cloud"
           : "Latest context";

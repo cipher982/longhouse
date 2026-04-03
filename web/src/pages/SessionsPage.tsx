@@ -45,7 +45,11 @@ import { PresenceBadge } from "../components/PresenceBadge";
 import { parseUTC } from "../lib/dateUtils";
 import { getExecutionHomeLabel } from "../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
-import { getProviderColor, getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
+import {
+  getProviderColor,
+  getSessionInteractionCapabilities,
+  normalizeSessionOriginLabel,
+} from "../lib/sessionWorkspace";
 import { RecallPanel } from "../components/RecallPanel";
 import "../styles/sessions.css";
 
@@ -277,7 +281,7 @@ function renderHighlightedText(text: string, query: string) {
 
 function getRuntimeMetaLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string | null {
   if (runtime.truthTier === "managed-local") {
-    return "Local runtime";
+    return "Live on host";
   }
   if (runtime.lastLiveAt) {
     if (runtime.truthTier === "stale" || runtime.confidence === "stale") {
@@ -516,8 +520,10 @@ function SessionCard({
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
   const executionHomeLabel = getExecutionHomeLabel(session.execution_home);
+  const headOriginLabel = normalizeSessionOriginLabel(thread.head_origin_label);
+  const startedOriginLabel = normalizeSessionOriginLabel(thread.started_origin_label);
   const showHeadOriginLabel =
-    !compatibilityMode && !!thread.head_origin_label && thread.head_origin_label !== executionHomeLabel;
+    !compatibilityMode && !!headOriginLabel && headOriginLabel !== executionHomeLabel;
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
@@ -601,13 +607,13 @@ function SessionCard({
             </span>
           )}
           {showHeadOriginLabel && (
-            <span className="environment-badge environment-badge--secondary">Head: {thread.head_origin_label}</span>
+            <span className="environment-badge environment-badge--secondary">Head: {headOriginLabel}</span>
           )}
           {!compatibilityMode &&
             thread.continuation_count > 1 &&
-            thread.started_origin_label &&
-            thread.started_origin_label !== thread.head_origin_label && (
-            <span className="environment-badge environment-badge--secondary">Started: {thread.started_origin_label}</span>
+            startedOriginLabel &&
+            startedOriginLabel !== headOriginLabel && (
+            <span className="environment-badge environment-badge--secondary">Started: {startedOriginLabel}</span>
           )}
           {!compatibilityMode && thread.continuation_count > 1 && (
             <span className="environment-badge environment-badge--secondary">

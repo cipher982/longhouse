@@ -686,7 +686,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("On this Mac")).toBeInTheDocument();
+    expect(await screen.findByText("Longhouse session")).toBeInTheDocument();
     expect(screen.getByText("Cloud")).toBeInTheDocument();
     expect(screen.getByText("Head: cinder")).toBeInTheDocument();
     expect(screen.queryByText("Head: Cloud")).not.toBeInTheDocument();
@@ -776,7 +776,7 @@ describe("SessionsPage", () => {
     const { container } = renderSessionsPage();
 
     expect(await screen.findByText("Needs you")).toBeInTheDocument();
-    expect(screen.getByText("Local runtime")).toBeInTheDocument();
+    expect(screen.getByText("Live on host")).toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--needs-user");
@@ -815,7 +815,7 @@ describe("SessionsPage", () => {
     const { container } = renderSessionsPage();
 
     expect(await screen.findByText("Blocked on bash")).toBeInTheDocument();
-    expect(screen.getByText("Local runtime")).toBeInTheDocument();
+    expect(screen.getByText("Live on host")).toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--blocked");
