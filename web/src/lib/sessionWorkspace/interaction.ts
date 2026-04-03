@@ -134,14 +134,7 @@ export function getSessionInteractionCapabilities({
       ? notice?.body ?? null
       : null;
 
-  const primaryActionLabel =
-    mode === "managed_local"
-      ? "Drive live session"
-      : mode === "managed_local_unavailable"
-        ? "Reattach on host"
-        : canContinueInCloud
-          ? "Continue in cloud"
-          : "Latest context";
+  const primaryActionLabel = "Continue here";
 
   return {
     mode,

@@ -25,6 +25,7 @@ interface SessionContextPaneProps {
   isViewingHead: boolean;
   onOpenSession: (sessionId: string) => void;
   onOpenLatest: () => void;
+  onPrimaryAction?: () => void;
   continuationNotice?: {
     title: string;
     body: string;
@@ -53,6 +54,7 @@ export function SessionContextPane({
   isViewingHead,
   onOpenSession,
   onOpenLatest,
+  onPrimaryAction,
   continuationNotice = null,
   loopModePending = false,
   onLoopModeChange,
@@ -87,6 +89,11 @@ export function SessionContextPane({
         : isManagedLocalCodex
           ? "For live Codex sessions, Loop Mode changes review posture only. Keep driving the live session from the host terminal."
           : "Loop Mode changes review posture only. Keep driving the live session from the host terminal.";
+  const primaryActionDescription = interaction.canChatFromBrowser
+    ? interaction.mode === "managed_local"
+      ? "Open the dock below and send the next prompt into the live session."
+      : "Open the dock below and continue from this session in the browser."
+    : interaction.composerDisabledReason ?? interaction.notice?.body ?? interaction.capabilitySummary;
 
   return (
     <div className="session-context-pane">
@@ -116,6 +123,25 @@ export function SessionContextPane({
         </div>
         <div className="session-context-capability-summary" data-testid="session-capability-summary">
           {interaction.capabilitySummary}
+        </div>
+      </div>
+
+      <div className="session-pane-section">
+        <div className="session-pane-section-title">Next action</div>
+        <div className="session-context-primary-action">
+          <Button
+            type="button"
+            variant="primary"
+            size="sm"
+            onClick={onPrimaryAction}
+            disabled={!interaction.canChatFromBrowser}
+            title={!interaction.canChatFromBrowser ? primaryActionDescription : undefined}
+          >
+            {interaction.primaryActionLabel}
+          </Button>
+          <div className="session-context-primary-action-copy">
+            {primaryActionDescription}
+          </div>
         </div>
       </div>
 
