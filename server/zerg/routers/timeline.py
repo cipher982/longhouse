@@ -772,6 +772,7 @@ async def get_timeline_session_projection(
     session_id: UUID,
     response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
     db: Session = Depends(get_db),
@@ -779,6 +780,7 @@ async def get_timeline_session_projection(
     return await _sessions_router.get_session_projection(
         session_id=session_id,
         branch_mode=branch_mode,
+        anchor=anchor,
         limit=limit,
         offset=offset,
         response=response,

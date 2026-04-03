@@ -4,7 +4,13 @@
  * Used by the Session Picker modal and other session UIs.
  */
 
-import { useInfiniteQuery, useQuery, keepPreviousData, type UseQueryOptions } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  keepPreviousData,
+  type InfiniteData,
+  type UseQueryOptions,
+} from "@tanstack/react-query";
 import {
   fetchAgentSessions,
   fetchAgentSession,
@@ -149,26 +155,45 @@ export function useAgentSessionProjectionInfinite(
   } = {}
 ) {
   const { limit = 1000, enabled = true, branch_mode = "head", initialPage = null } = options;
+  type ProjectionPageParam =
+    | { anchor: "tail" }
+    | { anchor: "start"; offset: number; limit: number };
 
-  return useInfiniteQuery<AgentSessionProjectionResponse>({
+  return useInfiniteQuery<
+    AgentSessionProjectionResponse,
+    Error,
+    InfiniteData<AgentSessionProjectionResponse>,
+    unknown[],
+    ProjectionPageParam
+  >({
     queryKey: ["agent-session-projection-infinite", sessionId, { limit, branch_mode }],
-    queryFn: ({ pageParam = 0 }) =>
+    queryFn: ({ pageParam }) =>
       fetchAgentSessionProjection(sessionId!, {
-        limit,
-        offset: Number(pageParam),
+        limit: pageParam.anchor === "tail" ? limit : pageParam.limit,
+        anchor: pageParam.anchor,
+        offset: pageParam.anchor === "start" ? pageParam.offset : undefined,
         branch_mode,
       }),
-    initialPageParam: 0,
-    // Backward pagination: each "next" page loads events that come before the
-    // oldest page currently loaded. page_offset=0 means we've reached the start.
-    getNextPageParam: (lastPage) => {
-      const currentOffset = lastPage.page_offset ?? 0;
-      return currentOffset > 0 ? Math.max(0, currentOffset - limit) : undefined;
+    initialPageParam: { anchor: "tail" },
+    // The initial page is the latest tail window. "Previous" pages are older
+    // slices prepended above it in display order.
+    getPreviousPageParam: (firstPage) => {
+      const currentOffset = firstPage.page_offset ?? 0;
+      if (currentOffset <= 0) return undefined;
+
+      const previousLimit = Math.min(limit, currentOffset);
+      return {
+        anchor: "start",
+        offset: currentOffset - previousLimit,
+        limit: previousLimit,
+      };
     },
+    getNextPageParam: () => undefined,
     enabled: !!sessionId && enabled,
-    // Seed page params from page_offset so backward pagination works correctly.
+    // Keep the seed page anchored to the tail so refetches continue to track
+    // newly appended events after the session grows beyond one page.
     initialData: initialPage
-      ? { pages: [initialPage], pageParams: [initialPage.page_offset ?? 0] }
+      ? { pages: [initialPage], pageParams: [{ anchor: "tail" }] }
       : undefined,
     staleTime: 10_000,
     gcTime: 5 * 60_000,

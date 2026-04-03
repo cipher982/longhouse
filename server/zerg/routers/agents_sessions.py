@@ -1015,6 +1015,7 @@ async def get_session_projection(
     session_id: UUID,
     response: Response,
     branch_mode: str = Query("head", description="Branch projection mode: head|all"),
+    anchor: str = Query("start", description="Page anchor: start|tail"),
     limit: int = Query(100, ge=1, le=1000, description="Max projected items"),
     offset: int = Query(0, ge=0, description="Offset within the stitched projection"),
     db: Session = Depends(get_db),
@@ -1038,6 +1039,11 @@ async def get_session_projection(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="branch_mode must be one of: head, all",
         )
+    if anchor not in {"start", "tail"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="anchor must be one of: start, tail",
+        )
 
     with timing.span("load_projection"):
         projection = store.get_session_projection_page(
@@ -1045,6 +1051,7 @@ async def get_session_projection(
             branch_mode=branch_mode,
             limit=limit,
             offset=offset,
+            load_from_end=anchor == "tail",
         )
     with timing.span("load_head"):
         head = store.get_thread_head(session)
