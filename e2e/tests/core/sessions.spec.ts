@@ -1183,11 +1183,12 @@ test.describe("Session Detail Page", () => {
 
     await expect(page.getByTestId("session-continuation-panel")).toBeVisible();
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
-      "not resumable from the web yet",
+      "Search and inspect this session",
     );
     await expect(
       page.getByTestId("session-continuation-unavailable"),
     ).toContainText("wired for Claude sessions only");
+    await expect(page.getByRole("button", { name: "Continue here" })).toBeDisabled();
     await expect(page.locator(".session-chat-composer textarea")).toBeVisible();
     await expect(page.locator(".session-chat-composer textarea")).toBeDisabled();
     await expect(
@@ -1286,10 +1287,17 @@ test.describe("Session Detail Page", () => {
       await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
       await expect(page.getByTestId("session-continuation-panel")).toContainText(
-        "Drive this live Codex session",
+        "Continue this session",
+      );
+      await expect(page.getByTestId("session-continuation-panel")).toContainText(
+        "Longhouse can send your next prompt into this live Codex session",
       );
 
       const composer = page.locator(".session-chat-composer textarea");
+      const continueHere = page.getByRole("button", { name: "Continue here" });
+      await expect(continueHere).toBeEnabled();
+      await continueHere.click();
+      await expect(composer).toBeFocused();
       await composer.fill("Continue locally");
       await page.getByRole("button", { name: "Send" }).click();
 
