@@ -191,7 +191,7 @@ describe("SessionDetailPage", () => {
       "send prompts from Longhouse below",
     );
     expect(
-      screen.getByText(/Keep driving the live session from Longhouse below or by reattaching locally/i),
+      screen.getByText(/Keep driving the live session from Longhouse below or by reattaching on the host machine/i),
     ).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();

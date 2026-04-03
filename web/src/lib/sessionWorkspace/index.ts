@@ -19,6 +19,7 @@ export {
   getProviderColor,
   getSessionOriginLabel,
   getTimelineMessagePreview,
+  normalizeSessionOriginLabel,
   supportsDirectWebContinuation,
   truncatePath,
 } from "./formatters";

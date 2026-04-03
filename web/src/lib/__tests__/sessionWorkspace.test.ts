@@ -97,7 +97,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.submitLabel).toBe("Send");
   });
 
-  it("surfaces managed-local sessions without runner metadata as local-reattach only", () => {
+  it("surfaces managed-local sessions without runner metadata as host-reattach only", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "codex",
@@ -108,8 +108,8 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("managed_local_unavailable");
     expect(capabilities.canChatFromBrowser).toBe(false);
-    expect(capabilities.primaryActionLabel).toBe("Reattach locally");
-    expect(capabilities.notice?.title).toMatch(/Managed-local Codex needs local attach/i);
+    expect(capabilities.primaryActionLabel).toBe("Reattach on host");
+    expect(capabilities.notice?.title).toMatch(/Codex session needs host attach/i);
   });
 
   it("treats a synced Claude transcript on the head as promotable to cloud continuation", () => {
