@@ -42,6 +42,7 @@ function renderPane(
   {
     session = makeSession(),
     onLoopModeChange = vi.fn(),
+    onPrimaryAction = vi.fn(),
     loopModePending = false,
     latestTurnReview = null,
     turnReviewLoading = false,
@@ -49,6 +50,7 @@ function renderPane(
   }: {
     session?: AgentSession;
     onLoopModeChange?: (nextMode: SessionLoopMode) => void;
+    onPrimaryAction?: () => void;
     loopModePending?: boolean;
     latestTurnReview?: SessionTurnReview | null;
     turnReviewLoading?: boolean;
@@ -64,6 +66,7 @@ function renderPane(
       isViewingHead
       onOpenSession={vi.fn()}
       onOpenLatest={vi.fn()}
+      onPrimaryAction={onPrimaryAction}
       onLoopModeChange={onLoopModeChange}
       loopModePending={loopModePending}
       latestTurnReview={latestTurnReview}
@@ -135,6 +138,42 @@ describe("SessionContextPane", () => {
       "This live Claude session is visible here, but you need the host terminal to keep driving it.",
     );
     expect(screen.queryByText("Completed")).not.toBeInTheDocument();
+  });
+
+  it("keeps the primary action visible and enabled for browser-drivable sessions", async () => {
+    const user = userEvent.setup();
+    const onPrimaryAction = vi.fn();
+
+    renderPane({
+      session: makeSession({
+        provider: "codex",
+        execution_home: "managed_local",
+        managed_transport: "codex_app_server",
+        source_runner_id: 7,
+        source_runner_name: "cinder",
+      }),
+      onPrimaryAction,
+    });
+
+    const button = screen.getByRole("button", { name: "Continue here" });
+    expect(button).toBeEnabled();
+    expect(screen.getByText("Open the dock below and send the next prompt into the live session.")).toBeInTheDocument();
+
+    await user.click(button);
+
+    expect(onPrimaryAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the primary action visible but disabled for searchable-only sessions", () => {
+    renderPane({
+      session: makeSession({
+        provider: "gemini",
+      }),
+    });
+
+    const button = screen.getByRole("button", { name: "Continue here" });
+    expect(button).toBeDisabled();
+    expect(screen.getByText(/direct cloud continuation is currently wired for Claude sessions only/i)).toBeInTheDocument();
   });
 
   it("shows the host reattach command for live-controlled sessions", () => {

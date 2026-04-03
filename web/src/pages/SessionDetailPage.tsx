@@ -77,6 +77,15 @@ function SessionDetailWorkspaceRoute({
   const handleBack = useCallback(() => {
     navigate(returnTo);
   }, [navigate, returnTo]);
+  const handleOpenContinuation = useCallback(() => {
+    const panel = document.querySelector('[data-testid="session-continuation-panel"]');
+    if (!(panel instanceof HTMLElement)) return;
+    panel.scrollIntoView({ behavior: "smooth", block: "end" });
+    const textarea = panel.querySelector("textarea");
+    if (textarea instanceof HTMLTextAreaElement && !textarea.disabled) {
+      textarea.focus({ preventScroll: true });
+    }
+  }, []);
 
   const { effectiveLoopMode, loopModePending, handleLoopModeChange } = useLoopModeChange(session);
   const queryClient = useQueryClient();
@@ -183,6 +192,7 @@ function SessionDetailWorkspaceRoute({
             isViewingHead={isViewingHead}
             onOpenSession={navigateToSession}
             onOpenLatest={() => headThreadSession && navigateToSession(headThreadSession.id)}
+            onPrimaryAction={handleOpenContinuation}
             continuationNotice={interaction.notice}
             loopModePending={loopModePending}
             onLoopModeChange={handleLoopModeChange}
