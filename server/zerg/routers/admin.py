@@ -28,6 +28,7 @@ from zerg.database import get_session_factory
 from zerg.dependencies.auth import get_current_user
 from zerg.dependencies.auth import require_admin
 from zerg.dependencies.auth import require_super_admin
+from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.schemas.usage import AdminUserDetailResponse
 from zerg.schemas.usage import AdminUsersResponse
@@ -118,9 +119,6 @@ def clear_user_data(engine) -> dict[str, any]:
     # It's useful in dev/prod for diagnostics, but unnecessary for tests.
     should_count_rows = os.getenv("RESET_DB_COUNT_ROWS", "").strip() == "1" or not (settings.testing or os.getenv("NODE_ENV") == "test")
 
-    # Discover all tables from SQLAlchemy metadata
-    all_tables = {table.name for table in Base.metadata.tables.values()}
-
     # Tables to preserve (infrastructure/auth)
     # Preserve infrastructure/auth tables.
     #
@@ -130,8 +128,11 @@ def clear_user_data(engine) -> dict[str, any]:
     # and auto-seeding runs again. Keeping runners is the least surprising DX.
     preserve_tables = {"users", "alembic_version", "runners"}
 
+    discovered_tables: list[tuple[str | None, str]] = [(table.schema, table.name) for table in Base.metadata.sorted_tables]
+    discovered_tables.extend((table.schema, table.name) for table in AgentsBase.metadata.sorted_tables)
+
     # Tables to clear (user-generated content)
-    clear_tables = all_tables - preserve_tables
+    clear_tables = [table_ref for table_ref in discovered_tables if table_ref[1] not in preserve_tables]
 
     if not clear_tables:
         return {"message": "No user data tables found to clear", "tables_cleared": [], "rows_cleared": 0}
@@ -147,20 +148,23 @@ def clear_user_data(engine) -> dict[str, any]:
                 if should_count_rows:
                     # Count rows before clearing (best-effort; for diagnostics only)
                     total_before = 0
-                    for table in clear_tables:
+                    for schema, table in clear_tables:
                         try:
-                            count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar() or 0
+                            qualified_name = f'"{schema}"."{table}"' if schema else f'"{table}"'
+                            count = conn.execute(text(f"SELECT COUNT(*) FROM {qualified_name}")).scalar() or 0
                             total_before += count
                         except Exception:
                             pass
 
                 # SQLite: Disable FK checks and DELETE
                 conn.execute(text("PRAGMA foreign_keys = OFF"))
-                for table in sorted(clear_tables):
+                for schema, table in sorted(clear_tables, key=lambda item: ((item[0] or ""), item[1])):
                     try:
-                        conn.execute(text(f'DELETE FROM "{table}"'))
+                        qualified_name = f'"{schema}"."{table}"' if schema else f'"{table}"'
+                        conn.execute(text(f"DELETE FROM {qualified_name}"))
                     except Exception as e:
-                        logger.warning(f"Failed to clear table {table}: {e}")
+                        table_label = f"{schema}.{table}" if schema else table
+                        logger.warning(f"Failed to clear table {table_label}: {e}")
                 conn.execute(text("PRAGMA foreign_keys = ON"))
 
                 conn.commit()
@@ -171,7 +175,10 @@ def clear_user_data(engine) -> dict[str, any]:
             return {
                 "message": "User data cleared successfully",
                 "operation": "clear_data",
-                "tables_cleared": sorted(list(clear_tables)),
+                "tables_cleared": [
+                    f"{schema}.{table}" if schema else table
+                    for schema, table in sorted(clear_tables, key=lambda item: ((item[0] or ""), item[1]))
+                ],
                 "rows_cleared": total_before,
                 "counts_skipped": not should_count_rows,
                 "duration_ms": duration_ms,
