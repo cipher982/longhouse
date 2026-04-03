@@ -24,6 +24,7 @@ import {
   describeRunnerNativeInstallMode,
   type RunnerNativeInstallMode,
 } from "../lib/runnerInstallCommands";
+import { isRunnerSessionLaunchReady } from "../lib/runnerSessions";
 import type { Runner, RunnerDoctorResponse, RunnerJob } from "../services/api";
 import LaunchSessionModal from "../components/LaunchSessionModal";
 import "../styles/runner-detail.css";
@@ -519,9 +520,9 @@ export default function RunnerDetailPage() {
                   {versionStatusLabel(runner.version_status)}
                 </Badge>
               )}
-              {runner.status === "online" && runner.capabilities?.includes("exec.full") && (
+              {isRunnerSessionLaunchReady(runner) && (
                 <Button variant="primary" size="sm" onClick={() => setLaunchModalOpen(true)}>
-                  Launch Session
+                  Start Longhouse Session
                 </Button>
               )}
               <Button variant="ghost" size="sm" onClick={() => navigate("/runners")}>

@@ -2,7 +2,7 @@
 
 Status: In progress
 Spec: `docs/specs/launch-runtime-simplification.md`
-Last updated: 2026-04-02
+Last updated: 2026-04-03
 
 ## Goal
 
@@ -42,6 +42,7 @@ Make the launch story match the real product:
   import first, start a Longhouse session second, wrappers later
 - [x] Spin wrapper mode out as a follow-on opt-in activation slice, not a launch prerequisite
 - [x] Remove leftover `managed-local` wording from public docs/UI
+- [x] Expose the second activation beat directly inside Timeline with runner-aware `Start Longhouse Session` / runner setup CTAs
 
 ## Work Order
 
@@ -148,4 +149,6 @@ Do separately and do not let it block launch.
 - Onboarding verification no longer creates a fake visible timeline session; the verification ingest is now hidden as a sidechain session.
 - Installer success output and the landing install block now present the same activation order:
   start Longhouse, import existing sessions, then start a Longhouse session when the user wants control.
+- Timeline now carries that same second beat in-product:
+  users can start a Longhouse session directly when one runner is ready, or jump to runners/setup when it is not.
 - Architectural cleanup remains real, but it is not the first thing to do next.

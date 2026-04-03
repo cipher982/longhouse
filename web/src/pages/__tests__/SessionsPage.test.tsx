@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route, Routes, useLocation } from "react-router-dom";
+import * as reactRouterDom from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as agentsApi from "../../services/api/agents";
 import type {
@@ -10,12 +11,17 @@ import type {
   TimelineSessionCard,
   TimelineSessionsListResponse,
 } from "../../services/api/agents";
+import type { Runner } from "../../services/api";
 import { TestRouter } from "../../test/test-utils";
 import SessionsPage from "../SessionsPage";
 
 const hookMocks = vi.hoisted(() => ({
   useAgentSessions: vi.fn(),
   useAgentFilters: vi.fn(),
+}));
+
+const runnerHookMocks = vi.hoisted(() => ({
+  useRunners: vi.fn(),
 }));
 
 const timelineStreamMocks = vi.hoisted(() => ({
@@ -25,6 +31,10 @@ const timelineStreamMocks = vi.hoisted(() => ({
 vi.mock("../../hooks/useAgentSessions", () => ({
   useAgentSessions: hookMocks.useAgentSessions,
   useAgentFilters: hookMocks.useAgentFilters,
+}));
+
+vi.mock("../../hooks/useRunners", () => ({
+  useRunners: runnerHookMocks.useRunners,
 }));
 
 vi.mock("../../hooks/useTimelineSessionStream", () => ({
@@ -42,6 +52,7 @@ vi.mock("../../lib/config", () => ({
 }));
 
 const { useAgentSessions: mockUseAgentSessions, useAgentFilters: mockUseAgentFilters } = hookMocks;
+const { useRunners: mockUseRunners } = runnerHookMocks;
 const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStreamMocks;
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
@@ -123,6 +134,38 @@ function makeSessionsResponse(): TimelineSessionsListResponse {
   };
 }
 
+function makeRunner(overrides: Partial<Runner> = {}): Runner {
+  const now = "2026-03-21T12:00:00Z";
+  return {
+    id: 1,
+    owner_id: 1,
+    name: "cube",
+    availability_policy: "always_on",
+    labels: null,
+    capabilities: ["exec.full"],
+    status: "online",
+    status_reason: null,
+    status_summary: "Ready to launch Longhouse sessions.",
+    last_seen_at: now,
+    last_seen_age_seconds: 3,
+    heartbeat_interval_ms: 30_000,
+    stale_after_seconds: 90,
+    runner_metadata: { hostname: "cube" },
+    install_mode: "native",
+    auto_update_policy: "notify",
+    install_layout_version: 1,
+    managed_install_ready: true,
+    runner_version: "1.0.0",
+    latest_runner_version: "1.0.0",
+    version_status: "current",
+    reported_capabilities: ["exec.full"],
+    capabilities_match: true,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  };
+}
+
 function createQueryClient() {
   return new QueryClient({
     defaultOptions: {
@@ -147,6 +190,15 @@ function renderSessionsPage(initialEntry = "/timeline", queryClient = createQuer
             }
           />
           <Route path="/briefings" element={<div>Briefings</div>} />
+          <Route
+            path="/runners"
+            element={
+              <>
+                <div>Runners</div>
+                <LocationProbe />
+              </>
+            }
+          />
           <Route path="/settings" element={<div>Settings</div>} />
         </Routes>
       </TestRouter>
@@ -207,6 +259,12 @@ describe("SessionsPage", () => {
         machines: ["laptop", "cube"],
       },
       isLoading: false,
+    });
+
+    mockUseRunners.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
     });
 
     mockUseTimelineSessionStream.mockImplementation(
@@ -390,11 +448,51 @@ describe("SessionsPage", () => {
     expect(await screen.findByText("Import sessions you already have")).toBeInTheDocument();
     expect(screen.getByText(/Longhouse gets useful once it can see real Claude Code, Codex, or Gemini work/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "See import steps" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Runner" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Load demo sessions instead" })).toBeInTheDocument();
     expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
     expect(screen.getByText("longhouse ship")).toBeInTheDocument();
     expect(screen.getByText("longhouse claude")).toBeInTheDocument();
     expect(screen.queryByText("Welcome to Longhouse")).not.toBeInTheDocument();
+  });
+
+  it("opens the launch modal directly from the timeline when exactly one runner is ready", async () => {
+    const user = userEvent.setup();
+
+    mockUseRunners.mockReturnValue({
+      data: [makeRunner()],
+      isLoading: false,
+      error: null,
+    });
+
+    renderSessionsPage("/timeline");
+
+    await user.click(await screen.findByRole("button", { name: "Start Longhouse Session" }));
+
+    expect(screen.getByTestId("launch-session-modal")).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Launch Longhouse session" })).toBeInTheDocument();
+    expect(screen.getByText(/Longhouse will launch the CLI inside tmux/i)).toBeInTheDocument();
+  });
+
+  it("sends users to runners when they need to choose a launch target", async () => {
+    const user = userEvent.setup();
+    const navigateMock = vi.fn();
+    vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigateMock);
+
+    mockUseRunners.mockReturnValue({
+      data: [
+        makeRunner({ id: 1, name: "cube" }),
+        makeRunner({ id: 2, name: "mac-mini" }),
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderSessionsPage("/timeline");
+
+    await user.click(await screen.findByRole("button", { name: "Choose Runner" }));
+
+    expect(navigateMock).toHaveBeenCalledWith("/runners");
   });
 
   it("treats demo sessions as preview data instead of the primary onboarding path", async () => {
