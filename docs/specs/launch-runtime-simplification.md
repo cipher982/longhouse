@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: launch/runtime story
-Updated: 2026-04-02
+Updated: 2026-04-03
 
 ## Goal
 
@@ -187,6 +187,42 @@ The machine choice is secondary. The session loop is the product.
 ### One honest sentence
 
 **Every session lands in one timeline. When Longhouse is in the launch path, that same session stays controllable.**
+
+## Capability, Not Type
+
+Longhouse should not teach users that there are different species of sessions.
+
+The correct model is:
+
+- every item in the timeline is a session
+- Longhouse-first launch adds a control path to that same session
+- capability changes state, not ontology
+
+Good product language:
+
+- `This session has live control`
+- `This session can continue on the web`
+- `This session needs host reattach`
+- `This session is history/search only right now`
+
+Bad product language:
+
+- `Longhouse session` vs `imported session` as if they are different objects
+- `managed` / `unmanaged` as the primary user-facing distinction
+- any UI that swaps whole layouts as if the user is looking at a different thing
+
+## Interaction Rule
+
+Session surfaces should stay structurally consistent.
+
+That means:
+
+- the same timeline card shape
+- the same session detail layout
+- the same dock/composer presence
+- disabled or explanatory actions when Longhouse cannot currently drive the session
+
+Do not hide the core surface just because capability is lower. Explain the limitation in-place.
 
 ## Public Vocabulary
 

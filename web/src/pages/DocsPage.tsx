@@ -35,7 +35,7 @@ export default function DocsPage() {
       <main className="info-page-content">
         <h1 className="info-page-title">Documentation</h1>
         <p className="info-page-subtitle">
-          Get started fast, bring sessions into one timeline, then keep control by starting through Longhouse.
+          Get started fast, bring sessions into one timeline, then keep more control over that same session by starting through Longhouse.
         </p>
 
         <nav className="docs-nav">
@@ -88,8 +88,8 @@ longhouse ship</code></pre>
 
           <h3>4. Start through Longhouse when you want live control</h3>
           <p>
-            All sessions live in the same timeline. When you want to steer one after launch, start it
-            through Longhouse or enable wrappers:
+            All sessions live in the same timeline. Starting through Longhouse adds live control to that
+            same session later:
           </p>
           <pre><code>longhouse claude
 longhouse codex</code></pre>

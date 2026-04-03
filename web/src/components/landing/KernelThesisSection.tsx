@@ -10,9 +10,9 @@ const cards: ThesisCard[] = [
       "It is not just history. You can inspect it, message it, tail it, and continue it later.",
   },
   {
-    title: "The same session works everywhere",
+    title: "One session, more capability",
     description:
-      "Browser, CLI, and HTTP all talk to the same session instead of three separate products pretending to agree.",
+      "Longhouse in the launch path changes what you can do with a session later. It does not create a second class of session.",
   },
   {
     title: "Laptop now. Durable machine later.",

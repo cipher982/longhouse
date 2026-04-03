@@ -2,7 +2,7 @@
 
 Status: draft
 Owner: launch/runtime story
-Updated: 2026-04-02
+Updated: 2026-04-03
 
 ## Goal
 
@@ -36,6 +36,12 @@ Mechanic line:
 **Find the session. Ask it. Continue it.**
 
 Longhouse puts every session into one timeline and keeps a control path attached when Longhouse is in the launch path.
+
+Important model:
+
+- every card in the timeline is the same kind of session object
+- starting through Longhouse adds capability to that session later
+- the landing page should never imply two different classes of session
 
 ## Message Hierarchy
 
@@ -130,6 +136,7 @@ See `docs/specs/launch-runtime-simplification.md` for the current launch framing
 - Avoid hand-wavy "AI productivity" copy.
 - Use `session kernel` as the technical identity, not the headline users must decode first.
 - Use `Works on your laptop. Shines on a machine that stays on.` somewhere in the page flow.
+- Prefer language like `same session, more control` over any wording that implies separate session types.
 
 ## Must Show
 

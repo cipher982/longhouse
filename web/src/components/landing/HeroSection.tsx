@@ -38,9 +38,8 @@ export function HeroSection({
           </h1>
 
           <p className="landing-hero-subhead">
-            Bring Claude Code, Codex, and Gemini sessions into one searchable timeline. Start through
-            Longhouse or enable wrappers when you want the same session to stay messageable and
-            continuable later.
+            Bring Claude Code, Codex, and Gemini sessions into one searchable timeline. When Longhouse
+            is in the launch path, that same session stays messageable and continuable later.
           </p>
 
           <p className="landing-hero-note">
@@ -66,7 +65,7 @@ export function HeroSection({
           <div className="landing-hero-friction-reducers">
             <span>One timeline first</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>Control channel when Longhouse is in the loop</span>
+            <span>Same session, more control</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
             <span>CLI / API first</span>
           </div>
