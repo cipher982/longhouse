@@ -1,4 +1,4 @@
-"""Compatibility Oikos history endpoints (GET, DELETE)."""
+"""Oikos history endpoints for the web assistant surface."""
 
 import logging
 from collections import deque
@@ -211,7 +211,7 @@ def _surface_info(msg: ThreadMessage) -> tuple[Optional[str], Optional[str], Opt
     )
 
 
-@router.get("/history", response_model=OikosHistoryResponse, deprecated=True)
+@router.get("/history", response_model=OikosHistoryResponse)
 def oikos_history(
     limit: int = 50,
     offset: int = 0,
@@ -340,7 +340,7 @@ def oikos_history(
     return OikosHistoryResponse(messages=chat_messages, total=total)
 
 
-@router.delete("/history", status_code=status.HTTP_204_NO_CONTENT, deprecated=True)
+@router.delete("/history", status_code=status.HTTP_204_NO_CONTENT)
 def oikos_clear_history(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),

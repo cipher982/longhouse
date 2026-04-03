@@ -4,7 +4,7 @@
  * Responsibilities:
  * - Send messages to POST /api/oikos/chat (SSE streaming)
  * - Handle SSE stream for streaming responses
- * - Load canonical conversation history from /api/conversations/*
+ * - Load Oikos surface history from /api/oikos/history
  * - Emit events for UI updates via stateManager
  *
  * Usage:
@@ -97,7 +97,6 @@ export interface OikosChatConfig {
 export interface OikosHistoryOptions {
   surface_id?: string;
   view?: 'surface' | 'all';
-  conversation_id?: string | number | null;
 }
 
 type QuotaHint = {
@@ -189,26 +188,14 @@ export class OikosChatController {
     try {
       logger.debug('[OikosChat] Loading history from server...');
 
-      const canonicalConversationId =
-        options.view !== 'all' && options.conversation_id !== undefined && options.conversation_id !== null
-          ? String(options.conversation_id)
-          : null;
-      const useCanonicalFormat = Boolean(canonicalConversationId) || options.view === 'all';
-
-      let url: string;
-      if (canonicalConversationId) {
-        const params = new URLSearchParams({ limit: String(limit) });
-        url = toAbsoluteUrl(`${CONFIG.API_BASE}/conversations/${canonicalConversationId}/messages?${params.toString()}`);
-      } else if (options.view === 'all') {
-        const params = new URLSearchParams({ limit: String(limit) });
-        url = toAbsoluteUrl(`${CONFIG.API_BASE}/conversations/activity?${params.toString()}`);
-      } else {
-        const params = new URLSearchParams({
-          limit: String(limit),
-          surface_id: options.surface_id || 'web',
-        });
-        url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history?${params.toString()}`);
+      const params = new URLSearchParams({
+        limit: String(limit),
+        surface_id: options.surface_id || 'web',
+      });
+      if (options.view === 'all') {
+        params.set('view', 'all');
       }
+      const url = toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/history?${params.toString()}`);
 
       const response = await fetchWithRefresh(url, {
         method: 'GET',
@@ -224,27 +211,6 @@ export class OikosChatController {
       const messages: OikosChatMessage[] = (data.messages || [])
         .filter((msg: any) => msg.role === 'user' || msg.role === 'assistant')
         .map((msg: any) => {
-          if (useCanonicalFormat) {
-            const surface = msg.message_metadata?.surface || {};
-            const oikos = msg.message_metadata?.oikos || {};
-            return {
-              role: msg.role,
-              content: msg.content,
-              timestamp: parseUTC(msg.sent_at),
-              origin_surface_id: surface.origin_surface_id || undefined,
-              delivery_surface_id: surface.delivery_surface_id || undefined,
-              visibility: surface.visibility || undefined,
-              usage: msg.message_metadata?.usage || undefined,
-              tool_calls: oikos.tool_calls
-                ? oikos.tool_calls.map((toolCall: any) => ({
-                    tool_call_id: toolCall.id,
-                    tool_name: toolCall.name,
-                    args: toolCall.args,
-                  }))
-                : undefined,
-            };
-          }
-
           return {
             role: msg.role,
             content: msg.content,

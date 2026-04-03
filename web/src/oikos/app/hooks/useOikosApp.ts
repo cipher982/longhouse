@@ -112,7 +112,6 @@ export function useOikosApp() {
   const lastBootstrapResultRef = useRef<BootstrapResult | null>(null)
   const lastOikosTurnsRef = useRef<ConversationTurn[]>([])
   const initStartedRef = useRef(false)
-  const canonicalConversationIdRef = useRef<string | null>(null)
   const [historyView, setHistoryViewState] = useState<OikosHistoryView>('surface')
   // Track if messages were pre-hydrated (e.g., from OikosChatPage with ?thread= param)
   // If pre-hydrated, we should skip loading oikos thread to avoid state clobbering
@@ -196,7 +195,6 @@ export function useOikosApp() {
       // but set conversation state to the oikos thread
       if (messagesPreHydratedRef.current) {
         logger.info('[useOikosApp] Skipping oikos thread load - messages pre-hydrated')
-        canonicalConversationIdRef.current = null
         dispatch({ type: 'SET_CONVERSATION_ID', id: null })
         dispatch({
           type: 'SET_CONVERSATIONS',
@@ -215,7 +213,6 @@ export function useOikosApp() {
             const canonicalConversationId = canonicalConversation?.id != null
               ? String(canonicalConversation.id)
               : null
-            canonicalConversationIdRef.current = canonicalConversationId
             dispatch({ type: 'SET_CONVERSATION_ID', id: canonicalConversationId })
             dispatch({
               type: 'SET_CONVERSATIONS',
@@ -231,7 +228,6 @@ export function useOikosApp() {
             )
           } else {
             // Fallback to default if endpoint fails
-            canonicalConversationIdRef.current = null
             dispatch({ type: 'SET_CONVERSATION_ID', id: null })
             dispatch({
               type: 'SET_CONVERSATIONS',
@@ -240,7 +236,6 @@ export function useOikosApp() {
           }
         } catch (threadError) {
           logger.warn('[useOikosApp] Failed to load thread info, using fallback:', threadError)
-          canonicalConversationIdRef.current = null
           dispatch({ type: 'SET_CONVERSATION_ID', id: null })
           dispatch({
             type: 'SET_CONVERSATIONS',
@@ -269,12 +264,9 @@ export function useOikosApp() {
     try {
       logger.info('[useOikosApp] Loading Oikos chat history...')
       const view = options?.view || historyView
-      const canonicalConversationId =
-        view === 'surface' ? canonicalConversationIdRef.current : null
       const messages = await oikosChatRef.current.loadHistory(50, {
         surface_id: 'web',
         view,
-        conversation_id: canonicalConversationId,
       })
 
       if (messages.length > 0) {

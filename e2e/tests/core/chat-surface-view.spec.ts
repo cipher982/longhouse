@@ -23,11 +23,11 @@ test.describe('Oikos Surface View', () => {
       });
     });
 
-    await page.route('**/api/conversations/**', async (route) => {
+    await page.route('**/api/oikos/history**', async (route) => {
       const url = route.request().url();
       conversationUrls.push(url);
       const parsed = new URL(url);
-      const isAllView = parsed.pathname.endsWith('/activity');
+      const isAllView = parsed.searchParams.get('view') === 'all';
 
       const payload = isAllView
         ? {
@@ -35,26 +35,18 @@ test.describe('Oikos Surface View', () => {
               {
                 role: 'user',
                 content: 'Web question',
-                sent_at: '2026-03-04T12:00:00Z',
-                message_metadata: {
-                  surface: {
-                    origin_surface_id: 'web',
-                    delivery_surface_id: 'web',
-                    visibility: 'surface-local',
-                  },
-                },
+                timestamp: '2026-03-04T12:00:00Z',
+                origin_surface_id: 'web',
+                delivery_surface_id: 'web',
+                visibility: 'surface-local',
               },
               {
                 role: 'assistant',
                 content: 'Telegram follow-up sent.',
-                sent_at: '2026-03-04T12:00:01Z',
-                message_metadata: {
-                  surface: {
-                    origin_surface_id: 'telegram',
-                    delivery_surface_id: 'telegram',
-                    visibility: 'cross-surface',
-                  },
-                },
+                timestamp: '2026-03-04T12:00:01Z',
+                origin_surface_id: 'telegram',
+                delivery_surface_id: 'telegram',
+                visibility: 'cross-surface',
               },
             ],
             total: 2,
@@ -64,14 +56,10 @@ test.describe('Oikos Surface View', () => {
               {
                 role: 'user',
                 content: 'Web question',
-                sent_at: '2026-03-04T12:00:00Z',
-                message_metadata: {
-                  surface: {
-                    origin_surface_id: 'web',
-                    delivery_surface_id: 'web',
-                    visibility: 'surface-local',
-                  },
-                },
+                timestamp: '2026-03-04T12:00:00Z',
+                origin_surface_id: 'web',
+                delivery_surface_id: 'web',
+                visibility: 'surface-local',
               },
             ],
             total: 1,
@@ -88,14 +76,15 @@ test.describe('Oikos Surface View', () => {
     await expect(page.getByTestId('chat-input')).toBeVisible({ timeout: 15000 });
 
     await expect.poll(() => conversationUrls.length, { timeout: 10000 }).toBeGreaterThan(0);
-    expect(conversationUrls[0]).toMatch(/\/api\/conversations\/\d+\/messages\?/);
-    expect(conversationUrls[0]).not.toContain('/activity');
+    expect(conversationUrls[0]).toContain('/api/oikos/history?');
+    expect(conversationUrls[0]).toContain('surface_id=web');
+    expect(conversationUrls[0]).not.toContain('view=all');
 
     const toggle = page.getByTestId('surface-view-toggle');
     await expect(toggle).toHaveText(/Web only/i);
     await toggle.click();
 
-    await expect.poll(() => conversationUrls.some((u) => u.includes('/api/conversations/activity?')), { timeout: 10000 }).toBeTruthy();
+    await expect.poll(() => conversationUrls.some((u) => u.includes('/api/oikos/history?') && u.includes('view=all')), { timeout: 10000 }).toBeTruthy();
     await expect(toggle).toHaveText(/All activity/i);
 
     const telegramBadge = page.locator('[data-testid="message-surface-badge"][data-surface-id="telegram"]');
