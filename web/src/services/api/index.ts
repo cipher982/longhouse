@@ -2,7 +2,6 @@
 export * from "./base";
 export * from "./auth";
 export * from "./types";
-export * from "./conversations";
 export * from "./automations";
 export * from "./threads";
 export * from "./models";

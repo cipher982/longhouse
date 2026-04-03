@@ -18,7 +18,6 @@ describe("getNavItems", () => {
     expect(getNavItems(null)).toEqual([
       { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
       { label: "Loop", href: "/loop", testId: "global-loop-tab" },
-      { label: "Inbox", href: "/conversations", testId: "global-inbox-tab" },
       { label: "Oikos", href: "/chat", testId: "global-chat-tab" },
     ]);
   });
@@ -28,7 +27,6 @@ describe("getNavItems", () => {
     expect(getNavItems("ADMIN").map((item) => item.href)).toEqual([
       "/timeline",
       "/loop",
-      "/conversations",
       "/chat",
       "/admin",
     ]);

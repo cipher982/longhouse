@@ -31,7 +31,6 @@ import { AuthGuard } from "../lib/auth";
 
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
 const ChatPage = lazy(() => import("../pages/ChatPage"));
-const ConversationsPage = lazy(() => import("../pages/ConversationsPage"));
 const LoopInboxPage = lazy(() => import("../pages/LoopInboxPage"));
 const OikosChatPage = lazy(() => import("../pages/OikosChatPage"));
 const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
@@ -305,17 +304,7 @@ export default function App() {
                     },
                   ]
                 : []),
-              {
-                path: "/conversations",
-                element: (
-                  <ErrorBoundary>
-                    <Suspense fallback={<PageLoader />}>
-                      <ConversationsPage />
-                    </Suspense>
-                  </ErrorBoundary>
-                ),
-              },
-              {
+{
                 path: "/chat",
                 element: (
                   <ErrorBoundary>

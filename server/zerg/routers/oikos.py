@@ -8,6 +8,9 @@ Sub-routers (each is a focused module with its own endpoints):
 - oikos_runs: GET /runs, GET /runs/active, GET /runs/{id}, etc.
 - oikos_internal: POST /internal/runs/{id}/resume
 - voice: POST /voice/turn, POST /voice/transcribe, POST /voice/tts
+
+Conversation tools (list, search, read, reply) are exposed to Oikos via
+builtin tools in conversation_tools.py — no HTTP router needed.
 """
 
 import asyncio
@@ -25,7 +28,6 @@ from zerg.events import EventType
 from zerg.events.event_bus import event_bus
 from zerg.routers import oikos_chat
 from zerg.routers import oikos_config
-from zerg.routers import oikos_conversations
 from zerg.routers import oikos_history
 from zerg.routers import oikos_internal
 from zerg.routers import oikos_runs
@@ -39,7 +41,6 @@ router = APIRouter(prefix="/oikos", tags=["oikos"])
 # Include sub-routers
 router.include_router(oikos_chat.router)
 router.include_router(oikos_config.router)
-router.include_router(oikos_conversations.router)
 router.include_router(oikos_history.router)
 router.include_router(oikos_tasks.router)
 router.include_router(oikos_runs.router)
