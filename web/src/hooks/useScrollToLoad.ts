@@ -16,11 +16,15 @@ import { useEffect, useRef } from "react";
  */
 export function useScrollToLoad(options: {
   sentinelRef: React.RefObject<HTMLDivElement | null>;
+  /** The scroll container. When provided, intersection is checked relative to
+   *  this element instead of the viewport — required when the sentinel lives
+   *  inside a scrollable div (overflow-y: auto). */
+  rootRef?: React.RefObject<HTMLDivElement | null>;
   enabled: boolean;
   loading: boolean;
   onLoad: () => void;
 }) {
-  const { sentinelRef, enabled, loading, onLoad } = options;
+  const { sentinelRef, rootRef, enabled, loading, onLoad } = options;
 
   const loadingRef = useRef(loading);
   useEffect(() => {
@@ -49,7 +53,7 @@ export function useScrollToLoad(options: {
           onLoadRef.current();
         }
       },
-      { threshold: 0 },
+      { root: rootRef?.current ?? null, threshold: 0 },
     );
 
     observer.observe(sentinel);

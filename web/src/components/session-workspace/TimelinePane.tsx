@@ -226,9 +226,14 @@ export function TimelinePane({
   const [searchQuery, setSearchQuery] = useState("");
 
   // Auto-fetch older events when the top sentinel scrolls into view.
+  // The sentinel lives inside timeline-pane__list (the scroll container),
+  // so we pass that div as `root` — otherwise the viewport-based observer
+  // never fires when the user scrolls within the inner div.
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   useScrollToLoad({
     sentinelRef: topSentinelRef,
+    rootRef: scrollContainerRef,
     enabled: hasNextPage,
     loading: isFetchingNextPage,
     onLoad: onFetchNextPage,
@@ -414,17 +419,19 @@ export function TimelinePane({
         </div>
       ) : null}
 
-      {hasNextPage || isFetchingNextPage ? (
-        <div ref={topSentinelRef} className="timeline-pane__load-older">
-          {isFetchingNextPage ? <Spinner size="sm" /> : null}
-        </div>
-      ) : null}
-
       <div
-        ref={listRef}
+        ref={(node) => {
+          scrollContainerRef.current = node;
+          if (typeof listRef === "function") listRef(node);
+        }}
         className="timeline-pane__list timeline-events"
         data-testid="session-timeline-list"
       >
+        {hasNextPage || isFetchingNextPage ? (
+          <div ref={topSentinelRef} className="timeline-pane__load-older">
+            {isFetchingNextPage ? <Spinner size="sm" /> : null}
+          </div>
+        ) : null}
         {showScopedLoading ? (
           <EmptyState
             icon={<Spinner size="lg" />}
