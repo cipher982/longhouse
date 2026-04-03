@@ -52,10 +52,13 @@ def test_emit_test_event_retries_with_fresh_device_token(monkeypatch):
         {"X-Agents-Token": "fresh-token"},
     ]
     UUID(calls[0]["json"]["id"])
+    assert calls[0]["json"]["provider"] == "longhouse"
+    assert calls[0]["json"]["project"] == "longhouse-onboarding"
+    assert calls[0]["json"]["is_sidechain"] is True
     assert calls[0]["json"]["events"] == [
         {
             "role": "user",
-            "content_text": "Welcome to Longhouse! This is a test event from onboarding.",
+            "content_text": "Longhouse onboarding verification",
             "timestamp": calls[0]["json"]["events"][0]["timestamp"],
             "source_path": "onboard://verification",
             "source_offset": 0,

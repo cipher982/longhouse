@@ -294,16 +294,17 @@ def _emit_test_event(api_url: str) -> bool:
         # Create a minimal test session/event
         payload = {
             "id": str(uuid4()),
-            "provider": "test",
+            "provider": "longhouse",
             "environment": "onboarding",
-            "project": "longhouse-test",
+            "project": "longhouse-onboarding",
             "device_id": device_name,
             "cwd": str(Path.home()),
+            "is_sidechain": True,
             "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "events": [
                 {
                     "role": "user",
-                    "content_text": "Welcome to Longhouse! This is a test event from onboarding.",
+                    "content_text": "Longhouse onboarding verification",
                     "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                     "source_path": "onboard://verification",
                     "source_offset": 0,
@@ -604,15 +605,15 @@ def onboard(
     typer.echo("")
 
     # Step 4: Verification
-    typer.secho("Step 4: Verify the pipeline", fg=typer.colors.BLUE, bold=True)
+    typer.secho("Step 4: Verify Longhouse can receive sessions", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     if _check_server_health(host, port):
-        typer.echo("  Emitting test event...")
+        typer.echo("  Sending hidden verification event...")
         if _emit_test_event(api_url):
-            typer.secho("  [OK] Test event shipped successfully", fg=typer.colors.GREEN)
+            typer.secho("  [OK] Longhouse received the verification event", fg=typer.colors.GREEN)
         else:
-            typer.secho("  [WARN] Test event failed (server may need auth)", fg=typer.colors.YELLOW)
+            typer.secho("  [WARN] Verification event failed (server may need auth)", fg=typer.colors.YELLOW)
     else:
         typer.echo("  Skipping verification (server not running)")
 
