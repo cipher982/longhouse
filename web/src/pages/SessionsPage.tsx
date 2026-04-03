@@ -16,12 +16,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
+import { useRunners } from "../hooks/useRunners";
 import { useClickOutside } from "../hooks/useClickOutside";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useTimelineSessionStream } from "../hooks/useTimelineSessionStream";
 import { useReadinessFlag } from "../lib/readiness-contract";
+import { isRunnerSessionLaunchReady } from "../lib/runnerSessions";
 import {
   type AgentSession,
   type AgentSessionFilters,
@@ -31,6 +33,7 @@ import {
   type TimelineSessionCard,
   seedDemoSessions,
 } from "../services/api/agents";
+import type { Runner } from "../services/api";
 import {
   Button,
   Badge,
@@ -42,6 +45,7 @@ import {
   Input,
 } from "../components/ui";
 import { PresenceBadge } from "../components/PresenceBadge";
+import LaunchSessionModal from "../components/LaunchSessionModal";
 import { parseUTC } from "../lib/dateUtils";
 import { getExecutionHomeLabel } from "../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
@@ -788,6 +792,7 @@ export default function SessionsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [launchRunner, setLaunchRunner] = useState<Runner | null>(null);
   const urlState = useMemo(() => readSessionsUrlState(searchParams), [searchParams]);
   const {
     project,
@@ -840,6 +845,38 @@ export default function SessionsPage() {
   const [recallOpen, setRecallOpen] = useState(false);
   const queryClient = useQueryClient();
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
+  const { data: runnersData } = useRunners();
+  const runners = runnersData ?? [];
+  const launchReadyRunners = useMemo(
+    () => runners.filter(isRunnerSessionLaunchReady),
+    [runners],
+  );
+  const singleLaunchReadyRunner = launchReadyRunners.length === 1 ? launchReadyRunners[0] : null;
+  const runnerActionLabel =
+    singleLaunchReadyRunner != null
+      ? "Start Longhouse Session"
+      : launchReadyRunners.length > 1
+        ? "Choose Runner"
+        : runners.length > 0
+          ? "Open Runners"
+          : "Add Runner";
+  const handleRunnerAction = useCallback(() => {
+    if (singleLaunchReadyRunner) {
+      setLaunchRunner(singleLaunchReadyRunner);
+      return;
+    }
+    navigate("/runners");
+  }, [navigate, singleLaunchReadyRunner]);
+  const handleLaunchModalClose = useCallback(() => {
+    setLaunchRunner(null);
+  }, []);
+  const launchModal = launchRunner ? (
+    <LaunchSessionModal
+      isOpen
+      onClose={handleLaunchModalClose}
+      runner={launchRunner}
+    />
+  ) : null;
 
   // Fetch dynamic filter options
   const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack, popoverOpen);
@@ -987,6 +1024,13 @@ export default function SessionsPage() {
           {compatibilityMode ? `${threadCards.length} results` : `${threadCards.length} tasks`}
         </span>
       )}
+      <Button
+        variant={singleLaunchReadyRunner ? "primary" : "secondary"}
+        size="sm"
+        onClick={handleRunnerAction}
+      >
+        {runnerActionLabel}
+      </Button>
       <Button
         variant="ghost"
         size="sm"
@@ -1140,6 +1184,13 @@ export default function SessionsPage() {
                 <Button
                   variant="secondary"
                   size="md"
+                  onClick={handleRunnerAction}
+                >
+                  {runnerActionLabel}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="md"
                   onClick={handleSeedDemo}
                   disabled={demoLoading}
                 >
@@ -1159,7 +1210,7 @@ export default function SessionsPage() {
               <li><code>longhouse connect --install</code> &mdash; keep background import running</li>
               <li><code>longhouse ship</code> &mdash; pull existing sessions into the timeline now</li>
               <li>Search one imported session or open raw detail</li>
-              <li>Later, start <code>longhouse claude</code> or <code>longhouse codex</code> when you want control after launch</li>
+              <li>Later, start <code>longhouse claude</code> or <code>longhouse codex</code> on a connected machine when you want control after launch</li>
             </ol>
             <p className="sessions-guided-cli-hint">
               Don&apos;t have a CLI yet? Longhouse supports{" "}
@@ -1168,6 +1219,7 @@ export default function SessionsPage() {
               <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
             </p>
           </div>
+          {launchModal}
         </div>
       </PageShell>
     );
@@ -1421,6 +1473,7 @@ export default function SessionsPage() {
           </div>
         )}
       </div>
+      {launchModal}
     </PageShell>
   );
 }
