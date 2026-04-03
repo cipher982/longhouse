@@ -517,6 +517,7 @@ function SessionCard({
   const [confirming, setConfirming] = useState(false);
   const detailSession = thread.detail;
   const session = compatibilityMode ? detailSession : thread.head;
+  const interaction = getSessionInteractionCapabilities({ session });
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
@@ -534,9 +535,7 @@ function SessionCard({
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
   const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
-  const primaryActionLabel = compatibilityMode
-    ? "Open match"
-    : getSessionInteractionCapabilities({ session }).primaryActionLabel;
+  const primaryActionLabel = compatibilityMode ? "Open match" : interaction.primaryActionLabel;
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
@@ -643,6 +642,10 @@ function SessionCard({
               )}
             </div>
           )}
+          <div className="session-card-capability" data-testid="session-card-capability">
+            <Badge variant={interaction.capabilityVariant}>{interaction.capabilityLabel}</Badge>
+            <span className="session-card-capability-text">{interaction.capabilitySummary}</span>
+          </div>
           {title && <div className="session-card-title">{title}</div>}
           {showSummary && (
             <div className="session-card-summary">{session.summary}</div>

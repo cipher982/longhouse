@@ -41,6 +41,35 @@ export function getSessionInteractionCapabilities({
           ? "Start in Cloud"
           : "Reply";
 
+  const capabilityLabel =
+    mode === "managed_local"
+      ? "Live control"
+      : mode === "managed_local_unavailable"
+        ? "Reattach on host"
+        : canContinueInCloud
+          ? "Web continue"
+          : "History only";
+
+  const capabilityVariant =
+    mode === "managed_local"
+      ? "success"
+      : mode === "managed_local_unavailable"
+        ? "warning"
+        : "neutral";
+
+  const capabilitySummary =
+    mode === "managed_local"
+      ? `Message this live ${providerLabel} session from Longhouse, or reattach on the host machine.`
+      : mode === "managed_local_unavailable"
+        ? `This live ${providerLabel} session is visible here, but you need the host terminal to keep driving it.`
+        : mode === "head"
+          ? "Continue this session from the browser."
+          : mode === "promote"
+            ? "Start browser continuation from this session."
+            : mode === "branch"
+              ? "Start a new browser continuation from this point."
+              : `Search and inspect this ${providerLabel} session here; direct continuation is not wired for this provider yet.`;
+
   const title =
     mode === "managed_local"
       ? `Drive this live ${providerLabel} session`
@@ -119,6 +148,9 @@ export function getSessionInteractionCapabilities({
     canDriveManagedLocalSession,
     canContinueInCloud,
     canChatFromBrowser: mode === "managed_local" || canContinueInCloud,
+    capabilityLabel,
+    capabilityVariant,
+    capabilitySummary,
     primaryActionLabel,
     submitLabel,
     title,

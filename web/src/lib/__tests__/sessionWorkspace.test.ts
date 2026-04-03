@@ -93,6 +93,7 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("managed_local");
     expect(capabilities.canChatFromBrowser).toBe(true);
+    expect(capabilities.capabilityLabel).toBe("Live control");
     expect(capabilities.primaryActionLabel).toBe("Drive live session");
     expect(capabilities.submitLabel).toBe("Send");
   });
@@ -108,6 +109,7 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("managed_local_unavailable");
     expect(capabilities.canChatFromBrowser).toBe(false);
+    expect(capabilities.capabilityLabel).toBe("Reattach on host");
     expect(capabilities.primaryActionLabel).toBe("Reattach on host");
     expect(capabilities.notice?.title).toMatch(/Codex session needs host attach/i);
   });
@@ -120,6 +122,7 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("promote");
     expect(capabilities.canChatFromBrowser).toBe(true);
+    expect(capabilities.capabilityLabel).toBe("Web continue");
     expect(capabilities.submitLabel).toBe("Start in Cloud");
   });
 
@@ -132,6 +135,7 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
+    expect(capabilities.capabilityLabel).toBe("History only");
     expect(capabilities.primaryActionLabel).toBe("Latest context");
   });
 });

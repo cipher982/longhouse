@@ -241,6 +241,12 @@
     color: var(--color-text-secondary);
   }
 
+  .session-context-capability-summary {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
   .session-context-provider {
     display: inline-flex;
     align-items: center;

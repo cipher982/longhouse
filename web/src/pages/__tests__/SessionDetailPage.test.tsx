@@ -183,6 +183,10 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     expect(screen.queryByTestId("session-continuation-unavailable")).not.toBeInTheDocument();
+    expect(screen.getAllByText("Live control")).toHaveLength(2);
+    expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
+      "Message this live Codex session from Longhouse, or reattach on the host machine.",
+    );
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach the live Codex terminal");
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
