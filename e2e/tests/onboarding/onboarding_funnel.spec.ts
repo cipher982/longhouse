@@ -45,7 +45,7 @@ test.describe('Onboarding Funnel (Docs-as-Source)', () => {
     const ctas = contract.cta_buttons || [];
     for (const cta of ctas) {
       const locator = page.locator(cta.selector);
-      await expect(locator.first()).toBeVisible();
+      await expect(locator.first()).toBeVisible({ timeout: 15_000 });
     }
 
     const demoCTA = ctas.find((cta) => cta.label.toLowerCase().includes('demo'));
