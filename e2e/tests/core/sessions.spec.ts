@@ -1643,6 +1643,58 @@ test.describe("Session Detail Page", () => {
       })
       .toBeGreaterThan(afterLeft);
   });
+
+  test("keeps the live tail window pinned to newly appended events past the first page", async ({
+    page,
+    request,
+  }) => {
+    const sessionId = randomUUID();
+    const suffix = randomUUID().slice(0, 8);
+    const now = Date.now();
+
+    const makeEvents = (count: number) =>
+      Array.from({ length: count }, (_, idx) => {
+        const timestamp = new Date(now + idx * 1000).toISOString();
+        return {
+          role: idx % 2 === 0 ? "user" : "assistant",
+          content_text: `tail-anchor event ${idx + 1} ${suffix}`,
+          timestamp,
+          source_path: "/tmp/session.jsonl",
+          source_offset: idx,
+        };
+      });
+
+    const streamConnected = page.waitForResponse((response) =>
+      response.url().includes(`/workspace/stream`) && response.status() === 200,
+    );
+
+    await ingestSession(request, {
+      id: sessionId,
+      project: `tail-anchor-${suffix}`,
+      started_at: new Date(now).toISOString(),
+      ended_at: new Date(now + 249_000).toISOString(),
+      events: makeEvents(250),
+    });
+
+    await page.goto(`/timeline/${sessionId}`);
+    await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
+    await streamConnected;
+
+    const timelineList = page.getByTestId("session-timeline-list");
+    await expect(timelineList).toContainText(`tail-anchor event 250 ${suffix}`);
+
+    await ingestSession(request, {
+      id: sessionId,
+      project: `tail-anchor-${suffix}`,
+      started_at: new Date(now).toISOString(),
+      ended_at: new Date(now + 250_000).toISOString(),
+      events: makeEvents(251),
+    });
+
+    await expect(timelineList).toContainText(`tail-anchor event 251 ${suffix}`, {
+      timeout: 15000,
+    });
+  });
 });
 
 test.describe("SSE Fallback", () => {

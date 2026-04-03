@@ -266,3 +266,40 @@ def test_projection_endpoint_returns_stitched_items(tmp_path):
         assert data["items"][2]["continued_from_session_id"] == root_id
         assert data["items"][2]["origin_label"] == "Cloud"
         assert data["items"][3]["event"]["content_text"] == "cloud follow-up"
+
+
+def test_projection_endpoint_anchor_tail_returns_latest_window(tmp_path):
+    Session = _make_db(tmp_path)
+    db = Session()
+    try:
+        store = AgentsStore(db)
+        session_id = uuid4()
+        started_at = datetime(2026, 4, 3, 12, 0, tzinfo=timezone.utc)
+        _ingest_session(
+            store,
+            session_id=session_id,
+            started_at=started_at,
+            environment="Cinder",
+            device_id="shipper-cinder",
+            continuation_kind="local",
+            origin_label="Cinder",
+            events=[
+                ("user", "event 1"),
+                ("assistant", "event 2"),
+                ("user", "event 3"),
+                ("assistant", "event 4"),
+                ("user", "event 5"),
+            ],
+        )
+        session_id_str = str(session_id)
+    finally:
+        db.close()
+
+    for client in _get_client(Session):
+        response = client.get(f"/agents/sessions/{session_id_str}/projection?limit=2&anchor=tail")
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["total"] == 5
+        assert data["page_offset"] == 3
+        assert [item["event"]["content_text"] for item in data["items"]] == ["event 4", "event 5"]

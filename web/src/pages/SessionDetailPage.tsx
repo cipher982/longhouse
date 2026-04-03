@@ -56,9 +56,9 @@ function SessionDetailWorkspaceRoute({
     items,
     eventsLoading,
     eventsError,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
+    fetchPreviousPage,
+    hasPreviousPage,
+    isFetchingPreviousPage,
     abandonedEvents,
     selectedKey,
     selectedSelection,
@@ -209,9 +209,9 @@ function SessionDetailWorkspaceRoute({
             abandonedEvents={abandonedEvents}
             showAbandonedBranches={showAbandonedBranches}
             onShowAbandonedBranchesChange={setShowAbandonedBranches}
-            hasNextPage={hasNextPage ?? false}
-            isFetchingNextPage={isFetchingNextPage}
-            onFetchNextPage={() => void fetchNextPage()}
+            hasPreviousPage={hasPreviousPage ?? false}
+            isFetchingPreviousPage={isFetchingPreviousPage}
+            onFetchPreviousPage={() => void fetchPreviousPage()}
             loading={eventsLoading}
             error={eventsError}
             selectedKey={selectedKey}

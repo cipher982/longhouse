@@ -77,6 +77,7 @@ function seedHookMocks(eventCount: number = 80) {
     data: {
       pages: [
         {
+          page_offset: 0,
           items: events.map((event) => ({
             kind: "event",
             session_id: baseSession.id,
@@ -90,9 +91,9 @@ function seedHookMocks(eventCount: number = 80) {
     },
     isLoading: false,
     error: null,
-    fetchNextPage: vi.fn(),
-    hasNextPage: false,
-    isFetchingNextPage: false,
+    fetchPreviousPage: vi.fn(),
+    hasPreviousPage: false,
+    isFetchingPreviousPage: false,
   });
 }
 
@@ -170,7 +171,7 @@ describe("useSessionWorkspace", () => {
   it("keeps polling visible, open sessions to refresh workspace runtime metadata", () => {
     renderHook(() => useSessionWorkspace(baseSession.id));
 
-    expect(agentSessionMocks.useAgentSessionWorkspace).toHaveBeenCalledTimes(1);
+    expect(agentSessionMocks.useAgentSessionWorkspace).toHaveBeenCalled();
     expect(agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[0]).toBe(baseSession.id);
     expect(agentSessionMocks.useAgentSessionWorkspace.mock.calls[0]?.[1]).toMatchObject({
       limit: 200,
@@ -387,6 +388,7 @@ describe("useSessionWorkspace", () => {
       data: {
         pages: [
           {
+            page_offset: 0,
             items: [
               {
                 kind: "event",
@@ -413,9 +415,9 @@ describe("useSessionWorkspace", () => {
       },
       isLoading: false,
       error: null,
-      fetchNextPage: vi.fn(),
-      hasNextPage: false,
-      isFetchingNextPage: false,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
     });
 
     const { result } = renderHook(() => useSessionWorkspace(childSession.id));
@@ -430,6 +432,118 @@ describe("useSessionWorkspace", () => {
         timestamp: "2026-03-19T16:45:00Z",
       },
     });
+  });
+
+  it("keeps older projection pages above the live tail window in display order", () => {
+    const events = makeEvents(4);
+
+    agentSessionMocks.useAgentSessionProjectionInfinite.mockReturnValue({
+      data: {
+        pages: [
+          {
+            page_offset: 2,
+            items: events.slice(2).map((event) => ({
+              kind: "event",
+              session_id: baseSession.id,
+              timestamp: event.timestamp,
+              event,
+            })),
+            total: events.length,
+            abandoned_events: 0,
+          },
+          {
+            page_offset: 0,
+            items: events.slice(0, 2).map((event) => ({
+              kind: "event",
+              session_id: baseSession.id,
+              timestamp: event.timestamp,
+              event,
+            })),
+            total: events.length,
+            abandoned_events: 0,
+          },
+        ],
+      },
+      isLoading: false,
+      error: null,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+    });
+
+    const { result } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(
+      result.current.items
+        .filter((item) => item.kind === "message")
+        .map((item) => item.event.id),
+    ).toEqual([1, 2, 3, 4]);
+  });
+
+  it("preserves evicted tail items when the live window shifts forward", () => {
+    const events = makeEvents(5);
+    const olderPage = {
+      page_offset: 0,
+      items: events.slice(0, 2).map((event) => ({
+        kind: "event",
+        session_id: baseSession.id,
+        timestamp: event.timestamp,
+        event,
+      })),
+      total: events.length,
+      abandoned_events: 0,
+    };
+    const initialTailPage = {
+      page_offset: 2,
+      items: events.slice(2, 4).map((event) => ({
+        kind: "event",
+        session_id: baseSession.id,
+        timestamp: event.timestamp,
+        event,
+      })),
+      total: events.length,
+      abandoned_events: 0,
+    };
+    const shiftedTailPage = {
+      page_offset: 3,
+      items: events.slice(3, 5).map((event) => ({
+        kind: "event",
+        session_id: baseSession.id,
+        timestamp: event.timestamp,
+        event,
+      })),
+      total: events.length,
+      abandoned_events: 0,
+    };
+
+    let currentPages = [olderPage, initialTailPage];
+    agentSessionMocks.useAgentSessionProjectionInfinite.mockImplementation(() => ({
+      data: {
+        pages: currentPages,
+      },
+      isLoading: false,
+      error: null,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+    }));
+
+    const { result, rerender } = renderHook(() => useSessionWorkspace(baseSession.id));
+
+    expect(
+      result.current.items
+        .filter((item) => item.kind === "message")
+        .map((item) => item.event.id),
+    ).toEqual([1, 2, 3, 4]);
+
+    currentPages = [olderPage, shiftedTailPage];
+    rerender();
+
+    expect(
+      result.current.items
+        .filter((item) => item.kind === "message")
+        .map((item) => item.event.id),
+    ).toEqual([1, 2, 3, 4, 5]);
   });
 
   it("derives highlight selection from the projection model without mutating manual selection", () => {

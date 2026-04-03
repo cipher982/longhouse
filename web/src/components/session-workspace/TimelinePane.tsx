@@ -30,9 +30,9 @@ interface TimelinePaneProps {
   abandonedEvents: number;
   showAbandonedBranches: boolean;
   onShowAbandonedBranchesChange: (show: boolean) => void;
-  hasNextPage: boolean;
-  isFetchingNextPage: boolean;
-  onFetchNextPage: () => void;
+  hasPreviousPage: boolean;
+  isFetchingPreviousPage: boolean;
+  onFetchPreviousPage: () => void;
   loading?: boolean;
   error?: unknown;
   selectedKey: string | null;
@@ -208,9 +208,9 @@ export function TimelinePane({
   abandonedEvents,
   showAbandonedBranches,
   onShowAbandonedBranchesChange,
-  hasNextPage,
-  isFetchingNextPage,
-  onFetchNextPage,
+  hasPreviousPage,
+  isFetchingPreviousPage,
+  onFetchPreviousPage,
   loading = false,
   error = null,
   selectedKey,
@@ -234,9 +234,9 @@ export function TimelinePane({
   useScrollToLoad({
     sentinelRef: topSentinelRef,
     rootRef: scrollContainerRef,
-    enabled: hasNextPage,
-    loading: isFetchingNextPage,
-    onLoad: onFetchNextPage,
+    enabled: hasPreviousPage,
+    loading: isFetchingPreviousPage,
+    onLoad: onFetchPreviousPage,
   });
 
   // Scroll anchoring: when a new page prepends items, preserve the user's
@@ -448,9 +448,9 @@ export function TimelinePane({
         className="timeline-pane__list timeline-events"
         data-testid="session-timeline-list"
       >
-        {hasNextPage || isFetchingNextPage ? (
+        {hasPreviousPage || isFetchingPreviousPage ? (
           <div ref={topSentinelRef} className="timeline-pane__load-older">
-            {isFetchingNextPage ? <Spinner size="sm" /> : null}
+            {isFetchingPreviousPage ? <Spinner size="sm" /> : null}
           </div>
         ) : null}
         {showScopedLoading ? (

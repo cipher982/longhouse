@@ -580,6 +580,7 @@ export async function fetchAgentSessionProjection(
   options: {
     limit?: number;
     offset?: number;
+    anchor?: "start" | "tail";
     branch_mode?: "head" | "all";
   } = {},
 ): Promise<AgentSessionProjectionResponse> {
@@ -587,6 +588,7 @@ export async function fetchAgentSessionProjection(
 
   if (options.limit) params.set("limit", String(options.limit));
   if (options.offset) params.set("offset", String(options.offset));
+  if (options.anchor && options.anchor !== "start") params.set("anchor", options.anchor);
   if (options.branch_mode) params.set("branch_mode", options.branch_mode);
 
   const queryString = params.toString();

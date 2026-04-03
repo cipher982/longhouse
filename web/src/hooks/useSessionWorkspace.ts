@@ -11,7 +11,11 @@ import {
   getPreferredSelectionKey,
   timelineItemContainsSelection,
 } from "../lib/sessionWorkspace";
-import { connectSessionWorkspaceStream } from "../services/api/agents";
+import {
+  connectSessionWorkspaceStream,
+  type AgentSessionProjectionItem,
+  type AgentSessionProjectionResponse,
+} from "../services/api/agents";
 
 const INITIAL_EVENTS_PAGE_SIZE = 200;
 const AUTO_SCROLL_MAX_ATTEMPTS = 12;
@@ -22,6 +26,31 @@ const WORKSPACE_FALLBACK_REFRESH_MS =
 
 interface UseSessionWorkspaceOptions {
   highlightEventId?: number | null;
+}
+
+function getProjectionItemKey(item: AgentSessionProjectionItem): string {
+  if (item.kind === "event" && item.event) {
+    return `event:${item.event.id}`;
+  }
+  return `seam:${item.session_id}:${item.timestamp}`;
+}
+
+function mergeProjectionItems(
+  ...itemGroups: AgentSessionProjectionItem[][]
+): AgentSessionProjectionItem[] {
+  const merged: AgentSessionProjectionItem[] = [];
+  const seen = new Set<string>();
+
+  for (const items of itemGroups) {
+    for (const item of items) {
+      const key = getProjectionItemKey(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(item);
+    }
+  }
+
+  return merged;
 }
 
 export function useSessionWorkspace(
@@ -96,9 +125,9 @@ export function useSessionWorkspace(
     data: projectionPagesData,
     isLoading: projectionLoading,
     error: projectionError,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
+    fetchPreviousPage,
+    hasPreviousPage,
+    isFetchingPreviousPage,
   } = useAgentSessionProjectionInfinite(sessionId, {
     limit: INITIAL_EVENTS_PAGE_SIZE,
     branch_mode: branchMode,
@@ -110,19 +139,59 @@ export function useSessionWorkspace(
   // Tracks which key is actually visible after TimelinePane's local filtering
   const [filteredVisibleKey, setFilteredVisibleKey] = useState<string | null | undefined>(undefined);
   const [timelineListElement, setTimelineListElement] = useState<HTMLDivElement | null>(null);
+  const [evictedTailItems, setEvictedTailItems] = useState<AgentSessionProjectionItem[]>([]);
   const highlightedEventRef = useRef<number | null>(null);
   const autoScrolledSelectionRef = useRef(false);
+  const lastTailPageRef = useRef<AgentSessionProjectionResponse | null>(null);
 
   const registerTimelineList = useCallback((node: HTMLDivElement | null) => {
     setTimelineListElement((current) => (current === node ? current : node));
   }, []);
 
-  const projectionItems = useMemo(() => {
+  useEffect(() => {
+    setEvictedTailItems([]);
+    lastTailPageRef.current = null;
+  }, [sessionId, branchMode]);
+
+  const sortedProjectionPages = useMemo(() => {
     if (!projectionPagesData) return [];
-    // Pages are ordered [newest, older, even_older, ...] since we paginate backward.
-    // Reverse so the timeline renders oldest-at-top, newest-at-bottom.
-    return [...projectionPagesData.pages].reverse().flatMap((page) => page.items);
+    return [...projectionPagesData.pages]
+      .sort((left, right) => (left.page_offset ?? 0) - (right.page_offset ?? 0));
   }, [projectionPagesData]);
+
+  useEffect(() => {
+    const tailPage =
+      sortedProjectionPages.length > 0
+        ? sortedProjectionPages[sortedProjectionPages.length - 1]
+        : workspaceData?.projection ?? null;
+    if (!tailPage) return;
+
+    const previousTailPage = lastTailPageRef.current;
+    lastTailPageRef.current = tailPage;
+
+    if (!previousTailPage) return;
+
+    const previousOffset = previousTailPage.page_offset ?? 0;
+    const currentOffset = tailPage.page_offset ?? 0;
+    if (currentOffset <= previousOffset) return;
+
+    const evictedCount = currentOffset - previousOffset;
+    const droppedItems = previousTailPage.items.slice(0, evictedCount);
+    if (droppedItems.length === 0) return;
+
+    setEvictedTailItems((current) => mergeProjectionItems(current, droppedItems));
+  }, [sortedProjectionPages, workspaceData?.projection]);
+
+  const projectionItems = useMemo(() => {
+    if (sortedProjectionPages.length === 0) return evictedTailItems;
+
+    const tailPage = sortedProjectionPages[sortedProjectionPages.length - 1];
+    const historicalItems = sortedProjectionPages
+      .slice(0, -1)
+      .flatMap((page) => page.items);
+
+    return mergeProjectionItems(historicalItems, evictedTailItems, tailPage.items);
+  }, [sortedProjectionPages, evictedTailItems]);
 
   // Count only actual event items (not seam dividers) so the "X/Y loaded"
   // counter matches what the backend reports as entries.
@@ -194,9 +263,9 @@ export function useSessionWorkspace(
   useEffect(() => {
     if (highlightEventId == null) return;
     if (hasHighlightEvent) return;
-    if (!hasNextPage || isFetchingNextPage) return;
-    void fetchNextPage();
-  }, [highlightEventId, hasHighlightEvent, hasNextPage, isFetchingNextPage, fetchNextPage]);
+    if (!hasPreviousPage || isFetchingPreviousPage) return;
+    void fetchPreviousPage();
+  }, [highlightEventId, hasHighlightEvent, hasPreviousPage, isFetchingPreviousPage, fetchPreviousPage]);
 
   useEffect(() => {
     if (highlightEventId == null) return;
@@ -322,9 +391,9 @@ export function useSessionWorkspace(
     abandonedEvents,
     eventsLoading: projectionLoading,
     eventsError: projectionError,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
+    fetchPreviousPage,
+    hasPreviousPage,
+    isFetchingPreviousPage,
     items: model.items,
     selectedKey,
     selectedSelection,
