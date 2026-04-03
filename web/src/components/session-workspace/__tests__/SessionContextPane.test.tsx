@@ -173,7 +173,7 @@ describe("SessionContextPane", () => {
 
     const button = screen.getByRole("button", { name: "Continue here" });
     expect(button).toBeDisabled();
-    expect(screen.getByText(/direct cloud continuation is currently wired for Claude sessions only/i)).toBeInTheDocument();
+    expect(screen.getByText(/browser continuation is currently wired for Claude sessions only/i)).toBeInTheDocument();
   });
 
   it("shows the host reattach command for live-controlled sessions", () => {
