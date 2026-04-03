@@ -676,9 +676,6 @@ qa-live-perf: ## Profile hosted timeline -> session detail journey on the live i
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/run-prod-e2e.sh tests/live/user-instance-perf.spec.ts --timeout=90000 --reporter=line
 
-qa-live-conversations: ## Run hosted conversations smoke against default instance
-	@$(MAKE) ensure-js-deps
-	@./scripts/qa/run-prod-e2e.sh tests/live/conversations-live.spec.ts --timeout=60000 --reporter=line
 
 test-ci: ## Simulate push/PR CI locally — run this before pushing (~3min)
 	@echo "🤖 Simulating push/PR CI (matches contract-first-ci.yml)..."

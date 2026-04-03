@@ -346,7 +346,7 @@ def _issue_hosted_gmail_handoff_token(*, email: str, instance: str) -> str:
 
 
 def _tenant_conversations_url(subdomain: str, *, error: str | None = None) -> str:
-    base = f"https://{subdomain}.{settings.root_domain}/conversations"
+    base = f"https://{subdomain}.{settings.root_domain}/settings/integrations"
     if not error:
         return base
     encoded = urllib.parse.quote(error[:300], safe="")

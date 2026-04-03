@@ -337,7 +337,7 @@ def test_google_gmail_callback_posts_handoff_and_redirects_to_tenant(client, db_
         )
 
     assert response.status_code == 302
-    assert response.headers["location"] == f"https://testuser.{settings.root_domain}/conversations"
+    assert response.headers["location"] == f"https://testuser.{settings.root_domain}/settings/integrations"
     mock_post.assert_called_once()
     _, kwargs = mock_post.call_args
     assert kwargs["headers"]["X-Internal-Token"] == settings.instance_internal_api_secret
@@ -385,7 +385,7 @@ def test_google_gmail_callback_provisions_pubsub_before_handoff(client, db_sessi
         )
 
     assert response.status_code == 302
-    assert response.headers["location"] == f"https://testuser.{settings.root_domain}/conversations"
+    assert response.headers["location"] == f"https://testuser.{settings.root_domain}/settings/integrations"
     assert events == ["subscription", "handoff"]
 
 
@@ -424,7 +424,7 @@ def test_google_gmail_callback_redirects_when_pubsub_provisioning_fails(client, 
 
     assert response.status_code == 302
     parsed = urllib.parse.urlparse(response.headers["location"])
-    assert parsed.path == "/conversations"
+    assert parsed.path == "/settings/integrations"
     assert parsed.netloc == f"testuser.{settings.root_domain}"
     query = urllib.parse.parse_qs(parsed.query)
     assert query["gmail_error"] == ["Could not configure Gmail notifications for this instance."]
