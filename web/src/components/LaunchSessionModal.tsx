@@ -1,5 +1,5 @@
 /**
- * LaunchSessionModal - Launch a managed-local AI session on a connected runner.
+ * LaunchSessionModal - Start a Longhouse session on a connected runner.
  *
  * Supports claude and codex providers. Uses the existing modal pattern from
  * AddRunnerModal and SessionPickerModal.
@@ -85,11 +85,11 @@ export default function LaunchSessionModal({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="Launch managed session"
+        aria-label="Launch Longhouse session"
         data-testid="launch-session-modal"
       >
         <div className="modal-header">
-          <h2>Launch Session</h2>
+          <h2>Start Longhouse Session</h2>
           <button
             type="button"
             className="modal-close-button"
@@ -104,10 +104,10 @@ export default function LaunchSessionModal({
           {launchMutation.isSuccess ? (
             <div className="launch-session-success">
               <p style={{ color: "var(--color-intent-success)", fontWeight: 500, marginBottom: "var(--space-3)" }}>
-                Session launched on {runner.name}
+                Longhouse session launched on {runner.name}
               </p>
               <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--font-size-sm)" }}>
-                Attach locally first, then open the session in Longhouse.
+                Open it on the host machine first, then open the session in Longhouse.
               </p>
               <pre className="code-block" style={{ marginTop: "var(--space-2)" }}>
                 <code>{launchMutation.data.attach_command}</code>
@@ -146,8 +146,8 @@ export default function LaunchSessionModal({
                   marginBottom: "var(--space-4)",
                 }}
               >
-                Start a managed AI session on <strong>{runner.name}</strong>.
-                Longhouse will launch the CLI inside tmux and manage the session lifecycle.
+                Start a Longhouse session on <strong>{runner.name}</strong>.
+                Longhouse will launch the CLI inside tmux and keep the session available from the timeline.
               </p>
               {provider === "codex" ? (
                 <p
@@ -157,8 +157,8 @@ export default function LaunchSessionModal({
                     marginBottom: "var(--space-4)",
                   }}
                 >
-                  Codex is terminal-first in this MVP. Launch here, attach locally, then use Longhouse as the live
-                  transcript and runtime view.
+                  Codex is terminal-first in this MVP. Launch here, open it on the host machine, then use Longhouse
+                  as the live transcript and runtime view.
                 </p>
               ) : null}
 
