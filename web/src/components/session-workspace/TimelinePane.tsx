@@ -19,6 +19,7 @@ import {
   timelineItemContainsSelection,
 } from "../../lib/sessionWorkspace";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
+import { useScrollToLoad } from "../../hooks/useScrollToLoad";
 
 type EventFilter = "all" | "messages" | "tools";
 
@@ -226,42 +227,12 @@ export function TimelinePane({
 
   // Auto-fetch older events when the top sentinel scrolls into view.
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
-  // Skip the very first intersection notification (fires on mount before
-  // auto-scroll has a chance to push the sentinel off-screen).
-  const skipFirstIntersectionRef = useRef(true);
-  // Keep mutable values in refs so the observer callback stays current without
-  // needing to be in effect deps (which would cause re-attach / skip-reset loops).
-  const isFetchingRef = useRef(isFetchingNextPage);
-  useEffect(() => { isFetchingRef.current = isFetchingNextPage; }, [isFetchingNextPage]);
-  const onFetchNextPageRef = useRef(onFetchNextPage);
-  useEffect(() => { onFetchNextPageRef.current = onFetchNextPage; }, [onFetchNextPage]);
-
-  useEffect(() => {
-    if (!hasNextPage) return;
-    const sentinel = topSentinelRef.current;
-    if (!sentinel) return;
-    // Skip the very first intersection (fires on attach before auto-scroll
-    // has a chance to push the sentinel off-screen).
-    skipFirstIntersectionRef.current = true;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (skipFirstIntersectionRef.current) {
-          skipFirstIntersectionRef.current = false;
-          return;
-        }
-        if (entry.isIntersecting && !isFetchingRef.current) {
-          onFetchNextPageRef.current();
-        }
-      },
-      { threshold: 0 },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-    // onFetchNextPage and isFetchingNextPage intentionally excluded — both
-    // tracked via refs so the observer isn't recreated (and skip-flag reset)
-    // on every React Query re-render after a page loads.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasNextPage]);
+  useScrollToLoad({
+    sentinelRef: topSentinelRef,
+    enabled: hasNextPage,
+    loading: isFetchingNextPage,
+    onLoad: onFetchNextPage,
+  });
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const messageCount = useMemo(
     () => items.filter((item) => item.kind === "message").length,
