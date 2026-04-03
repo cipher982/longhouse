@@ -4,6 +4,8 @@ Longhouse puts Claude Code, Codex CLI, and Gemini CLI sessions into one searchab
 
 Import sessions you already have, or route new work through Longhouse, then inspect, message, and continue the same session from the web UI, CLI, or HTTP.
 
+A session stays the same object either way. Longhouse in the launch path changes what you can do with that session later; it does not create a second class of session.
+
 Works on your laptop. Shines on a machine that stays on.
 
 Self-host free on the machine where work should live, or use hosted beta later when you want the convenience path. Claude is the strongest continuation path today; Codex and Gemini are searchable and inspectable today.
@@ -84,6 +86,7 @@ Sign up at https://longhouse.ai when you want the convenience path. Hosted beta 
 
 - **Find existing sessions fast**: Import and search old Claude, Codex, and Gemini work immediately
 - **Control after launch**: Start through Longhouse or enable wrappers to keep a control channel open for the same session later
+- **Capability over type**: Launch path changes control affordances, not what a session is
 - **Session kernel**: The technical model is a durable session object, not a dead transcript
 - **One timeline**: Claude Code, Codex CLI, and Gemini CLI sessions in one place
 - **Search + recall**: Find messages, tool calls, file edits, and session metadata fast

@@ -66,7 +66,7 @@ export function HowItWorksSection() {
             <blockquote>Find the session. Ask it. Continue it.</blockquote>
             <p>
               The session stops being a dead transcript. It becomes something you can search, return to,
-              and steer from more than one surface when Longhouse is in the loop.
+              and steer from more than one surface. Longhouse changes capability, not what the session is.
             </p>
           </aside>
         </div>

@@ -46,6 +46,9 @@ Make the launch story match the real product:
 - [x] Expose the second activation beat directly inside Timeline with runner-aware `Start Session` / runner setup CTAs
 - [x] Add launch-critical activation coverage for the three Timeline states:
   no runner, one ready runner, multiple ready runners
+- [x] Write down the session-capability rule explicitly:
+  one session object, fixed core surfaces, disabled/explained actions instead of type-driven layout swaps
+- [x] Spin remaining capability-surface cleanup into its own active task so launch story work stays narrow
 
 ## Work Order
 
@@ -149,6 +152,9 @@ Do separately and do not let it block launch.
   - interactive onboarding offers wrapper install explicitly
   - `longhouse wrap --json` gives automation a machine-readable status/results surface
 - Runtime/session UI copy now uses capability language like `Live control`, `host machine`, and `Live on host` instead of implying separate session classes.
+- The product model is now explicit in launch docs and README:
+  Longhouse in the launch path changes session capability, not session type.
+- Remaining UI cleanup is now tracked separately in `docs/tasks/open/session-capability-consistency.md` so the launch story task can stay focused on public framing and onboarding.
 - Session-facing activation and navigation now talk about `machines` instead of `runners`; `runner` stays as the connector/install term inside explicit machine setup and diagnostics.
 - Onboarding verification no longer creates a fake visible timeline session; the verification ingest is now hidden as a sidechain session.
 - Installer success output and the landing install block now present the same activation order:
