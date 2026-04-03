@@ -1,22 +1,22 @@
 import { useEffect, useRef } from "react";
 
 /**
- * Calls `onLoad` when the sentinel element scrolls into view inside `rootRef`.
+ * Fires `onLoad` when the sentinel scrolls into view inside the scroll
+ * container (`rootRef`).
  *
- * Two triggers:
- * 1. IntersectionObserver — fires when the sentinel enters the scroll container.
- * 2. Post-load check — when a load completes (loading: true→false), if the
- *    sentinel is still visible, fires again immediately so the user doesn't
- *    have to scroll down and back up to "reset" the observer.
+ * Pair this with scroll anchoring on the scroll container so that when new
+ * content is prepended the user's visual position is preserved (sentinel moves
+ * off-screen naturally). Without anchoring you'd need a "scroll down to reset"
+ * dance because IntersectionObserver only fires on intersection *changes*.
  *
- * All callbacks/state are kept in refs so the observer is only re-created
- * when `enabled` actually changes (no more pages → disconnect).
+ * `loading` and `onLoad` are kept in refs so the observer isn't recreated —
+ * and the skip-first-fire flag reset — on every React Query re-render.
  */
 export function useScrollToLoad(options: {
   sentinelRef: React.RefObject<HTMLDivElement | null>;
-  /** Scroll container — pass the overflow div so intersection is relative to
-   *  it, not the viewport. Required when the sentinel lives inside a
-   *  scrollable div. */
+  /** Scroll container — intersection is checked relative to this element
+   *  rather than the viewport. Required when the sentinel lives inside an
+   *  overflow-y:auto div. */
   rootRef?: React.RefObject<HTMLDivElement | null>;
   enabled: boolean;
   loading: boolean;
@@ -26,22 +26,8 @@ export function useScrollToLoad(options: {
 
   const loadingRef = useRef(loading);
   const onLoadRef = useRef(onLoad);
-  const isIntersectingRef = useRef(false);
-
   useEffect(() => { loadingRef.current = loading; }, [loading]);
   useEffect(() => { onLoadRef.current = onLoad; }, [onLoad]);
-
-  // When a fetch completes and the sentinel is still visible, fire immediately
-  // instead of waiting for another intersection event (which won't come because
-  // the state didn't change — the sentinel was already intersecting).
-  const prevLoadingRef = useRef(loading);
-  useEffect(() => {
-    const wasLoading = prevLoadingRef.current;
-    prevLoadingRef.current = loading;
-    if (wasLoading && !loading && isIntersectingRef.current && enabled) {
-      onLoadRef.current();
-    }
-  }, [loading, enabled]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -52,7 +38,6 @@ export function useScrollToLoad(options: {
 
     const observer = new IntersectionObserver(
       ([entry]) => {
-        isIntersectingRef.current = entry.isIntersecting;
         if (skipFirst) {
           skipFirst = false;
           return;
