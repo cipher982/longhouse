@@ -389,6 +389,12 @@
   gap: var(--space-2);
 }
 
+.session-chat-disabled-reason {
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  color: rgba(181, 164, 142, 0.78);
+}
+
 /* Pending message pill — shows while managed-local POST is in flight */
 .session-chat-pending-message {
   display: flex;

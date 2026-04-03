@@ -26,7 +26,18 @@ vi.mock("../../services/api/oikos", () => ({
 }));
 
 vi.mock("../../components/SessionChat", () => ({
-  SessionChat: () => <div data-testid="session-chat">session-chat</div>,
+  SessionChat: ({
+    composerDisabledReason,
+  }: {
+    composerDisabledReason?: string | null;
+  }) => (
+    <div
+      data-testid="session-chat"
+      data-disabled-reason={composerDisabledReason ?? ""}
+    >
+      session-chat
+    </div>
+  ),
 }));
 
 vi.mock("../../components/workspace/WorkspaceShell", () => ({
@@ -198,6 +209,7 @@ describe("SessionDetailPage", () => {
       screen.getByText(/Keep driving the live session from Longhouse below or by reattaching on the host machine/i),
     ).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
+    expect(screen.getByTestId("session-chat")).toHaveAttribute("data-disabled-reason", "");
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();
 
     const toolLabel = screen.getByText("Bash");
@@ -209,5 +221,76 @@ describe("SessionDetailPage", () => {
     await user.click(toolRow);
 
     expect(screen.getByText("Output")).toBeInTheDocument();
+  });
+
+  it("keeps the dock visible for searchable-only sessions and explains why continuation is disabled", () => {
+    const session = makeSession({
+      provider: "gemini",
+      execution_home: "local",
+      managed_transport: null,
+      source_runner_id: null,
+      source_runner_name: null,
+      attach_command: null,
+      continuation_kind: "local",
+      id: "session-gemini",
+    });
+    const model = buildTimelineModel([
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: "2026-03-22T22:00:01Z",
+        event: {
+          id: 1,
+          role: "assistant",
+          content_text: "Transcript row from Gemini.",
+          tool_name: null,
+          tool_input_json: null,
+          tool_output_text: null,
+          tool_call_id: null,
+          timestamp: "2026-03-22T22:00:01Z",
+          in_active_context: true,
+        },
+      },
+    ]);
+
+    workspaceMocks.useSessionWorkspace.mockImplementation(() => {
+      const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+      return {
+        session,
+        sessionLoading: false,
+        sessionError: null,
+        threadSessions: [session],
+        currentThreadSession: session,
+        headThreadSession: session,
+        isViewingHead: true,
+        totalEntries: model.items.length,
+        loadedEntryCount: model.items.length,
+        items: model.items,
+        eventsLoading: false,
+        eventsError: null,
+        fetchNextPage: vi.fn(),
+        hasNextPage: false,
+        isFetchingNextPage: false,
+        abandonedEvents: 0,
+        showAbandonedBranches: false,
+        setShowAbandonedBranches: vi.fn(),
+        selectedKey,
+        selectedSelection: selectedKey ? model.selectionMap.get(selectedKey) ?? null : null,
+        selectKey: setSelectedKey,
+        handleVisibleSelectionChange: vi.fn(),
+        registerTimelineList: vi.fn(),
+      };
+    });
+
+    renderSessionDetailPage();
+
+    expect(screen.getByTestId("session-chat")).toBeInTheDocument();
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-disabled-reason",
+      "This Gemini transcript is still fully searchable here, but direct cloud continuation is currently wired for Claude sessions only.",
+    );
+    expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
+      "Web continuation unavailable for Gemini",
+    );
   });
 });

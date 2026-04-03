@@ -157,6 +157,19 @@ describe("SessionChat", () => {
     expect(container.querySelector(".session-chat-callout")).toBeNull();
   });
 
+  it("keeps the dock visible but disables the composer when browser control is unavailable", () => {
+    renderSessionChat({
+      composerDisabledReason: "This session is visible here, but Longhouse cannot continue it from the browser yet.",
+    });
+
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByTestId("session-chat-disabled-reason")).toHaveTextContent(
+      "Longhouse cannot continue it from the browser yet.",
+    );
+    expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  });
+
   it("navigates only after persisted continuation events land", async () => {
     const user = userEvent.setup();
     const onSessionChanged = vi.fn();

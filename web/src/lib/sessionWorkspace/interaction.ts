@@ -120,7 +120,7 @@ export function getSessionInteractionCapabilities({
           title: isManagedLocalCodex
             ? "Codex session needs host attach"
             : "Live session needs host attach",
-          body: `This live ${providerLabel} session is still searchable here, but Longhouse cannot inject prompts until the runner bridge is present. Reattach on the host machine to continue.`,
+          body: `This live ${providerLabel} session is visible here, but Longhouse cannot reach its host control channel right now. Reattach on the host machine to continue.`,
         }
       : mode === "unsupported"
         ? {
@@ -128,6 +128,11 @@ export function getSessionInteractionCapabilities({
             body: `This ${providerLabel} transcript is still fully searchable here, but direct cloud continuation is currently wired for Claude sessions only.`,
           }
         : null;
+
+  const composerDisabledReason =
+    mode === "managed_local_unavailable" || mode === "unsupported"
+      ? notice?.body ?? null
+      : null;
 
   const primaryActionLabel =
     mode === "managed_local"
@@ -151,6 +156,7 @@ export function getSessionInteractionCapabilities({
     capabilityLabel,
     capabilityVariant,
     capabilitySummary,
+    composerDisabledReason,
     primaryActionLabel,
     submitLabel,
     title,
