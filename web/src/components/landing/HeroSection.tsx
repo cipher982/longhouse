@@ -96,7 +96,7 @@ export function HeroSection({
 
         <div className="landing-hero-visual">
           <div className="landing-hero-signal-panel">
-            <p className="landing-hero-signal-label">Two-beat product loop</p>
+            <p className="landing-hero-signal-label">How people get value fast</p>
             <h2 className="landing-hero-signal-title">Find old sessions first. Control new ones second.</h2>
             <div className="landing-hero-signal-list">
               <div className="landing-hero-signal-card">
