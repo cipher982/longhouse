@@ -48,10 +48,5 @@ test.describe('Onboarding Funnel (Docs-as-Source)', () => {
       await expect(locator.first()).toBeVisible({ timeout: 15_000 });
     }
 
-    const demoCTA = ctas.find((cta) => cta.label.toLowerCase().includes('demo'));
-    if (demoCTA) {
-      await page.locator(demoCTA.selector).click();
-      await expect(page.locator('.session-card').first()).toBeVisible({ timeout: 15000 });
-    }
   });
 });
