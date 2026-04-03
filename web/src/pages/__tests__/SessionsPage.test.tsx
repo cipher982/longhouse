@@ -373,6 +373,50 @@ describe("SessionsPage", () => {
     expect(await screen.findByRole("button", { name: "Load More" })).toBeInTheDocument();
   });
 
+  it("shows import-first guidance when the timeline is empty", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [],
+        total: 0,
+        has_real_sessions: false,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    expect(await screen.findByText("Import sessions you already have")).toBeInTheDocument();
+    expect(screen.getByText(/Longhouse gets useful once it can see real Claude Code, Codex, or Gemini work/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "See import steps" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Load demo sessions instead" })).toBeInTheDocument();
+    expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
+    expect(screen.getByText("longhouse ship")).toBeInTheDocument();
+    expect(screen.getByText("longhouse claude")).toBeInTheDocument();
+    expect(screen.queryByText("Welcome to Longhouse")).not.toBeInTheDocument();
+  });
+
+  it("treats demo sessions as preview data instead of the primary onboarding path", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [makeTimelineCard()],
+        total: 1,
+        has_real_sessions: false,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage("/timeline");
+
+    expect(await screen.findByText("These are demo sessions.")).toBeInTheDocument();
+    expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
+    expect(screen.getByText("longhouse ship")).toBeInTheDocument();
+    expect(screen.getByText(/start a Longhouse session when you want control after launch/i)).toBeInTheDocument();
+  });
+
   it("renders query compatibility cards from the matched detail session instead of speculative head state", async () => {
     const detail = makeSession({
       id: "matched-continuation",

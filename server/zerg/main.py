@@ -462,63 +462,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Demo mode auto-seed failed (non-fatal): {e}")
 
-        # OSS first-run UX: auto-seed demo sessions when timeline is empty
-        # This gives new users something to see immediately after `longhouse serve`.
-        # Skipped when: testing, demo_mode (handled above), SKIP_DEMO_SEED=1,
-        # or production mode (only seeds in DEV/DEMO).
-        from zerg.config import AppMode
-
-        _should_seed = (
-            not _settings.testing
-            and not _settings.demo_mode
-            and not _settings.skip_demo_seed
-            and _settings.app_mode in (AppMode.DEV, AppMode.DEMO)
-        )
-        if _should_seed:
-            try:
-                from sqlalchemy import or_
-
-                from zerg.database import get_session_factory
-                from zerg.models.agents import AgentSession
-                from zerg.services.demo_seed import DEMO_PROVIDER_SESSION_PREFIX
-                from zerg.services.demo_seed import seed_missing_demo_sessions
-
-                session_factory = get_session_factory()
-                with session_factory() as db:
-                    # Only auto-seed when the timeline has no real sessions yet.
-                    has_real_sessions = (
-                        db.query(AgentSession.id)
-                        .filter(
-                            or_(
-                                AgentSession.provider_session_id.is_(None),
-                                ~AgentSession.provider_session_id.like(f"{DEMO_PROVIDER_SESSION_PREFIX}%"),
-                            )
-                        )
-                        .limit(1)
-                        .first()
-                        is not None
-                    )
-                    if not has_real_sessions:
-                        seeded_count, failed_count = seed_missing_demo_sessions(db)
-                        if seeded_count > 0:
-                            logger.info(
-                                "First-run: seeded %d demo sessions (set SKIP_DEMO_SEED=1 to disable)",
-                                seeded_count,
-                            )
-                        elif failed_count > 0:
-                            logger.warning(
-                                "First-run demo seed had %d failures (see per-session errors above)",
-                                failed_count,
-                            )
-                        else:
-                            logger.info("First-run: demo sessions already present, skipping seed")
-                    else:
-                        logger.info(
-                            "First-run: real sessions already present, skipping demo seed",
-                        )
-            except Exception as e:
-                logger.warning(f"First-run demo seed failed (non-fatal): {e}")
-
         # Bootstrap the external jobs repo only when one is actually configured.
         # Builtin-only Longhouse instances should not create or hydrate /data/jobs.
         if not _settings.testing:

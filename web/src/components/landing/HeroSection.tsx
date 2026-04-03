@@ -89,7 +89,7 @@ export function HeroSection({
 
           <div className="landing-hero-cta-secondary">
             <Button variant="ghost" size="lg" className="landing-cta-text" onClick={onScrollToHowItWorks}>
-              See The Proof Journey <span className="landing-cta-arrow">↓</span>
+              See how it works <span className="landing-cta-arrow">↓</span>
             </Button>
           </div>
         </div>
@@ -117,7 +117,7 @@ export function HeroSection({
           <AppScreenshotFrame
             src="/images/landing/timeline-preview.png"
             alt="Longhouse session timeline showing Claude Code sessions"
-            title="Bundled Human View"
+            title="Session Timeline"
             aspectRatio="16/9"
             showChrome={true}
             theme={screenshotTheme}
