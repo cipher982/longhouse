@@ -379,7 +379,7 @@ Onboarding contract (CI). Do not edit unless the README steps change.
   "steps": [
     "cd {{WORKDIR}}/web && bun install --silent && bun run build",
     "cd {{WORKDIR}}/server && uv sync",
-    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --demo-fresh --host 127.0.0.1 --port 8080 --daemon",
+    "cd {{WORKDIR}}/server && HOME={{WORKDIR}}/.qa-home uv run longhouse serve --host 127.0.0.1 --port 8080 --daemon",
     "sleep 5",
     "curl -fsS http://127.0.0.1:8080/api/health",
     "cd {{WORKDIR}}/e2e && bun install --silent && PLAYWRIGHT_BASE_URL=http://127.0.0.1:8080 bunx playwright test --config playwright.onboarding.config.js --project onboarding-chromium"
@@ -391,12 +391,12 @@ Onboarding contract (CI). Do not edit unless the README steps change.
   "primary_route": "/timeline",
   "cta_buttons": [
     {
-      "label": "Timeline search",
-      "selector": ".sessions-search-input"
+      "label": "See import steps",
+      "selector": "button:has-text(\"See import steps\")"
     },
     {
-      "label": "Timeline sessions",
-      "selector": ".session-card"
+      "label": "Load demo sessions instead",
+      "selector": "button:has-text(\"Load demo sessions instead\")"
     }
   ]
 }
