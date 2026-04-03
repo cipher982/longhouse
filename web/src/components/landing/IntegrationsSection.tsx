@@ -30,11 +30,11 @@ export function IntegrationsSection() {
   return (
     <section id="providers" className="landing-integrations">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Provider Truth</p>
-        <h2 className="landing-section-title">Be honest about support.</h2>
+        <p className="landing-section-label">What Works Today</p>
+        <h2 className="landing-section-title">Claude is strongest today.</h2>
         <p className="landing-section-subtitle">
-          Claude is the strongest launch-ready continuation path today. Import and search are broader than
-          direct continuation parity. That honesty builds trust.
+          Import and search already work across providers. Direct continuation is still Claude-first at
+          launch.
         </p>
 
         <div className="landing-providers-grid">
@@ -57,12 +57,12 @@ export function IntegrationsSection() {
         </div>
 
         <p className="landing-providers-tagline">
-          Existing sessions become findable across providers today. Real continuation is still Claude-first.
+          Existing sessions are findable across providers today. Direct continuation is still Claude-first.
         </p>
 
         <p className="landing-providers-tagline landing-providers-tagline--subtle">
           Claude currently has the richest hooks and telemetry. Codex and Gemini are already useful in the
-          archive and machine surface, but direct web continuation is still Claude-first.
+          timeline and CLI/API surface, but direct web continuation is still Claude-first.
         </p>
       </div>
     </section>

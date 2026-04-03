@@ -21,8 +21,8 @@ const cards: SurfaceCard[] = [
     code: "longhouse message TARGET_ID \"Inspect the failing test\"\nlonghouse check-messages --json",
   },
   {
-    title: "Continue from the kernel",
-    description: "Resume work from terminal or call the machine surface directly.",
+    title: "Continue from the API",
+    description: "Resume work from terminal or call the session API directly.",
     code: `curl -N \\
   -X POST \\
   -H "X-Agents-Token: $LONGHOUSE_TOKEN" \\
@@ -37,11 +37,11 @@ export function MachineSurfaceSection() {
   return (
     <section className="landing-machine-surface" id="surface">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Machine Surface</p>
-        <h2 className="landing-section-title">Show the terminal seam early.</h2>
+        <p className="landing-section-label">CLI + API</p>
+        <h2 className="landing-section-title">Use it from terminal, not just the browser.</h2>
         <p className="landing-section-subtitle">
-          The product should not read like “just a website.” Existing sessions are findable here, and new
-          Longhouse sessions are steerable from the same CLI and <code> /api/agents/*</code> seam.
+          The same session works from browser, CLI, and <code>/api/agents/*</code>. You do not need an MCP
+          host or a web UI just to steer live work.
         </p>
 
         <div className="landing-surface-grid">
@@ -62,11 +62,11 @@ export function MachineSurfaceSection() {
 
         <div className="landing-surface-note">
           <p>
-            <strong>Canonical product line:</strong> Your existing sessions become findable. Your new
-            Longhouse sessions become controllable.
+            Your existing sessions become useful before you change your workflow. New Longhouse sessions
+            become controllable once you start them inside Longhouse.
           </p>
           <p>
-            The timeline still matters, but it stops pretending to be the entire product boundary.
+            The timeline still matters, but it is one surface on top of the same session model.
           </p>
         </div>
       </div>
