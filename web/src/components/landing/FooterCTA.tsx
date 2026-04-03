@@ -41,9 +41,9 @@ export function FooterCTA() {
           <nav className="landing-footer-nav">
             <div className="landing-footer-nav-group">
               <h4>Product</h4>
-              <a href="#journey">Proof Journey</a>
-              <a href="#surface">Machine Surface</a>
-              <a href="#providers">Provider Truth</a>
+              <a href="#journey">How it works</a>
+              <a href="#surface">CLI + API</a>
+              <a href="#providers">What works today</a>
               <a href="#pricing">Hosted</a>
             </div>
             <div className="landing-footer-nav-group">

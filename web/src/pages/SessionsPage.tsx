@@ -1126,17 +1126,24 @@ export default function SessionsPage() {
       <PageShell size="wide" className="sessions-page-container">
         <div className="sessions-hero-empty">
           <EmptyState
-            title="Welcome to Longhouse"
-            description="Your AI coding sessions from Claude Code, Codex, and Gemini will appear here as a searchable timeline."
+            title="Import sessions you already have"
+            description="Longhouse gets useful once it can see real Claude Code, Codex, or Gemini work you already did. Use demo sessions only when you want a safe preview."
             action={
               <div className="sessions-guided-actions">
                 <Button
                   variant="primary"
                   size="md"
+                  onClick={() => navigate("/docs#quickstart")}
+                >
+                  See import steps
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="md"
                   onClick={handleSeedDemo}
                   disabled={demoLoading}
                 >
-                  {demoLoading ? "Loading..." : "Load demo sessions"}
+                  {demoLoading ? "Loading..." : "Load demo sessions instead"}
                 </Button>
                 {seedError && (
                   <p style={{ color: "var(--color-intent-error)", marginTop: "0.5rem", fontSize: "0.875rem" }}>
@@ -1147,11 +1154,12 @@ export default function SessionsPage() {
             }
           />
           <div className="sessions-guided-steps">
-            <p className="sessions-guided-steps-label">To start shipping your own sessions:</p>
+            <p className="sessions-guided-steps-label">Fastest path to first value:</p>
             <ol className="sessions-guided-steps-list">
-              <li><code>longhouse connect</code> &mdash; link your CLI tools</li>
-              <li>Use Claude Code, Codex, or Gemini as normal</li>
-              <li>Sessions appear here automatically</li>
+              <li><code>longhouse connect --install</code> &mdash; keep background import running</li>
+              <li><code>longhouse ship</code> &mdash; pull existing sessions into the timeline now</li>
+              <li>Search one imported session or open raw detail</li>
+              <li>Later, start <code>longhouse claude</code> or <code>longhouse codex</code> when you want control after launch</li>
             </ol>
             <p className="sessions-guided-cli-hint">
               Don&apos;t have a CLI yet? Longhouse supports{" "}
@@ -1186,7 +1194,8 @@ export default function SessionsPage() {
           <div className="sessions-demo-banner">
             <span>These are demo sessions.</span>{" "}
             <span>
-              Start Claude Code, Codex, or Gemini — your real sessions will appear here automatically.
+              Import real sessions with <code>longhouse connect --install</code> and <code>longhouse ship</code>,
+              then start a Longhouse session when you want control after launch.
             </span>
           </div>
         )}

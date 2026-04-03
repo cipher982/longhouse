@@ -183,7 +183,7 @@ class Settings:  # noqa: D401 – simple data container
     bootstrap_token: str | None  # Token for CLI-based bootstrap API auth
 
     # OSS first-run UX ------------------------------------------------
-    skip_demo_seed: bool  # SKIP_DEMO_SEED=1 suppresses auto-seeding on first run
+    skip_demo_seed: bool  # Legacy flag; normal first run no longer auto-seeds demo data
 
     # Oikos tool output storage -----------------------------------
     oikos_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)

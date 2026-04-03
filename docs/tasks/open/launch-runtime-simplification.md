@@ -145,4 +145,7 @@ Do separately and do not let it block launch.
   - interactive onboarding offers wrapper install explicitly
   - `longhouse wrap --json` gives automation a machine-readable status/results surface
 - Runtime/session UI copy now uses `Longhouse session`, `host machine`, and `Live on host` language instead of leaking `managed-local` into user-facing surfaces.
+- Onboarding verification no longer creates a fake visible timeline session; the verification ingest is now hidden as a sidechain session.
+- Installer success output and the landing install block now present the same activation order:
+  start Longhouse, import existing sessions, then start a Longhouse session when the user wants control.
 - Architectural cleanup remains real, but it is not the first thing to do next.
