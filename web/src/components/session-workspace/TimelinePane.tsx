@@ -229,17 +229,19 @@ export function TimelinePane({
   // Skip the very first intersection notification (fires on mount before
   // auto-scroll has a chance to push the sentinel off-screen).
   const skipFirstIntersectionRef = useRef(true);
-  // Keep mutable fetch state in a ref so the observer callback always sees the
-  // latest value without the effect needing to re-run (and re-fire) on changes.
+  // Keep mutable values in refs so the observer callback stays current without
+  // needing to be in effect deps (which would cause re-attach / skip-reset loops).
   const isFetchingRef = useRef(isFetchingNextPage);
   useEffect(() => { isFetchingRef.current = isFetchingNextPage; }, [isFetchingNextPage]);
+  const onFetchNextPageRef = useRef(onFetchNextPage);
+  useEffect(() => { onFetchNextPageRef.current = onFetchNextPage; }, [onFetchNextPage]);
 
   useEffect(() => {
     if (!hasNextPage) return;
     const sentinel = topSentinelRef.current;
     if (!sentinel) return;
-    // Reset skip flag each time the observer is (re)attached so the first
-    // intersection on the new element is always skipped.
+    // Skip the very first intersection (fires on attach before auto-scroll
+    // has a chance to push the sentinel off-screen).
     skipFirstIntersectionRef.current = true;
     const observer = new IntersectionObserver(
       ([entry]) => {
@@ -248,16 +250,18 @@ export function TimelinePane({
           return;
         }
         if (entry.isIntersecting && !isFetchingRef.current) {
-          onFetchNextPage();
+          onFetchNextPageRef.current();
         }
       },
       { threshold: 0 },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-    // isFetchingNextPage intentionally excluded — tracked via ref to avoid
-    // recreating the observer (which would re-fire on an already-visible sentinel).
-  }, [hasNextPage, onFetchNextPage]);
+    // onFetchNextPage and isFetchingNextPage intentionally excluded — both
+    // tracked via refs so the observer isn't recreated (and skip-flag reset)
+    // on every React Query re-render after a page loads.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasNextPage]);
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const messageCount = useMemo(
     () => items.filter((item) => item.kind === "message").length,
