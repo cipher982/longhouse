@@ -366,6 +366,16 @@ describe("SessionsPage", () => {
     expect(prefetchSpy).not.toHaveBeenCalled();
   });
 
+  it("shows the capability summary on session cards", async () => {
+    renderSessionsPage("/timeline");
+
+    const capability = await screen.findByTestId("session-card-capability");
+    expect(capability).toHaveTextContent("History only");
+    expect(capability).toHaveTextContent(
+      "Search and inspect this Codex session here; direct continuation is not wired for this provider yet.",
+    );
+  });
+
   it("uses honest grouped-results copy in query compatibility mode", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {

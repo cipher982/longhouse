@@ -130,7 +130,10 @@ describe("SessionContextPane", () => {
     });
 
     expect(screen.getAllByText("Running bash")).toHaveLength(2);
-    expect(screen.getByText("Live control")).toBeInTheDocument();
+    expect(screen.getByText("Reattach on host")).toBeInTheDocument();
+    expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
+      "This live Claude session is visible here, but you need the host terminal to keep driving it.",
+    );
     expect(screen.queryByText("Completed")).not.toBeInTheDocument();
   });
 
@@ -165,6 +168,9 @@ describe("SessionContextPane", () => {
 
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach the live Codex terminal");
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("send prompts from Longhouse below");
+    expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
+      "Message this live Codex session from Longhouse, or reattach on the host machine.",
+    );
     expect(
       screen.getByText(/Keep driving the live session from Longhouse below or by reattaching on the host machine/i),
     ).toBeInTheDocument();

@@ -82,6 +82,9 @@ export type SessionInteractionCapabilities = {
   canDriveManagedLocalSession: boolean;
   canContinueInCloud: boolean;
   canChatFromBrowser: boolean;
+  capabilityLabel: string;
+  capabilityVariant: "neutral" | "success" | "warning";
+  capabilitySummary: string;
   primaryActionLabel: string;
   submitLabel: string;
   title: string;

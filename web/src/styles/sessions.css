@@ -679,6 +679,19 @@
     white-space: nowrap;
   }
 
+  .session-card-capability {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .session-card-capability-text {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-snug);
+  }
+
   /* Secondary: what was done — summary title or first user message */
   .session-card-title {
     font-size: var(--font-size-sm);

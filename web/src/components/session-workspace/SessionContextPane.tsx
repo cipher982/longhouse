@@ -60,7 +60,11 @@ export function SessionContextPane({
   turnReviewLoading = false,
   turnReviewUnavailable = false,
 }: SessionContextPaneProps) {
-  const interaction = getSessionInteractionCapabilities({ session });
+  const interaction = getSessionInteractionCapabilities({
+    session,
+    isViewingHead,
+    headThreadSession,
+  });
   const isManagedLocalCodex = interaction.isManagedLocalCodex;
   const canDriveManagedLocalFromBrowser = interaction.canDriveManagedLocalSession;
   const turnCount = session.user_messages + session.assistant_messages;
@@ -102,12 +106,16 @@ export function SessionContextPane({
         </div>
         <div className="session-context-badges">
           <Badge variant={runtimeBadgeVariant}>{runtime.displayPhase}</Badge>
+          <Badge variant={interaction.capabilityVariant}>{interaction.capabilityLabel}</Badge>
           <Badge variant="neutral">{turnCount} turns</Badge>
           <Badge variant="neutral">{session.tool_calls} tools</Badge>
           {executionHomeLabel ? <Badge variant="neutral">{executionHomeLabel}</Badge> : null}
           {session.environment && session.environment !== "production" ? (
             <Badge variant="warning">{session.environment}</Badge>
           ) : null}
+        </div>
+        <div className="session-context-capability-summary" data-testid="session-capability-summary">
+          {interaction.capabilitySummary}
         </div>
       </div>
 
