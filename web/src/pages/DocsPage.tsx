@@ -35,7 +35,7 @@ export default function DocsPage() {
       <main className="info-page-content">
         <h1 className="info-page-title">Documentation</h1>
         <p className="info-page-subtitle">
-          Get started fast, import existing sessions, then start Longhouse sessions when you want control.
+          Get started fast, bring sessions into one timeline, then keep control by starting through Longhouse.
         </p>
 
         <nav className="docs-nav">
@@ -86,10 +86,10 @@ longhouse ship</code></pre>
             sessions into the timeline so you can browse, search, and inspect them from one place.
           </p>
 
-          <h3>4. Start a Longhouse session when you want control</h3>
+          <h3>4. Start through Longhouse when you want live control</h3>
           <p>
-            Existing sessions become findable first. When you want to steer a session after launch, start it
-            through Longhouse:
+            All sessions live in the same timeline. When you want to steer one after launch, start it
+            through Longhouse or enable wrappers:
           </p>
           <pre><code>longhouse claude
 longhouse codex</code></pre>
@@ -151,7 +151,7 @@ longhouse wrap --status</code></pre>
           <h3>Current Support</h3>
           <ul>
             <li><strong>Claude Code</strong> — strongest continuation path today: timeline sync, hooks, and direct browser continuation</li>
-            <li><strong>Codex CLI</strong> — timeline sync, search/detail, Longhouse session starts, and opt-in default-launcher wrappers today; continuation is still Claude-first</li>
+            <li><strong>Codex CLI</strong> — timeline sync, search/detail, control-ready launches through Longhouse, and opt-in default-launcher wrappers today; continuation is still Claude-first</li>
             <li><strong>Gemini CLI</strong> — timeline sync and search/detail today; continuation is still Claude-first</li>
           </ul>
 

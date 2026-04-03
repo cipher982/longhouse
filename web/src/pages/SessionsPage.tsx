@@ -852,7 +852,7 @@ export default function SessionsPage() {
   const singleLaunchReadyRunner = launchReadyRunners.length === 1 ? launchReadyRunners[0] : null;
   const runnerActionLabel =
     singleLaunchReadyRunner != null
-      ? "Start Longhouse Session"
+      ? "Start Session"
       : launchReadyRunners.length > 1
         ? "Choose Machine"
         : runners.length > 0
@@ -1219,8 +1219,8 @@ export default function SessionsPage() {
             <ol className="sessions-guided-steps-list">
               <li><code>longhouse connect --install</code> &mdash; keep background import running</li>
               <li><code>longhouse ship</code> &mdash; pull existing sessions into the timeline now</li>
-              <li>Search one imported session or open raw detail</li>
-              <li>Later, start <code>longhouse claude</code> or <code>longhouse codex</code> on a connected machine when you want control after launch</li>
+              <li>Search one session or open raw detail</li>
+              <li>Later, start through <code>longhouse claude</code> or <code>longhouse codex</code> on a connected machine when you want control after launch</li>
             </ol>
             <p className="sessions-guided-cli-hint">
               Don&apos;t have a CLI yet? Longhouse supports{" "}
@@ -1258,7 +1258,7 @@ export default function SessionsPage() {
             <span>These are demo sessions.</span>{" "}
             <span>
               Import real sessions with <code>longhouse connect --install</code> and <code>longhouse ship</code>,
-              then start a Longhouse session when you want control after launch.
+              then start through Longhouse or wrappers when you want control after launch.
             </span>
           </div>
         )}

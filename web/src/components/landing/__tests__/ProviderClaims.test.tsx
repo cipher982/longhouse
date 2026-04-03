@@ -15,7 +15,7 @@ describe("landing provider claims", () => {
 
     expect(screen.getByText("Claude Code")).toBeInTheDocument();
     expect(screen.getByText("Import, search, and direct web continuation")).toBeInTheDocument();
-    expect(screen.getByText("Import, search, and Longhouse session starts")).toBeInTheDocument();
+    expect(screen.getByText("Import, search, and control-ready launches through Longhouse")).toBeInTheDocument();
     expect(screen.getByText("Import and search today; direct web continuation later")).toBeInTheDocument();
     expect(screen.getAllByText("Live now")).toHaveLength(3);
     expect(
@@ -33,7 +33,7 @@ describe("landing provider claims", () => {
       screen.getByText(/Claude Code currently has the strongest continuation path, hooks, and telemetry/i),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Codex CLI and Gemini CLI are already findable and inspectable in the timeline/i),
+      screen.getByText(/Codex CLI and Gemini CLI already land in the same timeline and machine surface today/i),
     ).toBeInTheDocument();
   });
 });

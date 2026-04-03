@@ -154,8 +154,8 @@ export function SessionContextPane({
                   ? `This live Codex session is running on ${attachRunnerLabel}. Reopen the Codex TUI on the host machine anytime, or send prompts from Longhouse below.`
                   : `This live Codex session is running on ${attachRunnerLabel}. Use the host-machine command below to reopen the Codex TUI.`
                 : canDriveManagedLocalFromBrowser
-                  ? `This Longhouse session is running on ${attachRunnerLabel}. Reattach on the host machine anytime, or keep sending prompts from Longhouse below.`
-                  : `This Longhouse session is running on ${attachRunnerLabel}. Use the host-machine command below to reopen the live tmux session.`}
+                  ? `This session is running on ${attachRunnerLabel}. Reattach on the host machine anytime, or keep sending prompts from Longhouse below.`
+                  : `This session is running on ${attachRunnerLabel}. Use the host-machine command below to reopen the live tmux session.`}
             </div>
             <pre className="inspector-code-block" data-testid="session-attach-command">
               <code>{attachCommand}</code>

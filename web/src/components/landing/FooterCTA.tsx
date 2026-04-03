@@ -19,7 +19,7 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Your existing sessions become findable. Your new Longhouse sessions become controllable.
+            One timeline for every session. Live control when Longhouse is in the loop.
           </blockquote>
           <div className="landing-footer-cta-buttons">
             <Button variant="primary" size="lg" onClick={handleSelfHost}>

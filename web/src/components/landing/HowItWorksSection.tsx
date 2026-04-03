@@ -7,7 +7,7 @@ interface Step {
 const steps: Step[] = [
   {
     number: "1",
-    title: "Import sessions you already have",
+    title: "Bring sessions into one timeline",
     description:
       "Bring in real Claude, Codex, or Gemini sessions before changing your workflow. Demo data is only the safe preview path.",
   },
@@ -25,9 +25,9 @@ const steps: Step[] = [
   },
   {
     number: "4",
-    title: "Start a Longhouse session for new work",
+    title: "Start through Longhouse for live control",
     description:
-      "New Longhouse sessions are the ones you can steer after launch from the browser, CLI, or API.",
+      "When Longhouse is in the launch path, the same session stays steerable later from browser, CLI, or API.",
   },
   {
     number: "5",
@@ -42,10 +42,10 @@ export function HowItWorksSection() {
     <section id="journey" className="landing-how-it-works landing-proof-journey">
       <div className="landing-section-inner">
         <p className="landing-section-label">How It Clicks</p>
-        <h2 className="landing-section-title">Find prior work first. Take control second.</h2>
+        <h2 className="landing-section-title">One timeline. Then keep control.</h2>
         <p className="landing-section-subtitle">
-          First you recover something you already solved. Then you see that a live session can still be
-          messaged and continued after launch.
+          First you recover something you already solved. Then you see that the same timeline can still
+          steer a session later when Longhouse kept the control channel open.
         </p>
 
         <div className="landing-journey-grid">
@@ -66,7 +66,7 @@ export function HowItWorksSection() {
             <blockquote>Find the session. Ask it. Continue it.</blockquote>
             <p>
               The session stops being a dead transcript. It becomes something you can search, return to,
-              and steer from more than one surface.
+              and steer from more than one surface when Longhouse is in the loop.
             </p>
           </aside>
         </div>

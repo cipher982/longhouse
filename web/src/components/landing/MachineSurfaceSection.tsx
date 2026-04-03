@@ -62,8 +62,8 @@ export function MachineSurfaceSection() {
 
         <div className="landing-surface-note">
           <p>
-            Your existing sessions become useful before you change your workflow. New Longhouse sessions
-            become controllable once you start them inside Longhouse.
+            One timeline, one session model. When a session starts through Longhouse or wrappers, browser,
+            CLI, and API all share the same control path.
           </p>
           <p>
             The timeline still matters, but it is one surface on top of the same session model.

@@ -8,8 +8,8 @@ Updated: 2026-04-02
 
 Make the landing page sell the prelaunch wedge clearly:
 
-- existing sessions become findable immediately
-- new Longhouse sessions become controllable after launch
+- every session lands in one timeline immediately
+- sessions started through Longhouse stay controllable after launch
 - Longhouse is a session kernel for coding agents, but that is the technical identity, not the first emotional hook
 - The bundled web UI is real, but it sits on top of a machine-first product seam.
 - Hosted is the paid convenience layer for always-on access, not the first required step.
@@ -35,14 +35,14 @@ Mechanic line:
 
 **Find the session. Ask it. Continue it.**
 
-Longhouse makes existing sessions findable now and new Longhouse sessions controllable after launch.
+Longhouse puts every session into one timeline and keeps a control path attached when Longhouse is in the launch path.
 
 ## Message Hierarchy
 
-1. **Existing sessions become findable**
+1. **Every session lands in one timeline**
    Search, inspect, and recover context from work the user already did.
-2. **New Longhouse sessions become controllable**
-   Start a session and steer it after launch from UI, CLI, or API.
+2. **Longhouse keeps live control attached**
+   Start through Longhouse and steer that same session after launch from UI, CLI, or API.
 3. **Session kernel is the technical identity**
    Longhouse is not just a dashboard. It makes sessions addressable and reusable.
 4. **Machine surface is real**
@@ -76,7 +76,7 @@ See `docs/specs/launch-runtime-simplification.md` for the current launch framing
 
 1. Hero
    Headline around control after launch.
-   Supporting proof that existing sessions become findable first.
+   Supporting proof that every session lands in one timeline first.
    Primary CTA: `Self-Host Free`
    Secondary CTA: `Hosted Later`
    Tertiary proof: one CLI example visible above the fold.
@@ -162,7 +162,7 @@ Say this bluntly in docs and on the page:
 
 ### Must demo
 
-- existing sessions become visible and searchable
+- sessions become visible and searchable in one timeline
 - raw session detail
 - one real Claude continuation or message/control proof
 - one CLI/API machine-surface proof

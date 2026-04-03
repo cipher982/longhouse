@@ -57,7 +57,7 @@ export function IntegrationsSection() {
         </div>
 
         <p className="landing-providers-tagline">
-          Existing sessions are findable across providers today. Direct continuation is still Claude-first.
+          All providers land in the same timeline today. Direct continuation is still Claude-first.
         </p>
 
         <p className="landing-providers-tagline landing-providers-tagline--subtle">

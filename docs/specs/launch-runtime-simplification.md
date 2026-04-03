@@ -8,8 +8,8 @@ Updated: 2026-04-02
 
 Lock Longhouse's launch story to one honest product loop:
 
-- make existing sessions findable immediately
-- make new Longhouse sessions controllable after launch
+- bring every session into one timeline immediately
+- keep a control channel open when sessions start through Longhouse
 - do this from browser, CLI, or API without pretending a transcript is the whole environment
 
 This document tightens the product story around the session kernel work already captured in `VISION.md`, the current landing-page spec and implementation, the launch demo contract, and the 2026-04-02 landing rewrite note in the Obsidian session log.
@@ -84,7 +84,7 @@ Longhouse should assume:
 - sessions run on the machine where Longhouse is installed
 - users may install Longhouse on a laptop, VPS, Mac mini, homelab box, or future hosted instance
 - users can still ship/import existing sessions, and that is often the fastest first-value path
-- Longhouse-started sessions are the controllable second beat that turns first value into the real product loop
+- the distinction is capability, not object type: when Longhouse is in the launch path, the same session stays controllable later
 
 This keeps the environment honest. It avoids promising that untracked files, `.env`, local networking, ports, or machine-specific setup somehow moved just because the transcript did.
 
@@ -159,7 +159,7 @@ That makes the "find / ask / continue" loop feel like proof instead of abstracti
 
 ### Two-beat onramp
 
-**Beat 1: your existing sessions become findable**
+**Beat 1: every session lands in one timeline**
 
 Install Longhouse and immediately get value from sessions you already have:
 
@@ -170,9 +170,9 @@ Install Longhouse and immediately get value from sessions you already have:
 
 This is the fastest "oh cool" moment and should remain a co-equal first beat, not a fallback.
 
-**Beat 2: new Longhouse sessions become controllable**
+**Beat 2: Longhouse keeps the control path attached**
 
-Start a real Claude or Codex session through Longhouse on the machine where work should live. Later, find it, message it, and continue it from anywhere.
+Start a real Claude or Codex session through Longhouse on the machine where work should live. Later, find that same session, message it, and continue it from anywhere.
 
 That machine might be:
 
@@ -186,7 +186,7 @@ The machine choice is secondary. The session loop is the product.
 
 ### One honest sentence
 
-**Your existing sessions become findable. Your new Longhouse sessions become controllable.**
+**Every session lands in one timeline. When Longhouse is in the launch path, that same session stays controllable.**
 
 ## Public Vocabulary
 
@@ -194,8 +194,9 @@ Use the smallest vocabulary possible.
 
 ### Good public terms
 
-- **Longhouse session**
-- **Imported session**
+- **session**
+- **timeline**
+- **live control**
 - **Self-hosted**
 - **Hosted**
 - **Machine surface**
@@ -294,7 +295,7 @@ This proves the product without requiring infra.
 ### Journey 2: self-hosted durable box
 
 - install Longhouse on a VPS / Mac mini / homelab box
-- start Longhouse sessions there
+- start sessions through Longhouse there
 - reconnect from another device later
 - message and continue those sessions remotely
 
@@ -361,7 +362,7 @@ The launch story is working if users do both beats:
    That same user performs at least one real control action after launch:
    continue, message, or another explicit session-level interaction.
 
-The activation signal to care about is not just install count. It is the conversion from imported/shipped session visibility into one controlled Longhouse session or one real post-launch control action.
+The activation signal to care about is not just install count. It is the conversion from timeline visibility into one real post-launch control action.
 
 ## Concrete Guidance For Landing / README / Demos
 
@@ -372,7 +373,7 @@ Lead with control, not taxonomy.
 Recommended direction:
 
 - headline about controlling live Claude/Codex sessions after launch
-- supporting line that says existing sessions become findable immediately
+- supporting line that says every session lands in one timeline immediately
 - supporting line that says the session can live on your laptop, your machine, or hosted later
 - use `Works on your laptop. Shines on a machine that stays on.` somewhere high on the page
 - keep `Find the session. Ask it. Continue it.` as the proof loop
@@ -406,8 +407,8 @@ That beats both dashboard theater and remote-shell theater.
 ## Immediate Implications For Product Work
 
 1. Keep the machine surface and session-kernel work as the canonical seam.
-2. Treat imported sessions as the first hit of value, not as a mere fallback.
-3. Reframe `longhouse claude` / `longhouse codex` as "start a Longhouse session" rather than "managed-local launcher" in public copy.
+2. Treat imported/shipped sessions as the first hit of value, not as a separate product class.
+3. Reframe `longhouse claude` / `longhouse codex` as "start through Longhouse" rather than implying a different species of session.
 4. Keep wrapper mode as an ergonomic accelerator, not the definition of the product.
 5. Keep hosted as a convenience layer that can arrive later without changing the product truth.
 6. Keep Oikos out of the hero, but do show browser proof that a session can be messaged or continued after launch.

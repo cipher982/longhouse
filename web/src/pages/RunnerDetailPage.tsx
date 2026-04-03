@@ -522,7 +522,7 @@ export default function RunnerDetailPage() {
               )}
               {isRunnerSessionLaunchReady(runner) && (
                 <Button variant="primary" size="sm" onClick={() => setLaunchModalOpen(true)}>
-                  Start Longhouse Session
+                  Start Session
                 </Button>
               )}
               <Button variant="ghost" size="sm" onClick={() => navigate("/runners")}>
