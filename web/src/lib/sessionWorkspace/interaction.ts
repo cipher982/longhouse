@@ -72,31 +72,31 @@ export function getSessionInteractionCapabilities({
 
   const title =
     mode === "managed_local"
-      ? `Drive this live ${providerLabel} session`
+      ? "Continue this session"
       : mode === "head"
-        ? "Cloud continuation began here"
+        ? "Continue this session"
         : mode === "promote"
-          ? "Cloud continuation starts here"
+          ? "Continue this session"
           : mode === "branch"
-            ? "New cloud branch starts here"
+            ? "Continue from this point"
             : mode === "managed_local_unavailable" && isManagedLocalCodex
-              ? "Drive this session from the host Codex terminal"
+              ? "Continue this session on the host"
               : mode === "managed_local_unavailable"
-                ? "Drive this session from the host terminal"
-                : `This ${providerLabel} transcript is synced, but not resumable from the web yet`;
+                ? "Continue this session on the host"
+                : "Search and inspect this session";
 
   const description =
     mode === "managed_local"
-      ? `This session is still running on ${sourceOriginLabel}. Messages below are injected into the live ${providerLabel} session on its host and sync back into the timeline here.`
+      ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
       : mode === "head"
-        ? `Earlier turns were synced from ${sourceOriginLabel}. New messages below keep extending this cloud session.`
+        ? `Earlier turns were synced from ${sourceOriginLabel}. New messages below keep extending this session from Longhouse.`
         : mode === "promote"
-          ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts the cloud continuation.`
+          ? `Earlier turns were synced from ${sourceOriginLabel}. Your next message below keeps this session going from Longhouse.`
           : mode === "branch"
-            ? `Earlier turns were synced from ${sourceOriginLabel}. Your first message below starts a new cloud branch from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
+            ? `Earlier turns were synced from ${sourceOriginLabel}. Your next message starts a new continuation from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
             : mode === "managed_local_unavailable"
-              ? `This live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts because the runner bridge metadata is missing. Reattach on the host machine to continue.`
-              : `Direct cloud continuation is currently wired for Claude sessions only. This ${providerLabel} transcript is still searchable and auditable here while we close that provider gap.`;
+              ? `This live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts right now. Reattach on the host machine to continue.`
+              : `This ${providerLabel} session is fully searchable here, but browser continuation is currently wired for Claude sessions only.`;
 
   const placeholder =
     mode === "managed_local"

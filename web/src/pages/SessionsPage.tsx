@@ -535,7 +535,7 @@ function SessionCard({
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
   const showSummary = !showKeywordSnippet && !showSemanticSnippet && !!session.summary;
   const showGenerating = !showKeywordSnippet && !showSemanticSnippet && !session.summary && !session.summary_title;
-  const primaryActionLabel = compatibilityMode ? "Open match" : interaction.primaryActionLabel;
+  const cardActionLabel = compatibilityMode ? "Open match" : "Open session";
   const cardClassName = [
     "session-card",
     confirming ? "session-card--confirming" : "",
@@ -570,7 +570,7 @@ function SessionCard({
           type="button"
           className="session-card-hitbox"
           onClick={onClick}
-          aria-label={title ? `${primaryActionLabel}: ${title}` : primaryActionLabel}
+          aria-label={title ? `${cardActionLabel}: ${title}` : cardActionLabel}
         />
       )}
 

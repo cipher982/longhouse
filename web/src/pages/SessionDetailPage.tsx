@@ -258,17 +258,7 @@ function SessionDetailWorkspaceRoute({
                 dockHeaderStyle={
                   interaction.mode === "head" ? "hidden" : "divider"
                 }
-                introEyebrow={
-                  interaction.mode === "managed_local"
-                    ? "Live session"
-                    : interaction.mode === "managed_local_unavailable"
-                      ? "Host session"
-                      : interaction.mode === "unsupported"
-                        ? "Session history"
-                        : interaction.mode === "branch"
-                          ? "Cloud branch"
-                          : "Cloud continuation"
-                }
+                introEyebrow="Session control"
                 introTitle={interaction.title}
                 introDescription={interaction.description}
                 chatMode={interaction.mode === "managed_local" ? "managed_local" : "cloud"}
