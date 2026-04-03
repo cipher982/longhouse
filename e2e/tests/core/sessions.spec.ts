@@ -1181,16 +1181,19 @@ test.describe("Session Detail Page", () => {
     await page.goto(`/timeline/${sessionId}`);
     await page.waitForSelector('body[data-ready="true"]', { timeout: 10000 });
 
-    await expect(
-      page.getByRole("button", { name: "Latest Context" }),
-    ).toHaveCount(0);
-    await expect(page.getByTestId("session-continuation-panel")).toHaveCount(0);
+    await expect(page.getByTestId("session-continuation-panel")).toBeVisible();
+    await expect(page.getByTestId("session-continuation-panel")).toContainText(
+      "not resumable from the web yet",
+    );
     await expect(
       page.getByTestId("session-continuation-unavailable"),
     ).toContainText("wired for Claude sessions only");
-    await expect(page.locator(".session-chat-composer textarea")).toHaveCount(
-      0,
-    );
+    await expect(page.locator(".session-chat-composer textarea")).toBeVisible();
+    await expect(page.locator(".session-chat-composer textarea")).toBeDisabled();
+    await expect(
+      page.getByTestId("session-chat-disabled-reason"),
+    ).toContainText("wired for Claude sessions only");
+    await expect(page.getByRole("button", { name: "Reply" })).toBeDisabled();
   });
 
   test("Managed-local session detail keeps the composer locked from dispatch through ack", async ({
