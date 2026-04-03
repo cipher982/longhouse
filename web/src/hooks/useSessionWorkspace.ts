@@ -124,6 +124,13 @@ export function useSessionWorkspace(
     return [...projectionPagesData.pages].reverse().flatMap((page) => page.items);
   }, [projectionPagesData]);
 
+  // Count only actual event items (not seam dividers) so the "X/Y loaded"
+  // counter matches what the backend reports as entries.
+  const loadedEventCount = useMemo(
+    () => projectionItems.filter((item) => item.kind === "event").length,
+    [projectionItems],
+  );
+
   const totalEntries = useMemo(
     () => projectionPagesData?.pages[0]?.total ?? projectionItems.length,
     [projectionItems.length, projectionPagesData],
@@ -311,7 +318,7 @@ export function useSessionWorkspace(
     setShowAbandonedBranches,
     events,
     totalEntries,
-    loadedEntryCount: projectionItems.length,
+    loadedEntryCount: loadedEventCount,
     abandonedEvents,
     eventsLoading: projectionLoading,
     eventsError: projectionError,
