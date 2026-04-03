@@ -5,19 +5,19 @@ interface ThesisCard {
 
 const cards: ThesisCard[] = [
   {
-    title: "The session is the durable object",
+    title: "A session stays addressable",
     description:
-      "A session is not a dead transcript. It is something you can inspect, address, tail, and continue.",
+      "It is not just history. You can inspect it, message it, tail it, and continue it later.",
   },
   {
-    title: "The machine surface is real",
+    title: "The same session works everywhere",
     description:
-      "Longhouse works from terminal and HTTP first. The web UI is the bundled human view on top of the same kernel.",
+      "Browser, CLI, and HTTP all talk to the same session instead of three separate products pretending to agree.",
   },
   {
-    title: "Works on your laptop. Shines on a machine that stays on.",
+    title: "Laptop now. Durable machine later.",
     description:
-      "Self-hosted is the free default path. A durable machine makes the product better, but laptop users can still get value immediately.",
+      "You can start on your laptop, then move to a box that stays on when you want stronger continuity.",
   },
 ];
 
@@ -25,11 +25,11 @@ export function KernelThesisSection() {
   return (
     <section className="landing-kernel-thesis">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Kernel Thesis</p>
-        <h2 className="landing-section-title">Not another AI dashboard.</h2>
+        <p className="landing-section-label">Why It Works</p>
+        <h2 className="landing-section-title">Built around real sessions.</h2>
         <p className="landing-section-subtitle">
-          Lead with the outcome: control sessions after launch. Then explain why it works: the session is
-          the durable object, and the machine surface is real.
+          Longhouse keeps the session, the machine context, and the control surface tied together so you
+          can come back later and keep working.
         </p>
 
         <div className="landing-thesis-grid">
