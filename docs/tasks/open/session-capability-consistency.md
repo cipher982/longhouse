@@ -30,9 +30,10 @@ Keep Longhouse on one session model everywhere the user touches it:
 - [x] Session detail dock stays visible for searchable-only sessions and explains why continuation is disabled.
 - [x] Session detail now exposes one stable primary action row (`Continue here`) and disables it with in-place explanation when control is unavailable.
 - [x] Session detail and timeline cards now use honest, capability-neutral action language (`Continue here` in detail, `Open session` on cards).
+- [x] Targeted browser coverage now locks the capability rule for searchable-only and live-controlled session detail states.
 - [ ] Normalize remaining session-facing CTAs and notices so capability changes state, not structure.
 - [ ] Audit timeline/detail/context surfaces for any remaining type-driven wording or hidden actions.
-- [ ] Add focused regression coverage for the capability rule where it is still implicit.
+- [ ] Extend regression coverage if the remaining audit turns up more implicit capability-specific behavior.
 
 ## Execution order
 
