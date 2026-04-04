@@ -1,11 +1,8 @@
-"""Tests for fleet wall, session tail, and pokes endpoints.
+"""Tests for fleet wall and session tail endpoints.
 
 Covers:
 - GET /agents/sessions/wall — raw signal metadata with repo/project filters
 - GET /agents/sessions/{id}/tail — tail-biased recent events
-- POST /agents/pokes — create a poke between sessions
-- GET /agents/pokes — list pokes for a session, marks as read
-
 Uses in-memory SQLite. No shared conftest.
 """
 
@@ -26,7 +23,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
-from zerg.models.agents import SessionPoke
 
 # ---------------------------------------------------------------------------
 # DB / client helpers
@@ -109,6 +105,7 @@ def test_wall_returns_sessions(tmp_path):
             db,
             device_id="shipper-laptop",
             device_name="laptop",
+            cwd="/Users/dev/git/zerg",
             git_repo="https://github.com/user/repo",
             git_branch="main",
             project="zerg",
@@ -122,6 +119,7 @@ def test_wall_returns_sessions(tmp_path):
         data = resp.json()
         assert data["total"] >= 1
         session = next(s for s in data["sessions"] if s["device_name"] == "laptop")
+        assert session["cwd"] == "/Users/dev/git/zerg"
         assert session["git_repo"] == "https://github.com/user/repo"
         assert session["git_branch"] == "main"
         assert session["project"] == "zerg"
@@ -145,6 +143,24 @@ def test_wall_filters_by_repo(tmp_path):
         data = resp.json()
         assert data["total"] == 1
         assert "zerg" in data["sessions"][0]["git_repo"]
+    finally:
+        api_ref.dependency_overrides = {}
+
+
+def test_wall_repo_filter_matches_cwd(tmp_path):
+    """Wall repo filter also matches against cwd for non-git workspaces."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        _seed_session(db, cwd="/Users/dev/git/zeta/athena-horizon", git_repo=None, project="athena-horizon")
+        _seed_session(db, cwd="/Users/dev/git/zerg", git_repo="https://github.com/user/other", project="zerg")
+
+    client, api_ref = _make_client(SessionLocal)
+    try:
+        resp = client.get("/api/agents/sessions/wall", params={"repo": "athena"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["sessions"][0]["cwd"] == "/Users/dev/git/zeta/athena-horizon"
     finally:
         api_ref.dependency_overrides = {}
 
@@ -341,146 +357,5 @@ def test_tail_includes_tool_name(tmp_path):
         resp = client.get(f"/api/agents/sessions/{sid}/tail")
         data = resp.json()
         assert data["events"][0]["tool_name"] == "Bash"
-    finally:
-        api_ref.dependency_overrides = {}
-
-
-# ---------------------------------------------------------------------------
-# Poke tests
-# ---------------------------------------------------------------------------
-
-
-def test_create_poke(tmp_path):
-    """POST /agents/pokes creates a poke between sessions."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s1 = _seed_session(db)
-        s2 = _seed_session(db)
-        s1_id, s2_id = str(s1.id), str(s2.id)
-
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.post(
-            "/api/agents/pokes",
-            json={
-                "from_session_id": s1_id,
-                "to_session_id": s2_id,
-                "note": "auth rotation is broken, don't test auth",
-                "source_event_id": 42,
-            },
-        )
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["from_session_id"] == s1_id
-        assert data["to_session_id"] == s2_id
-        assert data["note"] == "auth rotation is broken, don't test auth"
-        assert data["source_event_id"] == 42
-        assert data["id"] is not None
-    finally:
-        api_ref.dependency_overrides = {}
-
-
-def test_create_poke_truncates_long_note(tmp_path):
-    """Notes over 2000 chars are truncated."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s1 = _seed_session(db)
-        s2 = _seed_session(db)
-        s1_id, s2_id = str(s1.id), str(s2.id)
-
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.post(
-            "/api/agents/pokes",
-            json={
-                "from_session_id": s1_id,
-                "to_session_id": s2_id,
-                "note": "z" * 5000,
-            },
-        )
-        assert resp.status_code == 201
-        assert len(resp.json()["note"]) == 2000
-    finally:
-        api_ref.dependency_overrides = {}
-
-
-def test_list_pokes_returns_unread(tmp_path):
-    """GET /agents/pokes returns unread pokes for a session."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s1 = _seed_session(db)
-        s2 = _seed_session(db)
-        poke = SessionPoke(
-            from_session_id=s1.id,
-            to_session_id=s2.id,
-            note="hey look at this",
-        )
-        db.add(poke)
-        db.commit()
-        s2_id = str(s2.id)
-
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get("/api/agents/pokes", params={"session_id": s2_id})
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total"] == 1
-        assert data["pokes"][0]["note"] == "hey look at this"
-    finally:
-        api_ref.dependency_overrides = {}
-
-
-def test_list_pokes_marks_as_read(tmp_path):
-    """Fetching pokes marks them as read — second call returns empty."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s1 = _seed_session(db)
-        s2 = _seed_session(db)
-        poke = SessionPoke(
-            from_session_id=s1.id,
-            to_session_id=s2.id,
-            note="one-time ping",
-        )
-        db.add(poke)
-        db.commit()
-        s2_id = str(s2.id)
-
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        # First call — should see the poke
-        resp1 = client.get("/api/agents/pokes", params={"session_id": s2_id})
-        assert resp1.json()["total"] == 1
-
-        # Second call — should be empty (unread_only=true by default)
-        resp2 = client.get("/api/agents/pokes", params={"session_id": s2_id})
-        assert resp2.json()["total"] == 0
-    finally:
-        api_ref.dependency_overrides = {}
-
-
-def test_list_pokes_unread_only_false_shows_all(tmp_path):
-    """With unread_only=false, already-read pokes still appear."""
-    SessionLocal = _make_db(tmp_path)
-    with SessionLocal() as db:
-        s1 = _seed_session(db)
-        s2 = _seed_session(db)
-        poke = SessionPoke(
-            from_session_id=s1.id,
-            to_session_id=s2.id,
-            note="persistent",
-            read_at=datetime.now(timezone.utc),
-        )
-        db.add(poke)
-        db.commit()
-        s2_id = str(s2.id)
-
-    client, api_ref = _make_client(SessionLocal)
-    try:
-        resp = client.get(
-            "/api/agents/pokes",
-            params={"session_id": s2_id, "unread_only": "false"},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["total"] == 1
     finally:
         api_ref.dependency_overrides = {}
