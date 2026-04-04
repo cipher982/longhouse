@@ -12,7 +12,7 @@
 - `make test`
 - `make test-e2e`
 - `make qa-live`
-- `make qa-live-conversations`
+- `make qa-live-chat`
 - Other checks:
 
 ## Rollout / Rollback
