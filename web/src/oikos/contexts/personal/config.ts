@@ -5,7 +5,7 @@
 
 import type { VoiceAgentConfig, ToolConfig } from '../types';
 import { getRealtimeModel } from '../../core';
-import { stateManager } from '../../lib/state-manager';
+import { bootstrapStore } from '../../lib/bootstrap-store';
 
 /**
  * Generate dynamic instructions based on which tools are actually enabled.
@@ -59,7 +59,7 @@ If the user asks for something that requires tools, respond that the request wil
  * falls back to client-side generation if bootstrap unavailable.
  */
 function getInstructions(): string {
-  const bootstrap = stateManager.getBootstrap();
+  const bootstrap = bootstrapStore.getBootstrap();
   if (bootstrap?.prompt) {
     return bootstrap.prompt;
   }

@@ -5,7 +5,7 @@
  * - Send messages to POST /api/oikos/chat (SSE streaming)
  * - Handle SSE stream for streaming responses
  * - Load Oikos surface history from /api/oikos/history
- * - Emit events for UI updates via stateManager
+ * - Emit UI updates via direct callbacks
  *
  * Usage:
  *   const controller = new OikosChatController();
@@ -14,8 +14,6 @@
  */
 
 import { logger } from '../core';
-import { stateManager } from './state-manager';
-import { conversationController } from './conversation-controller';
 import { CONFIG, toAbsoluteUrl } from './config';
 import { eventBus } from './event-bus';
 import { commisProgressStore } from './commis-progress-store';
@@ -99,6 +97,20 @@ export interface OikosHistoryOptions {
   view?: 'surface' | 'all';
 }
 
+export interface AssistantMessageUpdate {
+  status?: 'queued' | 'typing' | 'streaming' | 'final' | 'error' | 'canceled';
+  content?: string;
+  usage?: OikosChatMessage['usage'];
+  runId?: number;
+  timestamp?: Date;
+}
+
+export interface OikosChatCallbacks {
+  onStreamingTextChange?: (text: string) => void;
+  onAssistantMessageUpdate?: (messageId: string, updates: AssistantMessageUpdate) => void;
+  onToast?: (message: string, variant: 'success' | 'error' | 'info') => void;
+}
+
 type QuotaHint = {
   kind: 'run_cap' | 'budget';
   scope?: 'user' | 'global';
@@ -155,22 +167,89 @@ function formatQuotaMessage(hint: QuotaHint | null, fallback: string): string {
 
 export class OikosChatController {
   private config: OikosChatConfig;
+  private callbacks: OikosChatCallbacks;
   private currentAbortController: AbortController | null = null;
   private currentRunId: number | null = null;
   private currentMessageId: string | null = null; // Client-generated message ID for the current run
   private lastMessageId: string | null = null; // Track messageId for cancellation
   private watchdogTimer: number | null = null;
   private isStreaming: boolean = false; // Track if we're receiving real tokens
+  private streamingText: string = '';
   private isContinuationRun: boolean = false; // Track if current run is a continuation (prevents UI reset)
   private readonly WATCHDOG_TIMEOUT_MS = 60000;
   private onAnySseEventOnce: (() => void) | null = null;
   private lastEventId: number = 0; // Track last received event ID for resumption
 
-  constructor(config: OikosChatConfig = {}) {
+  constructor(config: OikosChatConfig = {}, callbacks: OikosChatCallbacks = {}) {
     this.config = {
       maxRetries: config.maxRetries || 3,
       retryDelay: config.retryDelay || 1000,
     };
+    this.callbacks = callbacks;
+  }
+
+  private emitStreamingText(text: string): void {
+    this.streamingText = text;
+    this.callbacks.onStreamingTextChange?.(text);
+  }
+
+  private resetStreamingState(): void {
+    this.isStreaming = false;
+    this.emitStreamingText('');
+  }
+
+  private updateAssistantMessage(messageId: string | null | undefined, updates: AssistantMessageUpdate): void {
+    if (!messageId) return;
+    this.callbacks.onAssistantMessageUpdate?.(messageId, updates);
+  }
+
+  private showToast(message: string, variant: 'success' | 'error' | 'info'): void {
+    this.callbacks.onToast?.(message, variant);
+  }
+
+  private appendStreamingText(messageId: string, delta: string): void {
+    if (!this.isStreaming) {
+      this.isStreaming = true;
+      this.emitStreamingText('');
+    }
+
+    const nextText = `${this.streamingText}${delta}`;
+    this.emitStreamingText(nextText);
+    this.updateAssistantMessage(messageId, {
+      status: 'streaming',
+      content: nextText,
+      runId: this.currentRunId ?? undefined,
+    });
+  }
+
+  private async finalizeStreamingText(messageId: string, usage?: OikosChatMessage['usage']): Promise<void> {
+    const finalText = this.streamingText;
+    this.resetStreamingState();
+    this.updateAssistantMessage(messageId, {
+      status: 'final',
+      content: finalText,
+      usage,
+      runId: this.currentRunId ?? undefined,
+      timestamp: new Date(),
+    });
+  }
+
+  private async simulateStreamingText(
+    messageId: string,
+    content: string,
+    options: { usage?: OikosChatMessage['usage']; chunkSize?: number; delayMs?: number } = {},
+  ): Promise<void> {
+    this.resetStreamingState();
+    const chunkSize = options.chunkSize ?? 10;
+    const delayMs = options.delayMs ?? 10;
+
+    for (let i = 0; i < content.length; i += chunkSize) {
+      const chunk = content.substring(i, i + chunkSize);
+      this.appendStreamingText(messageId, chunk);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+
+    await this.finalizeStreamingText(messageId, options.usage);
   }
 
   /**
@@ -245,8 +324,9 @@ export class OikosChatController {
     // Cancel any previous stream
     if (this.currentAbortController) {
       if (this.lastMessageId) {
-        stateManager.updateAssistantStatusByMessageId(this.lastMessageId, 'canceled');
+        this.updateAssistantMessage(this.lastMessageId, { status: 'canceled' });
       }
+      this.resetStreamingState();
       this.currentAbortController.abort();
     }
 
@@ -295,13 +375,13 @@ export class OikosChatController {
 
       // v2.2: Don't cancel or show error - the server work continues in background
       const deferredMsg = 'Still working on this in the background. The server will continue processing...';
-
-      // Show deferred message as assistant response (not error toast)
-      conversationController.startStreamingWithMessageId(messageId, this.currentRunId ?? undefined);
-      conversationController.appendStreamingByMessageId(messageId, deferredMsg);
-      await conversationController.finalizeStreaming();
-
-      stateManager.updateAssistantStatusByMessageId(messageId, 'final', deferredMsg);
+      this.resetStreamingState();
+      this.updateAssistantMessage(messageId, {
+        status: 'final',
+        content: deferredMsg,
+        runId: this.currentRunId ?? undefined,
+        timestamp: new Date(),
+      });
 
       // Emit deferred event for UI
       if (this.currentRunId) {
@@ -544,7 +624,7 @@ export class OikosChatController {
       logger.debug(`[OikosChat] Connected to run ${payload.run_id}`);
       // Update placeholder status to typing using client-generated messageId
       if (this.currentMessageId) {
-        stateManager.updateAssistantStatusByMessageId(this.currentMessageId, 'typing');
+        this.updateAssistantMessage(this.currentMessageId, { status: 'typing' });
       }
       return;
     }
@@ -585,7 +665,10 @@ export class OikosChatController {
           logger.debug('[OikosChat] Normal run, using client messageId:', this.currentMessageId);
           // Set status to 'typing'
           if (this.currentMessageId) {
-            stateManager.updateAssistantStatusByMessageId(this.currentMessageId, 'typing', undefined, undefined, this.currentRunId ?? undefined);
+            this.updateAssistantMessage(this.currentMessageId, {
+              status: 'typing',
+              runId: this.currentRunId ?? undefined,
+            });
           }
         }
 
@@ -608,7 +691,7 @@ export class OikosChatController {
         // If this is a continuation run, do NOT reset status to 'typing'
         // because 'typing' with no content wipes the existing message bubble.
         if (!this.isContinuationRun && this.currentMessageId) {
-          stateManager.updateAssistantStatusByMessageId(this.currentMessageId, 'typing');
+          this.updateAssistantMessage(this.currentMessageId, { status: 'typing' });
         }
         if (payload.message && this.currentRunId) {
           // Emit thinking event for progress UI
@@ -630,15 +713,10 @@ export class OikosChatController {
         const messageId = payload.message_id || this.currentMessageId;
 
         if (token !== undefined && token !== null && messageId) {
-          // Start streaming if not already
           if (!this.isStreaming) {
-            this.isStreaming = true;
             logger.debug('[OikosChat] Starting streaming with messageId:', messageId);
-            conversationController.startStreamingWithMessageId(messageId, this.currentRunId ?? undefined);
           }
-
-          // Append token to the streaming message
-          conversationController.appendStreamingByMessageId(messageId, token);
+          this.appendStreamingText(messageId, token);
         }
         break;
       }
@@ -656,29 +734,12 @@ export class OikosChatController {
 
         if (result && messageId) {
           if (wasStreaming) {
-            // Real tokens were streamed - just finalize the message
             logger.debug('[OikosChat] Finalizing real-time streamed response');
-            await conversationController.finalizeStreaming();
+            await this.finalizeStreamingText(messageId, payload.usage);
           } else {
-            // Fallback: No real tokens received (LLM_TOKEN_STREAM disabled?)
-            // Stream the result in chunks for smooth UX
             logger.debug('[OikosChat] Fallback: simulating streaming for response');
-
-            conversationController.startStreamingWithMessageId(messageId, this.currentRunId ?? undefined);
-
-            const chunkSize = 10; // characters per chunk
-            for (let i = 0; i < result.length; i += chunkSize) {
-              const chunk = result.substring(i, i + chunkSize);
-              conversationController.appendStreamingByMessageId(messageId, chunk);
-              // Small delay for visual effect
-              await new Promise(resolve => setTimeout(resolve, 10));
-            }
-
-            await conversationController.finalizeStreaming();
+            await this.simulateStreamingText(messageId, result, { usage: payload.usage });
           }
-
-          // Update the message status to final
-          stateManager.updateAssistantStatusByMessageId(messageId, 'final', result, payload.usage, this.currentRunId ?? undefined);
         }
 
         // Clear oikos progress UI (include trace_id for debugging)
@@ -709,13 +770,14 @@ export class OikosChatController {
         const deferredMsg = payload.message || 'Still working on this in the background...';
         const messageId = payload.message_id || this.currentMessageId;
 
-        // Show deferred message as an assistant response (not error toast)
         if (messageId) {
-          conversationController.startStreamingWithMessageId(messageId, this.currentRunId ?? undefined);
-          conversationController.appendStreamingByMessageId(messageId, deferredMsg);
-          await conversationController.finalizeStreaming();
-          // Use 'final' status since this is a valid response
-          stateManager.updateAssistantStatusByMessageId(messageId, 'final', deferredMsg);
+          this.resetStreamingState();
+          this.updateAssistantMessage(messageId, {
+            status: 'final',
+            content: deferredMsg,
+            runId: this.currentRunId ?? undefined,
+            timestamp: new Date(),
+          });
         }
 
         if (this.currentRunId) {
@@ -741,7 +803,10 @@ export class OikosChatController {
         // Don't show the interrupt message - the commis card displays task details.
         // Final response arrives later via oikos_tokens/oikos_complete.
         if (messageId) {
-          stateManager.updateAssistantStatusByMessageId(messageId, 'typing', undefined, undefined, this.currentRunId ?? undefined);
+          this.updateAssistantMessage(messageId, {
+            status: 'typing',
+            runId: this.currentRunId ?? undefined,
+          });
         }
 
         if (this.currentRunId) {
@@ -762,8 +827,10 @@ export class OikosChatController {
 
         const messageId = payload.message_id || this.currentMessageId;
         if (messageId) {
-          // Set status back to typing; tokens will overwrite the waiting message as they stream in.
-          stateManager.updateAssistantStatusByMessageId(messageId, 'typing', undefined, undefined, this.currentRunId ?? undefined);
+          this.updateAssistantMessage(messageId, {
+            status: 'typing',
+            runId: this.currentRunId ?? undefined,
+          });
         }
 
         if (this.currentRunId) {
@@ -781,18 +848,17 @@ export class OikosChatController {
         const rawError = payload.error || payload.message || 'Unknown error';
         const quotaHint = parseQuotaHint(rawError);
         const errorMsg = formatQuotaMessage(quotaHint, rawError);
-        stateManager.showToast(errorMsg, 'error');
+        this.resetStreamingState();
+        this.showToast(errorMsg, 'error');
 
         if (this.currentMessageId && quotaHint) {
-          stateManager.updateAssistantStatusByMessageId(
-            this.currentMessageId,
-            'final',
-            `${errorMsg} Add your own provider key in Settings to bypass shared limits.`,
-            undefined,
-            this.currentRunId ?? undefined,
-          );
+          this.updateAssistantMessage(this.currentMessageId, {
+            status: 'final',
+            content: `${errorMsg} Add your own provider key in Settings to bypass shared limits.`,
+            runId: this.currentRunId ?? undefined,
+          });
         } else if (this.currentMessageId) {
-          stateManager.updateAssistantStatusByMessageId(this.currentMessageId, 'error');
+          this.updateAssistantMessage(this.currentMessageId, { status: 'error' });
         }
 
         if (this.currentRunId) {
@@ -1012,6 +1078,7 @@ export class OikosChatController {
       this.currentAbortController.abort();
       this.currentAbortController = null;
     }
+    this.resetStreamingState();
 
     if (this.currentRunId) {
       eventBus.emit('oikos:cleared', { timestamp: Date.now() });

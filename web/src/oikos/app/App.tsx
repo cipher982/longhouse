@@ -3,7 +3,8 @@
  * Main application component with realtime session integration
  *
  * This is a pure React application. useOikosApp manages initialization,
- * connection, and voice state. useTextChannel handles text messaging.
+ * connection, voice state, and the live chat controller. useTextChannel
+ * handles optimistic text-input state.
  */
 
 import { useCallback, useEffect, useState } from 'react'
@@ -59,7 +60,7 @@ export default function App({ embedded = false }: AppProps) {
   const oikosApp = useOikosApp()
 
   // Text channel handling (always active)
-  const textChannel = useTextChannel()
+  const textChannel = useTextChannel({ sendText: oikosApp.sendText })
 
   const turnBasedVoice = useTurnBasedVoice({
     onError: (error) => console.error('[App] Voice error:', error),
