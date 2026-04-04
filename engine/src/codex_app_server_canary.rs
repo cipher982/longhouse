@@ -639,7 +639,6 @@ async fn spawn_client(
     }
     if let Some(session_id) = hook_session_id {
         command.env("LONGHOUSE_MANAGED_SESSION_ID", session_id);
-        command.env("LONGHOUSE_SESSION_ID", session_id);
     }
 
     let mut child = command

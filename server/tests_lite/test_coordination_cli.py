@@ -791,7 +791,6 @@ def test_sessions_continue_command_prints_managed_local_acceptance(monkeypatch):
     monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
     monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
     monkeypatch.delenv("LONGHOUSE_MANAGED_SESSION_ID", raising=False)
-    monkeypatch.delenv("LONGHOUSE_SESSION_ID", raising=False)
 
     result = runner.invoke(
         app,

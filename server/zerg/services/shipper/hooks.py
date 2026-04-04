@@ -77,7 +77,7 @@ IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE <<< "$(
   ] | join("\\u001f")'
 )"
 
-MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-${LONGHOUSE_SESSION_ID:-}}"
+MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-}"
 [ -n "$MANAGED_SESSION_ID" ] && SESSION_ID="$MANAGED_SESSION_ID"
 [ -z "$SESSION_ID" ] && exit 0
 
@@ -219,9 +219,8 @@ IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT <<< "$(
   ] | join("\\u001f")'
 )"
 
-# Session ID resolution — managed sessions use the launcher-injected env,
-# with legacy LONGHOUSE_SESSION_ID accepted during transition.
-MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-${LONGHOUSE_SESSION_ID:-}}"
+# Session ID resolution — managed sessions use the launcher-injected env.
+MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-}"
 if [ -n "$MANAGED_SESSION_ID" ]; then
   SID="$MANAGED_SESSION_ID"
 else
