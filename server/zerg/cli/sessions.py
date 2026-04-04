@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from uuid import UUID
 
 import httpx
 import typer
 
+from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
+from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 
@@ -348,7 +349,7 @@ def continue_session(
     current_session_id: str | None = typer.Option(
         None,
         "--current-session",
-        help="Current session UUID. Defaults to LONGHOUSE_SESSION_ID when set.",
+        help="Current session UUID. Defaults to the current managed session when available.",
     ),
     url: str | None = typer.Option(
         None,
@@ -374,9 +375,9 @@ def continue_session(
     resolved_session_id = _parse_uuid_or_exit(session_id, label="session_id")
 
     headers = {"X-Agents-Token": resolved_token}
-    resolved_current_session_id = (current_session_id or os.environ.get("LONGHOUSE_SESSION_ID") or "").strip()
+    resolved_current_session_id = (current_session_id or get_managed_session_id() or "").strip()
     if resolved_current_session_id:
-        headers["X-Longhouse-Session-Id"] = _parse_uuid_or_exit(
+        headers[CURRENT_SESSION_HEADER] = _parse_uuid_or_exit(
             resolved_current_session_id,
             label="current_session_id",
         )

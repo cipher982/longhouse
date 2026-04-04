@@ -858,6 +858,7 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         command.arg("--session-source").arg(src);
     }
     command
+        .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
         .env("LONGHOUSE_SESSION_ID", &config.session_id)
         .env("LONGHOUSE_HOOK_URL", &config.api_url)
         .env("LONGHOUSE_HOOK_TOKEN", &config.api_token)

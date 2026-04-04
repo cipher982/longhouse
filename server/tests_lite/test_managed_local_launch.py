@@ -196,6 +196,7 @@ class _FakeDispatcher:
 def test_build_entry_command_claude_includes_session_id():
     cmd = _build_entry_command(provider="claude", provider_session_id="abc-123", display_name=None)
     inner = _inner_command(cmd)
+    assert "export LONGHOUSE_MANAGED_SESSION_ID=abc-123" in inner
     assert "export LONGHOUSE_SESSION_ID=abc-123" in inner
     assert _MANAGED_LOCAL_PATH_EXPORT in inner
     assert "if ! command -v claude >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner
@@ -212,6 +213,7 @@ def test_build_entry_command_claude_includes_hook_target_overrides():
         hook_token="zdt_live_token",
     )
     inner = _inner_command(cmd)
+    assert "export LONGHOUSE_MANAGED_SESSION_ID=abc-123" in inner
     assert "export LONGHOUSE_SESSION_ID=abc-123" in inner
     assert "export LONGHOUSE_HOOK_URL=https://david010.longhouse.ai" in inner
     assert "export LONGHOUSE_HOOK_TOKEN=zdt_live_token" in inner
@@ -252,6 +254,7 @@ def test_build_entry_command_codex_injects_longhouse_session_id():
     assert inner.endswith("exec codex --enable codex_hooks --no-alt-screen")
     assert "claude --session-id" not in inner
     assert "--session-id" not in inner
+    assert "export LONGHOUSE_MANAGED_SESSION_ID=" in inner
     assert "export LONGHOUSE_SESSION_ID=" in inner
     assert _MANAGED_LOCAL_PATH_EXPORT in inner
     assert "if ! command -v codex >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner

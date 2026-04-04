@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from pathlib import Path
 from uuid import UUID
@@ -11,13 +10,13 @@ from uuid import UUID
 import httpx
 import typer
 
+from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
+from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 
 app = typer.Typer(help="Session coordination commands")
-
-_CURRENT_SESSION_ENV = "LONGHOUSE_SESSION_ID"
-_CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
+_CURRENT_SESSION_HEADER = CURRENT_SESSION_HEADER
 
 
 def _load_api_credentials(*, url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:
@@ -60,7 +59,7 @@ def _resolve_repo_context(*, explicit_repo: str | None, base_url: str, token: st
         return explicit_repo.strip(), None
 
     current_session_id = ""
-    env_session_id = str(os.environ.get(_CURRENT_SESSION_ENV, "") or "").strip()
+    env_session_id = str(get_managed_session_id() or "")
     if env_session_id:
         try:
             current_session_id = str(UUID(env_session_id))
@@ -340,7 +339,7 @@ def peers(
         message = "".join(
             [
                 "Could not infer a repo. Pass --repo or run the command from a git repo ",
-                "or a session with LONGHOUSE_SESSION_ID.",
+                "or inside a Longhouse-managed session.",
             ]
         )
         typer.secho(message, fg=typer.colors.RED)
@@ -401,7 +400,7 @@ def message(
         None,
         "--from-session",
         "--from",
-        help="Sender session UUID. Defaults to LONGHOUSE_SESSION_ID when available.",
+        help="Sender session UUID. Defaults to the current managed session when available.",
     ),
     source_event_id: int | None = typer.Option(
         None,
@@ -437,9 +436,9 @@ def message(
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
     resolved_to_session_id = _parse_uuid_or_exit(to_session_id, label="to_session_id")
     resolved_from_session_id = _resolve_session_context(
-        from_session_id or os.environ.get(_CURRENT_SESSION_ENV),
+        from_session_id or get_managed_session_id(),
         label="from_session_id",
-        guidance="Provide --from-session or run inside a managed session with LONGHOUSE_SESSION_ID set.",
+        guidance="Provide --from-session or run inside a Longhouse-managed session.",
     )
 
     body: dict[str, object] = {
@@ -580,7 +579,7 @@ def check_messages(
         None,
         "--session",
         "-s",
-        help="Session UUID. Defaults to LONGHOUSE_SESSION_ID when available.",
+        help="Session UUID. Defaults to the current managed session when available.",
     ),
     direction: str = typer.Option(
         "inbound",
@@ -626,9 +625,9 @@ def check_messages(
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
     resolved_session_id = _resolve_session_context(
-        session_id or os.environ.get(_CURRENT_SESSION_ENV),
+        session_id or get_managed_session_id(),
         label="session_id",
-        guidance="Provide --session or run inside a managed session with LONGHOUSE_SESSION_ID set.",
+        guidance="Provide --session or run inside a Longhouse-managed session.",
     )
 
     try:
@@ -690,7 +689,7 @@ def ack_message(
         None,
         "--session",
         "-s",
-        help="Target session UUID. Defaults to LONGHOUSE_SESSION_ID when available.",
+        help="Target session UUID. Defaults to the current managed session when available.",
     ),
     output_json: bool = typer.Option(
         False,
@@ -720,9 +719,9 @@ def ack_message(
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
     resolved_session_id = _resolve_session_context(
-        session_id or os.environ.get(_CURRENT_SESSION_ENV),
+        session_id or get_managed_session_id(),
         label="session_id",
-        guidance="Provide --session or run inside a managed session with LONGHOUSE_SESSION_ID set.",
+        guidance="Provide --session or run inside a Longhouse-managed session.",
     )
 
     try:

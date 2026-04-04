@@ -26,7 +26,7 @@ const cards: SurfaceCard[] = [
     code: `curl -N \\
   -X POST \\
   -H "X-Agents-Token: $LONGHOUSE_TOKEN" \\
-  -H "X-Longhouse-Session-Id: $LONGHOUSE_SESSION_ID" \\
+  -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \\
   -H "Content-Type: application/json" \\
   -d '{"message":"Continue from the API route and keep going."}' \\
   "$LONGHOUSE_URL/api/agents/sessions/$SESSION_ID/continue"`,
@@ -62,8 +62,8 @@ export function MachineSurfaceSection() {
 
         <div className="landing-surface-note">
           <p>
-            One timeline, one session model. When a session starts through Longhouse or wrappers, browser,
-            CLI, and API all share the same control path.
+            One timeline, one session model. When a session starts through Longhouse, browser, CLI, and API
+            all share the same control path.
           </p>
           <p>
             The timeline still matters, but it is one surface on top of the same session model.

@@ -365,7 +365,7 @@ def test_message_command_uses_session_env_when_from_session_omitted(monkeypatch)
     monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
     monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
     monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
-    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
 
     result = runner.invoke(
         app,
@@ -478,7 +478,7 @@ def test_check_messages_command_prints_inbox(monkeypatch):
     monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
     monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
     monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
-    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "22222222-2222-2222-2222-222222222222")
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "22222222-2222-2222-2222-222222222222")
 
     result = runner.invoke(app, ["check-messages"])
 
@@ -526,7 +526,7 @@ def test_check_messages_command_json_output(monkeypatch):
     monkeypatch.setattr(coordination_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
     monkeypatch.setattr(coordination_cli, "load_token", lambda _config_dir: "zdt_test_token")
     monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
-    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "22222222-2222-2222-2222-222222222222")
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "22222222-2222-2222-2222-222222222222")
 
     result = runner.invoke(app, ["check-messages", "--json"])
 
@@ -790,6 +790,7 @@ def test_sessions_continue_command_prints_managed_local_acceptance(monkeypatch):
     monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
     monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
     monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
+    monkeypatch.delenv("LONGHOUSE_MANAGED_SESSION_ID", raising=False)
     monkeypatch.delenv("LONGHOUSE_SESSION_ID", raising=False)
 
     result = runner.invoke(
@@ -837,7 +838,7 @@ def test_sessions_continue_command_streams_cloud_output(monkeypatch):
     monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
     monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
     monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
-    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
 
     result = runner.invoke(
         app,

@@ -59,8 +59,9 @@ Use it for directed session actions such as:
 
 ### CLI and MCP source of session context
 
-- `LONGHOUSE_SESSION_ID` is the process-level source of current session identity when a CLI is already running inside a Longhouse-managed session.
-- The CLI and MCP layers translate that into `X-Longhouse-Session-Id` when they call the API.
+- Longhouse-managed launchers inject current session context into the process environment for the running session.
+- `LONGHOUSE_MANAGED_SESSION_ID` is the internal env name; `LONGHOUSE_SESSION_ID` remains a legacy fallback during transition.
+- The CLI and MCP layers translate current managed-session context into `X-Longhouse-Session-Id` when they call the API.
 
 ## Response Conventions
 
@@ -163,6 +164,7 @@ The rule going forward is simple: if a coordination or session-inspection primit
 ## Common Coordination Flows
 
 These are the shortest useful machine flows for external agents and scripts.
+When a CLI example omits `--from-session` or `--session`, it assumes the command is running inside a Longhouse-managed session.
 
 ### Read the raw wall
 
@@ -181,15 +183,14 @@ longhouse wall --repo longhouse --json
 ```bash
 curl -s \
   -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
-  -H "X-Longhouse-Session-Id: $LONGHOUSE_SESSION_ID" \
+  -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \
   -H "Content-Type: application/json" \
   -d '{"to_session_id":"'"$TARGET_SESSION_ID"'","text":"Please inspect the failing test and report back."}' \
   "$LONGHOUSE_URL/api/agents/messages"
 ```
 
 ```bash
-LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
-  longhouse message "$TARGET_SESSION_ID" "Please inspect the failing test and report back." --json
+longhouse message "$TARGET_SESSION_ID" "Please inspect the failing test and report back." --json
 ```
 
 ### Continue a session from the machine surface
@@ -197,15 +198,14 @@ LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
 ```bash
 curl -N \
   -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
-  -H "X-Longhouse-Session-Id: $LONGHOUSE_SESSION_ID" \
+  -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \
   -H "Content-Type: application/json" \
   -d '{"message":"Continue from the API route and keep going."}' \
   "$LONGHOUSE_URL/api/agents/sessions/$TARGET_SESSION_ID/continue"
 ```
 
 ```bash
-LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
-  longhouse continue "$TARGET_SESSION_ID" "Continue from the terminal command and keep going."
+longhouse continue "$TARGET_SESSION_ID" "Continue from the terminal command and keep going."
 ```
 
 ### Read and acknowledge the durable inbox
@@ -213,28 +213,26 @@ LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
 ```bash
 curl -s \
   -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
-  -H "X-Longhouse-Session-Id: $LONGHOUSE_SESSION_ID" \
+  -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \
   "$LONGHOUSE_URL/api/agents/messages?direction=inbound&unacknowledged_only=true&limit=20"
 ```
 
 ```bash
-LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
-  longhouse check-messages --json
+longhouse check-messages --json
 ```
 
 ```bash
 curl -s \
   -X POST \
   -H "X-Agents-Token: $LONGHOUSE_TOKEN" \
-  -H "X-Longhouse-Session-Id: $LONGHOUSE_SESSION_ID" \
+  -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \
   -H "Content-Type: application/json" \
   -d '{}' \
   "$LONGHOUSE_URL/api/agents/messages/$MESSAGE_ID/ack"
 ```
 
 ```bash
-LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
-  longhouse ack-message "$MESSAGE_ID" --json
+longhouse ack-message "$MESSAGE_ID" --json
 ```
 
 ## Non-Goals
