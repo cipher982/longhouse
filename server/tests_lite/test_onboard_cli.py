@@ -42,7 +42,6 @@ class _DemoClient:
 def test_onboard_quick_imports_existing_sessions_first(monkeypatch, tmp_path):
     runner = CliRunner()
     subprocess_calls: list[list[str]] = []
-    wrapper_calls: list[list[str] | None] = []
 
     monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
@@ -53,7 +52,6 @@ def test_onboard_quick_imports_existing_sessions_first(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
     monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
-    monkeypatch.setattr(onboard_cli, "install_wrappers", lambda providers=None: wrapper_calls.append(providers) or {})
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
 
     def _fake_run(args: list[str], **kwargs):
@@ -72,9 +70,8 @@ def test_onboard_quick_imports_existing_sessions_first(monkeypatch, tmp_path):
     assert "Skipping demo data (real CLI import path available)" in result.output
     assert "Open Longhouse and look for imported sessions" in result.output
     assert "longhouse claude" in result.output
-    assert "longhouse wrap --install" in result.output
-    assert "Skipping wrapper mode in quick/headless defaults." in result.output
-    assert wrapper_calls == []
+    assert "longhouse wrap --install" not in result.output
+    assert "wrapper mode" not in result.output
     assert ["longhouse", "connect", "--install", "--url", "http://127.0.0.1:8080"] in subprocess_calls
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
 
@@ -104,9 +101,8 @@ def test_onboard_quick_without_cli_seeds_demo_sessions(monkeypatch, tmp_path):
     assert demo_client.calls == ["http://127.0.0.1:8080/api/agents/demo"]
 
 
-def test_onboard_interactive_can_install_wrapper_mode(monkeypatch, tmp_path):
+def test_onboard_interactive_stays_focused_on_explicit_launch_paths(monkeypatch, tmp_path):
     runner = CliRunner()
-    wrapper_calls: list[list[str] | None] = []
 
     monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr(onboard_cli, "_is_server_running", lambda: (False, None))
@@ -115,21 +111,16 @@ def test_onboard_interactive_can_install_wrapper_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
     monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
-    monkeypatch.setattr(
-        onboard_cli,
-        "install_wrappers",
-        lambda providers=None: wrapper_calls.append(providers) or {"claude": "installed in ~/.zshrc"},
-    )
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
 
     result = runner.invoke(
         app,
         ["onboard", "--no-server", "--no-shipper", "--no-demo"],
-        input="1\ny\n",
+        input="1\n",
     )
 
     assert result.exit_code == 0, result.output
-    assert "Step 7: Optional default launchers" in result.output
-    assert "claude: installed in ~/.zshrc" in result.output
-    assert "Open a new terminal (or source your shell profile) for wrappers to take effect." in result.output
-    assert wrapper_calls == [["claude"]]
+    assert "Step 7: PATH verification" in result.output
+    assert "longhouse claude" in result.output
+    assert "longhouse wrap --install" not in result.output
+    assert "wrapper mode" not in result.output

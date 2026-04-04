@@ -369,7 +369,7 @@ Hosted should be explained as "we run the box," not as an entirely different ont
 
 ### Activation / polish, not hero copy
 
-- opt-in default wrappers for `claude` / `codex`
+- launch ergonomics on top of explicit `longhouse claude` / `longhouse codex` entrypoints
 
 ## Product Boundaries
 
@@ -445,7 +445,7 @@ That beats both dashboard theater and remote-shell theater.
 1. Keep the machine surface and session-kernel work as the canonical seam.
 2. Treat imported/shipped sessions as the first hit of value, not as a separate product class.
 3. Reframe `longhouse claude` / `longhouse codex` as "start through Longhouse" rather than implying a different species of session.
-4. Keep wrapper mode as an ergonomic accelerator, not the definition of the product.
+4. Keep explicit Longhouse start commands as the supported control-ready path.
 5. Keep hosted as a convenience layer that can arrive later without changing the product truth.
 6. Keep Oikos out of the hero, but do show browser proof that a session can be messaged or continued after launch.
 
