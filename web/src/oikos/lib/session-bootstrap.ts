@@ -20,14 +20,12 @@ import type { VoiceAgentConfig } from '../contexts/types'
 export interface BootstrapResult {
   session: any // RealtimeSession
   agent: any // RealtimeAgent
-  conversationId: string | null
   history: ConversationTurn[]
   hydratedItemCount: number
 }
 
 export interface BootstrapOptions {
   context: VoiceAgentConfig
-  conversationId?: string | null
   history: ConversationTurn[]
   mediaStream?: MediaStream
   audioElement?: HTMLAudioElement
@@ -41,7 +39,7 @@ export interface BootstrapOptions {
  * Returns the same history data for both UI and Realtime hydration.
  *
  * GUARANTEES:
- * 1. History is loaded exactly once from IndexedDB
+ * 1. History is loaded exactly once from the server
  * 2. UI receives full history for display
  * 3. Realtime receives trimmed/mapped subset from same data
  * 4. No divergence possible between UI and model context
@@ -49,7 +47,6 @@ export interface BootstrapOptions {
 export async function bootstrapSession(options: BootstrapOptions): Promise<BootstrapResult> {
   const { realtimeHistoryTurns = 8 } = options
 
-  const conversationId = options.conversationId ?? null
   const fullHistory = Array.isArray(options.history) ? options.history : []
   logger.info(`📚 Bootstrap: using ${fullHistory.length} turns from server history`)
 
@@ -72,7 +69,6 @@ export async function bootstrapSession(options: BootstrapOptions): Promise<Boots
   return {
     session,
     agent,
-    conversationId,
     history: fullHistory, // Full history for UI
     hydratedItemCount: realtimeItems.length,
   }

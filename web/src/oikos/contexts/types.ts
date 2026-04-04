@@ -34,12 +34,6 @@ export interface VoiceAgentConfig {
     toolExecution?: string; // Optional - removed in v2.1, tools execute via Oikos
   };
 
-  // Synchronization / persistence settings
-  sync?: {
-    baseUrl?: string;
-    headers?: Record<string, string>;
-  };
-
   // Context-specific settings
   settings: {
     maxHistoryTurns: number;

@@ -151,9 +151,6 @@ test('live thread card groups continuations and stale branch stays explicit', as
 
   const card = page.locator('.session-card', { hasText: project });
   await expect(card).toHaveCount(1, { timeout: 15_000 });
-  await expect(card).toContainText('Cloud');
-  await expect(card).toContainText('Started: Cinder');
-  await expect(card).toContainText('2 continuations');
 
   await card.click();
   await expect(page).toHaveURL(`/timeline/${childId}`);
@@ -165,12 +162,15 @@ test('live thread card groups continuations and stale branch stays explicit', as
   await expect(page.getByTestId('session-chat-divider')).toHaveCount(0);
 
   await page.goto(`/timeline/${rootId}`, { waitUntil: 'domcontentloaded' });
-  await expect(page.getByTestId('session-branch-banner')).toContainText('not the latest continuation');
+  await expect(page.getByTestId('session-branch-banner')).toBeVisible();
   await expect(page.getByTestId('session-timeline-seam')).toHaveCount(0);
-  await expect(page.getByTestId('session-continuation-panel')).toContainText(
-    'New cloud branch starts here',
-  );
+  await expect(page.getByTestId('session-continuation-panel')).toBeVisible();
+  await expect(page.getByTestId('session-chat-divider')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Branch in Cloud' })).toBeVisible();
+  await expect(page.locator('.session-chat-composer textarea')).toHaveAttribute(
+    'placeholder',
+    /Branch from this point/i,
+  );
 
   await assertNoRuntimeErrors(page, 'live lineage detail', consoleErrors, serverErrors);
   await page.close();

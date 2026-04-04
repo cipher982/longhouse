@@ -3,7 +3,6 @@
  */
 
 import type { RealtimeSession } from '@openai/agents/realtime'
-import type { SessionManager } from '../../core'
 
 /**
  * Voice mode
@@ -94,7 +93,6 @@ export interface AppState {
   // Core OpenAI SDK objects
   agent: unknown | null
   session: RealtimeSession | null
-  sessionManager: SessionManager | null
 
   messages: ChatMessage[]
   streamingContent: string
@@ -126,7 +124,6 @@ export interface AppState {
 export type AppAction =
   | { type: 'SET_SESSION'; session: RealtimeSession | null }
   | { type: 'SET_AGENT'; agent: unknown | null }
-  | { type: 'SET_SESSION_MANAGER'; sessionManager: SessionManager | null }
   | { type: 'SET_MESSAGES'; messages: ChatMessage[] }
   | { type: 'ADD_MESSAGE'; message: ChatMessage }
   | { type: 'UPDATE_MESSAGE'; itemId: string; content: string }

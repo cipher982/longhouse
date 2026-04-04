@@ -121,11 +121,6 @@ export const personalConfig: VoiceAgentConfig = {
     tokenMinting: '/session',
     // toolExecution removed in v2.1 - tools execute via Oikos
   },
-
-  sync: {
-    baseUrl: import.meta.env?.VITE_SYNC_BASE_URL || ''
-  },
-
   settings: {
     maxHistoryTurns: 50,
     realtimeHistoryTurns: 8, // Turns to inject into OpenAI Realtime session
