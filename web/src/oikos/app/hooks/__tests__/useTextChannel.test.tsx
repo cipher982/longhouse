@@ -87,4 +87,19 @@ describe('useTextChannel', () => {
 
     expect(result.current.isSending).toBe(false)
   })
+
+  it('does not create optimistic bubbles before Oikos is ready', async () => {
+    const sendText = vi.fn().mockResolvedValue(undefined)
+
+    const { result } = renderHook(() => useTextChannel({ sendText, ready: false }), { wrapper })
+
+    await act(async () => {
+      await result.current.sendMessage('hello')
+    })
+
+    expect(sendText).not.toHaveBeenCalled()
+    expect(result.current.messages).toHaveLength(0)
+    expect(result.current.isSending).toBe(false)
+    expect(result.current.lastError?.message).toBe('Oikos chat is still initializing')
+  })
 })

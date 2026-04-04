@@ -13,9 +13,10 @@ import { eventBus } from '../../lib/event-bus'
 
 interface UseTextChannelOptions {
   sendText: (text: string, messageId: string) => Promise<void>
+  ready?: boolean
 }
 
-export function useTextChannel({ sendText }: UseTextChannelOptions) {
+export function useTextChannel({ sendText, ready = true }: UseTextChannelOptions) {
   const state = useAppState()
   const dispatch = useAppDispatch()
   const [isSending, setIsSending] = useState(false)
@@ -46,6 +47,11 @@ export function useTextChannel({ sendText }: UseTextChannelOptions) {
   const sendMessage = useCallback(
     async (text: string) => {
       if (!text.trim()) {
+        return
+      }
+
+      if (!ready) {
+        setLastError(new Error('Oikos chat is still initializing'))
         return
       }
 
@@ -111,7 +117,7 @@ export function useTextChannel({ sendText }: UseTextChannelOptions) {
         }
       }
     },
-    [dispatch, sendText]
+    [dispatch, ready, sendText]
   )
 
   // Clear all messages

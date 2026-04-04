@@ -21,7 +21,7 @@
  * Page-specific behavior:
  * - Automations: Both set when !isLoading
  * - Canvas: Both set when isWorkflowFetched
- * - Chat: data-ready on mount, data-screenshot-ready when messages.length > 0
+ * - Chat: data-ready/chatReady when the Oikos controller is initialized, data-screenshot-ready when messages.length > 0
  *
  * == RECOMMENDED PATTERNS ==
  *
