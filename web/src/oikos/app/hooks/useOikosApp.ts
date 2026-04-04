@@ -586,7 +586,7 @@ export function useOikosApp() {
         realtimeHistoryTurns: state.currentContext.settings?.realtimeHistoryTurns ?? 8,
       })
 
-      const { session, conversationId, hydratedItemCount } = bootstrapResult
+      const { session, hydratedItemCount } = bootstrapResult
       lastBootstrapResultRef.current = bootstrapResult
 
       logger.info(`[useOikosApp] Session bootstrapped, ${hydratedItemCount} items hydrated`)
@@ -602,10 +602,6 @@ export function useOikosApp() {
       updateState({ connecting: false, connected: true })
       setVoiceStatus('ready')
       dispatch({ type: 'SET_CONNECTED', connected: true })
-
-      if (conversationId) {
-        dispatch({ type: 'SET_CONVERSATION_ID', id: conversationId })
-      }
 
       // Set voice mode for PTT
       voiceController.transitionToVoice({ handsFree: false })
