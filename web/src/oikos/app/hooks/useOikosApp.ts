@@ -715,14 +715,15 @@ export function useOikosApp() {
       timestamp: Date.now(),
     })
 
-    // Get preferences from bootstrap
-    const prefs = state.bootstrap?.preferences || { ...DEFAULT_CHAT_PREFERENCES }
-    const model = options?.model || prefs.chat_model
-    const reasoning_effort = options?.reasoning_effort || prefs.reasoning_effort
+    const model = options?.model || appState.preferences.chat_model || DEFAULT_CHAT_PREFERENCES.chat_model
+    const reasoning_effort =
+      options?.reasoning_effort
+      || appState.preferences.reasoning_effort
+      || DEFAULT_CHAT_PREFERENCES.reasoning_effort
 
     logger.info(`[useOikosApp] Sending text, model: ${model}, messageId: ${msgId}`)
     await oikosChatRef.current.sendMessage(text, msgId, { model, reasoning_effort })
-  }, [state.bootstrap])
+  }, [appState.preferences.chat_model, appState.preferences.reasoning_effort])
 
   const clearHistory = useCallback(async () => {
     if (!oikosChatRef.current) return

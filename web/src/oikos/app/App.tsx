@@ -60,7 +60,7 @@ export default function App({ embedded = false }: AppProps) {
   const oikosApp = useOikosApp()
 
   // Text channel handling (always active)
-  const textChannel = useTextChannel({ sendText: oikosApp.sendText })
+  const textChannel = useTextChannel({ sendText: oikosApp.sendText, ready: oikosApp.initialized })
 
   const turnBasedVoice = useTurnBasedVoice({
     onError: (error) => console.error('[App] Voice error:', error),
@@ -117,7 +117,7 @@ export default function App({ embedded = false }: AppProps) {
   // Chat uses window.__oikos.ready.chatReady as the authoritative interactive signal.
   // The shared readiness hook mirrors the browser-facing flags.
   useReadinessFlag({
-    ready: true,
+    ready: oikosApp.initialized,
     screenshotReady: state.messages.length > 0,
   })
 
@@ -127,11 +127,13 @@ export default function App({ embedded = false }: AppProps) {
     const w = window as OikosWindow
     w.__oikos = w.__oikos || {}
     w.__oikos.ready = w.__oikos.ready || {}
-    w.__oikos.ready.chatReady = true
-    w.__oikos.ready.chatReadyTimestamp = Date.now()
+    w.__oikos.ready.chatReady = oikosApp.initialized
+    if (oikosApp.initialized) {
+      w.__oikos.ready.chatReadyTimestamp = Date.now()
+    }
 
     // Emit event for backwards compatibility (DEV mode only)
-    if (config.isDevelopment) {
+    if (config.isDevelopment && oikosApp.initialized) {
       eventBus.emit('test:chat_ready', { timestamp: Date.now() })
     }
 
@@ -141,7 +143,7 @@ export default function App({ embedded = false }: AppProps) {
         w2.__oikos.ready.chatReady = false
       }
     }
-  }, []) // Empty deps = set once on mount, clear on unmount
+  }, [oikosApp.initialized])
 
   return (
     <>
@@ -197,8 +199,8 @@ export default function App({ embedded = false }: AppProps) {
         <div className="bottom-controls">
           <TextInput
             onSend={textChannel.sendMessage}
-            disabled={textChannel.isSending}
-            inputDisabled={quotaUi.blocked}
+            disabled={textChannel.isSending || !oikosApp.initialized}
+            inputDisabled={quotaUi.blocked || !oikosApp.initialized}
             blockedReason={quotaUi.placeholderOverride}
             helperText={quotaUi.helperText}
             micStatus={micStatus}
