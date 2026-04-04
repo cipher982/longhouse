@@ -13,7 +13,8 @@
     "@axe-core/playwright": "^4.10.2",
     "@playwright/test": "^1.52.0",
     "pixelmatch": "^7.1.0",
-    "pngjs": "^7.0.0"
+    "pngjs": "^7.0.0",
+    "ws": "^8.20.0"
   },
   "dependencies": {
     "@google/genai": "^1.41.0",
