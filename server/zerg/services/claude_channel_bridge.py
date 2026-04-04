@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
+from zerg.services.managed_session_env import build_managed_session_env_exports
 
 CLAUDE_CHANNEL_SERVER_NAME = "longhouse-channel"
 
@@ -193,7 +194,7 @@ def build_claude_channel_exec_command(
     inner = [
         build_managed_local_shell_prelude(require_tmux=False, required_commands=(claude_command,)),
         f"cd {_quote(working_dir)}",
-        f"export LONGHOUSE_SESSION_ID={_quote(longhouse_sid)}",
+        *build_managed_session_env_exports(longhouse_sid),
         f"export LONGHOUSE_CHANNEL_SESSION_ID={_quote(longhouse_sid)}",
         f"export LONGHOUSE_PROVIDER_SESSION_ID={_quote(provider_sid)}",
     ]

@@ -51,7 +51,7 @@ async def test_query_insights_uses_machine_agents_route():
 
 
 @pytest.mark.asyncio
-async def test_message_session_uses_longhouse_session_env(monkeypatch):
+async def test_message_session_uses_current_managed_session_env(monkeypatch):
     server = create_server("http://example.com", "test-token")
     tool = server._tool_manager._tools["message_session"]
     response = type(
@@ -63,7 +63,7 @@ async def test_message_session_uses_longhouse_session_env(monkeypatch):
         },
     )()
 
-    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
     with patch(
         "zerg.mcp_server.server.LonghouseAPIClient.post",
         new=AsyncMock(return_value=response),
@@ -126,7 +126,7 @@ async def test_peers_infers_repo_from_current_session(monkeypatch):
         },
     )()
 
-    monkeypatch.setenv("LONGHOUSE_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
     with patch(
         "zerg.mcp_server.server.LonghouseAPIClient.get",
         new=AsyncMock(side_effect=[current_resp, wall_resp]),

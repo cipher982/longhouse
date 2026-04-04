@@ -77,12 +77,12 @@ IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE <<< "$(
   ] | join("\\u001f")'
 )"
 
-[ -n "$LONGHOUSE_SESSION_ID" ] && SESSION_ID="$LONGHOUSE_SESSION_ID"
+MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-${LONGHOUSE_SESSION_ID:-}}"
+[ -n "$MANAGED_SESSION_ID" ] && SESSION_ID="$MANAGED_SESSION_ID"
 [ -z "$SESSION_ID" ] && exit 0
 
 TARGET_URL="${LONGHOUSE_HOOK_URL:-}"
 TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
-MANAGED_SESSION_ID="${LONGHOUSE_SESSION_ID:-}"
 FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"
 HINDSIGHT_ROOT="$HOME/.claude/hindsight"
 if [[ "$FORCE_SIDECHAIN" != "1" ]] && [[ -n "$CWD" ]]; then
@@ -219,12 +219,11 @@ IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT <<< "$(
   ] | join("\\u001f")'
 )"
 
-# Session ID resolution — two distinct paths, no fallbacks.
-# LONGHOUSE_SESSION_ID is injected by the managed-local launcher into the
-# tmux environment. When present, Longhouse owns the session identity.
-# When absent, this is an unmanaged Codex session and Codex owns the ID.
-if [ -n "$LONGHOUSE_SESSION_ID" ]; then
-  SID="$LONGHOUSE_SESSION_ID"
+# Session ID resolution — managed sessions use the launcher-injected env,
+# with legacy LONGHOUSE_SESSION_ID accepted during transition.
+MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-${LONGHOUSE_SESSION_ID:-}}"
+if [ -n "$MANAGED_SESSION_ID" ]; then
+  SID="$MANAGED_SESSION_ID"
 else
   [ -z "$CODEX_SESSION_ID" ] && exit 0
   SID="$CODEX_SESSION_ID"
@@ -269,8 +268,8 @@ fi
 
 # Seed session binding so the daemon ships with the correct managed session ID.
 ENGINE="__ENGINE_PATH__"
-if [[ -n "$LONGHOUSE_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
-  "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$LONGHOUSE_SESSION_ID" --provider codex >/dev/null 2>&1 || true
+if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
+  "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" --provider codex >/dev/null 2>&1 || true
 fi
 
 exit 0

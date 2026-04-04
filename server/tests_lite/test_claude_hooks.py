@@ -24,6 +24,7 @@ def test_claude_hook_script_supports_direct_hook_target_overrides():
     assert 'TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"' in HOOK_SCRIPT
     assert "X-Agents-Token: $TARGET_TOKEN" in HOOK_SCRIPT
     assert "${TARGET_URL%/}/api/agents/presence" in HOOK_SCRIPT
+    assert "LONGHOUSE_MANAGED_SESSION_ID" in HOOK_SCRIPT
     assert "LONGHOUSE_SESSION_ID" in HOOK_SCRIPT
 
 

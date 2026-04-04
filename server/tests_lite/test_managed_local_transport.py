@@ -66,6 +66,7 @@ def test_build_managed_local_attach_command_uses_native_claude_resume_for_channe
     command = build_managed_local_attach_command(session=session)
     assert command is not None
     inner = _wrapped_inner(command)
+    assert "export LONGHOUSE_MANAGED_SESSION_ID=session-123" in inner
     assert "export LONGHOUSE_SESSION_ID=session-123" in inner
     assert "export LONGHOUSE_CHANNEL_SESSION_ID=session-123" in inner
     assert "export LONGHOUSE_PROVIDER_SESSION_ID=provider-123" in inner

@@ -8,20 +8,19 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 
 from mcp.server.fastmcp import FastMCP
 
 from zerg.mcp_server.api_client import LonghouseAPIClient
+from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
+from zerg.services.managed_session_env import get_managed_session_id
 
 # UUID v4 pattern for input validation
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
 
 logger = logging.getLogger(__name__)
-
-_CURRENT_SESSION_ENV = "LONGHOUSE_SESSION_ID"
-_CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
+_CURRENT_SESSION_HEADER = CURRENT_SESSION_HEADER
 
 
 def _truncate_event(event: dict, max_chars: int, include_tool_output: bool) -> dict:
@@ -581,9 +580,9 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         """List nearby same-repo peer sessions.
 
         When repo is omitted, the tool tries to infer it from the current
-        LONGHOUSE_SESSION_ID environment variable.
+        managed session context when available.
         """
-        current_session_id = os.getenv(_CURRENT_SESSION_ENV)
+        current_session_id = get_managed_session_id()
         resolved_repo = repo
 
         if resolved_repo is None and current_session_id and _UUID_RE.match(current_session_id):
@@ -600,7 +599,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         if not resolved_repo:
             return json.dumps(
                 {
-                    "error": "peers requires repo or LONGHOUSE_SESSION_ID for a session with git_repo",
+                    "error": "peers requires repo or a current managed session with git_repo",
                 }
             )
 
@@ -643,14 +642,14 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
     ) -> str:
         """Send a directed message to another session.
 
-        The sender session id is inferred from LONGHOUSE_SESSION_ID.
+        The sender session id is inferred from the current managed session.
         """
         if not _UUID_RE.match(to_session_id):
             return json.dumps({"error": "Invalid to_session_id format — expected UUID"})
 
-        from_session_id = os.getenv(_CURRENT_SESSION_ENV)
+        from_session_id = get_managed_session_id()
         if not from_session_id or not _UUID_RE.match(from_session_id):
-            return json.dumps({"error": "message_session requires LONGHOUSE_SESSION_ID in the current session environment"})
+            return json.dumps({"error": "message_session requires a current managed session context"})
 
         body = {
             "to_session_id": to_session_id,

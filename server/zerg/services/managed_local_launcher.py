@@ -30,6 +30,7 @@ from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
 from zerg.services.managed_local_tmux import normalize_tmux_session_name
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.managed_local_transport import build_managed_local_launch_transport_plan
+from zerg.services.managed_session_env import build_managed_session_env_exports
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import ManagedSessionTransport
@@ -186,7 +187,7 @@ def _build_entry_command(
     hook_token: str | None = None,
     claude_launch_env: dict[str, str] | None = None,
 ) -> str:
-    env_exports = [f"export LONGHOUSE_SESSION_ID={shlex.quote(provider_session_id)}"]
+    env_exports = build_managed_session_env_exports(provider_session_id)
     if hook_url and hook_url.strip():
         env_exports.append(f"export LONGHOUSE_HOOK_URL={shlex.quote(hook_url.strip())}")
     if hook_token and hook_token.strip():
@@ -228,7 +229,7 @@ def _build_codex_entry_command(
     drive it through the codex bridge once the managed session is up.
     """
     del managed_session_name
-    exports = list(env_exports or [f"export LONGHOUSE_SESSION_ID={shlex.quote(managed_session_id)}"])
+    exports = list(env_exports or build_managed_session_env_exports(managed_session_id))
     inner = "; ".join(
         [
             *exports,
