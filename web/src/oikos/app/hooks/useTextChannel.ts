@@ -1,41 +1,26 @@
 /**
  * useTextChannel hook - Text message sending
  *
- * This hook manages sending text messages to the assistant.
- * Uses OikosChatController for backend communication.
+ * This hook manages optimistic text-message UI state.
+ * The actual chat controller lives in useOikosApp.
  */
 
 import { useCallback, useState, useRef, useEffect } from 'react'
 import { useAppState, useAppDispatch, type ChatMessage } from '../context'
-import { OikosChatController } from '../../lib/oikos-chat-controller'
 import { uuid } from '../../lib/uuid'
 import { logger } from '../../core'
 import { eventBus } from '../../lib/event-bus'
-import { timelineLogger } from '../../lib/timeline-logger'
 
-export function useTextChannel() {
+interface UseTextChannelOptions {
+  sendText: (text: string, messageId: string) => Promise<void>
+}
+
+export function useTextChannel({ sendText }: UseTextChannelOptions) {
   const state = useAppState()
   const dispatch = useAppDispatch()
   const [isSending, setIsSending] = useState(false)
   const [lastError, setLastError] = useState<Error | null>(null)
   const sendCounterRef = useRef(0)
-
-  // Initialize oikos chat controller
-  const oikosChatRef = useRef<OikosChatController | null>(null)
-  const initRef = useRef(false)
-
-  useEffect(() => {
-    if (initRef.current) return
-    initRef.current = true
-
-    const controller = new OikosChatController({ maxRetries: 3 })
-    controller.initialize().then(() => {
-      oikosChatRef.current = controller
-      logger.info('[useTextChannel] OikosChatController initialized')
-    }).catch((error) => {
-      logger.error('[useTextChannel] Failed to initialize OikosChatController:', error)
-    })
-  }, [])
 
   useEffect(() => {
     const clearSending = () => setIsSending(false)
@@ -50,7 +35,7 @@ export function useTextChannel() {
     }
   }, [])
 
-  const { messages, streamingContent, isConnected, preferences } = state
+  const { messages, streamingContent, isConnected } = state
 
   // Clear error state
   const clearError = useCallback(() => {
@@ -61,12 +46,6 @@ export function useTextChannel() {
   const sendMessage = useCallback(
     async (text: string) => {
       if (!text.trim()) {
-        return
-      }
-
-      if (!oikosChatRef.current) {
-        const err = new Error('Chat not initialized')
-        setLastError(err)
         return
       }
 
@@ -105,24 +84,11 @@ export function useTextChannel() {
       try {
         logger.info(`[useTextChannel] Sending message, messageId: ${messageId}`)
 
-        // Set message ID for timeline tracking
-        timelineLogger.setMessageId(messageId)
-
-        // Emit text_channel:sent event for timeline tracking
-        eventBus.emit('text_channel:sent', {
-          text: trimmedText,
-          timestamp: Date.now(),
-        })
-
         // Yield to browser to ensure placeholder renders before SSE events arrive
         // This prevents React batching from skipping the typing indicator
         await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))
 
-        // Send to backend via OikosChatController
-        await oikosChatRef.current.sendMessage(trimmedText, messageId, {
-          model: preferences.chat_model,
-          reasoning_effort: preferences.reasoning_effort,
-        })
+        await sendText(trimmedText, messageId)
       } catch (error) {
         logger.error('[useTextChannel] Error sending message:', error)
 
@@ -145,7 +111,7 @@ export function useTextChannel() {
         }
       }
     },
-    [dispatch, preferences]
+    [dispatch, sendText]
   )
 
   // Clear all messages

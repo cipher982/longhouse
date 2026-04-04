@@ -5,13 +5,13 @@
  * - Initialization (OikosClient, bootstrap, context, history)
  * - Voice connection (mic, session, voice controller)
  * - Text messaging (via OikosChatController)
- * - State synchronization (directly to React context, no stateManager bridge)
+ * - State synchronization (directly to React context)
  *
  * Replaces the old architecture:
- *   Controllers → stateManager → useRealtimeSession → dispatch → context
+ *   Controllers → global bridge → dispatch → context
  *
  * New architecture:
- *   Controllers → useOikosApp → dispatch → context
+ *   Controllers → useOikosApp callbacks → dispatch → context
  */
 
 import { useEffect, useCallback, useRef, useState } from 'react'
@@ -24,7 +24,7 @@ import type { ConversationTurn } from '../../data'
 import { voiceController, type VoiceEvent } from '../../lib/voice-controller'
 import { audioController } from '../../lib/audio-controller'
 import { feedbackSystem } from '../../lib/feedback-system'
-import { OikosChatController } from '../../lib/oikos-chat-controller'
+import { OikosChatController, type AssistantMessageUpdate } from '../../lib/oikos-chat-controller'
 import type { BootstrapResult } from '../../lib/session-bootstrap'
 import { contextLoader } from '../../contexts/context-loader'
 import { commisProgressStore } from '../../lib/commis-progress-store'
@@ -32,9 +32,7 @@ import { oikosToolStore, type OikosToolCall } from '../../lib/oikos-tool-store'
 import type { VoiceAgentConfig } from '../../contexts/types'
 import { getZergApiUrl, CONFIG, toAbsoluteUrl } from '../../lib/config'
 import { uuid } from '../../lib/uuid'
-// Keep stateManager for streaming events from oikos-chat-controller
-// TODO: Refactor oikos-chat-controller to use callbacks instead
-import { stateManager, type StateChangeEvent, type BootstrapData } from '../../lib/state-manager'
+import { bootstrapStore, type BootstrapData } from '../../lib/bootstrap-store'
 import { eventBus } from '../../lib/event-bus'
 import { timelineLogger } from '../../lib/timeline-logger'
 import { fetchWithRefresh } from '../../../lib/auth-refresh'
@@ -102,6 +100,22 @@ export function useOikosApp() {
     dispatch({ type: 'SET_VOICE_STATUS', status })
   }, [dispatch, updateState])
 
+  const handleStreamingTextChange = useCallback((text: string) => {
+    dispatch({ type: 'SET_STREAMING_CONTENT', content: text })
+  }, [dispatch])
+
+  const handleAssistantMessageUpdate = useCallback((messageId: string, updates: AssistantMessageUpdate) => {
+    dispatch({
+      type: 'UPDATE_MESSAGE_BY_MESSAGE_ID',
+      messageId,
+      updates,
+    })
+  }, [dispatch])
+
+  const handleToast = useCallback((message: string, variant: 'success' | 'error' | 'info') => {
+    logger.info(`[Toast] ${variant}: ${message}`)
+  }, [])
+
   // ============= Initialization =============
 
   const initializeOikosClient = useCallback(async () => {
@@ -139,7 +153,7 @@ export function useOikosApp() {
 
       const bootstrap = await response.json() as BootstrapData
       updateState({ bootstrap })
-      stateManager.setBootstrap(bootstrap)
+      bootstrapStore.setBootstrap(bootstrap)
 
       // Update React context with bootstrap data
       if (bootstrap.available_models) {
@@ -153,7 +167,7 @@ export function useOikosApp() {
       return bootstrap
     } catch (error) {
       logger.error('[useOikosApp] Failed to fetch bootstrap:', error)
-      stateManager.setBootstrap(null)
+      bootstrapStore.setBootstrap(null)
       return null
     }
   }, [dispatch, updateState])
@@ -378,7 +392,14 @@ export function useOikosApp() {
       await initializeContext()
 
       // 4. Initialize OikosChatController
-      oikosChatRef.current = new OikosChatController({ maxRetries: 3 })
+      oikosChatRef.current = new OikosChatController(
+        { maxRetries: 3 },
+        {
+          onStreamingTextChange: handleStreamingTextChange,
+          onAssistantMessageUpdate: handleAssistantMessageUpdate,
+          onToast: handleToast,
+        },
+      )
       await oikosChatRef.current.initialize()
 
       // 5. Check for active run and reconnect if found.
@@ -409,7 +430,19 @@ export function useOikosApp() {
       initStartedRef.current = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- setupVoiceListeners defined below, circular dep intentional
-  }, [state.initialized, initializeOikosClient, fetchBootstrap, initializeContext, loadOikosHistory, checkForActiveRun, reconnectToRun, updateState])
+  }, [
+    state.initialized,
+    initializeOikosClient,
+    fetchBootstrap,
+    initializeContext,
+    loadOikosHistory,
+    checkForActiveRun,
+    reconnectToRun,
+    updateState,
+    handleStreamingTextChange,
+    handleAssistantMessageUpdate,
+    handleToast,
+  ])
 
   // Set up voice controller event listeners
   const setupVoiceListeners = useCallback(() => {
@@ -455,55 +488,6 @@ export function useOikosApp() {
     return () => voiceController.removeListener(handleVoiceEvent)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handleUserTranscript defined below, circular dep intentional
   }, [dispatch, setVoiceStatus])
-
-  // Set up stateManager listeners for streaming events from oikos-chat-controller
-  const setupStreamingListeners = useCallback(() => {
-    const handleStateChange = (event: StateChangeEvent) => {
-      switch (event.type) {
-        case 'STREAMING_TEXT_CHANGED':
-          dispatch({ type: 'SET_STREAMING_CONTENT', content: event.text })
-          break
-
-        case 'MESSAGE_FINALIZED':
-          if (event.message.messageId) {
-            // Update by messageId or create if doesn't exist
-            dispatch({
-              type: 'UPDATE_MESSAGE_BY_MESSAGE_ID',
-              messageId: event.message.messageId,
-              updates: {
-                content: event.message.content,
-                status: 'final',
-                timestamp: event.message.timestamp,
-              },
-            })
-          } else {
-            dispatch({ type: 'ADD_MESSAGE', message: event.message as ChatMessage })
-          }
-          break
-
-        case 'ASSISTANT_STATUS_CHANGED_BY_MESSAGE_ID':
-          dispatch({
-            type: 'UPDATE_MESSAGE_BY_MESSAGE_ID',
-            messageId: event.messageId,
-            updates: {
-              status: event.status as any,
-              ...(event.content !== undefined ? { content: event.content } : {}),
-              ...(event.usage !== undefined ? { usage: event.usage } : {}),
-              ...(event.runId !== undefined ? { runId: event.runId } : {}),
-            },
-          })
-          break
-
-        case 'TOAST':
-          // Could dispatch to a toast system in React context
-          logger.info(`[Toast] ${event.variant}: ${event.message}`)
-          break
-      }
-    }
-
-    stateManager.addListener(handleStateChange)
-    return () => stateManager.removeListener(handleStateChange)
-  }, [dispatch])
 
   // Handle user voice transcript
   const handleUserTranscript = useCallback(async (text: string) => {
@@ -746,6 +730,7 @@ export function useOikosApp() {
     try {
       await oikosChatRef.current.clearHistory()
       dispatch({ type: 'SET_MESSAGES', messages: [] })
+      dispatch({ type: 'SET_STREAMING_CONTENT', content: '' })
       logger.info('[useOikosApp] History cleared')
     } catch (error) {
       logger.error('[useOikosApp] Failed to clear history:', error)
@@ -775,15 +760,6 @@ export function useOikosApp() {
   }, [])
 
   // ============= Effects =============
-
-  // Set up streaming listeners IMMEDIATELY on mount (before any messages can be sent)
-  // This must run before initialize() completes to avoid race conditions where
-  // useTextChannel sends a message before listeners are registered, causing events
-  // like BIND_MESSAGE_ID_TO_CORRELATION_ID to be lost.
-  useEffect(() => {
-    const cleanup = setupStreamingListeners()
-    return cleanup
-  }, [setupStreamingListeners])
 
   // Initialize on mount
   useEffect(() => {

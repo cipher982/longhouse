@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { stateManager, type BootstrapData } from '../../../lib/state-manager'
+import { bootstrapStore, type BootstrapData } from '../../../lib/bootstrap-store'
 import { personalConfig } from '../config'
 
 function makeBootstrap(prompt: string): BootstrapData {
@@ -18,17 +18,17 @@ function makeBootstrap(prompt: string): BootstrapData {
 
 describe('personalConfig instructions', () => {
   afterEach(() => {
-    stateManager.reset()
+    bootstrapStore.reset()
   })
 
   it('prefers the server bootstrap prompt when available', () => {
-    stateManager.setBootstrap(makeBootstrap('Use the server prompt'))
+    bootstrapStore.setBootstrap(makeBootstrap('Use the server prompt'))
 
     expect(personalConfig.instructions).toBe('Use the server prompt')
   })
 
   it('falls back to generated local instructions when bootstrap is absent', () => {
-    stateManager.reset()
+    bootstrapStore.reset()
 
     expect(personalConfig.instructions).toContain('This Realtime session is I/O ONLY.')
   })

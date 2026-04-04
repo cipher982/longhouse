@@ -5,32 +5,12 @@ import { AppProvider } from '../../context'
 import { useTextChannel } from '../useTextChannel'
 import { eventBus } from '../../../lib/event-bus'
 
-const initializeMock = vi.fn(() => Promise.resolve())
-const sendMessageMock = vi.fn()
-
-vi.mock('../../../lib/oikos-chat-controller', () => {
-  return {
-    OikosChatController: class {
-      initialize = initializeMock
-      sendMessage = (...args: unknown[]) => sendMessageMock(...args)
-    },
-  }
-})
-
 const wrapper = ({ children }: { children: ReactNode }) => (
   <AppProvider>{children}</AppProvider>
 )
 
-const flushInit = async () => {
-  await act(async () => {
-    await Promise.resolve()
-  })
-}
-
 describe('useTextChannel', () => {
   beforeEach(() => {
-    sendMessageMock.mockReset()
-    initializeMock.mockClear()
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
       cb(0)
       return 0
@@ -44,12 +24,11 @@ describe('useTextChannel', () => {
 
   it('clears isSending on oikos_complete even if send promise is pending', async () => {
     let resolveSend: (() => void) | undefined
-    sendMessageMock.mockImplementation(() => new Promise<void>((resolve) => {
+    const sendText = vi.fn().mockImplementation(() => new Promise<void>((resolve) => {
       resolveSend = resolve
     }))
 
-    const { result, unmount } = renderHook(() => useTextChannel(), { wrapper })
-    await flushInit()
+    const { result, unmount } = renderHook(() => useTextChannel({ sendText }), { wrapper })
 
     await act(async () => {
       void result.current.sendMessage('hello')
@@ -76,7 +55,7 @@ describe('useTextChannel', () => {
     let resolveFirst: (() => void) | undefined
     let resolveSecond: (() => void) | undefined
 
-    sendMessageMock
+    const sendText = vi.fn()
       .mockImplementationOnce(() => new Promise<void>((resolve) => {
         resolveFirst = resolve
       }))
@@ -84,8 +63,7 @@ describe('useTextChannel', () => {
         resolveSecond = resolve
       }))
 
-    const { result } = renderHook(() => useTextChannel(), { wrapper })
-    await flushInit()
+    const { result } = renderHook(() => useTextChannel({ sendText }), { wrapper })
 
     await act(async () => {
       void result.current.sendMessage('first')

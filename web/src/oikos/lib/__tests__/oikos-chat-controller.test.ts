@@ -2,6 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { OikosChatController } from '../oikos-chat-controller';
 
+function createSseBody(events: Array<{ event: string; data: unknown; id?: number }>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const payload = events.map(({ event, data, id }) => {
+    const idLine = id !== undefined ? `id: ${id}\n` : '';
+    return `${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  }).join('');
+
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(payload));
+      controller.close();
+    },
+  });
+}
+
 describe('OikosChatController history loading', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -146,5 +161,99 @@ describe('OikosChatController history loading', () => {
     expect(messages).toHaveLength(1);
     expect(messages[0].origin_surface_id).toBe('telegram');
     expect(messages[0].visibility).toBe('cross-surface');
+  });
+});
+
+describe('OikosChatController callbacks', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('streams assistant updates through direct callbacks', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'content-type': 'text/event-stream' }),
+      body: createSseBody([
+        {
+          event: 'connected',
+          data: { run_id: 123 },
+          id: 1,
+        },
+        {
+          event: 'oikos_started',
+          data: {
+            type: 'oikos_started',
+            payload: {
+              run_id: 123,
+              message_id: 'msg-1',
+              task: 'Thinking',
+            },
+          },
+          id: 2,
+        },
+        {
+          event: 'oikos_token',
+          data: {
+            type: 'oikos_token',
+            payload: {
+              message_id: 'msg-1',
+              token: 'Hello',
+            },
+          },
+          id: 3,
+        },
+        {
+          event: 'oikos_complete',
+          data: {
+            type: 'oikos_complete',
+            payload: {
+              message_id: 'msg-1',
+              result: 'Hello',
+              usage: { total_tokens: 5 },
+            },
+          },
+          id: 4,
+        },
+      ]),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const onStreamingTextChange = vi.fn();
+    const onAssistantMessageUpdate = vi.fn();
+
+    const controller = new OikosChatController(
+      {},
+      {
+        onStreamingTextChange,
+        onAssistantMessageUpdate,
+      },
+    );
+
+    await controller.sendMessage('hello', 'msg-1');
+
+    expect(onAssistantMessageUpdate).toHaveBeenCalledWith(
+      'msg-1',
+      expect.objectContaining({ status: 'typing' }),
+    );
+    expect(onAssistantMessageUpdate).toHaveBeenCalledWith(
+      'msg-1',
+      expect.objectContaining({ status: 'streaming', content: 'Hello', runId: 123 }),
+    );
+    expect(onAssistantMessageUpdate).toHaveBeenCalledWith(
+      'msg-1',
+      expect.objectContaining({
+        status: 'final',
+        content: 'Hello',
+        runId: 123,
+        usage: expect.objectContaining({ total_tokens: 5 }),
+      }),
+    );
+    expect(onStreamingTextChange).toHaveBeenLastCalledWith('');
   });
 });
