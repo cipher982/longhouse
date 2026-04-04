@@ -24,8 +24,6 @@ def test_create_server_exposes_only_continuity_and_oikos_tools():
         "recall",
         "check_wall",
         "session_tail",
-        "poke",
-        "check_pokes",
         "peers",
         "message_session",
     }
