@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-chat qa-live-conversations qa-live-perf reprovision qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-chat qa-live-conversations qa-live-perf reprovision qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-sdk validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
 
 
 # ---------------------------------------------------------------------------
@@ -548,9 +548,11 @@ validate: ## Run all validation checks
 	@$(MAKE) validate-ws
 	@printf '\n2️⃣  Validating SSE code...\n'
 	@$(MAKE) validate-sse
-	@printf '\n3️⃣  Validating Makefile structure...\n'
+	@printf '\n3️⃣  Validating OpenAPI/SDK drift...\n'
+	@$(MAKE) validate-sdk
+	@printf '\n4️⃣  Validating Makefile structure...\n'
 	@$(MAKE) validate-makefile
-	@printf '\n4️⃣  Checking for test anti-patterns...\n'
+	@printf '\n5️⃣  Checking for test anti-patterns...\n'
 	@$(MAKE) lint-test-patterns
 	@printf '\n✅ All validations passed\n'
 
@@ -611,6 +613,16 @@ regen-sse: ## Regenerate SSE event contract code
 		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
 		uv run --no-project --with pyyaml python ../scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml
 	@echo "✅ SSE code regenerated"
+
+validate-sdk: ## Check OpenAPI export and generated frontend SDK types are in sync
+	@$(MAKE) generate-sdk >/dev/null
+	@if ! git diff --quiet -- openapi.json web/src/generated/openapi-types.ts; then \
+		echo "❌ OpenAPI/SDK code out of sync"; \
+		echo "   Run 'make generate-sdk' and commit changes"; \
+		git diff -- openapi.json web/src/generated/openapi-types.ts; \
+		exit 1; \
+	fi
+	@echo "✅ OpenAPI/SDK code in sync"
 
 lint-test-patterns: ## Check for test anti-patterns (window.confirm, alert, waitForTimeout)
 	@bash scripts/qa/lint-test-patterns.sh
