@@ -15,7 +15,6 @@ const initialState: AppState = {
   // Core objects
   agent: null,
   session: null,
-  sessionManager: null,
 
   messages: [],
   streamingContent: '',
@@ -50,8 +49,6 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, session: action.session, isConnected: action.session !== null }
     case 'SET_AGENT':
       return { ...state, agent: action.agent }
-    case 'SET_SESSION_MANAGER':
-      return { ...state, sessionManager: action.sessionManager }
     case 'SET_MESSAGES':
       return { ...state, messages: action.messages }
     case 'ADD_MESSAGE':

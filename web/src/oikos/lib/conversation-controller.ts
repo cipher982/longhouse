@@ -15,7 +15,6 @@ import { logger } from '../core';
 import { stateManager } from './state-manager';
 
 export interface ConversationState {
-  conversationId: string | null;
   streamingMessageId: string | null;
   streamingText: string;
   currentMessageId: string | null; // Message ID for streaming updates
@@ -24,14 +23,12 @@ export interface ConversationState {
 
 export type ConversationEvent =
   | { type: 'streamingStart' }
-  | { type: 'streamingStop' }
-  | { type: 'conversationIdChange', id: string | null };
+  | { type: 'streamingStop' };
 
 type ConversationListener = (event: ConversationEvent) => void;
 
 export class ConversationController {
   private state: ConversationState = {
-    conversationId: null,
     streamingMessageId: null,
     streamingText: '',
     currentMessageId: null,
@@ -52,23 +49,6 @@ export class ConversationController {
 
   private emit(event: ConversationEvent): void {
     this.listeners.forEach(l => l(event));
-  }
-
-  // ============= Setup =============
-
-  /**
-   * Set current conversation ID
-   */
-  setConversationId(id: string | null): void {
-    this.state.conversationId = id;
-    this.emit({ type: 'conversationIdChange', id });
-  }
-
-  /**
-   * Get current conversation ID
-   */
-  getConversationId(): string | null {
-    return this.state.conversationId;
   }
 
   // ============= Streaming Response Management =============

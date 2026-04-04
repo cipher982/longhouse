@@ -34,7 +34,7 @@ import { getZergApiUrl, CONFIG, toAbsoluteUrl } from '../../lib/config'
 import { uuid } from '../../lib/uuid'
 // Keep stateManager for streaming events from oikos-chat-controller
 // TODO: Refactor oikos-chat-controller to use callbacks instead
-import { stateManager, type StateChangeEvent } from '../../lib/state-manager'
+import { stateManager, type StateChangeEvent, type BootstrapData } from '../../lib/state-manager'
 import { eventBus } from '../../lib/event-bus'
 import { timelineLogger } from '../../lib/timeline-logger'
 import { fetchWithRefresh } from '../../../lib/auth-refresh'
@@ -47,32 +47,6 @@ async function loadRealtimeBootstrap() {
 
 async function loadRealtimeSessionHandler() {
   return import('../../lib/session-handler')
-}
-
-// Types (previously in state-manager.ts)
-export interface ModelInfo {
-  id: string
-  display_name: string
-  description: string
-  capabilities?: { reasoning?: boolean; reasoningNone?: boolean }
-}
-
-export interface ChatPreferences {
-  chat_model: string
-  reasoning_effort: 'none' | 'low' | 'medium' | 'high'
-}
-
-export interface BootstrapData {
-  prompt: string
-  enabled_tools: Array<{ name: string; description: string }>
-  user_context: {
-    display_name?: string
-    role?: string
-    location?: string
-    servers?: Array<{ name: string; purpose: string }>
-  }
-  available_models: ModelInfo[]
-  preferences: ChatPreferences
 }
 
 interface OikosAppState {
@@ -165,6 +139,7 @@ export function useOikosApp() {
 
       const bootstrap = await response.json() as BootstrapData
       updateState({ bootstrap })
+      stateManager.setBootstrap(bootstrap)
 
       // Update React context with bootstrap data
       if (bootstrap.available_models) {
@@ -178,6 +153,7 @@ export function useOikosApp() {
       return bootstrap
     } catch (error) {
       logger.error('[useOikosApp] Failed to fetch bootstrap:', error)
+      stateManager.setBootstrap(null)
       return null
     }
   }, [dispatch, updateState])
@@ -577,7 +553,6 @@ export function useOikosApp() {
       const { bootstrapSession } = await loadRealtimeBootstrap()
       const bootstrapResult = await bootstrapSession({
         context: state.currentContext,
-        conversationId: null,
         history: lastOikosTurnsRef.current,
         mediaStream: micStream,
         audioElement: undefined,

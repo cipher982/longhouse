@@ -4,7 +4,6 @@
  */
 
 import { logger } from '../core';
-import type { ConversationManagerOptions, SyncTransport } from '../data';
 
 // Main configuration object
 export const CONFIG = {
@@ -130,75 +129,6 @@ export enum VoiceButtonState {
 export interface FeedbackPreferences {
   haptics: boolean;
   audio: boolean;
-}
-
-/**
- * Resolve a sync base URL from various input formats
- */
-export function resolveSyncBaseUrl(raw?: string): string {
-  const fallback = CONFIG.OIKOS_API_BASE;
-  if (!raw) return fallback;
-
-  const trimmed = raw.trim();
-  if (trimmed === '' || trimmed.toLowerCase() === 'auto') {
-    return fallback;
-  }
-
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed.replace(/\/$/, '');
-  }
-
-  if (trimmed.startsWith('//')) {
-    return `${window.location.protocol}${trimmed}`.replace(/\/$/, '');
-  }
-
-  if (/^[\w.-]+:\d+$/.test(trimmed)) {
-    return `${window.location.protocol}//${trimmed}`.replace(/\/$/, '');
-  }
-
-  if (trimmed.startsWith('/')) {
-    return `${window.location.origin}${trimmed}`.replace(/\/$/, '');
-  }
-
-  try {
-    return new URL(trimmed, window.location.origin).toString().replace(/\/$/, '');
-  } catch (error) {
-    logger.warn('Invalid sync base URL, using fallback', { provided: trimmed, error });
-    return fallback;
-  }
-}
-
-/**
- * Create a sync transport with optional headers
- */
-export function createSyncTransport(headers?: Record<string, string>): SyncTransport {
-  return async (input, init = {}) => {
-    if (typeof fetch === 'undefined') {
-      throw new Error('Fetch is not available for sync transport');
-    }
-
-    const mergedHeaders = new Headers(headers ?? {});
-    const initHeaders = new Headers(init.headers ?? {});
-    initHeaders.forEach((value, key) => mergedHeaders.set(key, value));
-
-    // SaaS auth: cookie-based auth (longhouse_session HttpOnly cookie)
-    // No need to add Authorization header - cookies are sent automatically with credentials: 'include'
-
-    return fetch(input, { ...init, headers: mergedHeaders, credentials: 'include' });
-  };
-}
-
-/**
- * Build conversation manager options from context
- */
-export function buildConversationManagerOptions(config: any): ConversationManagerOptions {
-  const syncBaseUrl = resolveSyncBaseUrl(config?.sync?.baseUrl);
-  const syncTransport = createSyncTransport(config?.sync?.headers);
-
-  return {
-    syncBaseUrl,
-    syncTransport
-  };
 }
 
 /**

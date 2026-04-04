@@ -1,8 +1,8 @@
 /**
  * History Mapper
- * Maps IndexedDB ConversationTurn records to OpenAI Realtime RealtimeMessageItem format
+ * Maps conversation history turns to OpenAI Realtime message items.
  *
- * This enables conversation history hydration after page refresh, so the
+ * This enables server-backed history hydration after page refresh so the
  * OpenAI Realtime session maintains context from previous interactions.
  */
 
@@ -20,7 +20,7 @@ function generateShortId(): string {
 }
 
 /**
- * Map IndexedDB conversation turns to OpenAI Realtime message items.
+ * Map conversation turns to OpenAI Realtime message items.
  *
  * Each ConversationTurn can produce 0-2 RealtimeMessageItems:
  * - 1 user message (if userTranscript exists)
@@ -28,7 +28,7 @@ function generateShortId(): string {
  *
  * Items are sorted by timestamp and linked via previousItemId for continuity.
  *
- * @param turns - Conversation turns from IndexedDB
+ * @param turns - Conversation turns from server history
  * @returns Array of RealtimeMessageItem suitable for session.updateHistory()
  */
 export function mapConversationToRealtimeItems(
