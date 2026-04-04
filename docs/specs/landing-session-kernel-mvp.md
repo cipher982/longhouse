@@ -188,7 +188,7 @@ Say this bluntly in docs and on the page:
 
 ### Activation / polish
 
-- opt-in default-launcher wrappers for `claude` / `codex`
+- explicit `longhouse claude` / `longhouse codex` start paths
 
 ## Success Signals
 

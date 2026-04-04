@@ -40,8 +40,8 @@ Make the launch story match the real product:
 - [x] Publish the canonical proof-of-value demo journey in launch-facing docs and demo scripts
 - [x] Make the hosted boundary explicit and honest until onboarding friction is reduced
 - [x] Decide and land the install/onboarding script changes needed for the story:
-  import first, start through Longhouse second, wrappers later
-- [x] Spin wrapper mode out as a follow-on opt-in activation slice, not a launch prerequisite
+  import first, start through Longhouse second, explicit managed starts only
+- [x] Remove wrapper mode from the launch path and keep explicit `longhouse claude|codex` starts as the only supported control-ready entrypoints
 - [x] Remove leftover `managed-local` wording from public docs/UI
 - [x] Expose the second activation beat directly inside Timeline with runner-aware `Start Session` / runner setup CTAs
 - [x] Add launch-critical activation coverage for the three Timeline states:
@@ -78,7 +78,7 @@ Do after the story is stable.
 - onboarding should get users to first value fast
 - import/ship existing sessions first
 - starting through Longhouse is the second activation beat
-- opt-in wrapper mode belongs here, not before copy is stable
+- explicit `longhouse claude|codex` starts belong here, not any implicit wrapper layer
 - installer, onboarding, and docs should all point at the same activation order
 
 ### Phase 4: Public-product cleanup
@@ -145,12 +145,12 @@ Do separately and do not let it block launch.
 
 - This task intentionally excludes the browser-vs-machine auth split that was being worked in parallel.
 - The launch story should optimize for first proof of value, not the hosted signup funnel.
-- Story alignment, launch proof, onboarding, and wrapper mode are now the main forward path.
+- Story alignment, launch proof, onboarding, and explicit managed launch are now the main forward path.
 - The first onboarding pass now matches the launch story: import existing sessions first, then start through Longhouse when the user wants control.
-- Wrapper-mode activation shipped as an explicit opt-in flow:
-  - installer no longer mutates Claude/Codex launch behavior by default
-  - interactive onboarding offers wrapper install explicitly
-  - `longhouse wrap --json` gives automation a machine-readable status/results surface
+- Wrapper mode was removed from the supported product path:
+  - installer no longer mutates Claude/Codex launch behavior
+  - interactive onboarding stays focused on import first, then explicit `longhouse claude|codex` starts
+  - control-ready sessions now mean Longhouse launched them through a supported transport
 - Runtime/session UI copy now uses capability language like `Live control`, `host machine`, and `Live on host` instead of implying separate session classes.
 - The product model is now explicit in launch docs and README:
   Longhouse in the launch path changes session capability, not session type.

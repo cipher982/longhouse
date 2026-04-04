@@ -61,13 +61,12 @@ Want a safe preview before importing real sessions?
 longhouse serve --demo
 ```
 
-If you want bare `claude` / `codex` interactive launches to go through Longhouse by default, opt in explicitly:
+When you want a control-ready session, start it explicitly through Longhouse:
 
 ```bash
-longhouse wrap --install
+longhouse claude
+longhouse codex
 ```
-
-Wrapper mode is passthrough-first and reversible. `auth`, `help`, non-interactive flags, and setup failures still fall back to the native CLI.
 
 ### Canonical proof journey
 
@@ -85,7 +84,7 @@ Sign up at https://longhouse.ai when you want the convenience path. Hosted beta 
 ## Features
 
 - **Find existing sessions fast**: Import and search old Claude, Codex, and Gemini work immediately
-- **Control after launch**: Start through Longhouse or enable wrappers to keep a control channel open for the same session later
+- **Control after launch**: Start through Longhouse to keep a control channel open for the same session later
 - **Capability over type**: Launch path changes control affordances, not what a session is
 - **Session kernel**: The technical model is a durable session object, not a dead transcript
 - **One timeline**: Claude Code, Codex CLI, and Gemini CLI sessions in one place
@@ -122,21 +121,6 @@ longhouse serve --demo
 uv tool install longhouse
 longhouse onboard
 longhouse serve
-```
-
-### Optional: default-launcher wrappers
-
-Keep the default install non-invasive, then opt in when you want bare `claude` / `codex` launches to route through Longhouse:
-
-```bash
-longhouse wrap --install
-longhouse wrap --status
-```
-
-Undo at any time:
-
-```bash
-longhouse wrap --uninstall
 ```
 
 ### 2. Hosted beta (later)

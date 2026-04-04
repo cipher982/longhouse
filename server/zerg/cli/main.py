@@ -20,7 +20,6 @@ Usage:
     longhouse recall        # Search past sessions
     longhouse migrate       # Plan/apply heavy legacy DB migrations
     longhouse onboard       # Run onboarding wizard
-    longhouse wrap          # Opt-in default-launcher wrappers for claude/codex
     longhouse doctor        # Self-diagnosis
     longhouse --help        # Show help
 """
@@ -50,7 +49,6 @@ from zerg.cli.serve import serve
 from zerg.cli.serve import status
 from zerg.cli.sessions import app as sessions_app
 from zerg.cli.sessions import continue_session
-from zerg.cli.wrap import wrap
 
 # Create main app
 app = typer.Typer(
@@ -143,7 +141,6 @@ app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
 app.command(name="connect")(_cmd_lookup["connect"])
 app.command(name="recall")(_cmd_lookup["recall"])
-app.command(name="wrap")(wrap)
 
 
 @app.command(name="migrate")

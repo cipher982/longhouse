@@ -29,7 +29,6 @@ from zerg.cli.config_file import get_config_path
 from zerg.cli.config_file import save_config
 from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
-from zerg.services.shipper import install_wrappers
 from zerg.services.shipper import load_token
 from zerg.services.shipper import save_token
 from zerg.services.shipper import save_zerg_url
@@ -367,42 +366,6 @@ def _run_initial_import(api_url: str) -> tuple[bool, str]:
     return False, detail
 
 
-def _offer_wrapper_mode(*, interactive_wizard: bool, has_claude: bool, has_codex: bool) -> None:
-    """Offer opt-in wrapper mode when supported launch CLIs are present."""
-    providers: list[str] = []
-    if has_claude:
-        providers.append("claude")
-    if has_codex:
-        providers.append("codex")
-
-    if not providers:
-        typer.echo("  No Claude/Codex CLI detected, so wrapper mode is unavailable.")
-        return
-
-    if not interactive_wizard:
-        typer.echo("  Skipping wrapper mode in quick/headless defaults.")
-        typer.echo("       Enable later with: longhouse wrap --install")
-        return
-
-    if not typer.confirm("Install opt-in default launchers for claude/codex?", default=False):
-        typer.echo("  Skipping wrapper mode")
-        typer.echo("       Enable later with: longhouse wrap --install")
-        return
-
-    results = install_wrappers(providers)
-    installed_any = False
-    for provider in providers:
-        message = str(results.get(provider, "unknown result"))
-        if "skipped" in message:
-            typer.secho(f"  {provider}: {message}", fg=typer.colors.YELLOW)
-        else:
-            typer.secho(f"  {provider}: {message}", fg=typer.colors.GREEN)
-            installed_any = True
-
-    if installed_any:
-        typer.echo("  Open a new terminal (or source your shell profile) for wrappers to take effect.")
-
-
 app = typer.Typer(help="Onboarding wizard")
 
 
@@ -456,8 +419,6 @@ def onboard(
     typer.secho("Welcome to Longhouse", fg=typer.colors.CYAN, bold=True)
     typer.echo("Make existing sessions findable first. Start Longhouse sessions when you want control.")
     typer.echo("")
-
-    interactive_wizard = not quick
 
     # Quick vs Manual mode selection
     if not quick:
@@ -681,20 +642,8 @@ def onboard(
 
     typer.echo("")
 
-    # Step 7: Optional wrapper mode
-    typer.secho("Step 7: Optional default launchers", fg=typer.colors.BLUE, bold=True)
-    typer.echo("")
-
-    _offer_wrapper_mode(
-        interactive_wizard=interactive_wizard,
-        has_claude=has_claude,
-        has_codex=has_codex,
-    )
-
-    typer.echo("")
-
-    # Step 8: Verify PATH in a fresh shell
-    typer.secho("Step 8: PATH verification", fg=typer.colors.BLUE, bold=True)
+    # Step 7: Verify PATH in a fresh shell
+    typer.secho("Step 7: PATH verification", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     path_warnings = verify_shell_path()
@@ -706,7 +655,7 @@ def onboard(
 
     typer.echo("")
 
-    # Step 9: Open browser (if GUI available)
+    # Step 8: Open browser (if GUI available)
     if _has_gui() and _check_server_health(host, port):
         if quick or typer.confirm("Open Longhouse in browser?", default=True):
             typer.echo(f"  Opening {api_url}...")
@@ -746,8 +695,6 @@ def onboard(
     typer.echo("Commands:")
     typer.echo("  longhouse ship             Import existing sessions once")
     typer.echo("  longhouse connect --install  Keep importing sessions in background")
-    if has_claude or has_codex:
-        typer.echo("  longhouse wrap --install   Opt in to bare claude/codex default launchers")
     typer.echo("  longhouse wall --json      Read the machine surface")
     typer.echo("  longhouse status           Show configuration")
     typer.echo("  longhouse serve --stop  Stop server")

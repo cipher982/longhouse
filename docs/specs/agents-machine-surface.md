@@ -59,7 +59,7 @@ Use it for directed session actions such as:
 
 ### CLI and MCP source of session context
 
-- `LONGHOUSE_SESSION_ID` is the process-level source of current session identity.
+- `LONGHOUSE_SESSION_ID` is the process-level source of current session identity when a CLI is already running inside a Longhouse-managed session.
 - The CLI and MCP layers translate that into `X-Longhouse-Session-Id` when they call the API.
 
 ## Response Conventions
@@ -205,7 +205,7 @@ curl -N \
 
 ```bash
 LONGHOUSE_SESSION_ID="$LONGHOUSE_SESSION_ID" \
-  longhouse continue "$TARGET_SESSION_ID" "Continue from the terminal wrapper and keep going."
+  longhouse continue "$TARGET_SESSION_ID" "Continue from the terminal command and keep going."
 ```
 
 ### Read and acknowledge the durable inbox

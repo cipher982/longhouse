@@ -20,7 +20,6 @@ from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.services.shipper.hooks import install_hooks
-from zerg.services.shipper.wrappers import EXIT_SETUP_FAILED
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
 
@@ -45,6 +44,7 @@ _CLAUDE_LAUNCH_ENV_KEYS = (
     "AWS_DEFAULT_REGION",
     "ANTHROPIC_MODEL",
 )
+EXIT_SETUP_FAILED = 78
 
 
 def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
