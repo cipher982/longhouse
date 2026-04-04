@@ -112,7 +112,7 @@ JSON_OUTPUT="$TMP_DIR/out.json"
 PATH="$TMP_DIR/bin:$PATH" \
 HOSTED_INSTANCE_HELPER="$FAKE_HELPER" \
 HOSTED_LOOP_DEBUG_SSH_TARGET="fake-zerg" \
-bash "$ROOT_DIR/hosted-loop-debug.sh" --subdomain demo --session sess-1 --limit 2 --logs >"$TEXT_OUTPUT"
+bash "$ROOT_DIR/ops/hosted-loop-debug.sh" --subdomain demo --session sess-1 --limit 2 --logs >"$TEXT_OUTPUT"
 
 if ! grep -q "host_data_path: /srv/longhouse/demo" "$TEXT_OUTPUT"; then
   echo "Expected text output to include helper-provided data path"
@@ -127,7 +127,7 @@ fi
 PATH="$TMP_DIR/bin:$PATH" \
 HOSTED_INSTANCE_HELPER="$FAKE_HELPER" \
 HOSTED_LOOP_DEBUG_SSH_TARGET="fake-zerg" \
-bash "$ROOT_DIR/hosted-loop-debug.sh" --subdomain demo --session sess-1 --limit 2 --logs --json >"$JSON_OUTPUT"
+bash "$ROOT_DIR/ops/hosted-loop-debug.sh" --subdomain demo --session sess-1 --limit 2 --logs --json >"$JSON_OUTPUT"
 
 python3 - "$JSON_OUTPUT" <<'PY'
 import json
