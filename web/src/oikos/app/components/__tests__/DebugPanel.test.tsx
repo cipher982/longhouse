@@ -70,12 +70,6 @@ describe('DebugPanel', () => {
           thread_id: 1,
           title: 'Thread',
           message_count: 1,
-          canonical_conversation: {
-            id: 10,
-            kind: 'chat',
-            external_conversation_id: 'conv-1',
-            message_count: 1,
-          },
         }),
       )
       .mockResolvedValueOnce(
@@ -83,19 +77,13 @@ describe('DebugPanel', () => {
           thread_id: 1,
           title: 'Thread',
           message_count: 2,
-          canonical_conversation: {
-            id: 10,
-            kind: 'chat',
-            external_conversation_id: 'conv-1',
-            message_count: 2,
-          },
         }),
       )
 
     const view = renderPanel(queryClient)
 
     await waitFor(() => expect(screen.getByTestId('debug-thread-id')).toHaveTextContent('1'))
-    await waitFor(() => expect(screen.getByTestId('debug-messages-db')).toHaveTextContent('1'))
+    await waitFor(() => expect(screen.getByTestId('debug-messages-thread')).toHaveTextContent('1'))
 
     mockAppState.current = {
       ...mockAppState.current,
@@ -111,7 +99,7 @@ describe('DebugPanel', () => {
     )
 
     await waitFor(() => expect(mockFetchWithRefresh).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(screen.getByTestId('debug-messages-db')).toHaveTextContent('2'))
+    await waitFor(() => expect(screen.getByTestId('debug-messages-thread')).toHaveTextContent('2'))
   })
 
   it('refetches thread info after reset completes', async () => {

@@ -64,17 +64,9 @@ class OikosBootstrapResponse(BaseModel):
 class OikosThreadInfo(BaseModel):
     """Oikos thread information."""
 
-    class CanonicalConversation(BaseModel):
-        id: int
-        kind: str
-        title: str | None = None
-        external_conversation_id: str
-        message_count: int
-
     thread_id: int
     title: str
     message_count: int
-    canonical_conversation: CanonicalConversation
 
 
 class OikosPreferencesUpdate(BaseModel):
@@ -197,25 +189,11 @@ def get_oikos_thread(
     from sqlalchemy import func
 
     from zerg.models.thread import ThreadMessage
-    from zerg.services.conversation_service import ConversationService
     from zerg.services.oikos_service import OikosService
 
     service = OikosService(db)
     fiche = service.get_or_create_oikos_fiche(current_user.id)
     thread = service.get_or_create_oikos_thread(current_user.id, fiche)
-    conversation = service.get_or_create_surface_conversation(
-        owner_id=current_user.id,
-        surface_id="web",
-        external_conversation_id="web:main",
-        backing_thread_id=thread.id,
-        title=thread.title or "Oikos",
-    )
-    service.ensure_surface_conversation_backfilled(
-        owner_id=current_user.id,
-        thread_id=thread.id,
-        conversation=conversation,
-        surface_id="web",
-    )
 
     message_count = (
         db.query(func.count(ThreadMessage.id))
@@ -232,17 +210,6 @@ def get_oikos_thread(
         thread_id=thread.id,
         title=thread.title or "Oikos",
         message_count=message_count,
-        canonical_conversation=OikosThreadInfo.CanonicalConversation(
-            id=conversation.id,
-            kind=conversation.kind,
-            title=conversation.title,
-            external_conversation_id="web:main",
-            message_count=ConversationService.count_messages(
-                db,
-                owner_id=current_user.id,
-                conversation_id=conversation.id,
-            ),
-        ),
     )
 
 
@@ -251,7 +218,7 @@ def clear_oikos_thread(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_oikos_user),
 ) -> None:
-    """Reset Oikos memory for the current user and clear the canonical web transcript."""
+    """Reset Oikos memory for the current user and clear the web surface transcript."""
     from zerg.services.oikos_service import OikosService
 
     service = OikosService(db)

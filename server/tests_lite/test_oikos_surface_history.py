@@ -145,6 +145,57 @@ def test_oikos_history_filters_by_surface_and_defaults_to_web(tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
+def test_oikos_thread_returns_thread_only_summary(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        user = User(email="thread@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        oikos_service = OikosService(db)
+        fiche = oikos_service.get_or_create_oikos_fiche(user.id)
+        thread = oikos_service.get_or_create_oikos_thread(user.id, fiche)
+
+        create_thread_message(
+            db=db,
+            thread_id=thread.id,
+            role="user",
+            content="hello",
+            processed=True,
+        )
+        create_thread_message(
+            db=db,
+            thread_id=thread.id,
+            role="assistant",
+            content="hi there",
+            processed=True,
+        )
+        create_thread_message(
+            db=db,
+            thread_id=thread.id,
+            role="tool",
+            content="internal tool output",
+            processed=True,
+        )
+
+        client, api_app_ref = _make_client(db, user)
+        try:
+            response = client.get("/api/oikos/thread")
+            assert response.status_code == 200, response.text
+
+            payload = response.json()
+            assert payload == {
+                "thread_id": thread.id,
+                "title": "Oikos",
+                "message_count": 2,
+            }
+            assert "canonical_conversation" not in payload
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 @pytest.mark.asyncio
 async def test_run_oikos_persists_surface_metadata_on_user_and_assistant(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
