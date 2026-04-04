@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import type { APIRequestContext, Page } from "@playwright/test";
+import { WebSocket } from "ws";
 import { test, expect } from "../fixtures";
 import { resetDatabase } from "../test-utils";
 
