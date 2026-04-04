@@ -1950,7 +1950,7 @@ export interface paths {
         post?: never;
         /**
          * Clear Oikos Thread
-         * @description Reset Oikos memory for the current user and clear the canonical web transcript.
+         * @description Reset Oikos memory for the current user and clear the web surface transcript.
          */
         delete: operations["clear_oikos_thread_oikos_thread_delete"];
         options?: never;
@@ -6114,19 +6114,6 @@ export interface components {
             /** Password */
             password: string;
         };
-        /** CanonicalConversation */
-        CanonicalConversation: {
-            /** Id */
-            id: number;
-            /** Kind */
-            kind: string;
-            /** Title */
-            title?: string | null;
-            /** External Conversation Id */
-            external_conversation_id: string;
-            /** Message Count */
-            message_count: number;
-        };
         /** CapabilitiesResponse */
         CapabilitiesResponse: {
             text: components["schemas"]["CapabilityStatus"];
@@ -8314,7 +8301,6 @@ export interface components {
             title: string;
             /** Message Count */
             message_count: number;
-            canonical_conversation: components["schemas"]["CanonicalConversation"];
         };
         /**
          * OikosWakeupSummary

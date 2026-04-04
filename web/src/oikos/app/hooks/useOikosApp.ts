@@ -114,7 +114,7 @@ export function useOikosApp() {
   const initStartedRef = useRef(false)
   const [historyView, setHistoryViewState] = useState<OikosHistoryView>('surface')
   // Track if messages were pre-hydrated (e.g., from OikosChatPage with ?thread= param)
-  // If pre-hydrated, we should skip loading oikos thread to avoid state clobbering
+  // If pre-hydrated, we should skip the initial history load to avoid state clobbering.
   const messagesPreHydratedRef = useRef(appState.messages.length > 0)
 
   // Helper to update internal state
@@ -190,58 +190,8 @@ export function useOikosApp() {
       const currentContext = await contextLoader.loadContext(contextName)
       updateState({ currentContext })
 
-      // Skip loading oikos thread if messages were pre-hydrated (e.g., ?thread= param)
-      // This prevents state clobbering where we'd show messages from one thread
-      // but set conversation state to the oikos thread
       if (messagesPreHydratedRef.current) {
-        logger.info('[useOikosApp] Skipping oikos thread load - messages pre-hydrated')
-        dispatch({ type: 'SET_CONVERSATION_ID', id: null })
-        dispatch({
-          type: 'SET_CONVERSATIONS',
-          conversations: [{ id: 'prehydrated', name: 'Loaded Thread', meta: 'Pre-hydrated', active: true }],
-        })
-      } else {
-        // Fetch actual oikos thread info
-        try {
-          const threadResponse = await fetchWithRefresh(toAbsoluteUrl(`${CONFIG.OIKOS_API_BASE}/thread`), {
-            credentials: 'include',
-          })
-
-          if (threadResponse.ok) {
-            const threadInfo = await threadResponse.json()
-            const canonicalConversation = threadInfo.canonical_conversation
-            const canonicalConversationId = canonicalConversation?.id != null
-              ? String(canonicalConversation.id)
-              : null
-            dispatch({ type: 'SET_CONVERSATION_ID', id: canonicalConversationId })
-            dispatch({
-              type: 'SET_CONVERSATIONS',
-              conversations: [{
-                id: canonicalConversationId || 'web:main',
-                name: canonicalConversation?.title || threadInfo.title,
-                meta: `${canonicalConversation?.message_count ?? threadInfo.message_count} messages`,
-                active: true
-              }],
-            })
-            logger.info(
-              `[useOikosApp] Oikos thread loaded with canonical conversation ${canonicalConversation?.external_conversation_id ?? 'web:main'}`
-            )
-          } else {
-            // Fallback to default if endpoint fails
-            dispatch({ type: 'SET_CONVERSATION_ID', id: null })
-            dispatch({
-              type: 'SET_CONVERSATIONS',
-              conversations: [{ id: 'server', name: 'Oikos', meta: 'Thread', active: true }],
-            })
-          }
-        } catch (threadError) {
-          logger.warn('[useOikosApp] Failed to load thread info, using fallback:', threadError)
-          dispatch({ type: 'SET_CONVERSATION_ID', id: null })
-          dispatch({
-            type: 'SET_CONVERSATIONS',
-              conversations: [{ id: 'server', name: 'Oikos', meta: 'Thread', active: true }],
-          })
-        }
+        logger.info('[useOikosApp] Using pre-hydrated messages for initial chat view')
       }
 
       logger.info(`[useOikosApp] Context initialized: ${contextName}`)
@@ -250,7 +200,7 @@ export function useOikosApp() {
       logger.error('[useOikosApp] Failed to initialize context:', error)
       throw error
     }
-  }, [dispatch, updateState])
+  }, [updateState])
 
   const loadOikosHistory = useCallback(async (options?: { view?: OikosHistoryView }) => {
     if (!oikosChatRef.current) return []

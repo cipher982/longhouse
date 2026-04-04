@@ -84,13 +84,11 @@ test.describe('Debug Panel Tests', () => {
     const threadId = threadSection.locator('.debug-row').filter({ hasText: 'ID' });
     await expect(threadId).toBeVisible();
 
-    // Should show message counts (canonical conversation, scratch thread, and UI)
-    const dbMessageCount = threadSection.locator('.debug-row').filter({ hasText: 'Messages (Conversation)' });
-    await expect(dbMessageCount).toBeVisible();
+    // Should show message counts for the backing thread and current UI state.
+    const threadMessageCount = threadSection.locator('.debug-row').filter({ hasText: 'Messages (Thread)' });
+    await expect(threadMessageCount).toBeVisible();
     const uiMessageCount = threadSection.locator('.debug-row').filter({ hasText: 'Messages (UI)' });
     await expect(uiMessageCount).toBeVisible();
-    const scratchMessageCount = threadSection.locator('.debug-row').filter({ hasText: 'Messages (Scratch)' });
-    await expect(scratchMessageCount).toBeVisible();
   });
 
   test('debug panel shows voice state', async ({ page }) => {
@@ -118,12 +116,12 @@ test.describe('Debug Panel Tests', () => {
     const apiSection = page.locator('.debug-section').filter({ hasText: 'API' });
     await expect(apiSection).toBeVisible();
 
-    // Should have Thread, Conversation, and Activity links
+    // Should have Thread, Web History, and Activity links
     const threadLink = apiSection.locator('.debug-link').filter({ hasText: 'Thread' });
     await expect(threadLink).toBeVisible();
 
-    const conversationLink = apiSection.locator('.debug-link').filter({ hasText: 'Conversation' });
-    await expect(conversationLink).toBeVisible();
+    const webHistoryLink = apiSection.locator('.debug-link').filter({ hasText: 'Web History' });
+    await expect(webHistoryLink).toBeVisible();
 
     const activityLink = apiSection.locator('.debug-link').filter({ hasText: 'Activity' });
     await expect(activityLink).toBeVisible();
@@ -204,7 +202,7 @@ test.describe('Reset Memory Tests', () => {
       .toBeGreaterThanOrEqual(1);
 
     // Get debug panel message count via stable testid (avoid parsing full row text)
-    const messageCountDb = page.locator('[data-testid="debug-messages-db"]');
+    const messageCountDb = page.locator('[data-testid="debug-messages-thread"]');
 
     // Wait for debug panel to show > 0 messages (deterministic wait for panel refresh)
     await expect

@@ -13,13 +13,6 @@ interface ThreadInfo {
   thread_id: number
   title: string
   message_count: number
-  canonical_conversation?: {
-    id: number
-    kind: string
-    title?: string | null
-    external_conversation_id: string
-    message_count: number
-  }
 }
 
 interface DebugPanelProps {
@@ -120,21 +113,15 @@ export function DebugPanel({ isOpen, onToggle, onReset, isResetting = false }: D
               </span>
             </div>
             <div className="debug-row">
-              <span className="debug-label">Messages (Conversation)</span>
-              <span className="debug-value" data-testid="debug-messages-db">
-                {threadInfo?.canonical_conversation?.message_count ?? '—'}
+              <span className="debug-label">Messages (Thread)</span>
+              <span className="debug-value" data-testid="debug-messages-thread">
+                {threadInfo?.message_count ?? '—'}
               </span>
             </div>
             <div className="debug-row">
               <span className="debug-label">Messages (UI)</span>
               <span className="debug-value" data-testid="debug-messages-ui">
                 {state.messages.length}
-              </span>
-            </div>
-            <div className="debug-row">
-              <span className="debug-label">Messages (Scratch)</span>
-              <span className="debug-value">
-                {threadInfo?.message_count ?? '—'}
               </span>
             </div>
             <div className="debug-row">

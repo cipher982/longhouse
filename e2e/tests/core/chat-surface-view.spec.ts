@@ -12,13 +12,6 @@ test.describe('Oikos Surface View', () => {
           thread_id: 7,
           title: 'Oikos',
           message_count: 1,
-          canonical_conversation: {
-            id: 17,
-            kind: 'web',
-            title: 'Web question',
-            external_conversation_id: 'web:main',
-            message_count: 1,
-          },
         }),
       });
     });
