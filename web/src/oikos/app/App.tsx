@@ -94,11 +94,6 @@ export default function App({ embedded = false }: AppProps) {
     }
   }, [oikosApp])
 
-  // Header handlers
-  const handleSync = useCallback(() => {
-    console.log('[App] Sync conversations')
-  }, [])
-
   const handleToggleHistoryView = useCallback(async () => {
     const nextView = oikosApp.historyView === 'surface' ? 'all' : 'surface'
     setIsSwitchingHistoryView(true)
@@ -164,7 +159,6 @@ export default function App({ embedded = false }: AppProps) {
       <div className="main-content">
         {!embedded && (
           <Header
-            onSync={handleSync}
             onReset={handleReset}
             isResetting={isResetting}
           />

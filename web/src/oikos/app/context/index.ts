@@ -4,7 +4,6 @@ export type {
   AppAction,
   ChatMessage,
   StoredToolCall,
-  Conversation,
   VoiceMode,
   VoiceStatus,
 } from './types'

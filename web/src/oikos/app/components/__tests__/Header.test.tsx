@@ -8,7 +8,7 @@ describe("Header", () => {
   });
 
   it("keeps the launch nav centered on timeline, Oikos, integrations, and machines", () => {
-    render(<Header onSync={() => {}} />);
+    render(<Header />);
 
     expect(screen.getByRole("link", { name: "Timeline" })).toHaveAttribute("href", "/timeline");
     expect(screen.getByRole("link", { name: "Oikos" })).toHaveAttribute("href", "/chat");

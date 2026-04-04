@@ -16,12 +16,11 @@ const NAV_ITEMS: NavItem[] = [
 ]
 
 interface HeaderProps {
-  onSync: () => void
   onReset?: () => void
   isResetting?: boolean
 }
 
-export function Header({ onSync, onReset, isResetting }: HeaderProps) {
+export function Header({ onReset, isResetting }: HeaderProps) {
   const currentPath = typeof window !== 'undefined' ? window.location.pathname : '/chat'
 
   return (
@@ -75,12 +74,6 @@ export function Header({ onSync, onReset, isResetting }: HeaderProps) {
             <span>{isResetting ? 'Resetting...' : 'Reset'}</span>
           </button>
         )}
-        <button className="header-button" title="Sync conversations" onClick={onSync}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M23 4v6h-6M1 20v-6h6M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.64A9 9 0 0 1 3.51 15" />
-          </svg>
-          <span>Sync</span>
-        </button>
       </div>
     </div>
   )

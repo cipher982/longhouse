@@ -17,12 +17,9 @@ const initialState: AppState = {
   session: null,
   sessionManager: null,
 
-  // Conversation state
   messages: [],
   streamingContent: '',
   userTranscriptPreview: '',
-  currentConversationId: null,
-  conversations: [],
 
   // Voice state
   voiceMode: 'push-to-talk',
@@ -101,10 +98,6 @@ function appReducer(state: AppState, action: AppAction): AppState {
       return { ...state, streamingContent: action.content }
     case 'SET_USER_TRANSCRIPT_PREVIEW':
       return { ...state, userTranscriptPreview: action.text }
-    case 'SET_CONVERSATION_ID':
-      return { ...state, currentConversationId: action.id }
-    case 'SET_CONVERSATIONS':
-      return { ...state, conversations: action.conversations }
     case 'SET_VOICE_MODE':
       return { ...state, voiceMode: action.mode }
     case 'SET_VOICE_STATUS':

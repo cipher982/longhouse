@@ -6,16 +6,6 @@ import type { RealtimeSession } from '@openai/agents/realtime'
 import type { SessionManager } from '../../core'
 
 /**
- * Conversation in sidebar
- */
-export interface Conversation {
-  id: string
-  name: string
-  meta: string
-  active?: boolean
-}
-
-/**
  * Voice mode
  */
 export type VoiceMode = 'push-to-talk' | 'hands-free'
@@ -106,12 +96,9 @@ export interface AppState {
   session: RealtimeSession | null
   sessionManager: SessionManager | null
 
-  // Conversation state
   messages: ChatMessage[]
   streamingContent: string
   userTranscriptPreview: string  // Live voice transcript preview
-  currentConversationId: string | null
-  conversations: Conversation[]
 
   // Voice state
   voiceMode: VoiceMode
@@ -146,8 +133,6 @@ export type AppAction =
   | { type: 'UPDATE_MESSAGE_BY_MESSAGE_ID'; messageId: string; updates: Partial<ChatMessage> }
   | { type: 'SET_STREAMING_CONTENT'; content: string }
   | { type: 'SET_USER_TRANSCRIPT_PREVIEW'; text: string }
-  | { type: 'SET_CONVERSATION_ID'; id: string | null }
-  | { type: 'SET_CONVERSATIONS'; conversations: Conversation[] }
   | { type: 'SET_VOICE_MODE'; mode: VoiceMode }
   | { type: 'SET_VOICE_STATUS'; status: VoiceStatus }
   | { type: 'SET_SIDEBAR_OPEN'; open: boolean }
