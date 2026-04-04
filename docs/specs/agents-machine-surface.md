@@ -60,7 +60,6 @@ Use it for directed session actions such as:
 ### CLI and MCP source of session context
 
 - Longhouse-managed launchers inject current session context into the process environment for the running session.
-- `LONGHOUSE_MANAGED_SESSION_ID` is the internal env name; `LONGHOUSE_SESSION_ID` remains a legacy fallback during transition.
 - The CLI and MCP layers translate current managed-session context into `X-Longhouse-Session-Id` when they call the API.
 
 ## Response Conventions
