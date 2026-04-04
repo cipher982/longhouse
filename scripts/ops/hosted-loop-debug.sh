@@ -22,8 +22,8 @@ OUTPUT_MODE="text"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/hosted-loop-debug.sh [subdomain]
-  scripts/hosted-loop-debug.sh --subdomain david010 --session <session-id> [--limit 5] [--logs] [--json]
+  scripts/ops/hosted-loop-debug.sh [subdomain]
+  scripts/ops/hosted-loop-debug.sh --subdomain david010 --session <session-id> [--limit 5] [--logs] [--json]
 
 What it does:
   1. Resolves the hosted tenant through the control plane

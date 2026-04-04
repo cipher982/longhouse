@@ -12,6 +12,12 @@ unset CP_URL
 # shellcheck disable=SC1091
 source "$ROOT_DIR/lib/hosted-instance.sh"
 
+# Keep this test focused on explicit env-token fallback behavior instead of
+# ambient operator access to the control plane via `ssh zerg`.
+ssh() {
+  return 255
+}
+
 if lh_hosted_prepare_control_plane_auth >/dev/null 2>&1; then
   echo "Expected hosted auth prep to fail without explicit admin token"
   exit 1
