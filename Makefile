@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-chat qa-live-conversations qa-live-perf reprovision qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-coolify-deploy test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-sdk validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps ensure-playwright-browser test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-chat qa-live-conversations qa-live-perf reprovision qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-coolify-deploy test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-sdk validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
 
 
 # ---------------------------------------------------------------------------
@@ -236,13 +236,17 @@ ensure-js-deps: ## @internal Install workspace JS deps when a clean clone needs 
 		bun install --frozen-lockfile; \
 	fi
 
+ensure-playwright-browser: ## @internal Install Playwright Chromium when missing
+	@$(MAKE) ensure-js-deps
+	@cd e2e && bunx playwright install chromium >/dev/null
+
 test-e2e: ## Run E2E tests (core + a11y)
 	@echo "🎭 Running E2E tests (core + a11y)..."
 	$(MAKE) test-e2e-core
 	$(MAKE) test-e2e-a11y
 
 test-e2e-core: ## Run core E2E tests only — no retries, must pass 100% (called by test-e2e)
-	@$(MAKE) ensure-js-deps
+	@$(MAKE) ensure-playwright-browser
 	@echo "🔴 Running CORE E2E tests (no retries, must pass 100%)..."
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=core --retries=0 --workers=1
@@ -262,12 +266,12 @@ test-full: ## Full suite: all tiers — backend + engine + frontend + runner + c
 	$(MAKE) qa-visual-compare-fast
 
 test-chat-e2e: ## Run Oikos chat E2E tests (inside unified SPA)
-	@$(MAKE) ensure-js-deps
+	@$(MAKE) ensure-playwright-browser
 	@echo "🧪 Running chat E2E tests (unified SPA)..."
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/unified-frontend.spec.ts
 
 test-e2e-single: ## @internal Run a single E2E test (usage: make test-e2e-single TEST=tests/unified-frontend.spec.ts)
-	@$(MAKE) ensure-js-deps
+	@$(MAKE) ensure-playwright-browser
 	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=<spec-or-args>" && exit 1)
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
 
@@ -277,11 +281,11 @@ test-e2e-continuation-provider: ## Run the real provider-backed continuation smo
 	cd e2e && E2E_BACKEND_PORT=$(E2E_BACKEND_PORT) node scripts/provider-continuation-smoke.mjs
 
 test-e2e-ui: ## @internal Run Playwright E2E tests with interactive UI
-	@$(MAKE) ensure-js-deps
+	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --ui
 
 test-e2e-verbose: ## @internal Run E2E tests with full verbose output (for debugging)
-	@$(MAKE) ensure-js-deps
+	@$(MAKE) ensure-playwright-browser
 	cd e2e && VERBOSE=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
 
 test-e2e-errors: ## @internal Show detailed errors from last E2E run
@@ -299,12 +303,12 @@ test-e2e-query: ## @internal Query last E2E results (usage: make test-e2e-query 
 	fi
 
 test-e2e-grep: ## @internal Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
-	@$(MAKE) ensure-js-deps
+	@$(MAKE) ensure-playwright-browser
 	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --grep "$(GREP)"
 
 test-e2e-a11y: ## Accessibility UI/UX checks — axe + heuristics (called by test-e2e)
-	@$(MAKE) ensure-js-deps
+	@$(MAKE) ensure-playwright-browser
 	@echo "🧪 Running accessibility UI/UX checks..."
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
 

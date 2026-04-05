@@ -884,7 +884,7 @@ test.describe("Session Detail Page", () => {
       "entries",
     );
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
-      "Your next message below keeps this session going from Longhouse.",
+      "Your next message below starts a cloud continuation from this session in Longhouse.",
     );
     await expect(page.getByTestId("session-chat-divider")).toHaveCount(1);
     await expect(
