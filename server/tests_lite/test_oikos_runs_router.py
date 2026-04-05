@@ -644,7 +644,7 @@ def test_loop_inbox_action_card_returns_expired_card_when_latest_review_no_longe
             api_app_ref.dependency_overrides = {}
 
 
-def test_loop_inbox_approve_action_queues_same_session_continue_and_clears_item(tmp_path):
+def test_loop_inbox_approve_action_queues_cloud_continue_and_clears_item(tmp_path):
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -1129,7 +1129,7 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
             api_app_ref.dependency_overrides = {}
 
 
-def test_loop_inbox_hides_reply_for_managed_local_claude_without_live_control_and_still_queues_continue(
+def test_loop_inbox_hides_live_actions_for_managed_local_claude_without_live_control(
     monkeypatch, tmp_path
 ):
     session_local = _make_db(tmp_path)
@@ -1188,28 +1188,17 @@ def test_loop_inbox_hides_reply_for_managed_local_claude_without_live_control_an
             card_response = client.get(f"/api/oikos/loop-inbox/cards/{review.id}")
             assert card_response.status_code == 200, card_response.text
             card_payload = card_response.json()
-            assert card_payload["available_actions"] == [
-                "approve_recommended_action",
-                "not_now",
-                "open_full_session",
-            ]
+            assert card_payload["available_actions"] == ["not_now", "open_full_session"]
 
             action_response = client.post(
                 f"/api/oikos/loop-inbox/cards/{review.id}/actions",
                 json={"action": "approve_recommended_action"},
             )
-            assert action_response.status_code == 200, action_response.text
-            action_payload = action_response.json()
-            assert action_payload["action"] == "approve_recommended_action"
-            assert action_payload["status"] == "acted"
-            assert action_payload["reason"] == "continue_session"
-            assert action_payload["queued_job_id"] is not None
+            assert action_response.status_code == 409, action_response.text
+            assert action_response.json()["detail"] == "turn review session cannot continue right now"
 
             queued_jobs = db.query(CommisJob).all()
-            assert len(queued_jobs) == 1
-            assert queued_jobs[0].task == "Run the pending targeted tests."
-            assert queued_jobs[0].config["resume_session_id"] == str(session.id)
-            assert queued_jobs[0].config["backend"] == "zai"
+            assert queued_jobs == []
         finally:
             api_app_ref.dependency_overrides = {}
 

@@ -150,8 +150,8 @@ def _coerce_loop_mode(value: str | None) -> SessionLoopMode:
         return SessionLoopMode.MANUAL
 
 
-def _supports_resume(session: AgentSession) -> bool:
-    return (session.provider or "").strip().lower() == "claude"
+def supports_live_turn_review_continue(session: AgentSession | None) -> bool:
+    return live_session_dispatch.supports_live_text_dispatch(session)
 
 
 def _is_managed_local_session(session: AgentSession | None) -> bool:
@@ -161,14 +161,16 @@ def _is_managed_local_session(session: AgentSession | None) -> bool:
     return execution_home == SessionExecutionHome.MANAGED_LOCAL.value
 
 
-def supports_same_session_continue(session: AgentSession | None) -> bool:
+def supports_cloud_turn_review_continue(session: AgentSession | None) -> bool:
     if session is None:
         return False
-    return _supports_resume(session) or live_session_dispatch.supports_live_text_dispatch(session)
+    if _is_managed_local_session(session):
+        return False
+    return (session.provider or "").strip().lower() == "claude"
 
 
-def _resume_backend_for_session(session: AgentSession) -> str | None:
-    if not _supports_resume(session):
+def _cloud_continue_backend_for_session(session: AgentSession) -> str | None:
+    if not supports_cloud_turn_review_continue(session):
         return None
     # Claude resume on the hosted commis path uses hatch's Claude-compatible
     # runtime via the z.ai-backed wrapper.
@@ -402,6 +404,8 @@ def _serialize_dialog_tail(messages: list[_TurnMessage]) -> list[dict[str, Any]]
 
 
 def _loop_mode_profile(session: AgentSession, policy: OikosOperatorPolicy) -> tuple[str, str]:
+    can_live_continue = supports_live_turn_review_continue(session)
+    can_continue_in_cloud = supports_cloud_turn_review_continue(session)
     loop_mode = _coerce_loop_mode(getattr(session, "loop_mode", None))
     if loop_mode == SessionLoopMode.MANUAL:
         return (
@@ -418,7 +422,7 @@ def _loop_mode_profile(session: AgentSession, policy: OikosOperatorPolicy) -> tu
             "observe_only",
             "Assist mode is set, but proactive notifications are disabled right now.",
         )
-    if policy.allow_continue and supports_same_session_continue(session):
+    if policy.allow_continue and (can_live_continue or can_continue_in_cloud):
         return (
             "bounded_autonomy",
             "Continue one bounded next step automatically when the finished turn clearly leaves one.",
@@ -1299,7 +1303,7 @@ async def maybe_execute_recorded_turn_review(*, db: Session, review: SessionTurn
         return None
 
 
-def _enqueue_same_session_continue_job(
+def _enqueue_cloud_turn_review_continue_job(
     *,
     db: Session,
     review: SessionTurnReview,
@@ -1326,13 +1330,13 @@ def _enqueue_same_session_continue_job(
         )
         return None
 
-    backend = _resume_backend_for_session(session)
+    backend = _cloud_continue_backend_for_session(session)
     if not backend:
         _mark_review_outcome(
             db,
             review=review,
             status="failed",
-            reason="resume_not_supported",
+            reason="cloud_continue_not_supported",
             actual_outcome="failed",
         )
         return None
@@ -1450,13 +1454,13 @@ async def approve_pending_turn_review(
         )
         raise RuntimeError("missing_session")
     job: CommisJob | None
-    if live_session_dispatch.supports_live_text_dispatch(session):
+    if supports_live_turn_review_continue(session):
         sent = await _continue_live_dispatch_session(db=db, review=review, session=session)
         if not sent:
             raise RuntimeError(str(review.reason or "managed_local_send_failed"))
         job = None
-    else:
-        job = _enqueue_same_session_continue_job(db=db, review=review, session=session)
+    elif supports_cloud_turn_review_continue(session):
+        job = _enqueue_cloud_turn_review_continue_job(db=db, review=review, session=session)
         if job is None:
             if review.status != "failed":
                 _mark_review_outcome(
@@ -1467,6 +1471,8 @@ async def approve_pending_turn_review(
                     actual_outcome="failed",
                 )
             raise RuntimeError(str(review.reason or "enqueue_failed"))
+    else:
+        raise ValueError("turn review session cannot continue right now")
 
     if review.run_id is not None:
         from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ACTED
