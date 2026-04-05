@@ -219,18 +219,27 @@ def test_build_tmux_launch_command_keeps_session_after_clean_exit(monkeypatch, t
         )
         assert has_session.returncode == 0
 
-        capture = subprocess.run(
-            base + ["capture-pane", "-pt", session_name, "-S", "-40"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout
+        capture = ""
+        for _ in range(20):
+            capture = subprocess.run(
+                base + ["capture-pane", "-pt", session_name, "-S", "-40"],
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+            if "managed-local-clean-exit" in capture:
+                break
+            time.sleep(0.1)
         assert "managed-local-clean-exit" in capture
 
         artifact_root = Path(str(tmp_path / ".claude" / "longhouse-managed"))
         launch_artifact = artifact_root / "session-clean-exit" / "launch.json"
         exit_artifact = artifact_root / "session-clean-exit" / "exit.json"
         pane_tail = artifact_root / "session-clean-exit" / "pane-tail.txt"
+        for _ in range(20):
+            if launch_artifact.exists() and exit_artifact.exists() and pane_tail.exists():
+                break
+            time.sleep(0.1)
         assert launch_artifact.exists()
         assert exit_artifact.exists()
         assert pane_tail.exists()
