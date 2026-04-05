@@ -3,11 +3,13 @@
 import shlex
 import shutil
 import subprocess
+import time
 
 import pytest
 
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_HISTORY_LIMIT
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_REMAIN_ON_EXIT
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES
 from zerg.services.managed_local_tmux import build_managed_local_conditional_zshrc_source
@@ -59,7 +61,7 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
         "set-option -gu terminal-features \\; ",
         "set-option -as terminal-features ',*:RGB' \\; ",
         f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT} \\; ",
-        "set-option -g remain-on-exit failed \\; ",
+        f"set-option -g remain-on-exit {MANAGED_LOCAL_TMUX_REMAIN_ON_EXIT} \\; ",
         "unbind-key -T root WheelUpPane \\; ",
         (
             'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" '
@@ -169,6 +171,51 @@ def test_managed_local_root_wheel_binding_executes_cleanly_in_tmux(monkeypatch, 
         ).stdout.strip()
 
         assert pane_in_mode == "1"
+    finally:
+        subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
+
+
+def test_build_tmux_launch_command_keeps_session_after_clean_exit(monkeypatch, tmp_path):
+    if shutil.which("tmux") is None:
+        pytest.skip("tmux is not installed")
+    shell_path = shutil.which("zsh")
+    if shell_path is None:
+        pytest.skip("zsh is not installed")
+
+    import zerg.services.managed_local_tmux as tmux_mod
+
+    socket = "lh-managed-remain-on-exit-test"
+    monkeypatch.setattr(tmux_mod, "MANAGED_LOCAL_TMUX_SERVER_LABEL", socket)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    session_name = "lh-clean-exit"
+    command = tmux_mod.build_tmux_launch_command(
+        session_name=session_name,
+        cwd=str(workspace),
+        launch_command="zsh -lc 'printf managed-local-clean-exit && exit 0'",
+    )
+    base = ["tmux", "-L", socket]
+
+    try:
+        subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
+        subprocess.run(command, shell=True, executable=shell_path, check=True, capture_output=True, text=True)
+        time.sleep(0.4)
+
+        has_session = subprocess.run(
+            base + ["has-session", "-t", session_name],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert has_session.returncode == 0
+
+        capture = subprocess.run(
+            base + ["capture-pane", "-pt", session_name, "-S", "-40"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert "managed-local-clean-exit" in capture
     finally:
         subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
 

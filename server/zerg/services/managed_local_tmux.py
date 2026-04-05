@@ -12,6 +12,7 @@ TMUX_NOT_INSTALLED_MESSAGE = "tmux is not installed"
 MANAGED_LOCAL_TMUX_HISTORY_LIMIT = 50000
 MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL = "tmux-256color"
 MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES = 1
+MANAGED_LOCAL_TMUX_REMAIN_ON_EXIT = "on"
 MANAGED_LOCAL_STANDARD_PATH_PREFIXES = (
     "$HOME/.local/bin",
     "$HOME/bin",
@@ -139,7 +140,10 @@ def _managed_local_tmux_launch_options() -> tuple[str, ...]:
         "set-option -gu terminal-features",
         "set-option -as terminal-features ',*:RGB'",
         f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT}",
-        "set-option -g remain-on-exit failed",
+        # Keep the dead pane for postmortem attach/capture even after a clean
+        # provider exit. Losing the only pane transcript makes managed-local
+        # failures look like tmux crashes and destroys the debugging surface.
+        f"set-option -g remain-on-exit {MANAGED_LOCAL_TMUX_REMAIN_ON_EXIT}",
         "unbind-key -T root WheelUpPane",
         _build_managed_local_root_wheel_binding(),
         "unbind-key -T copy-mode WheelUpPane",
