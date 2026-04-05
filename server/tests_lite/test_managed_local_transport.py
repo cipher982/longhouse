@@ -29,11 +29,16 @@ def test_build_managed_local_launch_transport_plan_wraps_tmux_commands():
         session_name="lh-demo",
         cwd="/tmp/demo",
         entry_command="codex --enable codex_hooks",
+        session_id="session-123",
+        provider="codex",
         tmux_tmpdir="/tmp/lh-transport",
     )
 
     assert plan.transport == ManagedSessionTransport.TMUX
     assert "start-server" in _wrapped_inner(plan.launch_command)
+    assert 'LONGHOUSE_MANAGED_ARTIFACT_DIR="${HOME}/.claude/longhouse-managed/session-123"' in _wrapped_inner(
+        plan.launch_command
+    )
     assert "attach -t lh-demo" in _wrapped_inner(str(plan.attach_command))
     assert "has-session -t lh-demo" in _wrapped_inner(plan.verify_session_command)
     assert "kill-session -t lh-demo" in _wrapped_inner(str(plan.cleanup_command))

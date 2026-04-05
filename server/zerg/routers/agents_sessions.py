@@ -24,6 +24,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
+from zerg.services.managed_local_runtime import reconcile_managed_local_tmux_sessions
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
@@ -327,6 +328,22 @@ async def list_sessions(
             activity_map = store.get_last_activity_map(session_ids)
             presence_map = load_presence_map(db, session_ids)
             runtime_state_map = load_runtime_state_map(db, session_ids)
+            managed_local_candidates = [
+                session
+                for session in fused
+                if session.ended_at is None
+                and str(getattr(session, "managed_transport", "") or "").strip() == "tmux"
+                and str(getattr(session, "execution_home", "") or "").strip() == "managed_local"
+            ]
+            if managed_local_candidates:
+                reconciled_ids = await reconcile_managed_local_tmux_sessions(
+                    db,
+                    sessions=managed_local_candidates,
+                    owner_id=getattr(_auth, "owner_id", None),
+                    occurred_at=datetime.now(timezone.utc),
+                )
+                if reconciled_ids:
+                    runtime_state_map = load_runtime_state_map(db, session_ids)
             now = datetime.now(timezone.utc)
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
             sem_score_map = {s.id: score for s, score in sem_hits}
@@ -406,6 +423,22 @@ async def list_sessions(
         activity_map = store.get_last_activity_map(session_ids)
         presence_map = load_presence_map(db, session_ids)
         runtime_state_map = load_runtime_state_map(db, session_ids)
+        managed_local_candidates = [
+            session
+            for session in sessions
+            if session.ended_at is None
+            and str(getattr(session, "managed_transport", "") or "").strip() == "tmux"
+            and str(getattr(session, "execution_home", "") or "").strip() == "managed_local"
+        ]
+        if managed_local_candidates:
+            reconciled_ids = await reconcile_managed_local_tmux_sessions(
+                db,
+                sessions=managed_local_candidates,
+                owner_id=getattr(_auth, "owner_id", None),
+                occurred_at=datetime.now(timezone.utc),
+            )
+            if reconciled_ids:
+                runtime_state_map = load_runtime_state_map(db, session_ids)
         first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
         thread_cache: dict[str, tuple[str, int]] = {}
         now = datetime.now(timezone.utc)
@@ -624,6 +657,22 @@ async def list_active_sessions(
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
         presence_map = load_presence_map(db, session_ids)
         runtime_state_map = load_runtime_state_map(db, session_ids)
+        managed_local_candidates = [
+            session
+            for session in sessions
+            if session.ended_at is None
+            and str(getattr(session, "managed_transport", "") or "").strip() == "tmux"
+            and str(getattr(session, "execution_home", "") or "").strip() == "managed_local"
+        ]
+        if managed_local_candidates:
+            reconciled_ids = await reconcile_managed_local_tmux_sessions(
+                db,
+                sessions=managed_local_candidates,
+                owner_id=getattr(_auth, "owner_id", None),
+                occurred_at=datetime.now(timezone.utc),
+            )
+            if reconciled_ids:
+                runtime_state_map = load_runtime_state_map(db, session_ids)
 
         now = datetime.now(timezone.utc)
         items: List[ActiveSessionResponse] = []

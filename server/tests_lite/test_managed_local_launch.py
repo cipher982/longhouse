@@ -479,9 +479,11 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             }
             attach_inner = _inner_command(payload["attach_command"])
             assert "export TMUX_TMPDIR=/tmp/lh-managed-launch" in attach_inner
-            assert attach_inner.endswith(
+            assert (
                 f"exec tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} attach -t {payload['managed_session_name']}"
+                in attach_inner
             )
+            assert f"Artifacts: ${{HOME}}/.claude/longhouse-managed/{payload['session_id']}" in attach_inner
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.execution_home == "managed_local"
@@ -906,7 +908,8 @@ def test_launch_managed_local_this_device_falls_back_to_tmux_when_native_channel
             payload = response.json()
             assert payload["managed_transport"] == "tmux"
             attach_inner = _inner_command(payload["attach_command"])
-            assert attach_inner.endswith(f"attach -t {payload['managed_session_name']}")
+            assert f"attach -t {payload['managed_session_name']}" in attach_inner
+            assert f"Artifacts: ${{HOME}}/.claude/longhouse-managed/{payload['session_id']}" in attach_inner
             assert payload["managed_launch_profile"] == {
                 "required_commands": ["claude"],
                 "exported_env_keys": [

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
+from datetime import datetime
+from datetime import timezone
 
 TMUX_SESSION_NAME_MAX = 64
 _TMUX_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
@@ -13,6 +16,9 @@ MANAGED_LOCAL_TMUX_HISTORY_LIMIT = 50000
 MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL = "tmux-256color"
 MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES = 1
 MANAGED_LOCAL_TMUX_REMAIN_ON_EXIT = "on"
+MANAGED_LOCAL_ARTIFACT_ROOT = "${HOME}/.claude/longhouse-managed"
+MANAGED_LOCAL_ARTIFACT_PANE_TAIL_LINES = 2000
+MANAGED_LOCAL_ATTACH_POSTMORTEM_TAIL_LINES = 120
 MANAGED_LOCAL_STANDARD_PATH_PREFIXES = (
     "$HOME/.local/bin",
     "$HOME/bin",
@@ -112,6 +118,11 @@ def _tmux_prefix() -> str:
     return f"tmux -L {_quote(MANAGED_LOCAL_TMUX_SERVER_LABEL)}"
 
 
+def managed_local_artifact_dir(*, session_id: str) -> str:
+    safe_session_id = normalize_tmux_session_name(session_id, prefix="")
+    return f"{MANAGED_LOCAL_ARTIFACT_ROOT}/{safe_session_id}"
+
+
 def _build_managed_local_copy_mode_scroll_command(*, direction: str) -> str:
     return f"send-keys -X -N {MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-{direction}"
 
@@ -162,6 +173,8 @@ def build_tmux_launch_command(
     session_name: str,
     cwd: str,
     launch_command: str,
+    session_id: str | None = None,
+    provider: str | None = None,
     tmux_tmpdir: str | None = None,
 ) -> str:
     """Build a detached tmux launch command for a managed local session."""
@@ -169,11 +182,54 @@ def build_tmux_launch_command(
     working_dir = _require_non_empty("cwd", cwd)
     entry = _require_non_empty("launch_command", launch_command)
     script_path = f"/tmp/longhouse-managed-{name}.zsh"
+    artifact_dir = managed_local_artifact_dir(session_id=session_id or name)
+    launch_metadata = json.dumps(
+        {
+            "schema_version": 1,
+            "managed_transport": "tmux",
+            "session_id": session_id or name,
+            "session_name": name,
+            "provider": str(provider or "").strip() or None,
+            "cwd": working_dir,
+            "tmux_server_label": MANAGED_LOCAL_TMUX_SERVER_LABEL,
+            "tmux_tmpdir": _normalize_tmux_tmpdir(tmux_tmpdir),
+            "launched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        },
+        separators=(",", ":"),
+    )
     script_body = "\n".join(
         [
             "#!/bin/zsh",
-            "set -e",
-            f"exec {entry}",
+            "set -u",
+            f'export LONGHOUSE_MANAGED_ARTIFACT_DIR="{artifact_dir}"',
+            'mkdir -p "$LONGHOUSE_MANAGED_ARTIFACT_DIR"',
+            "cat > \"$LONGHOUSE_MANAGED_ARTIFACT_DIR/launch.json\" <<'__LONGHOUSE_MANAGED_LOCAL_JSON__'",
+            launch_metadata,
+            "__LONGHOUSE_MANAGED_LOCAL_JSON__",
+            entry,
+            "exit_code=$?",
+            'finished_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"',
+            'exit_classification="provider_nonzero_exit"',
+            '[ "$exit_code" -eq 0 ] && exit_classification="provider_clean_exit"',
+            'cat > "$LONGHOUSE_MANAGED_ARTIFACT_DIR/exit.json" <<__LONGHOUSE_MANAGED_LOCAL_EXIT__',
+            (
+                '{"session_id":"'
+                + str(session_id or name)
+                + '","session_name":"'
+                + name
+                + '","provider":"'
+                + str(provider or "")
+                + '","finished_at":"$finished_at","exit_code":$exit_code,'
+                + '"exit_classification":"$exit_classification"}'
+            ),
+            "__LONGHOUSE_MANAGED_LOCAL_EXIT__",
+            (
+                'if [ -n "${TMUX_PANE:-}" ]; then '
+                f'{_tmux_prefix()} capture-pane -p -t "$TMUX_PANE" -S -{MANAGED_LOCAL_ARTIFACT_PANE_TAIL_LINES} '
+                '> "$LONGHOUSE_MANAGED_ARTIFACT_DIR/pane-tail.txt" 2>/dev/null || true; '
+                "fi"
+            ),
+            "exit $exit_code",
         ]
     )
     write_script = "\n".join(
@@ -204,6 +260,15 @@ def build_tmux_current_command_command(*, session_name: str, tmux_tmpdir: str | 
     name = normalize_tmux_session_name(session_name, prefix="")
     return _wrap_managed_local_shell_command(
         f"{_tmux_prefix()} display-message -p -t {_quote(name)} '#{{pane_current_command}}'",
+        tmux_tmpdir=tmux_tmpdir,
+    )
+
+
+def build_tmux_pane_status_command(*, session_name: str, tmux_tmpdir: str | None = None) -> str:
+    """Build a command that prints pane liveness and exit status facts."""
+    name = normalize_tmux_session_name(session_name, prefix="")
+    return _wrap_managed_local_shell_command(
+        (f"{_tmux_prefix()} display-message -p -t {_quote(name)} " "'#{pane_dead}\t#{pane_dead_status}\t#{pane_current_command}'"),
         tmux_tmpdir=tmux_tmpdir,
     )
 
@@ -243,13 +308,39 @@ def build_tmux_set_remain_on_exit_command(
     )
 
 
-def build_tmux_attach_command(*, session_name: str, tmux_tmpdir: str | None = None) -> str:
+def build_tmux_attach_command(
+    *,
+    session_name: str,
+    session_id: str | None = None,
+    tmux_tmpdir: str | None = None,
+) -> str:
     """Build the user-facing attach command for a managed local session."""
     name = normalize_tmux_session_name(session_name, prefix="")
+    commands = [
+        f"if {_tmux_prefix()} has-session -t {_quote(name)} >/dev/null 2>&1; then exec {_tmux_prefix()} attach -t {_quote(name)}; fi"
+    ]
+    if session_id:
+        artifact_dir = managed_local_artifact_dir(session_id=session_id)
+        commands.extend(
+            [
+                'echo "Managed local tmux session is no longer running." >&2',
+                f'echo "Artifacts: {artifact_dir}" >&2',
+                f'[ -f "{artifact_dir}/exit.json" ] && cat "{artifact_dir}/exit.json" >&2',
+                (
+                    f'if [ -f "{artifact_dir}/pane-tail.txt" ]; then '
+                    'echo "--- pane tail ---" >&2; '
+                    f"tail -n {MANAGED_LOCAL_ATTACH_POSTMORTEM_TAIL_LINES} "
+                    f'"{artifact_dir}/pane-tail.txt" >&2; '
+                    "fi"
+                ),
+                "exit 1",
+            ]
+        )
+    else:
+        commands.append(f"exec {_tmux_prefix()} attach -t {_quote(name)}")
     return _wrap_managed_local_shell_command(
-        f"{_tmux_prefix()} attach -t {_quote(name)}",
+        "; ".join(commands),
         tmux_tmpdir=tmux_tmpdir,
-        exec_command=True,
     )
 
 

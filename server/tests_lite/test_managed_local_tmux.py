@@ -1,9 +1,11 @@
 """Tests for deterministic managed-local tmux command builders."""
 
+import os
 import shlex
 import shutil
 import subprocess
 import time
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +23,7 @@ from zerg.services.managed_local_tmux import build_tmux_current_command_command
 from zerg.services.managed_local_tmux import build_tmux_has_session_command
 from zerg.services.managed_local_tmux import build_tmux_kill_session_command
 from zerg.services.managed_local_tmux import build_tmux_launch_command
+from zerg.services.managed_local_tmux import build_tmux_pane_status_command
 from zerg.services.managed_local_tmux import build_tmux_paste_text_command
 from zerg.services.managed_local_tmux import build_tmux_send_text_command
 from zerg.services.managed_local_tmux import build_tmux_set_remain_on_exit_command
@@ -46,6 +49,8 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
         session_name="lh-demo",
         cwd="/tmp/path with spaces",
         launch_command="claude --dangerously-skip-permissions",
+        session_id="session-123",
+        provider="claude",
     )
 
     inner = _wrapped_inner(command)
@@ -70,10 +75,7 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
         ),
         "unbind-key -T copy-mode WheelUpPane \\; ",
         "unbind-key -T copy-mode WheelDownPane \\; ",
-        (
-            "bind-key -T copy-mode WheelUpPane send-keys -X -N "
-            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up \\; "
-        ),
+        (f"bind-key -T copy-mode WheelUpPane send-keys -X -N {MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up \\; "),
         (
             "bind-key -T copy-mode WheelDownPane send-keys -X -N "
             f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-down \\; "
@@ -96,7 +98,8 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
         assert next_index > cursor
         cursor = next_index
     assert "cat > /tmp/longhouse-managed-lh-demo.zsh <<'__LONGHOUSE_MANAGED_LOCAL__'" in inner
-    assert "exec claude --dangerously-skip-permissions" in inner
+    assert 'export LONGHOUSE_MANAGED_ARTIFACT_DIR="${HOME}/.claude/longhouse-managed/session-123"' in inner
+    assert "claude --dangerously-skip-permissions" in inner
 
 
 def test_build_tmux_launch_command_resets_terminal_features_before_reapplying(monkeypatch, tmp_path):
@@ -160,7 +163,9 @@ def test_managed_local_root_wheel_binding_executes_cleanly_in_tmux(monkeypatch, 
 
     try:
         subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
-        subprocess.run(base + ["new-session", "-d", "-s", "lh-demo", "sleep 30"], check=True, capture_output=True, text=True)
+        subprocess.run(
+            base + ["new-session", "-d", "-s", "lh-demo", "sleep 30"], check=True, capture_output=True, text=True
+        )
         subprocess.run(base + ["source-file", str(config_path)], check=True, capture_output=True, text=True)
 
         pane_in_mode = subprocess.run(
@@ -189,16 +194,21 @@ def test_build_tmux_launch_command_keeps_session_after_clean_exit(monkeypatch, t
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     session_name = "lh-clean-exit"
+    session_id = "session-clean-exit"
     command = tmux_mod.build_tmux_launch_command(
         session_name=session_name,
         cwd=str(workspace),
         launch_command="zsh -lc 'printf managed-local-clean-exit && exit 0'",
+        session_id=session_id,
+        provider="claude",
     )
     base = ["tmux", "-L", socket]
+    env = dict(os.environ)
+    env["HOME"] = str(tmp_path)
 
     try:
         subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
-        subprocess.run(command, shell=True, executable=shell_path, check=True, capture_output=True, text=True)
+        subprocess.run(command, shell=True, executable=shell_path, check=True, capture_output=True, text=True, env=env)
         time.sleep(0.4)
 
         has_session = subprocess.run(
@@ -216,6 +226,16 @@ def test_build_tmux_launch_command_keeps_session_after_clean_exit(monkeypatch, t
             text=True,
         ).stdout
         assert "managed-local-clean-exit" in capture
+
+        artifact_root = Path(str(tmp_path / ".claude" / "longhouse-managed"))
+        launch_artifact = artifact_root / "session-clean-exit" / "launch.json"
+        exit_artifact = artifact_root / "session-clean-exit" / "exit.json"
+        pane_tail = artifact_root / "session-clean-exit" / "pane-tail.txt"
+        assert launch_artifact.exists()
+        assert exit_artifact.exists()
+        assert pane_tail.exists()
+        assert '"exit_classification":"provider_clean_exit"' in exit_artifact.read_text(encoding="utf-8")
+        assert "managed-local-clean-exit" in pane_tail.read_text(encoding="utf-8")
     finally:
         subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
 
@@ -230,6 +250,14 @@ def test_build_tmux_current_command_command_targets_session():
     assert (
         f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} display-message -p -t lh-demo '#{{pane_current_command}}'" in inner
     )
+
+
+def test_build_tmux_pane_status_command_targets_session():
+    inner = _wrapped_inner(build_tmux_pane_status_command(session_name="lh-demo"))
+    assert f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} display-message -p -t lh-demo" in inner
+    assert "#{pane_dead}" in inner
+    assert "#{pane_dead_status}" in inner
+    assert "#{pane_current_command}" in inner
 
 
 def test_build_tmux_capture_command_respects_line_window():
@@ -280,6 +308,14 @@ def test_build_tmux_set_remain_on_exit_command_targets_session():
 def test_build_tmux_attach_command_targets_session():
     inner = _wrapped_inner(build_tmux_attach_command(session_name="lh-demo"))
     assert inner.endswith(f"exec tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} attach -t lh-demo")
+
+
+def test_build_tmux_attach_command_prints_postmortem_when_session_missing():
+    inner = _wrapped_inner(build_tmux_attach_command(session_name="lh-demo", session_id="session-123"))
+    assert "Managed local tmux session is no longer running." in inner
+    assert "Artifacts: ${HOME}/.claude/longhouse-managed/session-123" in inner
+    assert 'cat "${HOME}/.claude/longhouse-managed/session-123/exit.json" >&2' in inner
+    assert 'tail -n 120 "${HOME}/.claude/longhouse-managed/session-123/pane-tail.txt" >&2' in inner
 
 
 def test_build_tmux_send_text_command_handles_multiline_reply():
