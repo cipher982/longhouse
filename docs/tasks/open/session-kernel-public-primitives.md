@@ -32,7 +32,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - [x] Add `SessionMessage` persistence, acknowledgement, safe-boundary managed-local delivery, and E2E coverage
 - [x] Add the first coordination CLI commands: `longhouse peers` and `longhouse message`
 - [x] Add `longhouse tail` backed by the canonical session tail route
-- [x] Add CLI inbox helpers for non-live sessions: `check-messages` / `ack-message`
+- [x] Add CLI inbox helpers for non-live sessions: `messages` / `messages ack`
 - [x] Add `longhouse sessions get` and `longhouse sessions events`
 - [x] Declare the canonical machine surface in docs: `/api/agents/*`, auth model, session-context headers, and JSON contracts
 - [x] Decide and document the browser/timeline relationship to the machine canon (browser veneer vs direct reuse)
@@ -51,7 +51,7 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - Do not extract new repos or services yet. First make the primitives obviously canonical inside Longhouse.
 - Current delivery trigger is presence-driven safe-boundary delivery. That is the right default and should stay simple.
 - Queued delivery now drains up to 10 messages per safe-boundary wakeup, but stops immediately if the target session leaves a deliverable state.
-- Current CLI progress: `wall`, `peers`, `message`, `continue`, `tail`, `check-messages`, `ack-message`, `sessions get`, and `sessions events` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
+- Current CLI progress: `wall`, `peers`, `message`, `continue`, `tail`, `messages`, `messages ack`, `sessions get`, and `sessions events` now hit the canonical `/api/agents/*` machine routes directly and are covered by backend tests.
 - Machine-surface test coverage now includes the canonical `POST /api/agents/insights` write path plus JSON smoke coverage for the core coordination/session CLI commands.
 - Canonical machine surface is now documented in `docs/specs/agents-machine-surface.md`, including the browser veneer split and the `POST /api/agents/insights` canonical write path.
 - `docs/specs/agents-machine-surface.md` now includes copyable HTTP and CLI recipes for the raw wall, directed session messaging, inbox reads, and acknowledgements.
