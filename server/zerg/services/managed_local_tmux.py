@@ -111,10 +111,22 @@ def _tmux_prefix() -> str:
     return f"tmux -L {_quote(MANAGED_LOCAL_TMUX_SERVER_LABEL)}"
 
 
+def _build_managed_local_copy_mode_scroll_command(*, direction: str) -> str:
+    return f"send-keys -X -N {MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-{direction}"
+
+
 def _build_managed_local_wheel_binding(*, table: str, direction: str) -> str:
     suffix = "Up" if direction == "up" else "Down"
-    command = f"send-keys -X -N {MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-{direction}"
+    command = _build_managed_local_copy_mode_scroll_command(direction=direction)
     return f"bind-key -T {table} Wheel{suffix}Pane {command}"
+
+
+def _build_managed_local_root_wheel_binding() -> str:
+    return (
+        'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" '
+        '"send-keys -M" '
+        f'"copy-mode -e ; {_build_managed_local_copy_mode_scroll_command(direction="up")}"'
+    )
 
 
 def _managed_local_tmux_launch_options() -> tuple[str, ...]:
@@ -129,11 +141,7 @@ def _managed_local_tmux_launch_options() -> tuple[str, ...]:
         f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT}",
         "set-option -g remain-on-exit failed",
         "unbind-key -T root WheelUpPane",
-        (
-            'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" '
-            '"send-keys -M" "copy-mode -e -t= \\; send-keys -X -N '
-            f'{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up"'
-        ),
+        _build_managed_local_root_wheel_binding(),
         "unbind-key -T copy-mode WheelUpPane",
         "unbind-key -T copy-mode WheelDownPane",
         _build_managed_local_wheel_binding(table="copy-mode", direction="up"),

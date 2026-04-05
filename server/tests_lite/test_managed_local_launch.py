@@ -551,28 +551,28 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
                 "unbind-key -T root WheelUpPane \\; ",
                 (
                     'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" '
-                    '"send-keys -M" "copy-mode -e -t= \\; send-keys -X -N '
-                    f'{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up" \\; '
+                    '"send-keys -M" '
+                    f'"copy-mode -e ; send-keys -X -N {MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up" \\; '
                 ),
                 "unbind-key -T copy-mode WheelUpPane \\; ",
                 "unbind-key -T copy-mode WheelDownPane \\; ",
                 (
                     "bind-key -T copy-mode WheelUpPane send-keys -X -N "
-                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up \\; "
+                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up \\; "
                 ),
                 (
                     "bind-key -T copy-mode WheelDownPane send-keys -X -N "
-                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-down \\; "
+                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-down \\; "
                 ),
                 "unbind-key -T copy-mode-vi WheelUpPane \\; ",
                 "unbind-key -T copy-mode-vi WheelDownPane \\; ",
                 (
                     "bind-key -T copy-mode-vi WheelUpPane send-keys -X -N "
-                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up \\; "
+                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up \\; "
                 ),
                 (
                     "bind-key -T copy-mode-vi WheelDownPane send-keys -X -N "
-                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-down \\; "
+                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-down \\; "
                 ),
                 "new-session -d -s",
             ]

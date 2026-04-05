@@ -63,28 +63,28 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
         "unbind-key -T root WheelUpPane \\; ",
         (
             'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" '
-            '"send-keys -M" "copy-mode -e -t= \\; send-keys -X -N '
-            f'{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up" \\; '
+            '"send-keys -M" '
+            f'"copy-mode -e ; send-keys -X -N {MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up" \\; '
         ),
         "unbind-key -T copy-mode WheelUpPane \\; ",
         "unbind-key -T copy-mode WheelDownPane \\; ",
         (
             "bind-key -T copy-mode WheelUpPane send-keys -X -N "
-            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up \\; "
+            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up \\; "
         ),
         (
             "bind-key -T copy-mode WheelDownPane send-keys -X -N "
-            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-down \\; "
+            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-down \\; "
         ),
         "unbind-key -T copy-mode-vi WheelUpPane \\; ",
         "unbind-key -T copy-mode-vi WheelDownPane \\; ",
         (
             "bind-key -T copy-mode-vi WheelUpPane send-keys -X -N "
-            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up \\; "
+            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up \\; "
         ),
         (
             "bind-key -T copy-mode-vi WheelDownPane send-keys -X -N "
-            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-down \\; "
+            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-down \\; "
         ),
         "new-session -d -s lh-demo -c '/tmp/path with spaces' /tmp/longhouse-managed-lh-demo.zsh",
     ]
@@ -134,6 +134,41 @@ def test_build_tmux_launch_command_resets_terminal_features_before_reapplying(mo
             text=True,
         ).stdout
         assert features.splitlines().count("*:RGB") == 1
+    finally:
+        subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
+
+
+def test_managed_local_root_wheel_binding_executes_cleanly_in_tmux(monkeypatch, tmp_path):
+    if shutil.which("tmux") is None:
+        pytest.skip("tmux is not installed")
+
+    import zerg.services.managed_local_tmux as tmux_mod
+
+    socket = "lh-managed-wheel-runtime-test"
+    monkeypatch.setattr(tmux_mod, "MANAGED_LOCAL_TMUX_SERVER_LABEL", socket)
+    config_path = tmp_path / "wheel-runtime.conf"
+    root_binding = next(
+        option
+        for option in tmux_mod._managed_local_tmux_launch_options()
+        if option.startswith("bind-key -T root WheelUpPane")
+    )
+    runtime_command = root_binding.split("WheelUpPane ", 1)[1]
+    config_path.write_text(f"{runtime_command}\n", encoding="utf-8")
+    base = ["tmux", "-L", socket]
+
+    try:
+        subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
+        subprocess.run(base + ["new-session", "-d", "-s", "lh-demo", "sleep 30"], check=True, capture_output=True, text=True)
+        subprocess.run(base + ["source-file", str(config_path)], check=True, capture_output=True, text=True)
+
+        pane_in_mode = subprocess.run(
+            base + ["display-message", "-p", "-t", "lh-demo", "#{pane_in_mode}"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+
+        assert pane_in_mode == "1"
     finally:
         subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
 
