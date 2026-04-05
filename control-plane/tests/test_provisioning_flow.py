@@ -1012,7 +1012,7 @@ class TestInstancesAPI:
         # Reprovision now blocks until wait_for_health succeeds, promoting to active
         assert data["status"] == "active"
         assert data["migration"]["state"] in {"ok", "pending", "failed", "unknown", "error"}
-        prov.run_migration_preflight.assert_called_once_with("inst1", data_path="/tmp/test-data/inst1")
+        prov.run_migration_preflight.assert_called_once_with("inst1", data_path="/tmp/test-data/inst1", image=None)
         prov.deprovision_instance.assert_called_once()
         prov.provision_instance.assert_called_once()
         prov.wait_for_health.assert_called_once()
@@ -1021,6 +1021,28 @@ class TestInstancesAPI:
         db_session.refresh(inst)
         assert inst.last_health_at is not None
         assert inst.data_path == "/tmp/test-data/inst1"
+
+    @patch("control_plane.routers.instances.Provisioner")
+    def test_reprovision_instance_uses_explicit_image_override(self, MockProv, client, db_session):
+        prov = _mock_provisioner()
+        MockProv.return_value = prov
+
+        user = _make_user(db_session)
+        inst = _make_instance(db_session, user, status="deprovisioned")
+
+        resp = client.post(
+            f"/api/instances/{inst.id}/reprovision",
+            headers=ADMIN_HEADERS,
+            json={"image": "ghcr.io/cipher982/longhouse-runtime:deadbeef"},
+        )
+        assert resp.status_code == 200
+        prov.run_migration_preflight.assert_called_once_with(
+            "inst1",
+            data_path="/tmp/test-data/inst1",
+            image="ghcr.io/cipher982/longhouse-runtime:deadbeef",
+        )
+        _, call_kwargs = prov.provision_instance.call_args
+        assert call_kwargs["image"] == "ghcr.io/cipher982/longhouse-runtime:deadbeef"
 
     @patch("control_plane.routers.instances.Provisioner")
     def test_reprovision_preserves_custom_env_overrides(self, MockProv, client, db_session):
@@ -1080,7 +1102,7 @@ class TestInstancesAPI:
         resp = client.post(f"/api/instances/{inst.id}/reprovision", headers=ADMIN_HEADERS)
         assert resp.status_code == 200
         assert prov.run_migration_preflight.call_count == 2
-        prov.run_migration_preflight.assert_any_call("inst1", data_path="/tmp/test-data/inst1")
+        prov.run_migration_preflight.assert_any_call("inst1", data_path="/tmp/test-data/inst1", image=None)
         assert prov.deprovision_instance.call_count == 2
         prov.deprovision_instance.assert_any_call("longhouse-inst1")
         prov.provision_instance.assert_called_once()

@@ -769,6 +769,7 @@ lh_hosted_authenticate_cookie_jar() {
 _lh_hosted_post_instance_action() {
   local instance_id="$1"
   local action="$2"
+  local payload="${3:-}"
   local response_file=""
   local http_code=""
 
@@ -780,10 +781,19 @@ _lh_hosted_post_instance_action() {
   lh_hosted_prepare_control_plane_auth || return 1
 
   response_file="$(mktemp)"
-  http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
-    -X POST \
-    -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
-    "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/${action}")"
+  if [[ -n "$payload" ]]; then
+    http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      -X POST \
+      -H "Content-Type: application/json" \
+      -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
+      -d "$payload" \
+      "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/${action}")"
+  else
+    http_code="$(curl -sS -o "$response_file" -w "%{http_code}" \
+      -X POST \
+      -H "X-Admin-Token: ${CONTROL_PLANE_ADMIN_TOKEN}" \
+      "${CONTROL_PLANE_URL%/}/api/instances/${instance_id}/${action}")"
+  fi
 
   if [[ "$http_code" != "200" ]]; then
     echo "Failed to ${action} instance ${instance_id} (HTTP ${http_code})" >&2
@@ -797,7 +807,14 @@ _lh_hosted_post_instance_action() {
 
 lh_hosted_reprovision() {
   local instance_id="${1:-${LH_INSTANCE_ID:-}}"
-  _lh_hosted_post_instance_action "$instance_id" "reprovision"
+  local image="${2:-}"
+  local payload=""
+
+  if [[ -n "$image" ]]; then
+    payload="$(_lh_hosted_json_object image "$image")" || return 1
+  fi
+
+  _lh_hosted_post_instance_action "$instance_id" "reprovision" "$payload"
 }
 
 lh_hosted_deprovision() {

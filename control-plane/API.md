@@ -42,6 +42,7 @@
 - `GET /api/instances/{instance_id}` → instance status
 - `POST /api/instances/{instance_id}/deprovision` → stop/remove instance
 - `POST /api/instances/{instance_id}/reprovision` → stop/remove + recreate instance
+  - Optional body: `{ "image": "ghcr.io/cipher982/longhouse-runtime:<tag>" }` to pin reprovision to an explicit runtime image
 - `POST /api/instances/{instance_id}/regenerate-password` → rotate instance password
 - `POST /api/instances/{instance_id}/login-token` → short-lived instance login token
 

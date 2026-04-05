@@ -686,11 +686,11 @@ qa-live-chat: ## Run hosted live chat smoke against the current instance
 qa-live-conversations: ## Backcompat alias; prefer qa-live-chat
 	@$(MAKE) qa-live-chat
 
-reprovision: ## Reprovision hosted instance — SUBDOMAIN=david010 (default). Waits for health.
+reprovision: ## Reprovision hosted instance — SUBDOMAIN=david010 (default), optional IMAGE=ghcr.io/...:<tag>. Waits for health.
 	@bash -c 'source scripts/lib/hosted-instance.sh && \
 	  lh_hosted_prepare_control_plane_auth && \
 	  lh_hosted_resolve_instance "$(or $(SUBDOMAIN),david010)" && \
-	  lh_hosted_reprovision "$$LH_INSTANCE_ID" && \
+	  lh_hosted_reprovision "$$LH_INSTANCE_ID" "$(IMAGE)" && \
 	  echo "Reprovisioned $$LH_INSTANCE_SUBDOMAIN — waiting for health..." && \
 	  ./scripts/ci/wait-for-http.sh "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" "$$LH_INSTANCE_SUBDOMAIN health" 30 2 && \
 	  curl -sf "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" | \

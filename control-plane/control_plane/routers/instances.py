@@ -27,6 +27,7 @@ from control_plane.models import User
 from control_plane.schemas import InstanceCreate
 from control_plane.schemas import InstanceCustomEnvPayload
 from control_plane.schemas import InstanceList
+from control_plane.schemas import InstanceReprovisionPayload
 from control_plane.schemas import MigrationStatusOut
 from control_plane.schemas import InstanceOut
 from control_plane.schemas import TokenOut
@@ -218,6 +219,7 @@ def _recreate_instance(
     provisioner: Provisioner,
     *,
     password: str | None = None,
+    image: str | None = None,
 ) -> Any:
     provisioner.deprovision_instance(inst.container_name)
     try:
@@ -231,6 +233,7 @@ def _recreate_instance(
         password=password,
         custom_env=custom_env,
         data_path=resolve_instance_data_path(inst.subdomain, data_path=inst.data_path),
+        image=image,
     )
     inst.container_name = result.container_name
     inst.data_path = result.data_path
@@ -469,7 +472,11 @@ def regenerate_password(instance_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{instance_id}/reprovision", response_model=InstanceOut, dependencies=[Depends(require_admin)])
-def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
+def reprovision_instance(
+    instance_id: int,
+    payload: InstanceReprovisionPayload | None = None,
+    db: Session = Depends(get_db),
+):
     """Reprovision a stopped/deprovisioned instance.
 
     Blocks until the runtime passes /api/readyz (up to 120s). On success,
@@ -490,23 +497,29 @@ def reprovision_instance(instance_id: int, db: Session = Depends(get_db)):
 
     provisioner = Provisioner()
     data_path = resolve_instance_data_path(inst.subdomain, data_path=inst.data_path)
+    target_image = payload.image.strip() if payload and payload.image else None
     try:
         provisioner.run_migration_preflight(
             inst.subdomain,
             data_path=data_path,
+            image=target_image,
         )
     except RuntimeError as exc:
         if _is_retryable_preflight_lock_error(str(exc)):
             provisioner.deprovision_instance(inst.container_name)
             try:
-                provisioner.run_migration_preflight(inst.subdomain, data_path=data_path)
+                provisioner.run_migration_preflight(
+                    inst.subdomain,
+                    data_path=data_path,
+                    image=target_image,
+                )
             except RuntimeError as retry_exc:
                 raise HTTPException(status_code=500, detail=str(retry_exc)) from retry_exc
         else:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     prior_image = inst.last_healthy_image
-    result = _recreate_instance(inst, user, provisioner)
+    result = _recreate_instance(inst, user, provisioner, image=target_image)
     db.commit()
 
     # Wait for the runtime to become ready, then stamp last_healthy_image.

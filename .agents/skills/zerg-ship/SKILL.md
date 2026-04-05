@@ -63,7 +63,7 @@ Manual fallback:
   --docker-image ghcr.io/cipher982/longhouse-runtime \
   --docker-tag <full-commit-sha> \
   --timeout 900
-make reprovision
+make reprovision IMAGE="ghcr.io/cipher982/longhouse-runtime:<full-commit-sha>"
 make qa-live
 make qa-live-conversations
 ```

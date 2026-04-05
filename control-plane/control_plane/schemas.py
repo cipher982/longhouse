@@ -41,6 +41,10 @@ class InstanceCustomEnvPayload(BaseModel):
     custom_env: dict[str, str | None] = Field(default_factory=dict)
 
 
+class InstanceReprovisionPayload(BaseModel):
+    image: str | None = None
+
+
 class TokenOut(BaseModel):
     token: str
     expires_in: int
