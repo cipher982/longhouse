@@ -14,7 +14,7 @@ from zerg.main import _settings
 from zerg.main import app
 
 
-def test_get_settings_uses_umami_env_with_vite_fallback(monkeypatch):
+def test_get_settings_uses_umami_env_with_legacy_vite_fallback(monkeypatch):
     monkeypatch.setenv("TESTING", "1")
     monkeypatch.setenv("DATABASE_URL", "sqlite://")
     monkeypatch.setenv("FERNET_SECRET", Fernet.generate_key().decode())
