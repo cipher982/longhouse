@@ -1,7 +1,7 @@
 """Session continuity helpers for cross-environment CLI session resumption.
 
 This module now holds:
-- provider-specific resume prep for Claude and Codex
+- provider-specific resume prep for Claude
 - shared session fetch/shipping helpers
 - workspace resolution and session locking
 
@@ -234,46 +234,6 @@ def get_codex_config_dir() -> Path:
     return Path.home() / ".codex"
 
 
-async def prepare_codex_session_for_resume(
-    session_id: str,
-    db: Session | None = None,
-) -> str:
-    """Fetch session from Zerg and prepare it for Codex exec resume.
-
-    Downloads the session JSONL and places it at the path Codex expects:
-    {codex_home}/sessions/{YYYY}/{MM}/{DD}/rollout-{timestamp}-{session_id}.jsonl
-
-    Args:
-        session_id: Session UUID to fetch
-        db: Optional local DB session for direct export
-
-    Returns:
-        The provider_session_id to pass to codex exec resume
-
-    Raises:
-        ValueError: If session not found or configuration error
-    """
-    jsonl_bytes, _original_cwd, provider_session_id = await fetch_session_from_zerg(session_id, db=db)
-
-    if not provider_session_id:
-        raise ValueError(f"Session {session_id} has no provider_session_id - cannot resume")
-
-    validate_session_id(provider_session_id)
-
-    codex_home = get_codex_config_dir()
-    now = datetime.now(timezone.utc)
-    session_dir = codex_home / "sessions" / str(now.year) / f"{now.month:02d}" / f"{now.day:02d}"
-    session_dir.mkdir(parents=True, exist_ok=True)
-
-    timestamp_str = now.strftime("%Y-%m-%dT%H-%M-%S")
-    session_file = session_dir / f"rollout-{timestamp_str}-{provider_session_id}.jsonl"
-    session_file.write_bytes(jsonl_bytes)
-
-    logger.info(f"Prepared Codex session {session_id} for resume at {session_file}")
-
-    return provider_session_id
-
-
 async def ship_session_to_zerg(
     workspace_path: Path,
     commis_id: str,
@@ -488,7 +448,6 @@ __all__ = [
     "encode_cwd_for_claude",
     "fetch_session_from_zerg",
     "prepare_claude_session_for_resume",
-    "prepare_codex_session_for_resume",
     "ship_session_to_zerg",
     "ShipSessionResult",
     "SessionLockManager",

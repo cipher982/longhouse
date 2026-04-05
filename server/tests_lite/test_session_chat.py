@@ -305,6 +305,69 @@ def test_managed_local_claude_cloud_chat_can_continue_when_live_control_is_gone(
         api_app_ref.dependency_overrides = {}
 
 
+def test_managed_local_claude_cloud_chat_requires_live_send_when_live_control_exists(tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"resume-send-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="session-chat-managed-local-live@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project="managed-local-live",
+                device_id="cinder",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on laptop with a live Longhouse control channel",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = "tmux"
+        source_session.source_runner_id = 42
+        source_session.source_runner_name = "cinder"
+        source_session.managed_session_name = "lh-claude-live"
+        db.commit()
+        user_id = user.id
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="session-chat-managed-local-live@test.local", role=UserRole.USER.value),
+    )
+
+    try:
+        response = client.post(
+            f"/api/sessions/{source_session_id}/chat",
+            json={"message": "continue from Longhouse"},
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "This session currently has live Longhouse control. Use live send instead of cloud continuation."
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_managed_local_codex_live_send_requires_host_attach(tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
@@ -364,6 +427,62 @@ def test_managed_local_codex_live_send_requires_host_attach(tmp_path):
         )
         assert response.status_code == 409, response.text
         assert response.json()["detail"] == "This live session needs host attach before Longhouse can continue it."
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_synced_codex_session_cloud_chat_is_not_available(tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"codex-import-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="session-chat-codex-cloud@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="codex",
+                environment="Cinder",
+                project="codex-history-only",
+                device_id="cinder",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Imported Codex session",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        db.commit()
+        user_id = user.id
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="session-chat-codex-cloud@test.local", role=UserRole.USER.value),
+    )
+
+    try:
+        response = client.post(
+            f"/api/sessions/{source_session_id}/chat",
+            json={"message": "continue from Longhouse"},
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "Codex sessions are not yet available for cloud continuation from Longhouse."
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -438,6 +557,59 @@ def test_agents_continue_route_supports_fake_cloud_continuation(monkeypatch, tmp
             assert target_session is not None
             assert target_session.id != source_session_id
             assert target_session.project == project
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_agents_continue_route_rejects_codex_cloud_continuation(tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"codex-agents-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="agents-continue-codex@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="codex",
+                environment="Cinder",
+                project="agents-codex-history-only",
+                device_id="agent-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Imported Codex session on agent-device",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        db.commit()
+        token = DeviceToken(owner_id=user.id, device_id="agent-device", token_hash="test")
+
+    client, api_app_ref = _make_machine_client(session_local, token)
+
+    try:
+        response = client.post(
+            f"/api/agents/sessions/{source_session_id}/continue",
+            json={"message": "continue from the API"},
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "Codex sessions are not yet available for cloud continuation from Longhouse."
     finally:
         api_app_ref.dependency_overrides = {}
 
