@@ -75,6 +75,7 @@ from zerg.services.session_continuity import prepare_codex_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_continuity import ship_session_to_zerg
 from zerg.services.session_continuity import workspace_resolver
+from zerg.services.session_views import ManagedLaunchProfileResponse
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
@@ -301,6 +302,10 @@ class ManagedLocalSessionLaunchRequest(BaseModel):
     git_branch: str | None = Field(None, description="Optional git branch name")
     display_name: str | None = Field(None, description="Optional display name for the session")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
+    claude_launch_env: dict[str, str] | None = Field(
+        None,
+        description="Optional allowlisted Claude launch env overrides to apply on the runner",
+    )
 
 
 class ManagedLocalThisDeviceLaunchRequest(BaseModel):
@@ -330,11 +335,6 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
 class ManagedLocalSessionLaunchResponse(BaseModel):
     """Response after successfully starting a managed local session."""
 
-    class ManagedLaunchProfileDebug(BaseModel):
-        required_commands: list[str]
-        argv: list[str]
-        exported_env_keys: list[str]
-
     session_id: str
     provider: str
     provider_session_id: str
@@ -345,7 +345,7 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     source_runner_name: str
     managed_session_name: str
     attach_command: str
-    managed_launch_profile: ManagedLaunchProfileDebug | None = None
+    managed_launch_profile: ManagedLaunchProfileResponse | None = None
 
 
 class SessionLockInfo(BaseModel):
@@ -394,9 +394,7 @@ def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
         managed_session_name=session.managed_session_name or "",
         attach_command=result.attach_command,
         managed_launch_profile=(
-            ManagedLocalSessionLaunchResponse.ManagedLaunchProfileDebug.model_validate(managed_launch_profile)
-            if isinstance(managed_launch_profile, dict)
-            else None
+            ManagedLaunchProfileResponse.model_validate(managed_launch_profile) if isinstance(managed_launch_profile, dict) else None
         ),
     )
 
@@ -2057,6 +2055,7 @@ async def launch_managed_local(
                 display_name=body.display_name,
                 loop_mode=body.loop_mode.value,
                 hook_url=hook_url,
+                claude_launch_env=body.claude_launch_env,
             ),
         )
     except ManagedLocalLaunchError as exc:

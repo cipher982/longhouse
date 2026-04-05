@@ -373,7 +373,7 @@ def test_serialize_launch_profile_redacts_values_and_keeps_debuggable_shape():
             "claude",
             "--dangerously-skip-permissions",
             "--session-id",
-            "abc-123",
+            "<provider-session-id>",
             "-n",
             "Bedrock PM Session",
         ],
@@ -469,7 +469,7 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
                     "claude",
                     "--dangerously-skip-permissions",
                     "--session-id",
-                    payload["provider_session_id"],
+                    "<provider-session-id>",
                     "-n",
                     "Hiring session",
                 ],
@@ -811,12 +811,14 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             assert payload["source_runner_name"] == "work-laptop"
             assert "claude --resume" in payload["attach_command"]
             assert "server:longhouse-channel" in payload["attach_command"]
+            assert payload["managed_launch_profile"] is None
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.source_runner_id == runner.id
             assert session.source_runner_name == "work-laptop"
             assert session.managed_transport == "claude_channel_bridge"
             assert session.managed_tmux_tmpdir is None
+            assert session.managed_launch_profile is None
             assert dispatcher.calls == []
         finally:
             api_app_ref.dependency_overrides = {}
@@ -868,12 +870,33 @@ def test_launch_managed_local_this_device_falls_back_to_tmux_when_native_channel
             assert payload["managed_transport"] == "tmux"
             attach_inner = _inner_command(payload["attach_command"])
             assert attach_inner.endswith(f"attach -t {payload['managed_session_name']}")
+            assert payload["managed_launch_profile"] == {
+                "required_commands": ["claude"],
+                "exported_env_keys": [
+                    "LONGHOUSE_MANAGED_SESSION_ID",
+                    "LONGHOUSE_HOOK_URL",
+                    "LONGHOUSE_HOOK_TOKEN",
+                    "CLAUDE_CODE_USE_BEDROCK",
+                    "AWS_PROFILE",
+                    "AWS_REGION",
+                    "ANTHROPIC_MODEL",
+                ],
+                "argv": [
+                    "claude",
+                    "--dangerously-skip-permissions",
+                    "--session-id",
+                    "<provider-session-id>",
+                    "-n",
+                    "Hiring session",
+                ],
+            }
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.source_runner_id == runner.id
             assert session.source_runner_name == "work-laptop"
             assert session.managed_transport == "tmux"
             assert session.managed_tmux_tmpdir == "/tmp/lh-managed-launch"
+            assert session.managed_launch_profile == payload["managed_launch_profile"]
             assert len(dispatcher.calls) == 5
             launch_inner = _inner_command(dispatcher.calls[2]["command"])
             assert "export CLAUDE_CODE_USE_BEDROCK=1" in launch_inner
@@ -979,6 +1002,7 @@ def test_launch_managed_local_this_device_prefers_forwarded_https_hook_url(monke
             payload = response.json()
             assert payload["managed_transport"] == "claude_channel_bridge"
             assert "server:longhouse-channel" in payload["attach_command"]
+            assert payload["managed_launch_profile"] is None
             assert dispatcher.calls == []
         finally:
             api_app_ref.dependency_overrides = {}
