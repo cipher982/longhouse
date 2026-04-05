@@ -15,10 +15,9 @@ on:
       - '.github/workflows/quality.yml'
   workflow_dispatch: {}
 
-# Never cancel runs
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'workflow_dispatch' && format('quality-manual-{0}', github.run_id) || (github.event_name == 'pull_request' && format('quality-pr-{0}', github.event.pull_request.number)) || format('quality-branch-{0}', github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   lighthouse:

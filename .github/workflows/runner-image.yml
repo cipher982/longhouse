@@ -14,10 +14,9 @@ permissions:
   contents: read
   packages: write
 
-# Never cancel - each build should complete
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'workflow_dispatch' && format('runner-image-manual-{0}', github.run_id) || (github.ref_type == 'tag' && format('runner-image-tag-{0}', github.ref_name)) || format('runner-image-branch-{0}', github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref_type != 'tag' }}
 
 jobs:
   build-and-push:

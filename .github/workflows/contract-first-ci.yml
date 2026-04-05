@@ -7,10 +7,9 @@ on:
 
 run-name: push-pr-ci--${{ github.ref_name }}--${{ github.sha }}
 
-# Never cancel runs
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'workflow_dispatch' && format('push-pr-ci-manual-{0}', github.run_id) || (github.event_name == 'pull_request' && format('push-pr-ci-pr-{0}', github.event.pull_request.number)) || format('push-pr-ci-branch-{0}', github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 env:
   # Self-hosted runners can have global pip config pointing at private indexes.

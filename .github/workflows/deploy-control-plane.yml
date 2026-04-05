@@ -11,8 +11,8 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: deploy-control-plane
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'workflow_dispatch' && format('deploy-control-plane-manual-{0}', github.run_id) || format('deploy-control-plane-{0}', github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
   deploy:
