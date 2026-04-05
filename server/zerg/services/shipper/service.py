@@ -117,33 +117,15 @@ def get_engine_executable() -> str:
     """Get the absolute path to the longhouse-engine binary.
 
     Resolution order:
-    1. shutil.which("longhouse-engine")  — installed on PATH
-    2. ~/.local/bin/longhouse-engine     — pipx / uv tool install
-    3. ~/.claude/bin/longhouse-engine    — Longhouse-managed install
-    4. Repo dev builds (release then debug)
+    1. Repo dev builds (release then debug)
+    2. shutil.which("longhouse-engine")  — installed on PATH
+    3. ~/.local/bin/longhouse-engine     — pipx / uv tool install
+    4. ~/.claude/bin/longhouse-engine    — Longhouse-managed install
 
     Raises:
         RuntimeError: If the binary cannot be found anywhere.
     """
-    # 1. PATH
-    found = shutil.which("longhouse-engine")
-    if found:
-        return found
-
-    # 2. ~/.local/bin
-    local_bin = Path.home() / ".local" / "bin" / "longhouse-engine"
-    if local_bin.exists():
-        return str(local_bin)
-
-    # 3. ~/.claude/bin
-    claude_bin = Path.home() / ".claude" / "bin" / "longhouse-engine"
-    if claude_bin.exists():
-        return str(claude_bin)
-
-    # 4. Repo dev builds
-    # service.py lives at server/zerg/services/shipper/service.py
-    # pyproject.toml is at server/ → project_root
-    # engine is at engine/ → project_root.parent / "engine"
+    # 1. Repo dev builds
     project_root = _find_project_root()
     if project_root:
         engine_dir = project_root.parent / "engine"
@@ -151,6 +133,21 @@ def get_engine_executable() -> str:
             candidate = engine_dir / "target" / profile / "longhouse-engine"
             if candidate.exists():
                 return str(candidate)
+
+    # 2. PATH
+    found = shutil.which("longhouse-engine")
+    if found:
+        return found
+
+    # 3. ~/.local/bin
+    local_bin = Path.home() / ".local" / "bin" / "longhouse-engine"
+    if local_bin.exists():
+        return str(local_bin)
+
+    # 4. ~/.claude/bin
+    claude_bin = Path.home() / ".claude" / "bin" / "longhouse-engine"
+    if claude_bin.exists():
+        return str(claude_bin)
 
     raise RuntimeError(
         "longhouse-engine not found. " "Install it from https://longhouse.ai/install or build engine (cargo build --release)."
@@ -210,8 +207,6 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
         str(config.fallback_scan_secs),
         "--spool-replay-secs",
         str(config.spool_replay_secs),
-        "--log-dir",
-        str(log_dir),
         "--compression",
         config.compression,
     ]
@@ -270,7 +265,6 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
         f" --flush-ms {config.flush_ms}"
         f" --fallback-scan-secs {config.fallback_scan_secs}"
         f" --spool-replay-secs {config.spool_replay_secs}"
-        f" --log-dir {log_dir}"
         f" --compression {config.compression}"
         f"{machine_name_arg}"
     )

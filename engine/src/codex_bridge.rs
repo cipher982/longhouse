@@ -15,6 +15,8 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
 
+use crate::text::truncate_tail_chars;
+
 const BRIDGE_RUNTIME_SOURCE: &str = "codex_bridge";
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
 
@@ -583,9 +585,8 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
                 // Only fall back on connection failures. If the daemon accepted the
                 // request but the reply was lost, retrying via direct WebSocket would
                 // duplicate the turn.
-                let is_connect_failure = e
-                    .downcast_ref::<std::io::Error>()
-                    .map_or(false, |io_err| {
+                let is_connect_failure =
+                    e.downcast_ref::<std::io::Error>().map_or(false, |io_err| {
                         matches!(
                             io_err.kind(),
                             std::io::ErrorKind::ConnectionRefused
@@ -594,9 +595,13 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
                         )
                     });
                 if !is_connect_failure {
-                    return Err(e.context("IPC dispatch may have succeeded; not retrying to avoid duplicate turn"));
+                    return Err(e.context(
+                        "IPC dispatch may have succeeded; not retrying to avoid duplicate turn",
+                    ));
                 }
-                eprintln!("[codex-bridge] IPC connect failed, falling back to direct WebSocket: {e}");
+                eprintln!(
+                    "[codex-bridge] IPC connect failed, falling back to direct WebSocket: {e}"
+                );
             }
         }
     }
@@ -639,14 +644,13 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
 const IPC_SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[cfg(unix)]
-async fn send_via_ipc(
-    sock_path: &Path,
-    text: &str,
-    thread_id: &str,
-) -> Result<BridgeSendSummary> {
-    tokio::time::timeout(IPC_SEND_TIMEOUT, send_via_ipc_inner(sock_path, text, thread_id))
-        .await
-        .map_err(|_| anyhow!("IPC send timed out after {}s", IPC_SEND_TIMEOUT.as_secs()))?
+async fn send_via_ipc(sock_path: &Path, text: &str, thread_id: &str) -> Result<BridgeSendSummary> {
+    tokio::time::timeout(
+        IPC_SEND_TIMEOUT,
+        send_via_ipc_inner(sock_path, text, thread_id),
+    )
+    .await
+    .map_err(|_| anyhow!("IPC send timed out after {}s", IPC_SEND_TIMEOUT.as_secs()))?
 }
 
 #[cfg(unix)]
@@ -669,8 +673,7 @@ async fn send_via_ipc_inner(
 
     let mut response_buf = Vec::new();
     stream.read_to_end(&mut response_buf).await?;
-    let response: Value =
-        serde_json::from_slice(&response_buf).context("parsing IPC response")?;
+    let response: Value = serde_json::from_slice(&response_buf).context("parsing IPC response")?;
 
     if response.get("ok").and_then(Value::as_bool) != Some(true) {
         let error = response
@@ -836,10 +839,7 @@ fn load_ready_state(
 
 fn read_log_tail(path: &Path, max_chars: usize) -> String {
     let text = fs::read_to_string(path).unwrap_or_default();
-    if text.len() <= max_chars {
-        return text;
-    }
-    text[text.len() - max_chars..].to_string()
+    truncate_tail_chars(&text, max_chars)
 }
 
 async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> {
@@ -1272,7 +1272,9 @@ async fn process_notification(
                                     .unwrap_or_else(|_| PathBuf::from(tp))
                                     .to_string_lossy()
                                     .to_string();
-                                if let Err(e) = sb.bind(&canonical, &context.state.session_id, "codex") {
+                                if let Err(e) =
+                                    sb.bind(&canonical, &context.state.session_id, "codex")
+                                {
                                     eprintln!("[codex-bridge] session_binding seed failed: {e}");
                                 }
                             }
@@ -1375,12 +1377,7 @@ async fn process_notification(
 }
 
 impl BridgeRuntimeSink {
-    async fn post_phase(
-        &self,
-        phase: &str,
-        dedupe_key: String,
-        tool_name: Option<String>,
-    ) {
+    async fn post_phase(&self, phase: &str, dedupe_key: String, tool_name: Option<String>) {
         let freshness_ms = match phase {
             "thinking" => Some(90_000),
             "running" => Some(600_000),
@@ -1704,11 +1701,16 @@ mod tests {
             Some("inProgress")
         );
 
-        let request_payload: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        let request_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
         assert_eq!(request_payload["method"], "turn/start");
 
-        let approval_payload: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        let approval_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
         assert_eq!(approval_payload["id"], "srv-1");
-        assert_eq!(approval_payload["result"]["answers"]["color"]["answers"][0], "blue");
+        assert_eq!(
+            approval_payload["result"]["answers"]["color"]["answers"][0],
+            "blue"
+        );
     }
 }

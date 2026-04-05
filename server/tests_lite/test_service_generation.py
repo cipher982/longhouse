@@ -13,6 +13,7 @@ import zerg.services.shipper.service as shipper_service
 from zerg.services.shipper.service import ServiceConfig
 from zerg.services.shipper.service import _generate_launchd_plist
 from zerg.services.shipper.service import _generate_systemd_unit
+from zerg.services.shipper.service import get_engine_executable
 
 
 @pytest.fixture(autouse=True)
@@ -47,6 +48,7 @@ def test_plist_contains_machine_name():
     plist = _generate_launchd_plist(config)
     assert "--machine-name" in plist
     assert "work-macbook" in plist
+    assert "--log-dir" not in plist
 
 
 def test_plist_no_machine_name_arg_when_none():
@@ -101,6 +103,7 @@ def test_systemd_contains_machine_name():
     unit = _generate_systemd_unit(config)
     assert "--machine-name" in unit
     assert "home-server" in unit
+    assert "--log-dir" not in unit
 
 
 def test_systemd_no_machine_name_arg_when_none():
@@ -121,11 +124,22 @@ def test_systemd_machine_name_no_spaces():
     unit = _generate_systemd_unit(config)
 
     # Extract ExecStart line
-    exec_line = next(
-        line for line in unit.splitlines() if line.startswith("ExecStart=")
-    )
+    exec_line = next(line for line in unit.splitlines() if line.startswith("ExecStart="))
     # After --machine-name there should be exactly one token (no space in value)
     parts = exec_line.split("--machine-name")
     assert len(parts) == 2
     machine_part = parts[1].strip()
     assert " " not in machine_part
+
+
+def test_get_engine_executable_prefers_repo_build_over_path(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    project_root = tmp_path / "server"
+    project_root.mkdir()
+    engine_binary = tmp_path / "engine" / "target" / "release" / "longhouse-engine"
+    engine_binary.parent.mkdir(parents=True)
+    engine_binary.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(shipper_service, "_find_project_root", lambda: project_root)
+    monkeypatch.setattr(shipper_service.shutil, "which", lambda name: "/usr/local/bin/longhouse-engine")
+
+    assert get_engine_executable() == str(engine_binary)

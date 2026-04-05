@@ -12,6 +12,7 @@ mod scheduler;
 mod shipper;
 mod shipping;
 mod state;
+mod text;
 mod watcher;
 
 use std::path::PathBuf;
