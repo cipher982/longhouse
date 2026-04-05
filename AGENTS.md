@@ -29,11 +29,10 @@ Skills-Dir: .agents/skills
 
 ## Task Tracking
 
-- **The external `docket` is the primary queue.** Park paused or cross-session repo work there instead of leaving it in `docs/tasks/open/`.
-- **`TODO.md` is deprecated.** Keep it only as a migration pointer while older habits/tools still look for it.
-- **Multi-commit work** that needs repo-local detail gets one file in `docs/tasks/open/`.
-- **When work ships:** delete the task file and any spec. Git history is the record.
-- **No `done/` folder, no backlog folder.** If it's not active, it doesn't belong here.
+- **The external `docket` is the only task queue.** Track active, paused, and resumable work there.
+- **Do not create repo-local task files, backlogs, or TODO trackers** in this repo.
+- If a task needs local context, write a normal doc/spec/note with a real subject-driven name and link it from the docket item.
+- When work ships, close the docket item. Git history is the record for the repo side.
 
 ## Quick Reference
 
@@ -340,7 +339,7 @@ Two separate things exist — don't conflate or rebuild:
 
 ## Learnings (High-Signal Only)
 
-<!-- Agents: keep this tight (<=10). Keep durable invariants only. If a learning is code-fixable confusion, add TODO work and remove it after the fix lands. -->
+<!-- Agents: keep this tight (<=10). Keep durable invariants only. If a learning is code-fixable confusion, open a docket item and remove it after the fix lands. -->
 - (2026-02-05) [db] Alembic migrations are deprecated for core app work; `server/alembic/versions` is intentionally empty. New models use `AgentsBase.metadata.create_all()` auto-creation. **New columns on existing models must also be added to `_migrate_agents_columns()` in `database.py`** — SQLite ignores new columns on existing tables and will 500 without the ALTER.
 - (2026-02-05) [security] Never store admin/device tokens in AI session notes; rotate immediately if exposed.
 - (2026-02-12) [arch] Agent infra models use `AgentsBase` (not `Base`), live in `models/agents.py` and `models/work.py`. Schema `agents.` gets translate-mapped to `None` for SQLite.
