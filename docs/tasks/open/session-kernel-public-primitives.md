@@ -60,6 +60,6 @@ Make Longhouse's session kernel and coordination surfaces the canonical product 
 - API routes and Oikos coordination tools now share `session_coordination.py` for wall/tail/message serialization and inbox acknowledgement semantics, reducing contract drift without a broad router rewrite.
 - Machine-facing continuation now exists at `POST /api/agents/sessions/{session_id}/continue`, reusing the existing session-chat engine instead of introducing a second continuation stack.
 - `longhouse continue` now wraps the machine continuation route directly, so terminal users do not need to script SSE by hand.
-- Related active tasks:
+- Related specs:
   - `docs/specs/launch-runtime-simplification.md`
   - `docs/specs/oikos-proactive-operator.md`
