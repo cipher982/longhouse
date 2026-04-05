@@ -139,7 +139,7 @@ def _create_runner(db, *, owner_id: int, name: str = "cinder") -> Runner:
 
 
 @pytest.mark.asyncio
-async def test_turn_review_autopilot_enqueues_same_session_continue_job(monkeypatch, tmp_path):
+async def test_turn_review_autopilot_enqueues_cloud_continue_job(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_autopilot_enqueue.db")
 
     async def _fake_evaluate(**_kwargs):
@@ -282,6 +282,73 @@ async def test_turn_review_autopilot_routes_claude_managed_local_continue_withou
         assert calls[0]["timeout_secs"] == 15
         assert calls[0]["verify_turn_started"] is True
         assert calls[0]["verification_timeout_secs"] == 15.0
+
+
+@pytest.mark.asyncio
+async def test_turn_review_autopilot_managed_local_without_live_control_notifies_instead_of_starting_cloud_continue(
+    monkeypatch, tmp_path
+):
+    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_managed_local_no_live_control.db")
+    invoke_calls: list[dict[str, object]] = []
+
+    async def _fake_evaluate(**_kwargs):
+        return LoopControllerDecision(
+            decision="continue",
+            summary="The next step is a bounded same-session continue.",
+            rationale="The assistant left exactly one obvious follow-up.",
+            recommended_action="continue_session",
+            follow_up_prompt="Run the pending targeted tests.",
+            blocked_reasons=(),
+            model_id="gpt-test",
+            raw_response='{"decision":"continue"}',
+            loop_thread_id=53,
+        )
+
+    async def _fake_invoke(owner_id, message, message_id, **_kwargs):
+        invoke_calls.append(
+            {
+                "owner_id": owner_id,
+                "message": message,
+                "message_id": message_id,
+            }
+        )
+        return 654
+
+    async def _unexpected_send_text(**_kwargs):
+        raise AssertionError("live session dispatch should not run without live control")
+
+    monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
+    monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", _unexpected_send_text)
+
+    with SessionLocal() as db:
+        _create_user(db, allow_continue=True)
+        session_id = _seed_session(
+            db,
+            loop_mode="autopilot",
+            user_text="finish the session detail page",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+            provider="claude",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+        session.managed_transport = "tmux"
+        session.managed_session_name = "lh-autopilot-managed-local-no-live-control"
+        db.commit()
+        db.refresh(session)
+
+        review = await maybe_process_session_turn_loop(db=db, session_id=str(session_id))
+        assert review is not None
+        assert review.execution_state == "awaiting_user_approval"
+        assert review.status == "enqueued"
+        assert review.reason == "notify_user"
+        assert review.actual_outcome is None
+        assert review.run_id == 654
+
+        jobs = db.query(CommisJob).all()
+        assert jobs == []
+        assert len(invoke_calls) == 1
+        assert invoke_calls[0]["owner_id"] == review.owner_id
 
 
 @pytest.mark.asyncio

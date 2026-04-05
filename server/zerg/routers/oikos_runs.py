@@ -43,7 +43,8 @@ from zerg.services.loop_push import upsert_loop_push_subscription
 from zerg.services.session_turn_reviews import approve_pending_turn_review
 from zerg.services.session_turn_reviews import dismiss_pending_turn_review
 from zerg.services.session_turn_reviews import reply_to_pending_turn_review
-from zerg.services.session_turn_reviews import supports_same_session_continue
+from zerg.services.session_turn_reviews import supports_cloud_turn_review_continue
+from zerg.services.session_turn_reviews import supports_live_turn_review_continue
 from zerg.utils.time import UTCBaseModel
 
 logger = logging.getLogger(__name__)
@@ -440,14 +441,11 @@ def _home_label(session: AgentSession | None) -> str | None:
 
 
 def _available_loop_actions(review: SessionTurnReview, session: AgentSession | None) -> List[str]:
+    can_approve_continue = supports_live_turn_review_continue(session) or supports_cloud_turn_review_continue(session)
     actions = ["not_now", "open_full_session"]
     if supports_live_text_dispatch(session):
         actions.insert(0, "reply_to_session")
-    if (
-        review.execution_state == "awaiting_user_approval"
-        and review.recommended_action == "continue_session"
-        and supports_same_session_continue(session)
-    ):
+    if review.execution_state == "awaiting_user_approval" and review.recommended_action == "continue_session" and can_approve_continue:
         return ["approve_recommended_action", *actions]
     return actions
 
