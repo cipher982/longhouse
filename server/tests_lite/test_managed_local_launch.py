@@ -4,6 +4,7 @@ import os
 import shlex
 from types import SimpleNamespace
 
+import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
@@ -24,8 +25,10 @@ from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
+from zerg.services.managed_local_launcher import _build_claude_launch_profile
 from zerg.services.managed_local_launcher import _build_entry_command
 from zerg.services.managed_local_launcher import _build_hooks_ensure_command
+from zerg.services.managed_local_launcher import _build_managed_launch_env_exports
 from zerg.services.managed_local_launcher import _build_preflight_command
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_HISTORY_LIMIT
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
@@ -204,6 +207,20 @@ def test_build_entry_command_claude_includes_session_id():
     assert "codex" not in inner
 
 
+def test_build_managed_launch_env_exports_includes_only_non_empty_hook_overrides():
+    exports = _build_managed_launch_env_exports(
+        managed_session_id="abc-123",
+        hook_url="https://longhouse.test",
+        hook_token="zdt_test_token",
+    )
+
+    assert exports == [
+        "export LONGHOUSE_MANAGED_SESSION_ID=abc-123",
+        "export LONGHOUSE_HOOK_URL=https://longhouse.test",
+        "export LONGHOUSE_HOOK_TOKEN=zdt_test_token",
+    ]
+
+
 def test_build_entry_command_claude_includes_hook_target_overrides():
     cmd = _build_entry_command(
         provider="claude",
@@ -242,12 +259,66 @@ def test_build_entry_command_claude_includes_allowlisted_launch_env():
     assert "export AWS_DEFAULT_REGION=" not in inner
 
 
+@pytest.mark.parametrize(
+    ("display_name", "launch_env", "expected_argv", "expected_env_exports"),
+    [
+        (
+            None,
+            None,
+            ("claude", "--dangerously-skip-permissions", "--session-id", "abc-123"),
+            (
+                "export LONGHOUSE_MANAGED_SESSION_ID=abc-123",
+                "export LONGHOUSE_HOOK_URL=https://longhouse.test",
+                "export LONGHOUSE_HOOK_TOKEN=zdt_test_token",
+            ),
+        ),
+        (
+            "Bedrock PM Session",
+            {
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "AWS_PROFILE": "zh-qa-engineer",
+                "AWS_REGION": "us-east-1",
+                "HOME": "/tmp/nope",
+            },
+            (
+                "claude",
+                "--dangerously-skip-permissions",
+                "--session-id",
+                "abc-123",
+                "-n",
+                "Bedrock PM Session",
+            ),
+            (
+                "export LONGHOUSE_MANAGED_SESSION_ID=abc-123",
+                "export LONGHOUSE_HOOK_URL=https://longhouse.test",
+                "export LONGHOUSE_HOOK_TOKEN=zdt_test_token",
+                "export CLAUDE_CODE_USE_BEDROCK=1",
+                "export AWS_PROFILE=zh-qa-engineer",
+                "export AWS_REGION=us-east-1",
+            ),
+        ),
+    ],
+)
+def test_build_claude_launch_profile_contract(display_name, launch_env, expected_argv, expected_env_exports):
+    profile = _build_claude_launch_profile(
+        provider_session_id="abc-123",
+        display_name=display_name,
+        hook_url="https://longhouse.test",
+        hook_token="zdt_test_token",
+        claude_launch_env=launch_env,
+    )
+
+    assert profile.required_commands == ("claude",)
+    assert profile.argv == expected_argv
+    assert profile.env_exports == expected_env_exports
+    assert all("HOME=" not in export for export in profile.env_exports)
+
+
 def test_build_entry_command_codex_injects_longhouse_session_id():
     cmd = _build_entry_command(
         provider="codex",
         provider_session_id="abc-123",
         display_name=None,
-        managed_session_name="lh-zerg-codex",
     )
     inner = _inner_command(cmd)
     assert inner.endswith("exec codex --enable codex_hooks --no-alt-screen")
@@ -266,7 +337,6 @@ def test_build_entry_command_codex_does_not_depend_on_remote_tui():
         provider="codex",
         provider_session_id="abc-123",
         display_name=None,
-        managed_session_name="lh-zerg-codex",
     )
     inner = _inner_command(cmd)
     assert "tui_app_server" not in inner

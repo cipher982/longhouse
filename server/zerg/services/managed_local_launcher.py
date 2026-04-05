@@ -70,6 +70,13 @@ class ManagedLocalLaunchResult:
     attach_command: str
 
 
+@dataclass(frozen=True)
+class ManagedLocalProviderLaunchProfile:
+    required_commands: tuple[str, ...]
+    env_exports: tuple[str, ...]
+    argv: tuple[str, ...]
+
+
 _MANAGED_LOCAL_TMUX_TMPDIR_MARKER = "__LONGHOUSE_TMUX_TMPDIR__="
 _MANAGED_LOCAL_SHELL_COMMANDS = {"", "bash", "sh", "zsh", "fish"}
 _MANAGED_LOCAL_RUNTIME_FAILURE_STATUS = 424
@@ -177,67 +184,95 @@ def _sanitize_claude_launch_env(raw: dict[str, str] | None) -> dict[str, str]:
     return sanitized
 
 
+def _build_managed_launch_env_exports(
+    *,
+    managed_session_id: str,
+    hook_url: str | None = None,
+    hook_token: str | None = None,
+) -> list[str]:
+    env_exports = build_managed_session_env_exports(managed_session_id)
+    if hook_url and hook_url.strip():
+        env_exports.append(f"export LONGHOUSE_HOOK_URL={shlex.quote(hook_url.strip())}")
+    if hook_token and hook_token.strip():
+        env_exports.append(f"export LONGHOUSE_HOOK_TOKEN={shlex.quote(hook_token.strip())}")
+    return env_exports
+
+
+def _build_claude_launch_profile(
+    *,
+    provider_session_id: str,
+    display_name: str | None,
+    hook_url: str | None = None,
+    hook_token: str | None = None,
+    claude_launch_env: dict[str, str] | None = None,
+) -> ManagedLocalProviderLaunchProfile:
+    env_exports = _build_managed_launch_env_exports(
+        managed_session_id=provider_session_id,
+        hook_url=hook_url,
+        hook_token=hook_token,
+    )
+    for key, value in _sanitize_claude_launch_env(claude_launch_env).items():
+        env_exports.append(f"export {key}={shlex.quote(value)}")
+    argv = ["claude", "--dangerously-skip-permissions", "--session-id", provider_session_id]
+    if display_name and display_name.strip():
+        argv.extend(["-n", display_name.strip()])
+    return ManagedLocalProviderLaunchProfile(
+        required_commands=("claude",),
+        env_exports=tuple(env_exports),
+        argv=tuple(argv),
+    )
+
+
+def _build_codex_launch_profile(
+    *,
+    managed_session_id: str,
+    hook_url: str | None = None,
+    hook_token: str | None = None,
+) -> ManagedLocalProviderLaunchProfile:
+    return ManagedLocalProviderLaunchProfile(
+        required_commands=("codex",),
+        env_exports=tuple(
+            _build_managed_launch_env_exports(
+                managed_session_id=managed_session_id,
+                hook_url=hook_url,
+                hook_token=hook_token,
+            )
+        ),
+        argv=("codex", "--enable", "codex_hooks", "--no-alt-screen"),
+    )
+
+
 def _build_entry_command(
     *,
     provider: str,
     provider_session_id: str,
     display_name: str | None,
-    managed_session_name: str | None = None,
     hook_url: str | None = None,
     hook_token: str | None = None,
     claude_launch_env: dict[str, str] | None = None,
 ) -> str:
-    env_exports = build_managed_session_env_exports(provider_session_id)
-    if hook_url and hook_url.strip():
-        env_exports.append(f"export LONGHOUSE_HOOK_URL={shlex.quote(hook_url.strip())}")
-    if hook_token and hook_token.strip():
-        env_exports.append(f"export LONGHOUSE_HOOK_TOKEN={shlex.quote(hook_token.strip())}")
-
     if provider == "codex":
-        return _build_codex_entry_command(
+        launch_profile = _build_codex_launch_profile(
             managed_session_id=provider_session_id,
-            managed_session_name=managed_session_name or provider_session_id,
-            env_exports=env_exports,
+            hook_url=hook_url,
+            hook_token=hook_token,
         )
-    for key, value in _sanitize_claude_launch_env(claude_launch_env).items():
-        env_exports.append(f"export {key}={shlex.quote(value)}")
-    parts = ["claude", "--dangerously-skip-permissions", "--session-id", provider_session_id]
-    if display_name and display_name.strip():
-        parts.extend(["-n", display_name.strip()])
+    else:
+        launch_profile = _build_claude_launch_profile(
+            provider_session_id=provider_session_id,
+            display_name=display_name,
+            hook_url=hook_url,
+            hook_token=hook_token,
+            claude_launch_env=claude_launch_env,
+        )
     inner = "; ".join(
         [
-            *env_exports,
+            *launch_profile.env_exports,
             build_managed_local_shell_prelude(
                 require_tmux=False,
-                required_commands=("claude",),
+                required_commands=launch_profile.required_commands,
             ),
-            "exec " + " ".join(shlex.quote(part) for part in parts),
-        ]
-    )
-    return f"zsh -lc {shlex.quote(inner)}"
-
-
-def _build_codex_entry_command(
-    *,
-    managed_session_id: str,
-    managed_session_name: str,
-    env_exports: list[str] | None = None,
-) -> str:
-    """Build the entry command for a managed-local Codex session.
-
-    Codex still starts as a local TUI on the runner, but Longhouse can later
-    drive it through the codex bridge once the managed session is up.
-    """
-    del managed_session_name
-    exports = list(env_exports or build_managed_session_env_exports(managed_session_id))
-    inner = "; ".join(
-        [
-            *exports,
-            build_managed_local_shell_prelude(
-                require_tmux=False,
-                required_commands=("codex",),
-            ),
-            "exec codex --enable codex_hooks --no-alt-screen",
+            "exec " + " ".join(shlex.quote(part) for part in launch_profile.argv),
         ]
     )
     return f"zsh -lc {shlex.quote(inner)}"
@@ -429,7 +464,6 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         provider=provider,
         provider_session_id=provider_session_id,
         display_name=params.display_name,
-        managed_session_name=managed_session_name,
         hook_url=params.hook_url,
         hook_token=hook_token,
         claude_launch_env=params.claude_launch_env,
