@@ -160,7 +160,7 @@ def test_create_message_delivers_immediately_for_safe_managed_local(monkeypatch,
         )
         return SimpleNamespace(ok=True, error=None)
 
-    monkeypatch.setattr("zerg.services.session_messages.send_text_to_managed_local_session", fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
 
     client, api_app_ref = _make_client(session_local)
     try:
@@ -208,7 +208,7 @@ def test_create_message_queues_when_target_is_running(monkeypatch, tmp_path):
     async def fail_if_called(**_kwargs):
         raise AssertionError("send_text_to_managed_local_session should not be called while running")
 
-    monkeypatch.setattr("zerg.services.session_messages.send_text_to_managed_local_session", fail_if_called)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fail_if_called)
 
     client, api_app_ref = _make_client(session_local)
     try:
@@ -272,7 +272,7 @@ def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tm
         send_calls.append(text)
         return SimpleNamespace(ok=True, error=None)
 
-    monkeypatch.setattr("zerg.services.session_messages.send_text_to_managed_local_session", fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
 
     client, api_app_ref = _make_client(session_local)
     try:
@@ -350,7 +350,7 @@ def test_presence_safe_transition_drains_multiple_queued_messages(monkeypatch, t
         send_calls.append(text)
         return SimpleNamespace(ok=True, error=None)
 
-    monkeypatch.setattr("zerg.services.session_messages.send_text_to_managed_local_session", fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
 
     client, api_app_ref = _make_client(session_local)
     try:
@@ -432,7 +432,7 @@ def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(
         )
         return SimpleNamespace(ok=True, error=None)
 
-    monkeypatch.setattr("zerg.services.session_messages.send_text_to_managed_local_session", fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
 
     client, api_app_ref = _make_client(session_local)
     try:
@@ -466,7 +466,7 @@ def test_create_message_stored_only_for_unmanaged_target(monkeypatch, tmp_path):
     async def fail_if_called(**_kwargs):
         raise AssertionError("send_text_to_managed_local_session should not be called for unmanaged sessions")
 
-    monkeypatch.setattr("zerg.services.session_messages.send_text_to_managed_local_session", fail_if_called)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fail_if_called)
 
     client, api_app_ref = _make_client(session_local)
     try:

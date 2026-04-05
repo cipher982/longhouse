@@ -39,6 +39,7 @@ from pydantic import Field
 from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
+import zerg.services.live_session_dispatch as live_session_dispatch
 from zerg.config import get_settings
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import require_single_tenant
@@ -58,7 +59,6 @@ from zerg.services.managed_local_control import await_managed_local_turn_termina
 from zerg.services.managed_local_control import get_managed_local_control_status_for_phase
 from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
 from zerg.services.managed_local_control import get_managed_local_presence_updated_at
-from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
@@ -658,7 +658,7 @@ async def _dispatch_managed_local_text(
         ),
     )
     t_turn_created = time.monotonic()
-    send_result = await send_text_to_managed_local_session(
+    send_result = await live_session_dispatch.send_text_to_live_session(
         db=db,
         owner_id=owner_id,
         session=source_session,
@@ -1090,7 +1090,7 @@ async def _stream_managed_local_output(
             expected_user_text=message,
         ),
     )
-    send_result = await send_text_to_managed_local_session(
+    send_result = await live_session_dispatch.send_text_to_live_session(
         db=db,
         owner_id=owner_id,
         session=source_session,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -10,16 +9,12 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from zerg.models.agents import AgentEvent
+import zerg.services.live_session_dispatch as live_session_dispatch
 from zerg.models.agents import AgentSession
-from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionPresence
 from zerg.models.user import User
-from zerg.services.managed_local_control import ManagedLocalSendResult
-from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.presence_cache import get_presence_cache
-from zerg.session_execution_home import SessionExecutionHome
 
 logger = logging.getLogger(__name__)
 
@@ -81,15 +76,6 @@ def _current_presence_state(db: Session, session_id: UUID) -> str | None:
     return str(getattr(presence, "state", "") or "").strip() or None
 
 
-def _is_managed_local_session(session: AgentSession | None) -> bool:
-    if session is None:
-        return False
-    return (
-        str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value
-        and getattr(session, "source_runner_id", None) is not None
-    )
-
-
 def _build_injected_message(from_session: AgentSession, message: SessionMessage) -> str:
     device_name = (
         str(getattr(from_session, "device_name", "") or "").strip()
@@ -112,64 +98,6 @@ def _mark_message_failed(message: SessionMessage, *, error: str | None) -> None:
     message.delivery_attempts = int(getattr(message, "delivery_attempts", 0) or 0) + 1
 
 
-def _truthy_env(name: str) -> bool:
-    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _use_fake_managed_local_delivery() -> bool:
-    return _truthy_env("TESTING") and _truthy_env("E2E_FAKE_SESSION_MESSAGES")
-
-
-def _ensure_head_branch_id(db: Session, session_id: UUID) -> int:
-    row = (
-        db.query(AgentSessionBranch.id)
-        .filter(AgentSessionBranch.session_id == session_id, AgentSessionBranch.is_head == 1)
-        .order_by(AgentSessionBranch.id.desc())
-        .first()
-    )
-    if row is not None:
-        return int(row[0])
-
-    branch = AgentSessionBranch(
-        session_id=session_id,
-        parent_branch_id=None,
-        branched_at_source_path=None,
-        branched_at_offset=None,
-        branch_reason="root",
-        is_head=1,
-    )
-    db.add(branch)
-    db.flush()
-    return int(branch.id)
-
-
-async def _fake_deliver_to_managed_local_session(
-    *,
-    db: Session,
-    session: AgentSession,
-    text: str,
-) -> ManagedLocalSendResult:
-    now = datetime.now(timezone.utc)
-    head_branch_id = _ensure_head_branch_id(db, session.id)
-    event = AgentEvent(
-        session_id=session.id,
-        role="user",
-        content_text=text,
-        timestamp=now,
-        branch_id=head_branch_id,
-    )
-    db.add(event)
-    session.last_activity_at = now
-    session.user_messages = int(getattr(session, "user_messages", 0) or 0) + 1
-    db.flush()
-    return ManagedLocalSendResult(
-        ok=True,
-        exit_code=0,
-        baseline_event_id=event.id,
-        verified_turn_started=True,
-    )
-
-
 async def deliver_next_queued_session_message(
     *,
     db: Session,
@@ -178,7 +106,7 @@ async def deliver_next_queued_session_message(
     target_presence_state: str | None = None,
 ) -> SessionMessageDispatchOutcome | None:
     target_session = db.query(AgentSession).filter(AgentSession.id == target_session_id).first()
-    if not _is_managed_local_session(target_session):
+    if not live_session_dispatch.supports_live_text_dispatch(target_session):
         return None
 
     current_state = target_presence_state or _current_presence_state(db, target_session_id)
@@ -227,7 +155,7 @@ async def deliver_next_queued_session_message(
         )
 
     if owner_id is None:
-        _mark_message_failed(message, error="No owner available for managed-local delivery")
+        _mark_message_failed(message, error="No owner available for live session delivery")
         db.commit()
         return SessionMessageDispatchOutcome(
             message=message,
@@ -236,23 +164,16 @@ async def deliver_next_queued_session_message(
         )
 
     injected_text = _build_injected_message(from_session, message)
-    if _use_fake_managed_local_delivery():
-        send_result = await _fake_deliver_to_managed_local_session(
-            db=db,
-            session=target_session,
-            text=injected_text,
-        )
-    else:
-        send_result = await send_text_to_managed_local_session(
-            db=db,
-            owner_id=owner_id,
-            session=target_session,
-            text=injected_text,
-            commis_id=f"session-message-{message.id}",
-            timeout_secs=15,
-            verify_turn_started=True,
-            verification_timeout_secs=15.0,
-        )
+    send_result = await live_session_dispatch.send_text_to_live_session(
+        db=db,
+        owner_id=owner_id,
+        session=target_session,
+        text=injected_text,
+        commis_id=f"session-message-{message.id}",
+        timeout_secs=15,
+        verify_turn_started=True,
+        verification_timeout_secs=15.0,
+    )
     if not send_result.ok:
         _mark_message_failed(message, error=send_result.error)
         db.commit()
@@ -265,7 +186,7 @@ async def deliver_next_queued_session_message(
     message.delivery_status = MESSAGE_STATUS_DELIVERED
     message.delivery_attempts = int(getattr(message, "delivery_attempts", 0) or 0) + 1
     message.last_error = None
-    message.delivered_via = SessionExecutionHome.MANAGED_LOCAL.value
+    message.delivered_via = live_session_dispatch.live_text_dispatch_label(target_session)
     message.delivered_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(message)
@@ -327,7 +248,7 @@ async def create_session_message(
     if from_session_id == to_session_id:
         raise ValueError("Cannot send a session message to the same session")
 
-    initial_status = MESSAGE_STATUS_QUEUED if _is_managed_local_session(to_session) else MESSAGE_STATUS_STORED_ONLY
+    initial_status = MESSAGE_STATUS_QUEUED if live_session_dispatch.supports_live_text_dispatch(to_session) else MESSAGE_STATUS_STORED_ONLY
     message = SessionMessage(
         from_session_id=from_session_id,
         to_session_id=to_session_id,
