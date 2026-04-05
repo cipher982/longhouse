@@ -20,6 +20,7 @@ def test_create_server_exposes_only_continuity_and_oikos_tools():
         "get_session_events",
         "notify_oikos",
         "log_insight",
+        "query_insights",
         "recall",
         "check_wall",
         "session_tail",
