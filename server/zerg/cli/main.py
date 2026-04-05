@@ -114,8 +114,8 @@ def config_show() -> None:
 
 
 # Add subcommands from connect module
-app.add_typer(connect_app, name="session", help="Session shipping commands")
-app.add_typer(coordination_app, name="coordination", help="Session coordination commands")
+app.add_typer(connect_app, name="session", help="Session shipping commands", hidden=True)
+app.add_typer(coordination_app, name="coordination", help="Session coordination commands", hidden=True)
 app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(serve_app, name="server", help="Server management commands")
