@@ -33,7 +33,10 @@ import zerg.bootstrap_sqlite  # noqa: F401
 from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
 from zerg.cli.codex import codex
-from zerg.cli.connect import app as connect_app
+from zerg.cli.connect import auth
+from zerg.cli.connect import connect as connect_command
+from zerg.cli.connect import recall
+from zerg.cli.connect import ship
 from zerg.cli.coordination import message
 from zerg.cli.coordination import messages_app
 from zerg.cli.coordination import peers
@@ -120,9 +123,6 @@ app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel br
 app.command(name="serve")(serve)
 app.command(name="status")(status)
 
-# Session shipping commands (convenience aliases)
-# Find commands by callback function name to avoid index-position bugs
-_cmd_lookup = {cmd.callback.__name__: cmd.callback for cmd in connect_app.registered_commands}
 app.command(name="claude")(claude)
 app.command(name="codex")(codex)
 app.command(name="wall")(wall)
@@ -130,10 +130,10 @@ app.command(name="peers")(peers)
 app.command(name="message")(message)
 app.command(name="tail")(tail)
 app.command(name="continue")(continue_session)
-app.command(name="auth")(_cmd_lookup["auth"])
-app.command(name="ship")(_cmd_lookup["ship"])
-app.command(name="connect")(_cmd_lookup["connect"])
-app.command(name="recall")(_cmd_lookup["recall"])
+app.command(name="auth")(auth)
+app.command(name="ship")(ship)
+app.command(name="connect")(connect_command)
+app.command(name="recall")(recall)
 
 
 @app.command(name="migrate")
