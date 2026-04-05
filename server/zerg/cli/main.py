@@ -91,23 +91,14 @@ app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
 
-app.command(name="serve")(serve)
-app.command(name="status")(status)
+for command in (serve, status, claude, codex, wall, peers, message, tail, auth, ship, recall):
+    app.command()(command)
 
-app.command(name="claude")(claude)
-app.command(name="codex")(codex)
-app.command(name="wall")(wall)
-app.command(name="peers")(peers)
-app.command(name="message")(message)
-app.command(name="tail")(tail)
 app.command(name="continue")(continue_session)
-app.command(name="auth")(auth)
-app.command(name="ship")(ship)
 app.command(name="connect")(connect_command)
-app.command(name="recall")(recall)
 
 
-@app.command(name="migrate")
+@app.command()
 def migrate(
     database_url: str | None = typer.Option(
         None,
@@ -178,11 +169,10 @@ def migrate(
         raise typer.Exit(code=1)
 
 
-app.command(name="onboard")(onboard)
+for command in (onboard, doctor):
+    app.command()(command)
 
-app.command(name="doctor")(doctor)
-
-app.command(name="mcp-server", hidden=True)(mcp_server)
+app.command(hidden=True)(mcp_server)
 
 
 def main():

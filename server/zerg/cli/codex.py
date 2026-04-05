@@ -11,17 +11,14 @@ from pathlib import Path
 import typer
 
 from zerg.cli import claude as managed_local_cli
+from zerg.cli._common import ManagedLocalLaunchResponse
+from zerg.cli._common import build_session_url as _build_session_url
+from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
+from zerg.cli._common import open_session_url as _open_session_url
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
-
-ManagedLocalLaunchResponse = managed_local_cli.ManagedLocalLaunchResponse
-
-
-_interactive_stdio = managed_local_cli._interactive_stdio
-_build_session_url = managed_local_cli._build_session_url
-_open_session_url = managed_local_cli._open_session_url
 
 
 def _check_codex_binary() -> str | None:
@@ -63,7 +60,9 @@ def _start_native_codex_bridge(
         text=True,
     )
     if completed.returncode != 0:
-        detail = (completed.stderr or "").strip() or (completed.stdout or "").strip() or "Failed to start native Codex bridge"
+        stderr = (completed.stderr or "").strip()
+        stdout = (completed.stdout or "").strip()
+        detail = stderr or stdout or "Failed to start native Codex bridge"
         raise _NativeBridgeError(detail)
     try:
         payload = json.loads((completed.stdout or "").strip())

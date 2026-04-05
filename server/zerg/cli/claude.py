@@ -6,16 +6,17 @@ import json
 import os
 import shlex
 import subprocess
-import sys
-import webbrowser
-from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 import typer
 
+from zerg.cli._common import ManagedLocalLaunchResponse
+from zerg.cli._common import build_session_url as _build_session_url
 from zerg.cli._common import git_output
+from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials
+from zerg.cli._common import open_session_url as _open_session_url
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
 from zerg.services.session_continuity import get_machine_name_label
@@ -24,15 +25,6 @@ from zerg.services.shipper import load_token
 from zerg.services.shipper.hooks import install_hooks
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
-
-
-@dataclass(frozen=True)
-class ManagedLocalLaunchResponse:
-    session_id: str
-    provider_session_id: str
-    attach_command: str
-    source_runner_name: str
-    managed_transport: str | None = None
 
 
 class _NativeClaudeError(Exception):
@@ -95,25 +87,10 @@ def _collect_claude_launch_env() -> dict[str, str]:
     return env
 
 
-def _interactive_stdio() -> bool:
-    return sys.stdin.isatty() and sys.stdout.isatty()
-
-
 def _run_attach_command(attach_command: str) -> int:
     parts = shlex.split(attach_command)
     completed = subprocess.run(parts, check=False)
     return int(completed.returncode)
-
-
-def _build_session_url(url: str, session_id: str) -> str:
-    return f"{url.rstrip('/')}/timeline/{session_id}"
-
-
-def _open_session_url(session_url: str) -> bool:
-    try:
-        return bool(webbrowser.open(session_url))
-    except Exception:
-        return False
 
 
 def _resolve_claude_dir(config_dir: Path | None) -> Path:
@@ -405,7 +382,8 @@ def claude(
         claude_launch_env=claude_launch_env,
         provider="claude",
     )
-    if not native_claude_channels_available and result.managed_transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
+    native_transport_unavailable = result.managed_transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+    if not native_claude_channels_available and native_transport_unavailable:
         typer.secho(
             f"Native Claude channels unavailable ({native_claude_channels_detail}); using tmux fallback.",
             fg=typer.colors.YELLOW,
