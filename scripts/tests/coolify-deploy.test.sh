@@ -8,10 +8,10 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$ROOT_DIR/ops/coolify-deploy.sh"
 
 payload="$(build_app_update_payload 'ghcr.io/cipher982/longhouse-runtime' '0123456789abcdef0123456789abcdef01234567')"
-expected='{"build_pack":"dockerimage","docker_registry_image_name":"ghcr.io/cipher982/longhouse-runtime","docker_registry_image_tag":"0123456789abcdef0123456789abcdef01234567"}'
+expected='{"docker_registry_image_name":"ghcr.io/cipher982/longhouse-runtime","docker_registry_image_tag":"0123456789abcdef0123456789abcdef01234567"}'
 
 if [[ "$(python3 -m json.tool <<<"$payload" | tr -d '\n[:space:]')" != "$(python3 -m json.tool <<<"$expected" | tr -d '\n[:space:]')" ]]; then
-  echo "Expected docker image payload to set build_pack=dockerimage and preserve image ref"
+  echo "Expected docker image payload to preserve the image ref without mutating build_pack"
   exit 1
 fi
 
