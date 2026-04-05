@@ -777,6 +777,17 @@ def test_sessions_events_command_json_output(monkeypatch):
 def test_sessions_continue_command_prints_managed_local_acceptance(monkeypatch):
     runner = CliRunner()
     fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "id": "22222222-2222-2222-2222-222222222222",
+                "execution_home": "managed_local",
+                "source_runner_id": 77,
+                "capabilities": {
+                    "live_control_available": True,
+                },
+            },
+        ),
         stream_response=_FakeResponse(
             status_code=200,
             json_data={
@@ -808,8 +819,14 @@ def test_sessions_continue_command_prints_managed_local_acceptance(monkeypatch):
     assert "dispatch_ms: 12.4" in result.output
     assert fake_client.calls == [
         {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "params": None,
+        },
+        {
             "method": "POST",
-            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/continue",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/send-live",
             "headers": {"X-Agents-Token": "zdt_test_token"},
             "json": {"message": "follow up on the failing test"},
         }
@@ -819,6 +836,17 @@ def test_sessions_continue_command_prints_managed_local_acceptance(monkeypatch):
 def test_sessions_continue_command_streams_cloud_output(monkeypatch):
     runner = CliRunner()
     fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "id": "22222222-2222-2222-2222-222222222222",
+                "execution_home": "cloud",
+                "source_runner_id": None,
+                "capabilities": {
+                    "live_control_available": False,
+                },
+            },
+        ),
         stream_response=_FakeResponse(
             status_code=200,
             headers={"content-type": "text/event-stream"},
@@ -853,6 +881,15 @@ def test_sessions_continue_command_streams_cloud_output(monkeypatch):
     assert result.exit_code == 0, result.output
     assert "hello world" in result.output
     assert fake_client.calls == [
+        {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222",
+            "headers": {
+                "X-Agents-Token": "zdt_test_token",
+                "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",
+            },
+            "params": None,
+        },
         {
             "method": "POST",
             "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/continue",
