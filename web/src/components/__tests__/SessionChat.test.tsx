@@ -71,6 +71,15 @@ function getChatCallCount() {
   return fetchWithRefreshMock.mock.calls.filter(([url]) => String(url).endsWith("/chat")).length;
 }
 
+function getLastChatRequestBody() {
+  const chatCall = [...fetchWithRefreshMock.mock.calls].reverse().find(([url]) => String(url).endsWith("/chat"));
+  if (!chatCall) {
+    throw new Error("Expected a /chat request");
+  }
+  const options = chatCall[1] as RequestInit | undefined;
+  return JSON.parse(String(options?.body ?? "{}"));
+}
+
 function createDeferredResponse() {
   let resolve: ((response: Response) => void) | null = null;
   const promise = new Promise<Response>((nextResolve) => {
@@ -202,6 +211,10 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "Continue in cloud");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
+    expect(getLastChatRequestBody()).toEqual({
+      message: "Continue in cloud",
+      continuation_mode: "cloud",
+    });
     await waitFor(() => expect(onSessionChanged).toHaveBeenCalledWith("sess-2", true));
     expect(screen.queryByText(/could not save the continuation transcript/i)).not.toBeInTheDocument();
   });
@@ -418,6 +431,10 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
+    expect(getLastChatRequestBody()).toEqual({
+      message: "Continue locally",
+      continuation_mode: "managed_local",
+    });
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toBeDisabled();
       expect(screen.getByRole("button", { name: /send/i })).toBeDisabled();

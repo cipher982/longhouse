@@ -89,14 +89,20 @@ export function SessionContextPane({
       : canDriveManagedLocalFromBrowser
         ? "Loop Mode changes review posture only. Keep driving the live session from Longhouse below or by reattaching on the host machine."
         : interaction.canChatFromBrowser
-          ? "Loop Mode changes review posture only. Keep driving this session from Longhouse below, or reattach on the host machine when available."
+          ? "Loop Mode changes review posture only. Start or keep the cloud continuation from Longhouse below, or reattach on the host machine when available."
         : isManagedLocalCodex
           ? "For live Codex sessions, Loop Mode changes review posture only. Keep driving the live session from the host terminal."
           : "Loop Mode changes review posture only. Keep driving the live session from the host terminal.";
   const primaryActionDescription = interaction.canChatFromBrowser
     ? interaction.mode === "managed_local"
       ? "Open the dock below and send the next prompt into the live session."
-      : "Open the dock below and continue from this session in the browser."
+      : interaction.mode === "head"
+        ? "Open the dock below and continue this session in cloud from Longhouse."
+        : interaction.mode === "promote"
+          ? "Open the dock below and start a cloud continuation from this session."
+          : interaction.mode === "branch"
+            ? "Open the dock below and start a branched cloud continuation from this point."
+            : "Open the dock below and continue from this session in the browser."
     : interaction.composerDisabledReason ?? interaction.notice?.body ?? interaction.capabilitySummary;
 
   return (

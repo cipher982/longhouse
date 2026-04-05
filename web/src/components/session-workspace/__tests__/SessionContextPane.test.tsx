@@ -192,10 +192,13 @@ describe("SessionContextPane", () => {
 
     const button = screen.getByRole("button", { name: "Continue here" });
     expect(button).toBeEnabled();
-    expect(screen.getByText("Open the dock below and continue from this session in the browser.")).toBeInTheDocument();
+    expect(screen.getByText("Open the dock below and start a cloud continuation from this session.")).toBeInTheDocument();
     expect(
-      screen.getByText(/Keep driving this session from Longhouse below, or reattach on the host machine when available/i),
+      screen.getByText(/Start or keep the cloud continuation from Longhouse below, or reattach on the host machine when available/i),
     ).toBeInTheDocument();
+    expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
+      "Start a cloud continuation from this session.",
+    );
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach on the host machine");
   });
 

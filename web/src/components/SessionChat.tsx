@@ -309,7 +309,7 @@ export function SessionChat({
         const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message }),
+          body: JSON.stringify({ message, continuation_mode: "managed_local" }),
           credentials: "include",
         });
 
@@ -372,7 +372,7 @@ export function SessionChat({
         const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message }),
+          body: JSON.stringify({ message, continuation_mode: "cloud" }),
           credentials: "include",
           signal: abortControllerRef.current.signal,
         });
