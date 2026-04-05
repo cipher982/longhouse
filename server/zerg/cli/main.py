@@ -118,7 +118,7 @@ app.add_typer(connect_app, name="session", help="Session shipping commands", hid
 app.add_typer(coordination_app, name="coordination", help="Session coordination commands", hidden=True)
 app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
-app.add_typer(serve_app, name="server", help="Server management commands")
+app.add_typer(serve_app, name="server", help="Server management commands", hidden=True)
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
 
