@@ -64,8 +64,15 @@ export interface AgentSession {
   source_runner_id: number | null;
   source_runner_name: string | null;
   attach_command?: string | null;
+  managed_launch_profile?: ManagedLaunchProfile | null;
   loop_mode: SessionLoopMode;
   user_state?: string;
+}
+
+export interface ManagedLaunchProfile {
+  required_commands: string[];
+  argv: string[];
+  exported_env_keys: string[];
 }
 
 export interface AgentSessionsListResponse {

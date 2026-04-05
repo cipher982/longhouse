@@ -93,6 +93,11 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     source_runner_id: 7,
     source_runner_name: "cinder",
     attach_command: "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
+    managed_launch_profile: {
+      required_commands: ["codex"],
+      exported_env_keys: ["LONGHOUSE_MANAGED_SESSION_ID", "LONGHOUSE_HOOK_URL", "LONGHOUSE_HOOK_TOKEN"],
+      argv: ["codex", "chat", "--session", "<provider-session-id>"],
+    },
     loop_mode: "manual",
     ...overrides,
   };
@@ -201,6 +206,10 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach the live Codex terminal");
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
+    );
+    expect(screen.getByTestId("session-launch-profile")).toHaveTextContent("Managed-local launcher contract");
+    expect(screen.getByTestId("session-launch-profile-argv")).toHaveTextContent(
+      "codex chat --session <provider-session-id>",
     );
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent(
       "send prompts from Longhouse below",
