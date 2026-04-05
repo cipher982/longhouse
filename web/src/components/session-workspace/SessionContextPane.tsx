@@ -80,6 +80,8 @@ export function SessionContextPane({
       : "neutral";
   const attachCommand =
     session.execution_home === "managed_local" ? session.attach_command?.trim() || null : null;
+  const managedLaunchProfile =
+    session.execution_home === "managed_local" ? session.managed_launch_profile ?? null : null;
   const attachRunnerLabel = session.source_runner_name?.trim() || "this machine";
   const loopModeCaption =
     session.execution_home !== "managed_local"
@@ -195,6 +197,25 @@ export function SessionContextPane({
             </div>
             <pre className="inspector-code-block" data-testid="session-attach-command">
               <code>{attachCommand}</code>
+            </pre>
+          </div>
+        </div>
+      ) : null}
+
+      {managedLaunchProfile ? (
+        <div className="session-pane-section">
+          <div className="session-pane-section-title">Launch profile</div>
+          <div className="session-pane-callout session-pane-callout--muted" data-testid="session-launch-profile">
+            <div className="session-pane-callout-title">Managed-local launcher contract</div>
+            <div className="session-pane-callout-copy">
+              Longhouse stored the redacted launch argv and allowlisted env exports for this live session.
+            </div>
+            <div className="session-context-meta">
+              <MetaRow label="Required commands" value={managedLaunchProfile.required_commands.join(", ") || "None"} />
+              <MetaRow label="Exported env keys" value={managedLaunchProfile.exported_env_keys.join(", ") || "None"} />
+            </div>
+            <pre className="inspector-code-block" data-testid="session-launch-profile-argv">
+              <code>{managedLaunchProfile.argv.join(" ")}</code>
             </pre>
           </div>
         </div>

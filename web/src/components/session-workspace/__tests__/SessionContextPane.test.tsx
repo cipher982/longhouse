@@ -206,6 +206,23 @@ describe("SessionContextPane", () => {
         managed_transport: "tmux",
         source_runner_name: "cinder",
         attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+        managed_launch_profile: {
+          required_commands: ["claude"],
+          exported_env_keys: [
+            "LONGHOUSE_MANAGED_SESSION_ID",
+            "LONGHOUSE_HOOK_URL",
+            "LONGHOUSE_HOOK_TOKEN",
+            "AWS_PROFILE",
+          ],
+          argv: [
+            "claude",
+            "--dangerously-skip-permissions",
+            "--session-id",
+            "<provider-session-id>",
+            "-n",
+            "Managed Local Proof",
+          ],
+        },
       }),
     });
 
@@ -213,6 +230,14 @@ describe("SessionContextPane", () => {
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("running on cinder");
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
       "tmux -L longhouse-managed attach -t lh-codex",
+    );
+    expect(screen.getByTestId("session-launch-profile")).toHaveTextContent("Managed-local launcher contract");
+    expect(screen.getByTestId("session-launch-profile")).toHaveTextContent("Required commandsclaude");
+    expect(screen.getByTestId("session-launch-profile")).toHaveTextContent(
+      "Exported env keysLONGHOUSE_MANAGED_SESSION_ID, LONGHOUSE_HOOK_URL, LONGHOUSE_HOOK_TOKEN, AWS_PROFILE",
+    );
+    expect(screen.getByTestId("session-launch-profile-argv")).toHaveTextContent(
+      "claude --dangerously-skip-permissions --session-id <provider-session-id> -n Managed Local Proof",
     );
   });
 
