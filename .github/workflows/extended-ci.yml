@@ -63,9 +63,6 @@ jobs:
     - name: Install Playwright browsers + deps
       run: cd e2e && bunx playwright install --with-deps chromium
 
-    - name: Build frontend (required by hatch)
-      run: cd web && bun install && bun run build
-
     - name: Pre-install backend deps
       run: cd server && uv sync
 

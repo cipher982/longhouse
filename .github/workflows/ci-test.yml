@@ -76,10 +76,6 @@ jobs:
         if: contains('frontend runner e2e-core e2e-a11y e2e-single full', inputs.suite)
         run: bun install --frozen-lockfile
 
-      - name: Build frontend (required by hatch)
-        if: contains('e2e-core e2e-a11y e2e-single full', inputs.suite)
-        run: cd web && bun install && bun run build
-
       - name: Pre-install backend deps
         if: contains('validate unit e2e-core e2e-a11y e2e-single full codex-bridge-e2e', inputs.suite)
         run: cd server && uv sync
