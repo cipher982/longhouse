@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from uuid import UUID
 
 import httpx
 import typer
 
+from zerg.cli._common import load_api_credentials
+from zerg.cli._common import parse_uuid_or_exit
 from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
 from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url
@@ -18,17 +19,13 @@ app = typer.Typer(help="Session inspection commands")
 
 
 def _load_api_credentials(*, url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:
-    resolved_url = (url or get_zerg_url(config_dir) or "").strip()
-    if not resolved_url:
-        typer.secho("No Longhouse URL configured. Run 'longhouse auth' first.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-    resolved_token = (token or load_token(config_dir) or "").strip()
-    if not resolved_token:
-        typer.secho("No device token found. Run 'longhouse auth' first.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-    return resolved_url, resolved_token
+    return load_api_credentials(
+        url=url,
+        token=token,
+        config_dir=config_dir,
+        resolve_url=get_zerg_url,
+        resolve_token=load_token,
+    )
 
 
 def _print_event(event: dict) -> None:
@@ -47,18 +44,6 @@ def _print_event(event: dict) -> None:
         typer.echo(content_text)
     if tool_output_text:
         typer.echo(tool_output_text)
-
-
-def _parse_uuid_or_exit(raw: str, *, label: str) -> str:
-    value = str(raw or "").strip()
-    if not value:
-        typer.secho(f"{label} is required.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    try:
-        return str(UUID(value))
-    except ValueError:
-        typer.secho(f"{label} must be a valid UUID.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
 
 
 def _print_continuation_stream(response: httpx.Response) -> int:
@@ -372,12 +357,12 @@ def continue_session(
     """Continue a session through the canonical machine-facing route."""
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    resolved_session_id = _parse_uuid_or_exit(session_id, label="session_id")
+    resolved_session_id = parse_uuid_or_exit(session_id, label="session_id")
 
     headers = {"X-Agents-Token": resolved_token}
     resolved_current_session_id = (current_session_id or get_managed_session_id() or "").strip()
     if resolved_current_session_id:
-        headers[CURRENT_SESSION_HEADER] = _parse_uuid_or_exit(
+        headers[CURRENT_SESSION_HEADER] = parse_uuid_or_exit(
             resolved_current_session_id,
             label="current_session_id",
         )

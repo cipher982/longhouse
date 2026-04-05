@@ -14,6 +14,8 @@ from pathlib import Path
 import httpx
 import typer
 
+from zerg.cli._common import git_output
+from zerg.cli._common import load_api_credentials
 from zerg.services.claude_channel_bridge import build_claude_channel_exec_command
 from zerg.services.claude_channel_bridge import install_claude_channel_mcp_server
 from zerg.services.session_continuity import get_machine_name_label
@@ -114,45 +116,24 @@ def _open_session_url(session_url: str) -> bool:
         return False
 
 
-def _load_api_credentials(
-    *,
-    url: str | None,
-    token: str | None,
-    config_dir: Path | None,
-) -> tuple[str, str]:
-    resolved_url = (url or get_zerg_url(config_dir) or "").strip()
-    if not resolved_url:
-        typer.secho("No Longhouse URL configured. Run 'longhouse auth' first.", fg=typer.colors.RED)
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
-
-    resolved_token = (token or load_token(config_dir) or "").strip()
-    if not resolved_token:
-        typer.secho("No device token found. Run 'longhouse auth' first.", fg=typer.colors.RED)
-        raise typer.Exit(code=EXIT_SETUP_FAILED)
-
-    return resolved_url, resolved_token
-
-
 def _resolve_claude_dir(config_dir: Path | None) -> Path:
     return config_dir or (Path.home() / ".claude")
 
 
-def _git_output(cwd: Path, *args: str) -> str | None:
-    completed = subprocess.run(
-        ["git", "-C", str(cwd), *args],
-        check=False,
-        capture_output=True,
-        text=True,
+def _load_api_credentials(*, url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:
+    return load_api_credentials(
+        url=url,
+        token=token,
+        config_dir=config_dir,
+        exit_code=EXIT_SETUP_FAILED,
+        resolve_url=get_zerg_url,
+        resolve_token=load_token,
     )
-    if completed.returncode != 0:
-        return None
-    value = completed.stdout.strip()
-    return value or None
 
 
 def _infer_git_context(cwd: Path) -> tuple[str | None, str | None]:
-    git_repo = _git_output(cwd, "rev-parse", "--show-toplevel")
-    git_branch = _git_output(cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    git_repo = git_output(cwd, "rev-parse", "--show-toplevel")
+    git_branch = git_output(cwd, "rev-parse", "--abbrev-ref", "HEAD")
     if git_branch == "HEAD":
         git_branch = None
     return git_repo, git_branch
@@ -402,7 +383,12 @@ def claude(
     """Launch a Longhouse Claude Code session on this machine via the Longhouse API."""
 
     resolved_config_dir = Path(config_dir) if config_dir else None
-    resolved_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=resolved_config_dir)
+    resolved_url, resolved_token = _load_api_credentials(
+        url=url,
+        token=token,
+        config_dir=resolved_config_dir,
+        exit_code=EXIT_SETUP_FAILED,
+    )
     machine_name = get_machine_name_label()
     native_claude_channels_available, native_claude_channels_detail = _detect_native_claude_channels_available()
     claude_launch_env = _collect_claude_launch_env()

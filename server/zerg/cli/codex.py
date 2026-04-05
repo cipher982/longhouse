@@ -11,6 +11,7 @@ from pathlib import Path
 import typer
 
 from zerg.cli import claude as managed_local_cli
+from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
@@ -19,7 +20,6 @@ ManagedLocalLaunchResponse = managed_local_cli.ManagedLocalLaunchResponse
 
 
 _interactive_stdio = managed_local_cli._interactive_stdio
-_load_api_credentials = managed_local_cli._load_api_credentials
 _build_session_url = managed_local_cli._build_session_url
 _open_session_url = managed_local_cli._open_session_url
 
@@ -172,7 +172,12 @@ def codex(
     """Launch a Longhouse Codex session on this machine via the Longhouse API."""
 
     resolved_config_dir = Path(config_dir) if config_dir else None
-    resolved_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=resolved_config_dir)
+    resolved_url, resolved_token = _load_api_credentials(
+        url=url,
+        token=token,
+        config_dir=resolved_config_dir,
+        exit_code=managed_local_cli.EXIT_SETUP_FAILED,
+    )
     machine_name = get_machine_name_label()
     typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(

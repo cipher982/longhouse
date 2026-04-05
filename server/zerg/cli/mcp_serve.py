@@ -1,10 +1,4 @@
-"""CLI command to run the Longhouse MCP server.
-
-Provides ``longhouse mcp-server`` which launches a Model Context Protocol
-server over stdio (default) or HTTP transport.  CLI agents like Claude Code
-connect to this server to access Longhouse session search, memory, and
-notification tools.
-"""
+"""Run the Longhouse MCP server."""
 
 from __future__ import annotations
 
@@ -39,15 +33,7 @@ def mcp_server(
         help="Port for HTTP transport",
     ),
 ) -> None:
-    """Run the Longhouse MCP server for CLI agent integration.
-
-    Exposes session search, memory read/write, and notification tools
-    via the Model Context Protocol (MCP).
-
-    Examples:
-        longhouse mcp-server
-        longhouse mcp-server --url https://api.longhouse.ai --transport http --port 9000
-    """
+    """Run the Longhouse MCP server for CLI agent integration."""
     if not url:
         url = get_zerg_url() or "http://localhost:8080"
     if not token:
