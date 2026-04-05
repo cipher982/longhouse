@@ -149,16 +149,26 @@ def wait_for_claude_channel_state(
     session_id: str,
     timeout_secs: float = 10.0,
     poll_interval_secs: float = 0.1,
+    require_ready: bool = True,
     state_root: str | Path | None = None,
     claude_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_secs
     state_path = build_claude_channel_state_file(session_id=session_id, state_root=state_root, claude_dir=claude_dir)
+    last_state: dict[str, Any] | None = None
     while time.monotonic() < deadline:
         if state_path.exists():
-            return read_claude_channel_state(session_id=session_id, state_root=state_root, claude_dir=claude_dir)
+            last_state = read_claude_channel_state(
+                session_id=session_id,
+                state_root=state_root,
+                claude_dir=claude_dir,
+            )
+            if not require_ready or bool(last_state.get("ready")):
+                return last_state
         time.sleep(poll_interval_secs)
-    raise FileNotFoundError(f"Claude channel state did not appear at {state_path} within {timeout_secs:.1f}s")
+    if last_state is None:
+        raise FileNotFoundError(f"Claude channel state did not appear at {state_path} within {timeout_secs:.1f}s")
+    raise TimeoutError(f"Claude channel state at {state_path} did not become ready within {timeout_secs:.1f}s")
 
 
 def build_claude_channel_exec_command(

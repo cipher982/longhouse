@@ -6,6 +6,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 from cryptography.fernet import Fernet
@@ -194,3 +195,23 @@ def test_claude_channel_bridge_emits_channel_notification_after_init(tmp_path):
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5.0)
+
+
+def test_wait_for_claude_channel_state_waits_for_ready_transition(tmp_path):
+    session_id = "22222222-2222-2222-2222-222222222222"
+    state_root = tmp_path / "bridge-state"
+    state_path = build_claude_channel_state_file(session_id=session_id, state_root=state_root)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(json.dumps({"ready": False}) + "\n", encoding="utf-8")
+
+    def _mark_ready() -> None:
+        time.sleep(0.2)
+        state_path.write_text(json.dumps({"ready": True, "port": 1234}) + "\n", encoding="utf-8")
+
+    writer = threading.Thread(target=_mark_ready, daemon=True)
+    writer.start()
+
+    state = wait_for_claude_channel_state(session_id=session_id, state_root=state_root, timeout_secs=2.0)
+
+    assert state["ready"] is True
+    assert state["port"] == 1234
