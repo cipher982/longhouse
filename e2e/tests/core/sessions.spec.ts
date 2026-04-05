@@ -1215,17 +1215,26 @@ test.describe("Session Detail Page", () => {
           continuation_kind: "local",
           origin_label: "Cinder",
         };
+        const managedCapabilities = {
+          live_control_available: true,
+          cloud_continuation_available: false,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+        };
 
         payload.session = {
           ...payload.session,
           ...managedSessionFields,
+          capabilities: managedCapabilities,
         };
         payload.thread = {
           ...payload.thread,
           head_session_id: sessionId,
           sessions: Array.isArray(payload.thread?.sessions)
             ? payload.thread.sessions.map((item: Record<string, unknown>) =>
-                item.id === sessionId ? { ...item, ...managedSessionFields } : item,
+                item.id === sessionId
+                  ? { ...item, ...managedSessionFields, capabilities: managedCapabilities }
+                  : item,
               )
             : payload.thread?.sessions,
         };
