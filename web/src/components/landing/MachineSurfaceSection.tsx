@@ -22,14 +22,14 @@ const cards: SurfaceCard[] = [
   },
   {
     title: "Continue from the API",
-    description: "Resume work from terminal or call the session API directly.",
+    description: "Start a cloud branch from terminal or call the session API directly.",
     code: `curl -N \\
   -X POST \\
   -H "X-Agents-Token: $LONGHOUSE_TOKEN" \\
   -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \\
   -H "Content-Type: application/json" \\
-  -d '{"message":"Continue from the API route and keep going."}' \\
-  "$LONGHOUSE_URL/api/agents/sessions/$SESSION_ID/continue"`,
+  -d '{"message":"Start a cloud branch from this thread and keep going."}' \\
+  "$LONGHOUSE_URL/api/agents/sessions/$SESSION_ID/branch-cloud"`,
   },
 ];
 

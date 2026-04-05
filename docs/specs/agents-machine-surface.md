@@ -48,7 +48,7 @@ Use it for directed session actions such as:
 - `POST /api/agents/messages`
 - `GET /api/agents/messages`
 - `POST /api/agents/messages/{id}/ack`
-- `POST /api/agents/sessions/{session_id}/continue`
+- `POST /api/agents/sessions/{session_id}/branch-cloud`
 
 ### Resolution rules
 
@@ -94,7 +94,7 @@ Use it for directed session actions such as:
 - `POST /api/agents/messages`
 - `GET /api/agents/messages`
 - `POST /api/agents/messages/{message_id}/ack`
-- `POST /api/agents/sessions/{session_id}/continue`
+- `POST /api/agents/sessions/{session_id}/branch-cloud`
 
 Current delivery model:
 
@@ -105,13 +105,13 @@ Current delivery model:
 - non-live sessions can still poll the durable inbox
 - wall entries now surface `pending_inbound_messages` so agents can see which sessions already have unacknowledged inbound work
 
-Current continuation model:
+Current cloud-branch model:
 
-- browser/Oikos continuation remains at `POST /api/sessions/{session_id}/chat`
-- machine continuation now lives at `POST /api/agents/sessions/{session_id}/continue`
+- browser/Oikos cloud branching lives at `POST /api/sessions/{session_id}/branch-cloud`
+- machine cloud branching lives at `POST /api/agents/sessions/{session_id}/branch-cloud`
 - the machine route reuses the current session-control transports under the hood
 - machine callers must present session context or a matching device token for the target session
-- fast local control paths return JSON acceptance immediately; provider-backed continuation paths may stream SSE output
+- fast local control paths return JSON acceptance immediately; provider-backed cloud-branch paths may stream SSE output
 
 ### Continuity and project context
 
@@ -200,7 +200,7 @@ curl -N \
   -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \
   -H "Content-Type: application/json" \
   -d '{"message":"Continue from the API route and keep going."}' \
-  "$LONGHOUSE_URL/api/agents/sessions/$TARGET_SESSION_ID/continue"
+  "$LONGHOUSE_URL/api/agents/sessions/$TARGET_SESSION_ID/branch-cloud"
 ```
 
 ```bash

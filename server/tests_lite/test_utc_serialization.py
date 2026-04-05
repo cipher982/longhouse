@@ -73,7 +73,7 @@ def test_session_response_model():
         thread_continuation_count=1,
         capabilities={
             "live_control_available": False,
-            "cloud_continuation_available": True,
+            "cloud_branch_available": True,
             "host_reattach_available": False,
             "reply_to_live_session_available": False,
         },

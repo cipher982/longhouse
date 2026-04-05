@@ -85,12 +85,12 @@ def validate_managed_local_chat_done_payload(
     session_id: str,
     done_payload: Mapping[str, object] | None,
 ) -> str | None:
-    """Validate the `/api/sessions/{id}/chat` done payload for managed-local sends."""
+    """Validate the `/api/sessions/{id}/send-live` done payload for managed-local sends."""
 
     if done_payload is None:
         return "missing done payload"
-    if done_payload.get("created_continuation") is not False:
-        return f"expected created_continuation=false, got {done_payload.get('created_continuation')!r}"
+    if done_payload.get("created_branch") is not False:
+        return f"expected created_branch=false, got {done_payload.get('created_branch')!r}"
     if str(done_payload.get("shipped_session_id") or "") != session_id:
         return f"expected shipped_session_id={session_id}, got {done_payload.get('shipped_session_id')!r}"
     sync_status = str(done_payload.get("sync_status") or "").strip().lower()

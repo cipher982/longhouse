@@ -107,7 +107,7 @@ def test_fake_cloud_continuation_persists_turn_for_follow_up_requests(monkeypatc
                 events=[
                     EventIngest(
                         role="user",
-                        content_text="Started on laptop before cloud continuation",
+                        content_text="Started on laptop before cloud branching",
                         timestamp=started_at,
                         source_path="/tmp/session.jsonl",
                         source_offset=0,
@@ -135,12 +135,12 @@ def test_fake_cloud_continuation_persists_turn_for_follow_up_requests(monkeypatc
 
     try:
         response = client.post(
-            f"/api/sessions/{source_session_id}/chat",
+            f"/api/sessions/{source_session_id}/branch-cloud",
             json={"message": "anything else?"},
         )
         assert response.status_code == 200, response.text
         assert '"persisted_events": 2' in response.text
-        assert '"created_continuation": true' in response.text
+        assert '"created_branch": true' in response.text
 
         with session_local() as db:
             store = AgentsStore(db)
@@ -295,11 +295,11 @@ def test_managed_local_claude_cloud_chat_can_continue_when_live_control_is_gone(
 
     try:
         response = client.post(
-            f"/api/sessions/{source_session_id}/chat",
+            f"/api/sessions/{source_session_id}/branch-cloud",
             json={"message": "continue from Longhouse"},
         )
         assert response.status_code == 200, response.text
-        assert '"created_continuation": true' in response.text
+        assert '"created_branch": true' in response.text
         assert '"persisted_events": 2' in response.text
     finally:
         api_app_ref.dependency_overrides = {}
@@ -359,11 +359,11 @@ def test_managed_local_claude_cloud_chat_requires_live_send_when_live_control_ex
 
     try:
         response = client.post(
-            f"/api/sessions/{source_session_id}/chat",
+            f"/api/sessions/{source_session_id}/branch-cloud",
             json={"message": "continue from Longhouse"},
         )
         assert response.status_code == 409, response.text
-        assert response.json()["detail"] == "This session currently has live Longhouse control. Use live send instead of cloud continuation."
+        assert response.json()["detail"] == "This session currently has live Longhouse control. Use live send instead of starting a cloud branch."
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -478,11 +478,11 @@ def test_synced_codex_session_cloud_chat_is_not_available(tmp_path):
 
     try:
         response = client.post(
-            f"/api/sessions/{source_session_id}/chat",
+            f"/api/sessions/{source_session_id}/branch-cloud",
             json={"message": "continue from Longhouse"},
         )
         assert response.status_code == 409, response.text
-        assert response.json()["detail"] == "Codex sessions are not yet available for cloud continuation from Longhouse."
+        assert response.json()["detail"] == "Codex sessions are not yet available for cloud branching from Longhouse."
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -542,11 +542,11 @@ def test_agents_continue_route_supports_fake_cloud_continuation(monkeypatch, tmp
 
     try:
         response = client.post(
-            f"/api/agents/sessions/{source_session_id}/continue",
+            f"/api/agents/sessions/{source_session_id}/branch-cloud",
             json={"message": "continue from the API"},
         )
         assert response.status_code == 200, response.text
-        assert '"created_continuation": true' in response.text
+        assert '"created_branch": true' in response.text
         assert '"persisted_events": 2' in response.text
 
         with session_local() as db:
@@ -605,11 +605,11 @@ def test_agents_continue_route_rejects_codex_cloud_continuation(tmp_path):
 
     try:
         response = client.post(
-            f"/api/agents/sessions/{source_session_id}/continue",
+            f"/api/agents/sessions/{source_session_id}/branch-cloud",
             json={"message": "continue from the API"},
         )
         assert response.status_code == 409, response.text
-        assert response.json()["detail"] == "Codex sessions are not yet available for cloud continuation from Longhouse."
+        assert response.json()["detail"] == "Codex sessions are not yet available for cloud branching from Longhouse."
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -754,7 +754,7 @@ def test_agents_continue_route_rejects_other_device(monkeypatch, tmp_path):
 
     try:
         response = client.post(
-            f"/api/agents/sessions/{source_session_id}/continue",
+            f"/api/agents/sessions/{source_session_id}/branch-cloud",
             json={"message": "should be rejected"},
         )
         assert response.status_code == 403
@@ -818,11 +818,11 @@ def test_agents_continue_route_allows_auth_disabled_without_device_token(monkeyp
 
     try:
         response = client.post(
-            f"/api/agents/sessions/{source_session_id}/continue",
+            f"/api/agents/sessions/{source_session_id}/branch-cloud",
             json={"message": "continue from localhost without a token"},
         )
         assert response.status_code == 200, response.text
-        assert '"created_continuation": true' in response.text
+        assert '"created_branch": true' in response.text
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -871,7 +871,7 @@ def test_agents_continue_route_auth_disabled_still_rejects_wrong_current_session
 
     try:
         response = client.post(
-            f"/api/agents/sessions/{source_session_id}/continue",
+            f"/api/agents/sessions/{source_session_id}/branch-cloud",
             headers={"X-Longhouse-Session-Id": str(uuid4())},
             json={"message": "this header should fail"},
         )

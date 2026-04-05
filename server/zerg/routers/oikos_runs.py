@@ -43,7 +43,7 @@ from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_turn_reviews import approve_pending_turn_review
 from zerg.services.session_turn_reviews import dismiss_pending_turn_review
 from zerg.services.session_turn_reviews import reply_to_pending_turn_review
-from zerg.services.session_turn_reviews import supports_cloud_turn_review_continue
+from zerg.services.session_turn_reviews import supports_cloud_turn_review_branch
 from zerg.services.session_turn_reviews import supports_live_turn_review_continue
 from zerg.utils.time import UTCBaseModel
 
@@ -442,7 +442,7 @@ def _home_label(session: AgentSession | None) -> str | None:
 
 def _available_loop_actions(review: SessionTurnReview, session: AgentSession | None) -> List[str]:
     session_capabilities = build_session_capabilities(session)
-    can_approve_continue = supports_live_turn_review_continue(session) or supports_cloud_turn_review_continue(session)
+    can_approve_continue = supports_live_turn_review_continue(session) or supports_cloud_turn_review_branch(session)
     actions = ["not_now", "open_full_session"]
     if session_capabilities.reply_to_live_session_available:
         actions.insert(0, "reply_to_session")

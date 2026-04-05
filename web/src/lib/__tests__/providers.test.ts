@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getLaunchProviderSupport,
   getLaunchProviderSupportList,
-  supportsDirectWebContinuation,
+  supportsDirectWebBranching,
 } from "../providers";
 
 describe("providers launch support", () => {
@@ -13,27 +13,27 @@ describe("providers launch support", () => {
     expect(providers.every((provider) => provider.cloudSessionStart === "live")).toBe(true);
   });
 
-  it("marks Claude as the only direct web continuation provider today", () => {
-    expect(supportsDirectWebContinuation("claude")).toBe(true);
-    expect(supportsDirectWebContinuation("codex")).toBe(false);
-    expect(supportsDirectWebContinuation("gemini")).toBe(false);
+  it("marks Claude as the only direct web branching provider today", () => {
+    expect(supportsDirectWebBranching("claude")).toBe(true);
+    expect(supportsDirectWebBranching("codex")).toBe(false);
+    expect(supportsDirectWebBranching("gemini")).toBe(false);
   });
 
   it("records hooks and telemetry differences for the landing truth pass", () => {
     expect(getLaunchProviderSupport("claude")).toMatchObject({
       hooksSupport: "live",
       telemetryQuality: "rich",
-      directWebContinuation: "live",
+      directWebBranching: "live",
     });
     expect(getLaunchProviderSupport("codex")).toMatchObject({
       hooksSupport: "none",
       telemetryQuality: "structured",
-      directWebContinuation: "later",
+      directWebBranching: "later",
     });
     expect(getLaunchProviderSupport("gemini")).toMatchObject({
       hooksSupport: "none",
       telemetryQuality: "basic",
-      directWebContinuation: "later",
+      directWebBranching: "later",
     });
   });
 });

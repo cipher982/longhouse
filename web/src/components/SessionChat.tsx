@@ -1,5 +1,5 @@
 /**
- * SessionChat - Interactive chat with Claude Code sessions via timeline drop-in.
+ * SessionChat - Live-send and cloud-branch dock for timeline sessions.
  *
  * Features:
  * - Streaming assistant response via SSE
@@ -37,7 +37,7 @@ interface SSEDone {
   session_id?: string;
   source_session_id?: string;
   shipped_session_id?: string | null;
-  created_continuation?: boolean;
+  created_branch?: boolean;
   branched_from_event_id?: number | null;
   exit_code: number;
   total_text_length: number;
@@ -64,7 +64,7 @@ interface SessionChatProps {
   emptyStateTitle?: string;
   hintText?: string;
   composerPlaceholder?: string;
-  onSessionChanged?: (nextSessionId: string, createdContinuation: boolean) => void;
+  onSessionChanged?: (nextSessionId: string, createdBranch: boolean) => void;
   layout?: "panel" | "dock";
   dockHeaderStyle?: "callout" | "divider" | "hidden";
   introEyebrow?: string;
@@ -74,7 +74,7 @@ interface SessionChatProps {
   requireClickForFirstSend?: boolean;
   keyboardHintText?: string;
   /** Managed-local sessions use explicit live-send with fast JSON ack. */
-  chatMode?: "cloud" | "managed_local";
+  chatMode?: "cloud_branch" | "managed_local";
   composerDisabledReason?: string | null;
 }
 
@@ -112,7 +112,7 @@ export function SessionChat({
   submitLabel = "Send",
   requireClickForFirstSend = false,
   keyboardHintText,
-  chatMode = "cloud",
+  chatMode = "cloud_branch",
   composerDisabledReason = null,
 }: SessionChatProps) {
   const isDock = layout === "dock";
@@ -252,7 +252,7 @@ export function SessionChat({
                 setMessages([]);
               });
             } else {
-              onSessionChanged?.(nextSessionId, Boolean(done.created_continuation));
+              onSessionChanged?.(nextSessionId, Boolean(done.created_branch));
             }
           }
           break;
@@ -356,7 +356,7 @@ export function SessionChat({
     [queryClient, session.id, refreshCurrentSessionWorkspace],
   );
 
-  const handleCloudSend = useCallback(
+  const handleCloudBranchSend = useCallback(
     async (message: string) => {
       const assistantId = `assistant-${Date.now()}`;
       setMessages((prev) => [
@@ -369,7 +369,7 @@ export function SessionChat({
       abortControllerRef.current = new AbortController();
 
       try {
-        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
+        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/branch-cloud`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message }),
@@ -462,10 +462,10 @@ export function SessionChat({
       if (isManagedLocal) {
         await handleManagedLocalSend(message);
       } else {
-        await handleCloudSend(message);
+        await handleCloudBranchSend(message);
       }
     },
-    [draft, isSubmitting, isManagedLocal, handleManagedLocalSend, handleCloudSend, isComposerDisabled],
+    [draft, isSubmitting, isManagedLocal, handleManagedLocalSend, handleCloudBranchSend, isComposerDisabled],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
