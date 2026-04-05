@@ -139,7 +139,6 @@ import json
 import sys
 
 print(json.dumps({
-    "build_pack": "dockerimage",
     "docker_registry_image_name": sys.argv[1],
     "docker_registry_image_tag": sys.argv[2],
 }))
