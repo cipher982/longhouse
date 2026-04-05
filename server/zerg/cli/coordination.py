@@ -16,6 +16,7 @@ from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 
 app = typer.Typer(help="Session coordination commands")
+messages_app = typer.Typer(help="Durable session inbox commands")
 _CURRENT_SESSION_HEADER = CURRENT_SESSION_HEADER
 
 
@@ -573,7 +574,6 @@ def tail(
         typer.echo("")
 
 
-@app.command("check-messages")
 def check_messages(
     session_id: str | None = typer.Option(
         None,
@@ -682,7 +682,6 @@ def check_messages(
         typer.echo("")
 
 
-@app.command("ack-message")
 def ack_message(
     message_id: int = typer.Argument(..., help="Message id to acknowledge."),
     session_id: str | None = typer.Option(
@@ -765,3 +764,114 @@ def ack_message(
     acknowledged_at = str(payload.get("acknowledged_at") or "").strip()
     if acknowledged_at:
         typer.echo(f"Acknowledged at: {acknowledged_at}")
+
+
+@messages_app.callback(invoke_without_command=True)
+def messages(
+    ctx: typer.Context,
+    session_id: str | None = typer.Option(
+        None,
+        "--session",
+        "-s",
+        help="Session UUID. Defaults to the current managed session when available.",
+    ),
+    direction: str = typer.Option(
+        "inbound",
+        "--direction",
+        help="Message direction: inbound, outbound, or all.",
+    ),
+    unacknowledged_only: bool = typer.Option(
+        True,
+        "--unacknowledged-only/--all",
+        help="Show only unacknowledged messages by default.",
+    ),
+    limit: int = typer.Option(
+        50,
+        "--limit",
+        "-n",
+        help="Max messages to return.",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output raw JSON response.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified).",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """List durable session messages for a session."""
+    if ctx.invoked_subcommand is not None:
+        return
+    check_messages(
+        session_id=session_id,
+        direction=direction,
+        unacknowledged_only=unacknowledged_only,
+        limit=limit,
+        output_json=output_json,
+        url=url,
+        token=token,
+        claude_dir=claude_dir,
+    )
+
+
+@messages_app.command("ack")
+def messages_ack(
+    message_id: int = typer.Argument(..., help="Message id to acknowledge."),
+    session_id: str | None = typer.Option(
+        None,
+        "--session",
+        "-s",
+        help="Target session UUID. Defaults to the current managed session when available.",
+    ),
+    output_json: bool = typer.Option(
+        False,
+        "--json",
+        "-j",
+        help="Output raw JSON response.",
+    ),
+    url: str | None = typer.Option(
+        None,
+        "--url",
+        "-u",
+        help="Longhouse API URL (uses stored URL if not specified).",
+    ),
+    token: str | None = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="Device token (uses stored token if not specified).",
+    ),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory (default: ~/.claude).",
+    ),
+) -> None:
+    """Acknowledge an inbound durable session message."""
+    ack_message(
+        message_id=message_id,
+        session_id=session_id,
+        output_json=output_json,
+        url=url,
+        token=token,
+        claude_dir=claude_dir,
+    )
+
+
+app.add_typer(messages_app, name="messages", help="Durable session inbox commands")

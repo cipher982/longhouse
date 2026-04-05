@@ -153,8 +153,8 @@ The current CLI contract sits directly on the canonical machine surface:
 - `longhouse message`
 - `longhouse continue`
 - `longhouse tail`
-- `longhouse check-messages`
-- `longhouse ack-message`
+- `longhouse messages`
+- `longhouse messages ack`
 - `longhouse sessions get`
 - `longhouse sessions events`
 
@@ -217,7 +217,7 @@ curl -s \
 ```
 
 ```bash
-longhouse check-messages --json
+longhouse messages --json
 ```
 
 ```bash
@@ -231,7 +231,7 @@ curl -s \
 ```
 
 ```bash
-longhouse ack-message "$MESSAGE_ID" --json
+longhouse messages ack "$MESSAGE_ID" --json
 ```
 
 ## Non-Goals

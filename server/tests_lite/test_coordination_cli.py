@@ -454,7 +454,7 @@ def test_tail_command_json_output(monkeypatch):
     assert '"total": 0' in result.output
 
 
-def test_check_messages_command_prints_inbox(monkeypatch):
+def test_messages_command_prints_inbox(monkeypatch):
     runner = CliRunner()
     fake_client = _FakeClient(
         get_response=_FakeResponse(
@@ -480,7 +480,7 @@ def test_check_messages_command_prints_inbox(monkeypatch):
     monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
     monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "22222222-2222-2222-2222-222222222222")
 
-    result = runner.invoke(app, ["check-messages"])
+    result = runner.invoke(app, ["messages"])
 
     assert result.exit_code == 0, result.output
     assert "Session: 22222222-2222-2222-2222-222222222222" in result.output
@@ -502,7 +502,7 @@ def test_check_messages_command_prints_inbox(monkeypatch):
     ]
 
 
-def test_check_messages_command_json_output(monkeypatch):
+def test_messages_command_json_output(monkeypatch):
     runner = CliRunner()
     fake_client = _FakeClient(
         get_response=_FakeResponse(
@@ -528,7 +528,7 @@ def test_check_messages_command_json_output(monkeypatch):
     monkeypatch.setattr(coordination_cli.httpx, "Client", lambda timeout: fake_client)
     monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "22222222-2222-2222-2222-222222222222")
 
-    result = runner.invoke(app, ["check-messages", "--json"])
+    result = runner.invoke(app, ["messages", "--json"])
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
@@ -536,7 +536,7 @@ def test_check_messages_command_json_output(monkeypatch):
     assert payload["messages"][0]["id"] == 9
 
 
-def test_ack_message_command_posts_ack(monkeypatch):
+def test_messages_ack_command_posts_ack(monkeypatch):
     runner = CliRunner()
     fake_client = _FakeClient(
         post_response=_FakeResponse(
@@ -556,7 +556,8 @@ def test_ack_message_command_posts_ack(monkeypatch):
     result = runner.invoke(
         app,
         [
-            "ack-message",
+            "messages",
+            "ack",
             "9",
             "--session",
             "22222222-2222-2222-2222-222222222222",
@@ -579,7 +580,7 @@ def test_ack_message_command_posts_ack(monkeypatch):
     ]
 
 
-def test_ack_message_command_json_output(monkeypatch):
+def test_messages_ack_command_json_output(monkeypatch):
     runner = CliRunner()
     fake_client = _FakeClient(
         post_response=_FakeResponse(
@@ -599,7 +600,8 @@ def test_ack_message_command_json_output(monkeypatch):
     result = runner.invoke(
         app,
         [
-            "ack-message",
+            "messages",
+            "ack",
             "9",
             "--session",
             "22222222-2222-2222-2222-222222222222",

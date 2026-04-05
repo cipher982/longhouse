@@ -9,8 +9,8 @@ Usage:
     longhouse peers         # Find live peer sessions for the current repo
     longhouse message       # Send a message to another session
     longhouse tail          # Read the recent tail of a session
-    longhouse check-messages  # Inspect the durable session inbox
-    longhouse ack-message     # Acknowledge an inbound session message
+    longhouse messages      # Inspect durable session messages
+    longhouse messages ack  # Acknowledge an inbound session message
     longhouse sessions get    # Inspect one session
     longhouse continue        # Continue a session from the terminal
     longhouse sessions events # Inspect session events
@@ -38,6 +38,7 @@ from zerg.cli.coordination import ack_message
 from zerg.cli.coordination import app as coordination_app
 from zerg.cli.coordination import check_messages
 from zerg.cli.coordination import message
+from zerg.cli.coordination import messages_app
 from zerg.cli.coordination import peers
 from zerg.cli.coordination import tail
 from zerg.cli.coordination import wall
@@ -115,6 +116,7 @@ def config_show() -> None:
 # Add subcommands from connect module
 app.add_typer(connect_app, name="session", help="Session shipping commands")
 app.add_typer(coordination_app, name="coordination", help="Session coordination commands")
+app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(serve_app, name="server", help="Server management commands")
 app.add_typer(config_app, name="config", help="Configuration management")
@@ -134,8 +136,8 @@ app.command(name="wall")(wall)
 app.command(name="peers")(peers)
 app.command(name="message")(message)
 app.command(name="tail")(tail)
-app.command(name="check-messages")(check_messages)
-app.command(name="ack-message")(ack_message)
+app.command(name="check-messages", hidden=True)(check_messages)
+app.command(name="ack-message", hidden=True)(ack_message)
 app.command(name="continue")(continue_session)
 app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
