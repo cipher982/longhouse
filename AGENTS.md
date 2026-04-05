@@ -233,8 +233,9 @@ If you manually ship, launch independent waits once and move on. Example: start 
 
 ```bash
 gh run watch $(gh run list --workflow runtime-image.yml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status
-./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
-make reprovision                    # david010 by default
+IMAGE_REF="ghcr.io/cipher982/longhouse-runtime:<full-commit-sha>"
+./scripts/ops/coolify-deploy.sh longhouse-demo --docker-image "${IMAGE_REF%:*}" --docker-tag "${IMAGE_REF##*:}" --timeout 900
+make reprovision IMAGE="$IMAGE_REF" # david010 by default
 make qa-live
 make qa-live-conversations
 ```
@@ -251,7 +252,8 @@ make qa-live-conversations
 
 ```bash
 make reprovision                    # david010 (default) — auto-fetches admin token from zerg
-make reprovision SUBDOMAIN=other    # other instance
+make reprovision SUBDOMAIN=other
+make reprovision IMAGE="ghcr.io/cipher982/longhouse-runtime:<tag>"
 ```
 Data is safe — SQLite lives on a host bind mount at `/var/app-data/longhouse/<subdomain>`. Waits 15s and prints health status. Admin token is auto-fetched from the control-plane container on zerg; set `CONTROL_PLANE_ADMIN_TOKEN` explicitly in CI.
 

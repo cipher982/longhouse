@@ -124,4 +124,44 @@ if [[ "$(cat "$temp_json.request")" != 'https://demo.longhouse.ai/api/auth/accep
   exit 1
 fi
 
+curl() {
+  local data=""
+  local request_url=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -d)
+        data="$2"
+        shift 2
+        ;;
+      -o)
+        : >"$2"
+        shift 2
+        ;;
+      -w|-H|-X)
+        shift 2
+        ;;
+      *)
+        request_url="$1"
+        shift
+        ;;
+    esac
+  done
+
+  printf '%s' "$request_url" >"$temp_json.request"
+  printf '%s' "$data" >"$temp_json.body"
+  printf '200'
+}
+
+lh_hosted_reprovision "7" "ghcr.io/cipher982/longhouse-runtime:deadbeef"
+
+if [[ "$(cat "$temp_json.request")" != 'https://control.longhouse.ai/api/instances/7/reprovision' ]]; then
+  echo "Expected reprovision helper to target the instance reprovision endpoint"
+  exit 1
+fi
+
+if [[ "$(cat "$temp_json.body")" != '{"image":"ghcr.io/cipher982/longhouse-runtime:deadbeef"}' ]]; then
+  echo "Expected reprovision helper to send image override JSON"
+  exit 1
+fi
+
 echo "hosted-instance auth tests passed"
