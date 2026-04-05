@@ -59,7 +59,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          short_sha="${GITHUB_SHA::7}"
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:latest"
           before_sha="${{ github.event.before }}"
           runtime_paths=(
@@ -79,7 +78,8 @@ jobs:
             fi
 
             if git diff --name-only "$before_sha" "$GITHUB_SHA" -- "${runtime_paths[@]}" | grep -q .; then
-              image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${short_sha}"
+              # runtime-image.yml publishes latest + full commit SHA tags.
+              image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
             fi
           fi
 
