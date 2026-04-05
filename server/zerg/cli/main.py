@@ -34,9 +34,6 @@ from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
 from zerg.cli.codex import codex
 from zerg.cli.connect import app as connect_app
-from zerg.cli.coordination import ack_message
-from zerg.cli.coordination import app as coordination_app
-from zerg.cli.coordination import check_messages
 from zerg.cli.coordination import message
 from zerg.cli.coordination import messages_app
 from zerg.cli.coordination import peers
@@ -45,7 +42,6 @@ from zerg.cli.coordination import wall
 from zerg.cli.doctor import doctor
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
-from zerg.cli.serve import app as serve_app
 from zerg.cli.serve import serve
 from zerg.cli.serve import status
 from zerg.cli.sessions import app as sessions_app
@@ -114,11 +110,8 @@ def config_show() -> None:
 
 
 # Add subcommands from connect module
-app.add_typer(connect_app, name="session", help="Session shipping commands", hidden=True)
-app.add_typer(coordination_app, name="coordination", help="Session coordination commands", hidden=True)
 app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
-app.add_typer(serve_app, name="server", help="Server management commands", hidden=True)
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
 
@@ -136,8 +129,6 @@ app.command(name="wall")(wall)
 app.command(name="peers")(peers)
 app.command(name="message")(message)
 app.command(name="tail")(tail)
-app.command(name="check-messages", hidden=True)(check_messages)
-app.command(name="ack-message", hidden=True)(ack_message)
 app.command(name="continue")(continue_session)
 app.command(name="auth")(_cmd_lookup["auth"])
 app.command(name="ship")(_cmd_lookup["ship"])
