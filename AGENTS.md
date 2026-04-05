@@ -11,6 +11,11 @@ Skills-Dir: .agents/skills
 - **Read VISION.md first** — It's the guiding light. Understand the strategic direction before diving into implementation.
 - **SQLite-only core** — SQLite pivot is complete. Don't invest in Postgres-specific infrastructure. See VISION.md.
 - **Progressive disclosure** — AGENTS.md should point to deeper docs/runbooks so agents know what they don't know.
+- **Design for cold restarts** — Assume future agents will re-understand the system from code and local docs only, with no durable human memory carrying context forward.
+- **Keep behavior explicit** — Prefer explicit intent, explicit modes, and capability objects over inference from scattered raw fields.
+- **No hidden fallbacks** — If behavior changes materially, make it an explicit product/API choice instead of a silent backend switch.
+- **One source of truth per capability** — Do not make the frontend, Oikos, and backend separately re-derive the same behavior from different heuristics.
+- **Prefer obvious seams over clever reuse** — When two flows differ in behavior or transport, split the route/service/contract instead of hiding both behind one overloaded surface.
 - Always commit changes as you go (no lingering uncommitted work). In swarm mode, **lead commits after each teammate's verified work** — don't batch everything into one mega-commit at the end.
 - **Execute autonomously** — When given a plan or task, implement → test → commit → deploy → verify without pausing for approval at each step. Only stop to ask if something is ambiguous or blocked. Don't narrate your progress — deliver results.
 
