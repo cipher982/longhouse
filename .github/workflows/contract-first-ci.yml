@@ -205,9 +205,19 @@ jobs:
     runs-on: ubuntu-latest
     # No dependency on other jobs — runs in parallel with sqlite-tests
     name: "🎭 control-plane-e2e--signup-login-gates"
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright-py
 
     steps:
     - uses: actions/checkout@v6
+
+    - name: Restore Playwright browser cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+        key: longhouse-playwright-py-${{ runner.os }}-${{ hashFiles('control-plane/uv.lock') }}
+        restore-keys: |
+          longhouse-playwright-py-${{ runner.os }}-
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -253,9 +263,27 @@ jobs:
     runs-on: ubuntu-latest
     # No dependency on validate - can run immediately on GitHub-hosted runners
     name: "📦 oss-qa--fresh-clone--sqlite--onboarding-ui"
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:
     - uses: actions/checkout@v6
+
+    - name: Restore Bun download cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          longhouse-bun-${{ runner.os }}-
+
+    - name: Restore Playwright browser cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+        key: longhouse-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+        restore-keys: |
+          longhouse-playwright-${{ runner.os }}-
 
     - name: Set up Python
       uses: actions/setup-python@v6
