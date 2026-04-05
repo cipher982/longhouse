@@ -15,9 +15,9 @@ import App from "./routes/App";
 // Umami Analytics - env-configurable via Vite (VITE_UMAMI_*)
 // Only loads on production domains (not localhost)
 const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-const umamiWebsiteId = import.meta.env.VITE_UMAMI_WEBSITE_ID;
-const umamiScriptSrc = import.meta.env.VITE_UMAMI_SCRIPT_SRC || "https://analytics.drose.io/script.js";
-const umamiDomains = import.meta.env.VITE_UMAMI_DOMAINS;
+const umamiWebsiteId = config.umamiWebsiteId;
+const umamiScriptSrc = config.umamiScriptSrc;
+const umamiDomains = config.umamiDomains;
 
 if (!isLocalhost && umamiWebsiteId) {
   const script = document.createElement("script");
