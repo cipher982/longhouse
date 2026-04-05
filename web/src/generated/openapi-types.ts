@@ -9475,6 +9475,11 @@ export interface components {
              * @description User message
              */
             message: string;
+            /**
+             * Continuation Mode
+             * @description Explicitly choose live managed-local control or cloud continuation.
+             */
+            continuation_mode?: ("managed_local" | "cloud") | null;
         };
         /**
          * SessionExecutionHome

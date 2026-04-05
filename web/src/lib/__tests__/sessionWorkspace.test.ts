@@ -131,6 +131,9 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("promote");
     expect(capabilities.canChatFromBrowser).toBe(true);
     expect(capabilities.capabilityLabel).toBe("Web continue");
+    expect(capabilities.capabilitySummary).toBe("Start a cloud continuation from this session.");
+    expect(capabilities.title).toBe("Continue in Cloud");
+    expect(capabilities.description).toContain("starts a cloud continuation from this session in Longhouse");
     expect(capabilities.submitLabel).toBe("Start in Cloud");
     expect(capabilities.composerDisabledReason).toBeNull();
   });
@@ -144,6 +147,8 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("promote");
     expect(capabilities.canChatFromBrowser).toBe(true);
     expect(capabilities.capabilityLabel).toBe("Web continue");
+    expect(capabilities.capabilitySummary).toBe("Start a cloud continuation from this session.");
+    expect(capabilities.title).toBe("Continue in Cloud");
     expect(capabilities.submitLabel).toBe("Start in Cloud");
   });
 
