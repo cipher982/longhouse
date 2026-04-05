@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import heapq
 import logging
+import os
 import time
 from dataclasses import dataclass
 from dataclasses import field
@@ -46,6 +47,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 _MISSING = object()
+_TRUTHY_ENV = {"1", "true", "yes", "on"}
 
 _DEFAULT_PRIORITY = 50
 _LABEL_PRIORITIES: dict[str, int] = {
@@ -321,6 +323,15 @@ class WriteSerializer:
 
         This eliminates the need for if/else blocks at every callsite.
         """
+        if self._configured and fallback_db is not None and os.getenv("TESTING", "").strip().lower() in _TRUTHY_ENV:
+            # Unit tests frequently override request DB dependencies to point at
+            # per-test SQLite files. Once the app startup configures the global
+            # serializer, routing those writes through the process-wide factory
+            # hits the wrong database and breaks request-scoped assertions.
+            result = fn(fallback_db)
+            if auto_commit:
+                fallback_db.commit()
+            return result
         if self._configured:
             return await self.execute(fn, label=label, priority=priority, auto_commit=auto_commit)
         if fallback_db is None:

@@ -22,7 +22,6 @@ from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
-from zerg.services.managed_local_tmux import build_tmux_attach_command
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 
 
@@ -193,7 +192,7 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
         payload = response.json()
         assert payload["execution_home"] == "managed_local"
         assert payload["source_runner_name"] == "cinder"
-        assert payload["attach_command"] == build_tmux_attach_command(session_name="lh-codex-managed-local")
+        assert payload["attach_command"] == build_managed_local_attach_command(session=session)
         assert payload["managed_launch_profile"] == {
             "required_commands": ["codex"],
             "exported_env_keys": ["LONGHOUSE_MANAGED_SESSION_ID"],
@@ -290,7 +289,7 @@ def test_timeline_session_detail_ignores_malformed_managed_launch_profile(tmp_pa
         assert response.status_code == 200
         payload = response.json()
         assert payload["managed_launch_profile"] is None
-        assert payload["attach_command"] == build_tmux_attach_command(session_name="lh-codex-managed-local")
+        assert payload["attach_command"] == build_managed_local_attach_command(session=session)
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

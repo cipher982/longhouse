@@ -21,6 +21,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeState
+from zerg.services.presence_cache import get_presence_cache
 from zerg.session_execution_home import SessionExecutionHome
 
 
@@ -263,6 +264,57 @@ def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
         assert row["display_phase"] == "Thinking"
         assert row["confidence"] == "live"
         assert row["timeline_anchor_at"] is not None
+
+
+def test_sessions_list_reads_missing_presence_from_db_when_cache_is_warm(tmp_path):
+    factory = _make_db(tmp_path, "warm_cache_presence.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=1),
+            ended_at=None,
+            project="warm-cache",
+        )
+        _upsert_presence(
+            db,
+            session_id=str(session.id),
+            state="running",
+            updated_at=now - timedelta(seconds=10),
+            tool_name="bash",
+            project="warm-cache",
+        )
+    finally:
+        db.close()
+
+    cache = get_presence_cache()
+    original_entries = dict(cache._entries)
+    original_cold = cache._cold
+    try:
+        cache._entries.clear()
+        cache._cold = False
+        cache._entries["other-session"] = cache.upsert(
+            "other-session",
+            "idle",
+            project="other",
+            updated_at=now - timedelta(seconds=5),
+        )[0]
+        cache._entries["other-session"].dirty = False
+
+        for client in _client(factory):
+            resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
+            assert resp.status_code == 200, resp.text
+            row = resp.json()["sessions"][0]
+            assert row["id"] == str(session.id)
+            assert row["status"] == "working"
+            assert row["presence_state"] == "running"
+            assert row["active_tool"] == "bash"
+    finally:
+        cache._entries.clear()
+        cache._entries.update(original_entries)
+        cache._cold = original_cold
 
 
 def test_sessions_list_uses_runtime_anchor_for_old_runtime_only_session(tmp_path):

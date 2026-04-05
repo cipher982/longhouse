@@ -612,6 +612,12 @@ def load_presence_map(db: Session, session_ids: list[UUID]) -> dict[str, Session
     cache = get_presence_cache()
     if not cache.is_cold:
         cached = cache.get_many(str_session_ids)
+        missing_ids = [sid for sid in str_session_ids if sid not in cached]
+        if missing_ids:
+            rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(missing_ids)).all()
+            if rows:
+                cache.warm_from_db(rows)
+                cached = cache.get_many(str_session_ids)
         return {sid: cache.to_presence_obj(entry) for sid, entry in cached.items()}
 
     rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()
