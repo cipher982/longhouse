@@ -137,8 +137,6 @@ jobs:
     timeout-minutes: 20
     needs: gate
     if: ${{ needs.gate.outputs.stale != 'true' }}
-    outputs:
-      prev_sha: ${{ steps.prev.outputs.sha }}
 
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
@@ -164,16 +162,6 @@ jobs:
 
       - name: Verify runtime image exists
         run: docker manifest inspect "${{ needs.gate.outputs.runtime_image_ref }}" >/dev/null
-
-      - name: Record previous canary image SHA
-        id: prev
-        run: |
-          CONTAINER_NAME="longhouse-${INSTANCE_SUBDOMAIN}"
-          REMOTE_FORMAT='{{index .Config.Labels "org.opencontainers.image.revision"}}'
-          FULL_SHA=$(ssh zerg -- docker inspect "$CONTAINER_NAME" --format "$REMOTE_FORMAT" 2>/dev/null || echo "")
-          SHORT_SHA="${FULL_SHA:0:7}"
-          echo "sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
-          echo "Previous canary image revision: ${SHORT_SHA:-unknown} (full: ${FULL_SHA:-unknown})"
 
       - name: Deploy public demo runtime
         run: |
@@ -282,7 +270,6 @@ jobs:
             echo "- **Control plane:** $CONTROL_PLANE_URL"
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
             echo "- **Demo image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
-            echo "- **Previous canary SHA:** ${{ needs.deploy-demo.outputs.prev_sha }}"
             echo "- **Demo deploy job:** \`${{ needs.deploy-demo.result }}\`"
             echo "- **Canary reprovision job:** \`${{ needs.reprovision-canary.result }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -296,7 +283,6 @@ jobs:
             echo "gh CLI is not installed on this runner; skipping issue creation."
             exit 0
           fi
-          PREV_SHA="${{ needs.deploy-demo.outputs.prev_sha }}"
           COMMIT_SHA="${{ needs.gate.outputs.head_sha }}"
           gh issue create \
             --title "Runtime deploy smoke failed for ${COMMIT_SHA:0:7}" \
@@ -305,7 +291,6 @@ jobs:
 
           - Hosted canary: $INSTANCE_URL
           - Public demo: $PUBLIC_DEMO_URL
-          - Previous canary image SHA: \`${PREV_SHA:-unknown}\`
           - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
           Check the workflow logs for which checks failed.
