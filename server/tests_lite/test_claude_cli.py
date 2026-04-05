@@ -184,10 +184,7 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
 
     assert result.exit_code == 0, result.output
     assert "Longhouse: https://longhouse.test" in result.output
-    assert (
-        "Native Claude channels unavailable (authMethod=third_party, apiProvider=bedrock); using tmux fallback."
-        in result.output
-    )
+    assert "Native Claude channels unavailable (disabled by Claude launch env); using tmux fallback." in result.output
     assert "Longhouse Claude session launched on this machine." in result.output
     assert "Session ID: session-123" in result.output
     assert "Provider session ID: provider-123" in result.output
@@ -322,6 +319,35 @@ def test_collect_claude_launch_env_filters_empty_values(monkeypatch):
     }
 
 
+def test_launch_env_requires_flag_capable_claude_path_when_explicit_launch_env_requests_it():
+    assert claude_cli._launch_env_requires_flag_capable_claude_path({}) is False
+    assert claude_cli._launch_env_requires_flag_capable_claude_path({"AWS_PROFILE": "zh-qa-engineer"}) is False
+    assert claude_cli._launch_env_requires_flag_capable_claude_path({"CLAUDE_CODE_USE_BEDROCK": ""}) is False
+    assert (
+        claude_cli._launch_env_requires_flag_capable_claude_path({"CLAUDE_CODE_USE_BEDROCK": "1"}) is True
+    )
+
+
+def test_result_uses_native_claude_bridge_only_for_native_transport():
+    native = claude_cli.ManagedLocalLaunchResponse(
+        session_id="session-123",
+        provider_session_id="provider-123",
+        attach_command="attach",
+        source_runner_name="work-laptop",
+        managed_transport="claude_channel_bridge",
+    )
+    tmux = claude_cli.ManagedLocalLaunchResponse(
+        session_id="session-123",
+        provider_session_id="provider-123",
+        attach_command="attach",
+        source_runner_name="work-laptop",
+        managed_transport="tmux",
+    )
+
+    assert claude_cli._result_uses_native_claude_bridge(native) is True
+    assert claude_cli._result_uses_native_claude_bridge(tmux) is False
+
+
 def test_detect_native_claude_channels_available_true_for_first_party_auth(monkeypatch):
     monkeypatch.setattr(
         claude_cli.subprocess,
@@ -354,3 +380,110 @@ def test_detect_native_claude_channels_available_false_for_bedrock(monkeypatch):
 
     assert available is False
     assert detail == "authMethod=third_party, apiProvider=bedrock"
+
+
+def test_claude_command_forces_tmux_path_when_launch_env_requires_flag_capable_path(monkeypatch, tmp_path):
+    runner = CliRunner()
+    launch_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        claude_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_detect_native_claude_channels_available",
+        lambda: (True, "authMethod=claude.ai, apiProvider=firstParty"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_collect_claude_launch_env",
+        lambda: {
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_PROFILE": "zh-qa-engineer",
+            "AWS_REGION": "us-east-1",
+            "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
+        },
+    )
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        claude_cli,
+        "_launch_managed_local_from_api",
+        lambda **kwargs: launch_calls.append(kwargs)
+        or claude_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="zsh -lc 'exec tmux attach -t lh-demo'",
+            source_runner_name="work-laptop",
+            managed_transport="tmux",
+        ),
+    )
+    monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: False)
+
+    result = runner.invoke(
+        app,
+        [
+            "claude",
+            "--cwd",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Native Claude channels unavailable (disabled by Claude launch env); using tmux fallback." in result.output
+    assert launch_calls[0]["native_claude_channels_available"] is False
+
+
+def test_claude_command_rejects_native_bridge_when_launch_env_requires_flag_capable_path(monkeypatch, tmp_path):
+    runner = CliRunner()
+    native_finalize_calls: list[dict] = []
+
+    monkeypatch.setattr(
+        claude_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_detect_native_claude_channels_available",
+        lambda: (True, "authMethod=claude.ai, apiProvider=firstParty"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_collect_claude_launch_env",
+        lambda: {
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_PROFILE": "zh-qa-engineer",
+        },
+    )
+    monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
+    monkeypatch.setattr(
+        claude_cli,
+        "_launch_managed_local_from_api",
+        lambda **_kwargs: claude_cli.ManagedLocalLaunchResponse(
+            session_id="session-123",
+            provider_session_id="provider-123",
+            attach_command="zsh -lc 'exec claude --resume provider-123'",
+            source_runner_name="work-laptop",
+            managed_transport="claude_channel_bridge",
+        ),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_finalize_native_claude_launch",
+        lambda **kwargs: native_finalize_calls.append(kwargs),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "claude",
+            "--cwd",
+            str(tmp_path),
+        ],
+    )
+
+    assert result.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert native_finalize_calls == []
+    assert "requires the permissive Claude path" in result.output

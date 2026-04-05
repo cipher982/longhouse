@@ -87,6 +87,14 @@ def _collect_claude_launch_env() -> dict[str, str]:
     return env
 
 
+def _launch_env_requires_flag_capable_claude_path(claude_launch_env: dict[str, str]) -> bool:
+    return bool(str(claude_launch_env.get("CLAUDE_CODE_USE_BEDROCK") or "").strip())
+
+
+def _result_uses_native_claude_bridge(result: ManagedLocalLaunchResponse) -> bool:
+    return result.managed_transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+
+
 def _run_attach_command(attach_command: str) -> int:
     parts = shlex.split(attach_command)
     completed = subprocess.run(parts, check=False)
@@ -373,8 +381,12 @@ def claude(
         exit_code=EXIT_SETUP_FAILED,
     )
     machine_name = get_machine_name_label()
-    native_claude_channels_available, native_claude_channels_detail = _detect_native_claude_channels_available()
     claude_launch_env = _collect_claude_launch_env()
+    native_claude_channels_available, native_claude_channels_detail = _detect_native_claude_channels_available()
+    force_flag_capable_path = _launch_env_requires_flag_capable_claude_path(claude_launch_env)
+    if force_flag_capable_path:
+        native_claude_channels_available = False
+        native_claude_channels_detail = "disabled by Claude launch env"
     typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
@@ -388,14 +400,21 @@ def claude(
         claude_launch_env=claude_launch_env,
         provider="claude",
     )
-    native_transport_unavailable = result.managed_transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+    if force_flag_capable_path and _result_uses_native_claude_bridge(result):
+        typer.secho(
+            "Longhouse returned the native Claude bridge for a launch that requires the permissive Claude path.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
+
+    native_transport_unavailable = not _result_uses_native_claude_bridge(result)
     if not native_claude_channels_available and native_transport_unavailable:
         typer.secho(
             f"Native Claude channels unavailable ({native_claude_channels_detail}); using tmux fallback.",
             fg=typer.colors.YELLOW,
         )
     resolved_claude_dir = Path(config_dir) if config_dir else None
-    if result.managed_transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
+    if _result_uses_native_claude_bridge(result):
         _finalize_native_claude_launch(
             base_url=resolved_url,
             token=resolved_token,
