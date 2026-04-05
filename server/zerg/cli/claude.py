@@ -97,12 +97,18 @@ def _resolve_claude_dir(config_dir: Path | None) -> Path:
     return config_dir or (Path.home() / ".claude")
 
 
-def _load_api_credentials(*, url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:
+def _load_api_credentials(
+    *,
+    url: str | None,
+    token: str | None,
+    config_dir: Path | None,
+    exit_code: int = EXIT_SETUP_FAILED,
+) -> tuple[str, str]:
     return load_api_credentials(
         url=url,
         token=token,
         config_dir=config_dir,
-        exit_code=EXIT_SETUP_FAILED,
+        exit_code=exit_code,
         resolve_url=get_zerg_url,
         resolve_token=load_token,
     )

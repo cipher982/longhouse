@@ -54,6 +54,13 @@ def test_load_api_credentials_requires_stored_url_and_token(tmp_path):
         claude_cli._load_api_credentials(url=None, token=None, config_dir=tmp_path)
 
 
+def test_load_api_credentials_accepts_custom_exit_code(tmp_path):
+    with pytest.raises(ClickExit) as exc_info:
+        claude_cli._load_api_credentials(url=None, token=None, config_dir=tmp_path, exit_code=78)
+
+    assert exc_info.value.exit_code == 78
+
+
 def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tmp_path):
     fake_client = _FakeClient(
         response=_FakeResponse(
