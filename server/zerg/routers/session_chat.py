@@ -1,9 +1,8 @@
 """Session continuation router for explicit live-send and cloud-continue flows.
 
 Enables interactive chat with synced CLI sessions.
-Cloud continuation shells out to the provider CLI (`claude --resume`,
-`codex exec resume`) while managed-local live send injects into the active
-local session.
+Cloud continuation shells out to Claude Code (`claude --resume`) while
+managed-local live send injects into the active local session.
 
 Security:
 - Workspace path derived server-side from session metadata (not client)
@@ -72,7 +71,6 @@ from zerg.services.managed_local_turns import run_best_effort_managed_local_turn
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import prepare_claude_session_for_resume
-from zerg.services.session_continuity import prepare_codex_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_continuity import ship_session_to_zerg
 from zerg.services.session_continuity import workspace_resolver
@@ -242,45 +240,6 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
     )
 
 
-def _check_codex_binary() -> bool:
-    """Check if the codex CLI binary is available on PATH."""
-    import shutil
-
-    return shutil.which("codex") is not None
-
-
-def _build_codex_resume_runtime(*, provider_session_id: str, message: str) -> ContinuationRuntime:
-    """Build the resume runtime for a Codex session.
-
-    Uses codex exec resume for non-interactive cloud continuation.
-    """
-    if not _check_codex_binary():
-        raise RuntimeError(
-            "Session continuation requires the 'codex' CLI but it is not installed. " "Install codex (npm install -g @openai/codex)."
-        )
-
-    cmd = [
-        "codex",
-        "exec",
-        "resume",
-        provider_session_id,
-        message,
-        "--json",
-        "--full-auto",
-    ]
-
-    env_updates: dict[str, str] = {}
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if api_key:
-        env_updates["OPENAI_API_KEY"] = api_key
-
-    model = os.getenv(SESSION_CHAT_MODEL_ENV, "").strip()
-    if model:
-        cmd.extend(["-m", model])
-
-    return ContinuationRuntime(backend="codex", cmd=cmd, env_updates=env_updates)
-
-
 # ---------------------------------------------------------------------------
 # Request/Response Models
 # ---------------------------------------------------------------------------
@@ -430,12 +389,32 @@ def _load_session_for_continuation(db: Session, session_id: str):
     return source_session
 
 
-def _assert_session_can_continue(source_session) -> None:
-    if source_session.provider not in ("claude", "codex"):
+def _assert_cloud_continuation_available(source_session) -> None:
+    capabilities = build_session_capabilities(source_session)
+    provider = str(source_session.provider or "").strip().lower()
+    provider_label = "Codex" if provider == "codex" else "Claude" if provider == "claude" else provider or "This"
+
+    if capabilities.cloud_continuation_available:
+        return
+    if capabilities.live_control_available:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Only Claude and Codex sessions can be resumed (got {source_session.provider})",
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This session currently has live Longhouse control. Use live send instead of cloud continuation.",
         )
+    if capabilities.host_reattach_available:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This live session needs host attach before Longhouse can continue it.",
+        )
+    if provider == "codex":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Codex sessions are not yet available for cloud continuation from Longhouse.",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"{provider_label} sessions are not available for cloud continuation from Longhouse.",
+    )
 
 
 def _assert_live_session_send_available(source_session) -> None:
@@ -768,18 +747,11 @@ async def _build_cloud_continuation_chat_response(
         )
 
     try:
-        session_provider = source_session.provider or "claude"
-        if session_provider == "codex":
-            provider_session_id = await prepare_codex_session_for_resume(
-                session_id=str(source_session.id),
-                db=db,
-            )
-        else:
-            provider_session_id = await prepare_claude_session_for_resume(
-                session_id=str(source_session.id),
-                workspace_path=resolved_workspace.path,
-                db=db,
-            )
+        provider_session_id = await prepare_claude_session_for_resume(
+            session_id=str(source_session.id),
+            workspace_path=resolved_workspace.path,
+            db=db,
+        )
     except Exception:
         if resolved_workspace.is_temp:
             resolved_workspace.cleanup()
@@ -788,7 +760,7 @@ async def _build_cloud_continuation_chat_response(
     logger.info(
         f"[{request_id}] Prepared source session {source_session.id} -> {provider_session_id[:20]}... "
         f"target={target_session.id} workspace={resolved_workspace.path} is_temp={resolved_workspace.is_temp} "
-        f"provider={session_provider}"
+        f"provider=claude"
     )
 
     async def generate():
@@ -806,7 +778,6 @@ async def _build_cloud_continuation_chat_response(
                 message=message,
                 request_id=request_id,
                 db=db,
-                provider=session_provider,
             ):
                 yield event
         finally:
@@ -1638,9 +1609,8 @@ async def stream_session_continuation_output(
     message: str,
     request_id: str,
     db: Session | None = None,
-    provider: str = "claude",
 ) -> AsyncIterator[str]:
-    """Stream CLI output as SSE events. Supports Claude and Codex providers.
+    """Stream Claude cloud continuation output as SSE events.
 
     Yields SSE events:
     - system: Session info, status updates
@@ -1667,10 +1637,7 @@ async def stream_session_continuation_output(
                 yield event
             return
 
-        if provider == "codex":
-            runtime = _build_codex_resume_runtime(provider_session_id=provider_session_id, message=message)
-        else:
-            runtime = _build_claude_resume_runtime(provider_session_id=provider_session_id, message=message)
+        runtime = _build_claude_resume_runtime(provider_session_id=provider_session_id, message=message)
 
         yield SSEEvent(
             event="system",
@@ -1698,7 +1665,7 @@ async def stream_session_continuation_output(
         logger.info(
             "[%s] Starting %s continuation: backend=%s cwd=%s",
             request_id,
-            provider,
+            "claude",
             runtime.backend,
             workspace_path,
         )
@@ -1721,25 +1688,13 @@ async def stream_session_continuation_output(
                 event = json.loads(line)
                 event_type = event.get("type", "unknown")
 
-                if provider == "codex":
-                    # Codex JSONL format: thread.started, item.completed, turn.completed
-                    if event_type == "thread.started":
-                        yield SSEEvent(
-                            event="system",
-                            data=json.dumps(
-                                {
-                                    "type": "codex_thread_started",
-                                    "thread_id": event.get("thread_id"),
-                                }
-                            ),
-                        ).encode()
-
-                    elif event_type == "item.completed":
-                        item = event.get("item", {})
-                        item_type = item.get("type", "")
-                        if item_type == "agent_message":
-                            text_content = item.get("text", "")
-                            if text_content:
+                if event_type == "assistant":
+                    msg = event.get("message", {})
+                    content = msg.get("content", [])
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                text_content = block.get("text", "")
                                 assistant_text += text_content
                                 yield SSEEvent(
                                     event="assistant_delta",
@@ -1750,76 +1705,37 @@ async def stream_session_continuation_output(
                                         }
                                     ),
                                 ).encode()
-                        elif item_type == "function_call":
-                            yield SSEEvent(
-                                event="tool_use",
-                                data=json.dumps(
-                                    {
-                                        "name": item.get("name"),
-                                        "id": item.get("id"),
-                                    }
-                                ),
-                            ).encode()
-                        elif item_type == "function_call_output":
-                            yield SSEEvent(
-                                event="tool_result",
-                                data=json.dumps(
-                                    {
-                                        "result": str(item.get("output", ""))[:500],
-                                    }
-                                ),
-                            ).encode()
+                            elif block.get("type") == "tool_use":
+                                yield SSEEvent(
+                                    event="tool_use",
+                                    data=json.dumps(
+                                        {
+                                            "name": block.get("name"),
+                                            "id": block.get("id"),
+                                        }
+                                    ),
+                                ).encode()
 
-                else:
-                    # Claude stream-json format
-                    if event_type == "assistant":
-                        msg = event.get("message", {})
-                        content = msg.get("content", [])
-                        for block in content:
-                            if isinstance(block, dict):
-                                if block.get("type") == "text":
-                                    text_content = block.get("text", "")
-                                    assistant_text += text_content
-                                    yield SSEEvent(
-                                        event="assistant_delta",
-                                        data=json.dumps(
-                                            {
-                                                "text": text_content,
-                                                "accumulated": assistant_text,
-                                            }
-                                        ),
-                                    ).encode()
-                                elif block.get("type") == "tool_use":
-                                    yield SSEEvent(
-                                        event="tool_use",
-                                        data=json.dumps(
-                                            {
-                                                "name": block.get("name"),
-                                                "id": block.get("id"),
-                                            }
-                                        ),
-                                    ).encode()
+                elif event_type == "result":
+                    yield SSEEvent(
+                        event="tool_result",
+                        data=json.dumps(
+                            {
+                                "result": str(event.get("result", ""))[:500],
+                            }
+                        ),
+                    ).encode()
 
-                    elif event_type == "result":
-                        yield SSEEvent(
-                            event="tool_result",
-                            data=json.dumps(
-                                {
-                                    "result": str(event.get("result", ""))[:500],
-                                }
-                            ),
-                        ).encode()
-
-                    elif event_type == "system":
-                        yield SSEEvent(
-                            event="system",
-                            data=json.dumps(
-                                {
-                                    "type": "provider_system",
-                                    "session_id": event.get("session_id"),
-                                }
-                            ),
-                        ).encode()
+                elif event_type == "system":
+                    yield SSEEvent(
+                        event="system",
+                        data=json.dumps(
+                            {
+                                "type": "provider_system",
+                                "session_id": event.get("session_id"),
+                            }
+                        ),
+                    ).encode()
 
             except json.JSONDecodeError:
                 logger.debug(f"[{request_id}] Non-JSON output: {line[:100]}")
@@ -1829,14 +1745,13 @@ async def stream_session_continuation_output(
         shipped_id: str | None = None
         persisted_events = 0
         persistence_error: str | None = None
-        cli_label = "Codex" if provider == "codex" else "Claude"
         if proc.returncode != 0:
-            logger.error(f"[{request_id}] {cli_label} exited with code {proc.returncode}")
+            logger.error(f"[{request_id}] Claude exited with code {proc.returncode}")
             yield SSEEvent(
                 event="error",
                 data=json.dumps(
                     {
-                        "error": f"{cli_label} exited with code {proc.returncode}",
+                        "error": f"Claude exited with code {proc.returncode}",
                         "details": "Process exited with non-zero status",
                     }
                 ),
@@ -1853,7 +1768,7 @@ async def stream_session_continuation_output(
                     continuation_kind="cloud",
                     origin_label="Cloud",
                     branched_from_event_id=branched_from_event_id,
-                    provider=provider,
+                    provider="claude",
                 )
                 if ship_result:
                     shipped_id = ship_result.session_id
@@ -1930,11 +1845,11 @@ async def chat_with_session(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_oikos_user),
 ):
-    """Start an explicit cloud continuation and stream the response via SSE."""
+    """Start an explicit Claude cloud continuation and stream the response via SSE."""
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
     logger.info(f"[{request_id}] Cloud continuation request for session {source_session.id}")
-    _assert_session_can_continue(source_session)
+    _assert_cloud_continuation_available(source_session)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
     try:
         return await _build_cloud_continuation_chat_response(
@@ -1967,7 +1882,6 @@ async def send_to_live_session(
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
     logger.info(f"[{request_id}] Live session send request for session {source_session.id}")
-    _assert_session_can_continue(source_session)
     _assert_live_session_send_available(source_session)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
     try:
@@ -2012,7 +1926,7 @@ async def continue_session(
         source_session=source_session,
         auth_disabled=settings.auth_disabled,
     )
-    _assert_session_can_continue(source_session)
+    _assert_cloud_continuation_available(source_session)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
 
     try:
@@ -2056,7 +1970,6 @@ async def send_to_live_session_agents(
         source_session=source_session,
         auth_disabled=settings.auth_disabled,
     )
-    _assert_session_can_continue(source_session)
     _assert_live_session_send_available(source_session)
     owner_id = _resolve_agents_owner_id(db, resolved_device_token)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
@@ -2223,23 +2136,16 @@ async def continuation_readiness(
 ) -> dict:
     """Pre-flight check: can this instance run session continuations?
 
-    Returns backend config and whether the required binary/keys are present.
+    Returns backend config and whether the required Claude binary/keys are present.
     Used by QA and the frontend to show actionable errors.
     """
     backend = _get_session_chat_backend()
     issues: list[str] = []
-    warnings: list[str] = []
 
     claude_available = _check_claude_binary()
-    codex_available = _check_codex_binary()
 
-    # Claude CLI is required for the primary continuation path
     if not claude_available:
         issues.append("'claude' CLI not found on PATH (required for Claude session continuation)")
-
-    # Codex is optional — missing it only limits Codex session continuation
-    if not codex_available:
-        warnings.append("'codex' CLI not found on PATH (Codex session continuation unavailable)")
 
     if backend == SESSION_CHAT_BACKEND_ZAI:
         if not os.getenv("ZAI_API_KEY", "").strip():
@@ -2250,14 +2156,10 @@ async def continuation_readiness(
     elif backend == SESSION_CHAT_BACKEND_BEDROCK:
         pass  # Uses IAM roles, hard to pre-check
 
-    if not os.getenv("OPENAI_API_KEY", "").strip():
-        warnings.append("OPENAI_API_KEY not set (Codex session continuation unavailable)")
-
     return {
         "ready": len(issues) == 0,
         "backend": backend,
         "claude_available": claude_available,
-        "codex_available": codex_available,
         "issues": issues,
-        "warnings": warnings,
+        "warnings": [],
     }

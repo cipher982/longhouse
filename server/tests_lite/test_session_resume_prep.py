@@ -386,6 +386,30 @@ def test_ship_session_to_zerg_uses_local_ingest_when_db_provided(tmp_path, monke
         assert persisted_target.user_messages >= 1
 
 
+def test_find_latest_codex_session_file(tmp_path, monkeypatch):
+    from zerg.services.session_continuity import _find_latest_codex_session_file
+
+    sessions_dir = tmp_path / ".codex" / "sessions" / "2026" / "03" / "26"
+    sessions_dir.mkdir(parents=True)
+
+    old_file = sessions_dir / "rollout-2026-03-26T10-00-00-old-session-id.jsonl"
+    old_file.write_text("{}")
+
+    import time
+
+    time.sleep(0.01)
+
+    new_file = sessions_dir / "rollout-2026-03-26T10-30-00-new-session-id.jsonl"
+    new_file.write_text("{}")
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+
+    result = _find_latest_codex_session_file()
+
+    assert result is not None
+    assert result.name == new_file.name
+
+
 def test_build_claude_resume_runtime_uses_zai_env(monkeypatch):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
