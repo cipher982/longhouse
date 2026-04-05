@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { buildTimelineModel, getSessionInteractionCapabilities } from "../sessionWorkspace";
-import type { AgentSession, AgentSessionProjectionItem } from "../../services/api/agents";
+import type { AgentSession, AgentSessionProjectionItem, SessionCapabilities } from "../../services/api/agents";
+
+function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
+  return {
+    live_control_available: false,
+    cloud_continuation_available: true,
+    host_reattach_available: false,
+    reply_to_live_session_available: false,
+    ...overrides,
+  };
+}
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
-  const session: AgentSession = {
+  return {
     id: "session-1",
     provider: "claude",
     project: "zerg",
@@ -34,17 +44,10 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     source_runner_id: null,
     source_runner_name: null,
     attach_command: null,
+    capabilities: makeCapabilities(),
     loop_mode: "manual",
     ...overrides,
   };
-  const liveControlAvailable = session.execution_home === "managed_local" && session.source_runner_id != null;
-  session.capabilities = overrides.capabilities ?? {
-    live_control_available: liveControlAvailable,
-    cloud_continuation_available: !liveControlAvailable && session.provider === "claude",
-    host_reattach_available: session.execution_home === "managed_local",
-    reply_to_live_session_available: liveControlAvailable,
-  };
-  return session;
 }
 
 describe("buildTimelineModel", () => {
@@ -96,6 +99,12 @@ describe("getSessionInteractionCapabilities", () => {
         managed_transport: "codex_app_server",
         source_runner_id: 7,
         source_runner_name: "cinder",
+        capabilities: makeCapabilities({
+          live_control_available: true,
+          cloud_continuation_available: false,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+        }),
       }),
     });
 
@@ -113,6 +122,10 @@ describe("getSessionInteractionCapabilities", () => {
         provider: "codex",
         execution_home: "managed_local",
         managed_transport: "codex_app_server",
+        capabilities: makeCapabilities({
+          cloud_continuation_available: false,
+          host_reattach_available: true,
+        }),
       }),
     });
 
@@ -132,6 +145,10 @@ describe("getSessionInteractionCapabilities", () => {
         managed_transport: "tmux",
         source_runner_id: null,
         source_runner_name: null,
+        capabilities: makeCapabilities({
+          cloud_continuation_available: true,
+          host_reattach_available: true,
+        }),
       }),
       isViewingHead: true,
     });
@@ -164,6 +181,9 @@ describe("getSessionInteractionCapabilities", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "gemini",
+        capabilities: makeCapabilities({
+          cloud_continuation_available: false,
+        }),
       }),
     });
 

@@ -20,7 +20,6 @@ export {
   getSessionOriginLabel,
   getTimelineMessagePreview,
   normalizeSessionOriginLabel,
-  supportsDirectWebContinuation,
   truncatePath,
 } from "./formatters";
 

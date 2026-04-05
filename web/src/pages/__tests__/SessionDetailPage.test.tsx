@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTimelineModel } from "../../lib/sessionWorkspace";
-import type { AgentSession, AgentSessionProjectionItem } from "../../services/api/agents";
+import type { AgentSession, AgentSessionProjectionItem, SessionCapabilities } from "../../services/api/agents";
 import { TestRouter } from "../../test/test-utils";
 import SessionDetailPage from "../SessionDetailPage";
 
@@ -61,8 +61,18 @@ vi.mock("../../components/workspace/WorkspaceShell", () => ({
   ),
 }));
 
+function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
+  return {
+    live_control_available: true,
+    cloud_continuation_available: false,
+    host_reattach_available: true,
+    reply_to_live_session_available: true,
+    ...overrides,
+  };
+}
+
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
-  const session: AgentSession = {
+  return {
     id: "session-codex",
     provider: "codex",
     project: "zerg",
@@ -98,17 +108,10 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
       exported_env_keys: ["LONGHOUSE_MANAGED_SESSION_ID", "LONGHOUSE_HOOK_URL", "LONGHOUSE_HOOK_TOKEN"],
       argv: ["codex", "chat", "--session", "<provider-session-id>"],
     },
+    capabilities: makeCapabilities(),
     loop_mode: "manual",
     ...overrides,
   };
-  const liveControlAvailable = session.execution_home === "managed_local" && session.source_runner_id != null;
-  session.capabilities = overrides.capabilities ?? {
-    live_control_available: liveControlAvailable,
-    cloud_continuation_available: !liveControlAvailable && session.provider === "claude",
-    host_reattach_available: session.execution_home === "managed_local",
-    reply_to_live_session_available: liveControlAvailable,
-  };
-  return session;
 }
 
 function renderSessionDetailPage() {
@@ -250,6 +253,12 @@ describe("SessionDetailPage", () => {
       attach_command: null,
       continuation_kind: "local",
       id: "session-gemini",
+      capabilities: makeCapabilities({
+        live_control_available: false,
+        cloud_continuation_available: false,
+        host_reattach_available: false,
+        reply_to_live_session_available: false,
+      }),
     });
     const model = buildTimelineModel([
       {
