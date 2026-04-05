@@ -342,41 +342,6 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": str(exc)})
 
     # ------------------------------------------------------------------
-    # Tool: query_insights
-    # ------------------------------------------------------------------
-    @server.tool()
-    async def query_insights(
-        project: str | None = None,
-        insight_type: str | None = None,
-        since_hours: int = 168,
-        limit: int = 20,
-    ) -> str:
-        """Read logged insights — learnings, patterns, failures, improvements.
-
-        Use before starting work to check for known gotchas, and before
-        calling log_insight to avoid duplicates.
-
-        Args:
-            project: Filter by project name (optional).
-            insight_type: Filter by type: pattern, failure, improvement, learning (optional).
-            since_hours: Hours to look back (default 168 = 7 days).
-            limit: Max results to return (default 20).
-        """
-        params: dict = {"since_hours": since_hours, "limit": limit}
-        if project:
-            params["project"] = project
-        if insight_type:
-            params["insight_type"] = insight_type
-
-        try:
-            resp = await client.get("/api/agents/insights", params=params)
-            if resp.status_code != 200:
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
-            return resp.text
-        except Exception as exc:
-            return json.dumps({"error": str(exc)})
-
-    # ------------------------------------------------------------------
     # Tool: recall
     # ------------------------------------------------------------------
     @server.tool()
