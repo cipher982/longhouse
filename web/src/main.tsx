@@ -12,8 +12,8 @@ import config from "./lib/config";
 import "./styles/app.css";
 import App from "./routes/App";
 
-// Umami Analytics - env-configurable via Vite (VITE_UMAMI_*)
-// Only loads on production domains (not localhost)
+// Umami analytics is driven by runtime config.js.
+// Vite env fallback remains only for older standalone frontend deployments.
 const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 const umamiWebsiteId = config.umamiWebsiteId;
 const umamiScriptSrc = config.umamiScriptSrc;

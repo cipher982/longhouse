@@ -484,6 +484,8 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         app_public_url=os.getenv("APP_PUBLIC_URL") or os.getenv("PUBLIC_SITE_URL"),
         public_site_url=os.getenv("PUBLIC_SITE_URL") or os.getenv("APP_PUBLIC_URL"),
         public_api_url=os.getenv("PUBLIC_API_URL"),
+        # Legacy VITE_* fallback keeps older standalone frontend deploys working
+        # while operators migrate analytics config fully to runtime env vars.
         umami_website_id=_env_or_fallback("UMAMI_WEBSITE_ID", "VITE_UMAMI_WEBSITE_ID"),
         umami_script_src=_env_or_fallback("UMAMI_SCRIPT_SRC", "VITE_UMAMI_SCRIPT_SRC"),
         umami_domains=_env_or_fallback("UMAMI_DOMAINS", "VITE_UMAMI_DOMAINS"),

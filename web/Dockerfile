@@ -21,18 +21,12 @@ RUN bun install --frozen-lockfile || bun install
 # Copy source
 COPY web/ ./
 
-# Build args for Vite env vars (baked into JS bundle at build time)
+# Build args for Vite env vars (legacy split-deploy API/WS fallback)
 ARG VITE_API_BASE_URL
 ARG VITE_WS_BASE_URL
-ARG VITE_UMAMI_WEBSITE_ID
-ARG VITE_UMAMI_SCRIPT_SRC
-ARG VITE_UMAMI_DOMAINS
 
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 ENV VITE_WS_BASE_URL=$VITE_WS_BASE_URL
-ENV VITE_UMAMI_WEBSITE_ID=$VITE_UMAMI_WEBSITE_ID
-ENV VITE_UMAMI_SCRIPT_SRC=$VITE_UMAMI_SCRIPT_SRC
-ENV VITE_UMAMI_DOMAINS=$VITE_UMAMI_DOMAINS
 
 # Build
 RUN bun run build

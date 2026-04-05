@@ -22,7 +22,7 @@ afterEach(() => {
 });
 
 describe("config analytics runtime overrides", () => {
-  it("prefers runtime umami config over Vite env", async () => {
+  it("prefers runtime umami config over legacy Vite env", async () => {
     setRequiredRuntimeConfig();
     window.__UMAMI_WEBSITE_ID__ = "runtime-site";
     window.__UMAMI_SCRIPT_SRC__ = "https://runtime.example/script.js";
@@ -39,7 +39,7 @@ describe("config analytics runtime overrides", () => {
     expect(config.umamiDomains).toBe("runtime.longhouse.ai");
   });
 
-  it("falls back to Vite umami env when runtime config is absent", async () => {
+  it("falls back to legacy Vite umami env when runtime config is absent", async () => {
     setRequiredRuntimeConfig();
 
     vi.stubEnv("VITE_UMAMI_WEBSITE_ID", "vite-site");
@@ -53,7 +53,7 @@ describe("config analytics runtime overrides", () => {
     expect(config.umamiDomains).toBe("vite.longhouse.ai");
   });
 
-  it("preserves explicit empty runtime values instead of falling back to Vite analytics config", async () => {
+  it("preserves explicit empty runtime values instead of falling back to legacy Vite analytics config", async () => {
     setRequiredRuntimeConfig();
     window.__UMAMI_WEBSITE_ID__ = "";
     window.__UMAMI_SCRIPT_SRC__ = "";
