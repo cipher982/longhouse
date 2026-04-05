@@ -120,6 +120,7 @@ class AgentSession(AgentsBase):
     source_runner_name = Column(String(255), nullable=True)
     managed_session_name = Column(String(255), nullable=True)
     managed_tmux_tmpdir = Column(Text, nullable=True)
+    managed_launch_profile = Column(JSON(), nullable=True)
     loop_mode = Column(String(20), nullable=False, server_default=text(f"'{SessionLoopMode.MANUAL.value}'"))
     # App-level reference to the per-session loop-controller thread.
     # This intentionally avoids a cross-metadata SQL FK to the main Thread table.

@@ -28,8 +28,10 @@ from zerg.models.user import User
 from zerg.services.managed_local_launcher import _build_claude_launch_profile
 from zerg.services.managed_local_launcher import _build_entry_command
 from zerg.services.managed_local_launcher import _build_hooks_ensure_command
+from zerg.services.managed_local_launcher import _build_launch_profile
 from zerg.services.managed_local_launcher import _build_managed_launch_env_exports
 from zerg.services.managed_local_launcher import _build_preflight_command
+from zerg.services.managed_local_launcher import _serialize_launch_profile
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_HISTORY_LIMIT
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
 
@@ -197,7 +199,9 @@ class _FakeDispatcher:
 
 
 def test_build_entry_command_claude_includes_session_id():
-    cmd = _build_entry_command(provider="claude", provider_session_id="abc-123", display_name=None)
+    cmd = _build_entry_command(
+        launch_profile=_build_launch_profile(provider="claude", provider_session_id="abc-123", display_name=None)
+    )
     inner = _inner_command(cmd)
     assert "export LONGHOUSE_MANAGED_SESSION_ID=abc-123" in inner
     assert _MANAGED_LOCAL_PATH_EXPORT in inner
@@ -223,11 +227,13 @@ def test_build_managed_launch_env_exports_includes_only_non_empty_hook_overrides
 
 def test_build_entry_command_claude_includes_hook_target_overrides():
     cmd = _build_entry_command(
-        provider="claude",
-        provider_session_id="abc-123",
-        display_name=None,
-        hook_url="https://david010.longhouse.ai",
-        hook_token="zdt_live_token",
+        launch_profile=_build_launch_profile(
+            provider="claude",
+            provider_session_id="abc-123",
+            display_name=None,
+            hook_url="https://david010.longhouse.ai",
+            hook_token="zdt_live_token",
+        )
     )
     inner = _inner_command(cmd)
     assert "export LONGHOUSE_MANAGED_SESSION_ID=abc-123" in inner
@@ -238,17 +244,19 @@ def test_build_entry_command_claude_includes_hook_target_overrides():
 
 def test_build_entry_command_claude_includes_allowlisted_launch_env():
     cmd = _build_entry_command(
-        provider="claude",
-        provider_session_id="abc-123",
-        display_name=None,
-        claude_launch_env={
-            "CLAUDE_CODE_USE_BEDROCK": "1",
-            "AWS_PROFILE": "zh-qa-engineer",
-            "AWS_REGION": "us-east-1",
-            "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
-            "HOME": "/tmp/nope",
-            "AWS_DEFAULT_REGION": "",
-        },
+        launch_profile=_build_launch_profile(
+            provider="claude",
+            provider_session_id="abc-123",
+            display_name=None,
+            claude_launch_env={
+                "CLAUDE_CODE_USE_BEDROCK": "1",
+                "AWS_PROFILE": "zh-qa-engineer",
+                "AWS_REGION": "us-east-1",
+                "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
+                "HOME": "/tmp/nope",
+                "AWS_DEFAULT_REGION": "",
+            },
+        )
     )
     inner = _inner_command(cmd)
     assert "export CLAUDE_CODE_USE_BEDROCK=1" in inner
@@ -311,14 +319,15 @@ def test_build_claude_launch_profile_contract(display_name, launch_env, expected
     assert profile.required_commands == ("claude",)
     assert profile.argv == expected_argv
     assert profile.env_exports == expected_env_exports
+    assert profile.exported_env_keys == tuple(
+        export.split(" ", 1)[1].split("=", 1)[0] for export in expected_env_exports
+    )
     assert all("HOME=" not in export for export in profile.env_exports)
 
 
 def test_build_entry_command_codex_injects_longhouse_session_id():
     cmd = _build_entry_command(
-        provider="codex",
-        provider_session_id="abc-123",
-        display_name=None,
+        launch_profile=_build_launch_profile(provider="codex", provider_session_id="abc-123", display_name=None)
     )
     inner = _inner_command(cmd)
     assert inner.endswith("exec codex --enable codex_hooks --no-alt-screen")
@@ -334,14 +343,41 @@ def test_build_entry_command_codex_injects_longhouse_session_id():
 
 def test_build_entry_command_codex_does_not_depend_on_remote_tui():
     cmd = _build_entry_command(
-        provider="codex",
-        provider_session_id="abc-123",
-        display_name=None,
+        launch_profile=_build_launch_profile(provider="codex", provider_session_id="abc-123", display_name=None)
     )
     inner = _inner_command(cmd)
     assert "tui_app_server" not in inner
     assert "APP_SERVER_" not in inner
     assert "curl -fsS" not in inner
+
+
+def test_serialize_launch_profile_redacts_values_and_keeps_debuggable_shape():
+    profile = _build_claude_launch_profile(
+        provider_session_id="abc-123",
+        display_name="Bedrock PM Session",
+        hook_url="https://longhouse.test",
+        hook_token="zdt_test_token",
+        claude_launch_env={"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_PROFILE": "zh-qa-engineer"},
+    )
+
+    assert _serialize_launch_profile(profile) == {
+        "required_commands": ["claude"],
+        "exported_env_keys": [
+            "LONGHOUSE_MANAGED_SESSION_ID",
+            "LONGHOUSE_HOOK_URL",
+            "LONGHOUSE_HOOK_TOKEN",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "AWS_PROFILE",
+        ],
+        "argv": [
+            "claude",
+            "--dangerously-skip-permissions",
+            "--session-id",
+            "abc-123",
+            "-n",
+            "Bedrock PM Session",
+        ],
+    }
 
 
 def test_build_preflight_command_claude_checks_claude():
@@ -422,6 +458,22 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert payload["managed_transport"] == "tmux"
             assert payload["loop_mode"] == "assist"
             assert payload["source_runner_name"] == "cinder"
+            assert payload["managed_launch_profile"] == {
+                "required_commands": ["claude"],
+                "exported_env_keys": [
+                    "LONGHOUSE_MANAGED_SESSION_ID",
+                    "LONGHOUSE_HOOK_URL",
+                    "LONGHOUSE_HOOK_TOKEN",
+                ],
+                "argv": [
+                    "claude",
+                    "--dangerously-skip-permissions",
+                    "--session-id",
+                    payload["provider_session_id"],
+                    "-n",
+                    "Hiring session",
+                ],
+            }
             attach_inner = _inner_command(payload["attach_command"])
             assert "export TMUX_TMPDIR=/tmp/lh-managed-launch" in attach_inner
             assert attach_inner.endswith(
@@ -436,6 +488,7 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert session.provider_session_id == payload["provider_session_id"]
             assert session.managed_session_name == payload["managed_session_name"]
             assert session.managed_tmux_tmpdir == "/tmp/lh-managed-launch"
+            assert session.managed_launch_profile == payload["managed_launch_profile"]
             assert session.continuation_kind == "local"
             assert session.origin_label == runner.name
 
@@ -537,11 +590,13 @@ def test_launch_managed_local_session_creates_native_codex_session_without_tmux(
             assert payload["managed_transport"] == "codex_app_server"
             assert payload["provider"] == "codex"
             assert payload["attach_command"] == ""
+            assert payload["managed_launch_profile"] is None
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.managed_transport == "codex_app_server"
             assert session.source_runner_id == runner.id
             assert session.source_runner_name == runner.name
             assert session.managed_tmux_tmpdir is None
+            assert session.managed_launch_profile is None
 
             runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one()
             assert runtime_state.phase == "idle"
