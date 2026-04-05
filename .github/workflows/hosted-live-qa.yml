@@ -64,18 +64,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
-          key: hosted-live-qa-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: |
-            hosted-live-qa-bun-${{ runner.os }}-
+            longhouse-bun-${{ runner.os }}-
 
       - name: Restore Playwright browser cache
         if: ${{ steps.freshness.outputs.stale != 'true' }}
         uses: actions/cache@v4
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
-          key: hosted-live-qa-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          key: longhouse-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
           restore-keys: |
-            hosted-live-qa-playwright-${{ runner.os }}-
+            longhouse-playwright-${{ runner.os }}-
 
       - name: Set up Python
         if: ${{ steps.freshness.outputs.stale != 'true' }}

@@ -33,6 +33,7 @@ env:
   LIFE_HUB_API_KEY: ${{ secrets.LIFE_HUB_API_KEY }}
   LIFE_HUB_URL: https://data.drose.io
   E2E_DB_DIR: /tmp/zerg_e2e_dbs/${{ github.run_id }}-${{ github.run_attempt }}
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
 jobs:
   run:
@@ -46,6 +47,24 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.ref }}
+
+      - name: Restore Bun download cache
+        if: contains('frontend runner e2e-core e2e-a11y e2e-single full', inputs.suite)
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            longhouse-bun-${{ runner.os }}-
+
+      - name: Restore Playwright browser cache
+        if: startsWith(inputs.suite, 'e2e-') || inputs.suite == 'full'
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: longhouse-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            longhouse-playwright-${{ runner.os }}-
 
       - name: Set up Python
         uses: actions/setup-python@v6
