@@ -38,8 +38,8 @@ while true; do curl .../health; sleep 5; done
 Changed paths typically include `server/**`, `web/**`, `engine/**`, `config/**`, `docker/runtime.dockerfile`.
 
 What ships:
-- GHCR runtime image for hosted tenants
-- Public demo runtime via Coolify
+- GHCR runtime image tagged as `latest` plus the full commit SHA
+- Public demo runtime via Coolify using that shared image
 - Hosted canary tenant via reprovision
 
 Primary automation:
@@ -59,7 +59,10 @@ GitHub then runs:
 Manual fallback:
 
 ```bash
-./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
+./scripts/ops/coolify-deploy.sh longhouse-demo \
+  --docker-image ghcr.io/cipher982/longhouse-runtime \
+  --docker-tag <full-commit-sha> \
+  --timeout 900
 make reprovision
 make qa-live
 make qa-live-conversations

@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-chat qa-live-conversations qa-live-perf reprovision qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-sdk validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-chat qa-live-conversations qa-live-perf reprovision qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-coolify-deploy test-runner-vm-canary test-install test-install-first-run test-install-remote test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-sdk validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +385,10 @@ test-hosted-instance: ## @internal Run hosted-instance helper script tests
 	bash scripts/tests/hosted-instance-auth.test.sh
 	bash scripts/tests/hosted-loop-debug.test.sh
 
+test-coolify-deploy: ## @internal Run Coolify deploy helper script tests
+	@echo "🧪 Running Coolify deploy helper tests..."
+	bash scripts/tests/coolify-deploy.test.sh
+
 test-runner-vm-canary: ## Run disposable VM runner canary against a hosted instance
 	@echo "🧪 Running disposable VM runner canary..."
 	bash scripts/qa/runner-vm-canary.sh
@@ -700,6 +704,7 @@ qa-live-perf: ## Profile hosted timeline -> session detail journey on the live i
 test-ci: ## Simulate push/PR CI locally — run this before pushing (~3min)
 	@echo "🤖 Simulating push/PR CI (matches contract-first-ci.yml)..."
 	$(MAKE) validate
+	$(MAKE) test-coolify-deploy
 	$(MAKE) test
 	$(MAKE) test-control-plane
 	$(MAKE) test-frontend
