@@ -8,6 +8,7 @@ import * as agentsApi from "../../services/api/agents";
 import type {
   AgentSession,
   AgentSessionFilters,
+  SessionCapabilities,
   TimelineSessionCard,
   TimelineSessionsListResponse,
 } from "../../services/api/agents";
@@ -55,9 +56,19 @@ const { useAgentSessions: mockUseAgentSessions, useAgentFilters: mockUseAgentFil
 const { useRunners: mockUseRunners } = runnerHookMocks;
 const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStreamMocks;
 
+function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
+  return {
+    live_control_available: false,
+    cloud_continuation_available: false,
+    host_reattach_available: false,
+    reply_to_live_session_available: false,
+    ...overrides,
+  };
+}
+
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = "2026-03-21T12:00:00Z";
-  const session: AgentSession = {
+  return {
     id: "session-1",
     provider: "codex",
     project: "zerg",
@@ -88,17 +99,10 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     execution_home: "legacy",
     branched_from_event_id: null,
     is_writable_head: true,
+    capabilities: makeCapabilities(),
     loop_mode: "manual",
     ...overrides,
   };
-  const liveControlAvailable = session.execution_home === "managed_local" && session.source_runner_id != null;
-  session.capabilities = overrides.capabilities ?? {
-    live_control_available: liveControlAvailable,
-    cloud_continuation_available: !liveControlAvailable && session.provider === "claude",
-    host_reattach_available: session.execution_home === "managed_local",
-    reply_to_live_session_available: liveControlAvailable,
-  };
-  return session;
 }
 
 function makeTimelineCard(
@@ -572,6 +576,11 @@ describe("SessionsPage", () => {
       presence_state: "running",
       display_phase: "Running bash",
       active_tool: "bash",
+      capabilities: makeCapabilities({
+        live_control_available: true,
+        host_reattach_available: true,
+        reply_to_live_session_available: true,
+      }),
     });
 
     mockUseAgentSessions.mockReturnValue({
@@ -832,6 +841,11 @@ describe("SessionsPage", () => {
           makeTimelineCard({
             execution_home: "managed_local",
             origin_label: "cinder",
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+              reply_to_live_session_available: true,
+            }),
           }),
           makeTimelineCard({
             id: "session-2",
@@ -853,7 +867,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Live control")).toBeInTheDocument();
+    expect(await screen.findAllByText("Live control")).toHaveLength(2);
     expect(screen.getByText("Cloud")).toBeInTheDocument();
     expect(screen.getByText("Head: cinder")).toBeInTheDocument();
     expect(screen.queryByText("Head: Cloud")).not.toBeInTheDocument();
@@ -930,6 +944,11 @@ describe("SessionsPage", () => {
             last_live_at: "2026-03-21T12:04:00Z",
             timeline_anchor_at: "2026-03-21T12:04:00Z",
             display_phase: "Needs you",
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+              reply_to_live_session_available: true,
+            }),
           }),
         ],
         total: 1,
@@ -969,6 +988,11 @@ describe("SessionsPage", () => {
             last_live_at: "2026-03-21T12:05:00Z",
             timeline_anchor_at: "2026-03-21T12:05:00Z",
             display_phase: "Blocked on bash",
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+              reply_to_live_session_available: true,
+            }),
           }),
         ],
         total: 1,

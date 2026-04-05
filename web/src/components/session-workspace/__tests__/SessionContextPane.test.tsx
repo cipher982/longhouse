@@ -2,11 +2,21 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SessionContextPane } from "../SessionContextPane";
-import type { AgentSession, SessionLoopMode } from "../../../services/api/agents";
+import type { AgentSession, SessionCapabilities, SessionLoopMode } from "../../../services/api/agents";
 import type { SessionTurnReview } from "../../../services/api/oikos";
 
+function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
+  return {
+    live_control_available: false,
+    cloud_continuation_available: true,
+    host_reattach_available: false,
+    reply_to_live_session_available: false,
+    ...overrides,
+  };
+}
+
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
-  const session: AgentSession = {
+  return {
     id: "sess-1",
     provider: "claude",
     project: "zerg",
@@ -33,17 +43,10 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     execution_home: "legacy",
     branched_from_event_id: null,
     is_writable_head: true,
+    capabilities: makeCapabilities(),
     loop_mode: "assist",
     ...overrides,
   };
-  const liveControlAvailable = session.execution_home === "managed_local" && session.source_runner_id != null;
-  session.capabilities = overrides.capabilities ?? {
-    live_control_available: liveControlAvailable,
-    cloud_continuation_available: !liveControlAvailable && session.provider === "claude",
-    host_reattach_available: session.execution_home === "managed_local",
-    reply_to_live_session_available: liveControlAvailable,
-  };
-  return session;
 }
 
 function renderPane(
@@ -139,6 +142,10 @@ describe("SessionContextPane", () => {
         runtime_source: "managed_local_transport",
         execution_home: "managed_local",
         managed_transport: "codex_app_server",
+        capabilities: makeCapabilities({
+          cloud_continuation_available: false,
+          host_reattach_available: true,
+        }),
       }),
     });
 
@@ -161,6 +168,12 @@ describe("SessionContextPane", () => {
         managed_transport: "codex_app_server",
         source_runner_id: 7,
         source_runner_name: "cinder",
+        capabilities: makeCapabilities({
+          live_control_available: true,
+          cloud_continuation_available: false,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+        }),
       }),
       onPrimaryAction,
     });
@@ -178,6 +191,9 @@ describe("SessionContextPane", () => {
     renderPane({
       session: makeSession({
         provider: "gemini",
+        capabilities: makeCapabilities({
+          cloud_continuation_available: false,
+        }),
       }),
     });
 
@@ -201,6 +217,10 @@ describe("SessionContextPane", () => {
         source_runner_id: null,
         source_runner_name: "cinder",
         attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-claude'",
+        capabilities: makeCapabilities({
+          cloud_continuation_available: true,
+          host_reattach_available: true,
+        }),
       }),
     });
 
@@ -223,6 +243,12 @@ describe("SessionContextPane", () => {
         managed_transport: "tmux",
         source_runner_name: "cinder",
         attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+        capabilities: makeCapabilities({
+          live_control_available: true,
+          cloud_continuation_available: false,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+        }),
         managed_launch_profile: {
           required_commands: ["claude"],
           exported_env_keys: [
@@ -267,6 +293,12 @@ describe("SessionContextPane", () => {
         source_runner_id: 7,
         source_runner_name: "cinder",
         attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+        capabilities: makeCapabilities({
+          live_control_available: true,
+          cloud_continuation_available: false,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+        }),
       }),
     });
 

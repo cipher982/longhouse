@@ -1,7 +1,7 @@
 import type { AgentEvent, AgentSession } from "../../services/api/agents";
 import { parseUTC } from "../dateUtils";
 
-export { getProviderColor, supportsDirectWebContinuation, getProviderLabel as formatProviderLabel } from "../providers";
+export { getProviderColor, getProviderLabel as formatProviderLabel } from "../providers";
 
 export function formatTime(dateStr: string): string {
   return parseUTC(dateStr).toLocaleTimeString(undefined, {

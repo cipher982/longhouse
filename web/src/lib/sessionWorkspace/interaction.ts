@@ -1,5 +1,5 @@
 import type { AgentSession } from "../../services/api/agents";
-import { getProviderLabel, supportsDirectWebContinuation } from "../providers";
+import { getProviderLabel } from "../providers";
 import type { SessionInteractionCapabilities, SessionInteractionMode } from "./types";
 import { getSessionOriginLabel } from "./formatters";
 
@@ -13,16 +13,15 @@ export function getSessionInteractionCapabilities({
   headThreadSession?: Pick<AgentSession, "origin_label" | "environment"> | null;
 }): SessionInteractionCapabilities {
   const providerLabel = getProviderLabel(session.provider);
-  const sessionCapabilities = session.capabilities;
-  const isManagedLocalSession = session.execution_home === "managed_local";
-  const fallbackLiveControlAvailable = isManagedLocalSession && session.source_runner_id != null;
-  const fallbackCloudContinuationAvailable =
-    !fallbackLiveControlAvailable && supportsDirectWebContinuation(session.provider);
-  const fallbackHostReattachAvailable = isManagedLocalSession;
-  const liveControlAvailable = sessionCapabilities?.live_control_available ?? fallbackLiveControlAvailable;
-  const cloudContinuationAvailable =
-    sessionCapabilities?.cloud_continuation_available ?? fallbackCloudContinuationAvailable;
-  const hostReattachAvailable = sessionCapabilities?.host_reattach_available ?? fallbackHostReattachAvailable;
+  if (!session.capabilities) {
+    throw new Error("Session workspace interactions require session.capabilities");
+  }
+  const {
+    live_control_available: liveControlAvailable,
+    cloud_continuation_available: cloudContinuationAvailable,
+    host_reattach_available: hostReattachAvailable,
+  } = session.capabilities;
+  const isManagedLocalSession = liveControlAvailable || hostReattachAvailable;
   const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
