@@ -12,21 +12,18 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.services.managed_local_control import ManagedLocalSendResult
 from zerg.services.managed_local_control import send_text_to_managed_local_session
-from zerg.session_execution_home import SessionExecutionHome
+from zerg.services.session_capabilities import resolve_execution_home
+from zerg.services.session_capabilities import supports_live_control
 
 
 def live_text_dispatch_label(session: AgentSession | None) -> str | None:
-    execution_home = str(getattr(session, "execution_home", "") or "").strip()
-    return execution_home or None
+    if session is None:
+        return None
+    return resolve_execution_home(session).value
 
 
 def supports_live_text_dispatch(session: AgentSession | None) -> bool:
-    if session is None:
-        return False
-    return (
-        str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value
-        and getattr(session, "source_runner_id", None) is not None
-    )
+    return supports_live_control(session)
 
 
 def _truthy_env(name: str) -> bool:
@@ -123,7 +120,7 @@ async def send_text_to_live_session(
             verification_timeout_secs=verification_timeout_secs,
         )
 
-    execution_home = str(getattr(session, "execution_home", "") or "").strip() or "unknown"
+    execution_home = resolve_execution_home(session).value if session is not None else "unknown"
     return ManagedLocalSendResult(
         ok=False,
         error=f"Live text dispatch is not supported for execution_home={execution_home}",

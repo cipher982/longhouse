@@ -68,7 +68,7 @@ export function SessionContextPane({
     headThreadSession,
   });
   const isManagedLocalCodex = interaction.isManagedLocalCodex;
-  const canDriveManagedLocalFromBrowser = interaction.canDriveManagedLocalSession;
+  const canDriveManagedLocalFromBrowser = interaction.liveControlAvailable;
   const turnCount = session.user_messages + session.assistant_messages;
   const runtime = resolveSessionRuntimeState(session);
   const executionHomeLabel =

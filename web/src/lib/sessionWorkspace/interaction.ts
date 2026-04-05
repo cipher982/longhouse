@@ -13,22 +13,29 @@ export function getSessionInteractionCapabilities({
   headThreadSession?: Pick<AgentSession, "origin_label" | "environment"> | null;
 }): SessionInteractionCapabilities {
   const providerLabel = getProviderLabel(session.provider);
+  const sessionCapabilities = session.capabilities;
   const isManagedLocalSession = session.execution_home === "managed_local";
-  const canDriveManagedLocalSession = isManagedLocalSession && session.source_runner_id != null;
-  const canContinueInCloud = !canDriveManagedLocalSession && supportsDirectWebContinuation(session.provider);
+  const fallbackLiveControlAvailable = isManagedLocalSession && session.source_runner_id != null;
+  const fallbackCloudContinuationAvailable =
+    !fallbackLiveControlAvailable && supportsDirectWebContinuation(session.provider);
+  const fallbackHostReattachAvailable = isManagedLocalSession;
+  const liveControlAvailable = sessionCapabilities?.live_control_available ?? fallbackLiveControlAvailable;
+  const cloudContinuationAvailable =
+    sessionCapabilities?.cloud_continuation_available ?? fallbackCloudContinuationAvailable;
+  const hostReattachAvailable = sessionCapabilities?.host_reattach_available ?? fallbackHostReattachAvailable;
   const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
 
-  const mode: SessionInteractionMode = canDriveManagedLocalSession
+  const mode: SessionInteractionMode = liveControlAvailable
     ? "managed_local"
-    : canContinueInCloud
+    : cloudContinuationAvailable
       ? !isViewingHead
         ? "branch"
         : session.continuation_kind === "cloud"
           ? "head"
           : "promote"
-      : isManagedLocalSession
+      : hostReattachAvailable
         ? "managed_local_unavailable"
         : "unsupported";
 
@@ -46,7 +53,7 @@ export function getSessionInteractionCapabilities({
       ? "Live control"
       : mode === "managed_local_unavailable"
         ? "Reattach on host"
-        : canContinueInCloud
+        : cloudContinuationAvailable
           ? "Web continue"
           : "History only";
 
@@ -68,7 +75,7 @@ export function getSessionInteractionCapabilities({
             ? "Start a cloud continuation from this session."
             : mode === "branch"
               ? "Start a new cloud continuation from this point."
-              : `Search and inspect this ${providerLabel} session here; direct continuation is not wired for this provider yet.`;
+              : `Search and inspect this ${providerLabel} session here; cloud continuation is not available from this session yet.`;
 
   const title =
     mode === "managed_local"
@@ -79,11 +86,9 @@ export function getSessionInteractionCapabilities({
           ? "Continue in Cloud"
           : mode === "branch"
             ? "Branch in Cloud"
-            : mode === "managed_local_unavailable" && isManagedLocalCodex
+            : mode === "managed_local_unavailable"
               ? "Continue this session on the host"
-              : mode === "managed_local_unavailable"
-                ? "Continue this session on the host"
-                : "Search and inspect this session";
+              : "Search and inspect this session";
 
   const description =
     mode === "managed_local"
@@ -96,7 +101,7 @@ export function getSessionInteractionCapabilities({
             ? `Earlier turns were synced from ${sourceOriginLabel}. Your next message starts a new cloud continuation from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
             : mode === "managed_local_unavailable"
               ? `This live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts right now. Reattach on the host machine to continue.`
-              : `This ${providerLabel} session is fully searchable here, but browser continuation is currently wired for Claude sessions only.`;
+              : `This ${providerLabel} session is fully searchable here, but cloud continuation is not available from this session yet.`;
 
   const placeholder =
     mode === "managed_local"
@@ -117,24 +122,18 @@ export function getSessionInteractionCapabilities({
   const notice =
     mode === "managed_local_unavailable"
       ? {
-          title: isManagedLocalCodex
-            ? "Codex session needs host attach"
-            : "Live session needs host attach",
+          title: isManagedLocalCodex ? "Codex session needs host attach" : "Live session needs host attach",
           body: `This live ${providerLabel} session is visible here, but Longhouse cannot reach its host control channel right now. Reattach on the host machine to continue.`,
         }
       : mode === "unsupported"
         ? {
             title: `Web continuation unavailable for ${providerLabel}`,
-            body: `This ${providerLabel} session is still fully searchable here, but browser continuation is currently wired for Claude sessions only.`,
+            body: `This ${providerLabel} session is still fully searchable here, but cloud continuation is not available from this session yet.`,
           }
         : null;
 
   const composerDisabledReason =
-    mode === "managed_local_unavailable" || mode === "unsupported"
-      ? notice?.body ?? null
-      : null;
-
-  const primaryActionLabel = "Continue here";
+    mode === "managed_local_unavailable" || mode === "unsupported" ? notice?.body ?? null : null;
 
   return {
     mode,
@@ -143,14 +142,15 @@ export function getSessionInteractionCapabilities({
     headOriginLabel,
     isManagedLocalSession,
     isManagedLocalCodex,
-    canDriveManagedLocalSession,
-    canContinueInCloud,
-    canChatFromBrowser: mode === "managed_local" || canContinueInCloud,
+    liveControlAvailable,
+    cloudContinuationAvailable,
+    hostReattachAvailable,
+    canChatFromBrowser: liveControlAvailable || cloudContinuationAvailable,
     capabilityLabel,
     capabilityVariant,
     capabilitySummary,
     composerDisabledReason,
-    primaryActionLabel,
+    primaryActionLabel: "Continue here",
     submitLabel,
     title,
     description,

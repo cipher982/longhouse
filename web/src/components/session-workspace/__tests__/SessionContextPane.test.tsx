@@ -6,7 +6,7 @@ import type { AgentSession, SessionLoopMode } from "../../../services/api/agents
 import type { SessionTurnReview } from "../../../services/api/oikos";
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
-  return {
+  const session: AgentSession = {
     id: "sess-1",
     provider: "claude",
     project: "zerg",
@@ -36,6 +36,14 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     loop_mode: "assist",
     ...overrides,
   };
+  const liveControlAvailable = session.execution_home === "managed_local" && session.source_runner_id != null;
+  session.capabilities = overrides.capabilities ?? {
+    live_control_available: liveControlAvailable,
+    cloud_continuation_available: !liveControlAvailable && session.provider === "claude",
+    host_reattach_available: session.execution_home === "managed_local",
+    reply_to_live_session_available: liveControlAvailable,
+  };
+  return session;
 }
 
 function renderPane(
@@ -175,7 +183,13 @@ describe("SessionContextPane", () => {
 
     const button = screen.getByRole("button", { name: "Continue here" });
     expect(button).toBeDisabled();
-    expect(screen.getByText(/browser continuation is currently wired for Claude sessions only/i)).toBeInTheDocument();
+    expect(button).toHaveAttribute(
+      "title",
+      "This Gemini session is still fully searchable here, but cloud continuation is not available from this session yet.",
+    );
+    expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
+      "Search and inspect this Gemini session here; cloud continuation is not available from this session yet.",
+    );
   });
 
   it("keeps browser continuation available when a managed-local Claude session loses its live control channel", () => {

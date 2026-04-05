@@ -32,10 +32,12 @@ from zerg.services.managed_local_turns import run_best_effort_managed_local_turn
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.presence_cache import get_presence_cache
+from zerg.services.session_capabilities import supports_cloud_continuation
+from zerg.services.session_capabilities import supports_host_reattach
+from zerg.services.session_capabilities import supports_live_control
 from zerg.services.session_loop_controller import build_loop_controller_payload
 from zerg.services.session_loop_controller import evaluate_session_turn_with_llm
 from zerg.services.write_serializer import get_write_serializer
-from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
 
 logger = logging.getLogger(__name__)
@@ -151,22 +153,13 @@ def _coerce_loop_mode(value: str | None) -> SessionLoopMode:
 
 
 def supports_live_turn_review_continue(session: AgentSession | None) -> bool:
-    return live_session_dispatch.supports_live_text_dispatch(session)
-
-
-def _is_managed_local_session(session: AgentSession | None) -> bool:
-    if session is None:
-        return False
-    execution_home = str(getattr(session, "execution_home", "") or "").strip()
-    return execution_home == SessionExecutionHome.MANAGED_LOCAL.value
+    return supports_live_control(session)
 
 
 def supports_cloud_turn_review_continue(session: AgentSession | None) -> bool:
-    if session is None:
+    if supports_host_reattach(session):
         return False
-    if _is_managed_local_session(session):
-        return False
-    return (session.provider or "").strip().lower() == "claude"
+    return supports_cloud_continuation(session)
 
 
 def _cloud_continue_backend_for_session(session: AgentSession) -> str | None:
@@ -336,7 +329,7 @@ def _load_turn_review_candidate(
     session_id: str,
     freshness_reference_at: datetime | None = None,
 ) -> CompletedAssistantTurn | None:
-    if _is_managed_local_session(session) and session is not None:
+    if supports_host_reattach(session) and session is not None:
         ledger_turns = get_reviewable_managed_local_turns(db, session_id=session.id)
         now = datetime.now(timezone.utc)
         for ledger_turn in ledger_turns:
@@ -867,7 +860,7 @@ def _should_wait_for_active_presence(
         return False
     if updated_at <= normalized_assistant_at:
         return False
-    if not _is_managed_local_session(session):
+    if not supports_host_reattach(session):
         return True
     # Presence is only a short settle signal for hot managed-local turns.
     # Once the assistant turn has been stable for a few seconds, do not let
@@ -1618,8 +1611,7 @@ async def maybe_process_session_turn_loop(
     await maybe_execute_recorded_turn_review(db=db, review=review)
     await maybe_enqueue_turn_review_operator_wakeup(db=db, review=review)
     session = db.query(AgentSession).filter(AgentSession.id == review.session_id).first()
-    execution_home = str(getattr(session, "execution_home", "") or "").strip() if session is not None else ""
-    is_managed_local_session = execution_home == SessionExecutionHome.MANAGED_LOCAL.value
+    is_managed_local_session = supports_host_reattach(session)
     if created:
         if session is not None:
             try:

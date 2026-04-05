@@ -65,6 +65,7 @@ export interface AgentSession {
   source_runner_name: string | null;
   attach_command?: string | null;
   managed_launch_profile?: ManagedLaunchProfile | null;
+  capabilities?: SessionCapabilities | null;
   loop_mode: SessionLoopMode;
   user_state?: string;
 }
@@ -73,6 +74,13 @@ export interface ManagedLaunchProfile {
   required_commands: string[];
   argv: string[];
   exported_env_keys: string[];
+}
+
+export interface SessionCapabilities {
+  live_control_available: boolean;
+  cloud_continuation_available: boolean;
+  host_reattach_available: boolean;
+  reply_to_live_session_available: boolean;
 }
 
 export interface AgentSessionsListResponse {

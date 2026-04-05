@@ -79,8 +79,9 @@ export type SessionInteractionCapabilities = {
   headOriginLabel: string | null;
   isManagedLocalSession: boolean;
   isManagedLocalCodex: boolean;
-  canDriveManagedLocalSession: boolean;
-  canContinueInCloud: boolean;
+  liveControlAvailable: boolean;
+  cloudContinuationAvailable: boolean;
+  hostReattachAvailable: boolean;
   canChatFromBrowser: boolean;
   capabilityLabel: string;
   capabilityVariant: "neutral" | "success" | "warning";

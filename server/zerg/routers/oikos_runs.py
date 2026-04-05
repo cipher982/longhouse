@@ -37,9 +37,9 @@ from zerg.models.models import Run
 from zerg.models.models import ThreadMessage
 from zerg.models.run_event import RunEvent
 from zerg.models.work import OikosWakeup
-from zerg.services.live_session_dispatch import supports_live_text_dispatch
 from zerg.services.loop_push import revoke_loop_push_subscription
 from zerg.services.loop_push import upsert_loop_push_subscription
+from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_turn_reviews import approve_pending_turn_review
 from zerg.services.session_turn_reviews import dismiss_pending_turn_review
 from zerg.services.session_turn_reviews import reply_to_pending_turn_review
@@ -441,9 +441,10 @@ def _home_label(session: AgentSession | None) -> str | None:
 
 
 def _available_loop_actions(review: SessionTurnReview, session: AgentSession | None) -> List[str]:
+    session_capabilities = build_session_capabilities(session)
     can_approve_continue = supports_live_turn_review_continue(session) or supports_cloud_turn_review_continue(session)
     actions = ["not_now", "open_full_session"]
-    if supports_live_text_dispatch(session):
+    if session_capabilities.reply_to_live_session_available:
         actions.insert(0, "reply_to_session")
     if review.execution_state == "awaiting_user_approval" and review.recommended_action == "continue_session" and can_approve_continue:
         return ["approve_recommended_action", *actions]

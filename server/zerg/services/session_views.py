@@ -26,6 +26,8 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
+from zerg.services.session_capabilities import build_session_capabilities
+from zerg.services.session_capabilities import resolve_execution_home
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
@@ -50,15 +52,6 @@ def _coerce_session_loop_mode(value: str | None) -> SessionLoopMode:
         return SessionLoopMode.MANUAL
 
 
-def _coerce_execution_home(value: str | None) -> SessionExecutionHome | None:
-    if value is None or not str(value).strip():
-        return None
-    try:
-        return SessionExecutionHome(str(value).strip())
-    except ValueError:
-        return None
-
-
 def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
     if value is None or not str(value).strip():
         return None
@@ -66,27 +59,6 @@ def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | No
         return ManagedSessionTransport(str(value).strip())
     except ValueError:
         return None
-
-
-def resolve_execution_home(session: AgentSession) -> SessionExecutionHome:
-    stored = _coerce_execution_home(getattr(session, "execution_home", None))
-    if stored is not None and stored != SessionExecutionHome.LEGACY:
-        return stored
-
-    continuation_kind = (session.continuation_kind or "").strip().lower()
-    if continuation_kind == "cloud":
-        return SessionExecutionHome.CLOUD_TAKEOVER
-    if continuation_kind == "runner":
-        return SessionExecutionHome.MANAGED_HOSTED
-
-    origin_label = (session.origin_label or "").strip().lower()
-    environment = (session.environment or "").strip().lower()
-    if origin_label == "cloud" or environment == "cloud":
-        return SessionExecutionHome.CLOUD_TAKEOVER
-    if origin_label == "hosted" or environment == "hosted":
-        return SessionExecutionHome.MANAGED_HOSTED
-
-    return stored or SessionExecutionHome.LEGACY
 
 
 def build_attach_command(session: AgentSession) -> str | None:
@@ -110,6 +82,16 @@ def _coerce_managed_launch_profile(value: Any) -> ManagedLaunchProfileResponse |
     )
 
 
+def build_session_capabilities_response(session: AgentSession | None) -> SessionCapabilitiesResponse:
+    capability_flags = build_session_capabilities(session)
+    return SessionCapabilitiesResponse(
+        live_control_available=capability_flags.live_control_available,
+        cloud_continuation_available=capability_flags.cloud_continuation_available,
+        host_reattach_available=capability_flags.host_reattach_available,
+        reply_to_live_session_available=capability_flags.reply_to_live_session_available,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
@@ -119,6 +101,19 @@ class ManagedLaunchProfileResponse(BaseModel):
     required_commands: List[str] = Field(..., description="Commands that must exist before managed launch")
     argv: List[str] = Field(..., description="Structured argv Longhouse resolved for the managed launch")
     exported_env_keys: List[str] = Field(..., description="Env var names Longhouse exported for the launch")
+
+
+class SessionCapabilitiesResponse(BaseModel):
+    live_control_available: bool = Field(False, description="True when Longhouse can inject into the live session now")
+    cloud_continuation_available: bool = Field(
+        False,
+        description="True when Longhouse currently supports starting or continuing this session in cloud",
+    )
+    host_reattach_available: bool = Field(False, description="True when this session can be resumed from its host terminal")
+    reply_to_live_session_available: bool = Field(
+        False,
+        description="True when operator flows may send a direct reply into the live session",
+    )
 
 
 class SessionResponse(UTCBaseModel):
@@ -184,6 +179,7 @@ class SessionResponse(UTCBaseModel):
         None,
         description="Structured managed-launch metadata for debugging tmux-backed sessions",
     )
+    capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
 
@@ -289,6 +285,7 @@ class ActiveSessionResponse(UTCBaseModel):
     )
     source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
     source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
+    capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
 
 
@@ -728,6 +725,7 @@ def build_session_response(
         source_runner_name=getattr(session, "source_runner_name", None),
         attach_command=build_attach_command(session),
         managed_launch_profile=_coerce_managed_launch_profile(getattr(session, "managed_launch_profile", None)),
+        capabilities=build_session_capabilities_response(session),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
     )

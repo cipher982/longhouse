@@ -25,6 +25,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_runtime import reconcile_managed_local_tmux_sessions
+from zerg.services.session_capabilities import resolve_execution_home
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
@@ -55,10 +56,10 @@ from zerg.services.session_views import WallResponse
 from zerg.services.session_views import _coerce_managed_transport
 from zerg.services.session_views import _coerce_session_loop_mode
 from zerg.services.session_views import build_event_response
+from zerg.services.session_views import build_session_capabilities_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import normalize_utc_datetime
-from zerg.services.session_views import resolve_execution_home
 from zerg.services.session_views import resolve_runtime_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
@@ -735,6 +736,7 @@ async def list_active_sessions(
                     managed_transport=_coerce_managed_transport(getattr(s, "managed_transport", None)),
                     source_runner_id=getattr(s, "source_runner_id", None),
                     source_runner_name=getattr(s, "source_runner_name", None),
+                    capabilities=build_session_capabilities_response(s),
                     loop_mode=_coerce_session_loop_mode(getattr(s, "loop_mode", None)),
                 )
             )
