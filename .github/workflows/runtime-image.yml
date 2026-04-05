@@ -22,8 +22,8 @@ permissions:
   packages: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.sha }}
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'workflow_dispatch' && format('runtime-image-manual-{0}', github.run_id) || (github.ref_type == 'tag' && format('runtime-image-tag-{0}', github.ref_name)) || format('runtime-image-branch-{0}', github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref_type != 'tag' }}
 
 jobs:
   build-and-push:

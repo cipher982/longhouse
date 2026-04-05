@@ -54,7 +54,7 @@ GitHub then runs:
 - `deploy-and-verify.yml`
 - `hosted-live-qa.yml`
 
-`deploy-and-verify.yml` now waits for the matching `contract-first-ci.yml` run for the same SHA to finish green before any remote deploy action. Automatic deploy/live-QA runs collapse superseded `main` commits; manual dispatch stays isolated for recovery use.
+`runtime-image.yml` cancels superseded branch pushes before spending time publishing stale images. `deploy-and-verify.yml` waits for the matching `contract-first-ci.yml` run for the same SHA to finish green before any remote deploy action. Automatic deploy/live-QA runs collapse superseded `main` commits; manual dispatch stays isolated for recovery use.
 
 Manual fallback:
 
