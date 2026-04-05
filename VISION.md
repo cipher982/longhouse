@@ -268,7 +268,7 @@ Any important capability exposed via MCP should also exist as an HTTP API and, w
 - `get_session_detail` — retrieve specific session content/events
 - `get_session_events` — surgical event search within a known session
 - `recall` — chunk-level semantic recall with event window retrieval
-- `log_insight` / `query_insights` — write/read insights
+- `log_insight` — write insights
 - `notify_oikos` — commis reports status back to Oikos coordinator (currently logs)
 
 **How it works:**
@@ -277,7 +277,7 @@ Any important capability exposed via MCP should also exist as an HTTP API and, w
 - Commis spawned via `hatch` automatically get the Longhouse MCP server configured in their workspace-local Claude/Codex settings
 - A hatch-spawned agent can search "how did we implement retry logic?" against the Longhouse archive mid-task
 
-**Current State (as of 2026-03-12):** MCP server implemented with stdio and HTTP transport. Default toolset is continuity-focused (search/detail/event drill-down, recall, insights, notify). Longhouse no longer auto-registers this MCP server into normal local Claude/Codex installs; it is auto-configured for commis workspaces only (injected into workspace-local `.claude/settings.json` / `.codex/config.toml`). Quality gates (verify hooks) are also injected into commis workspaces. `notify_oikos` still logs (WebSocket delivery pending).
+**Current State (as of 2026-03-12):** MCP server implemented with stdio and HTTP transport. Default toolset is continuity-focused (search/detail/event drill-down, recall, log-insight, notify). Longhouse no longer auto-registers this MCP server into normal local Claude/Codex installs; it is auto-configured for commis workspaces only (injected into workspace-local `.claude/settings.json` / `.codex/config.toml`). Quality gates (verify hooks) are also injected into commis workspaces. `notify_oikos` still logs (WebSocket delivery pending).
 
 ### Multi-Provider Backend Integration
 
