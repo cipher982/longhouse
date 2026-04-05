@@ -105,6 +105,7 @@ def test_wall_returns_sessions(tmp_path):
             db,
             device_id="shipper-laptop",
             device_name="laptop",
+            cwd="/Users/dev/git/zerg",
             git_repo="https://github.com/user/repo",
             git_branch="main",
             project="zerg",
@@ -118,6 +119,7 @@ def test_wall_returns_sessions(tmp_path):
         data = resp.json()
         assert data["total"] >= 1
         session = next(s for s in data["sessions"] if s["device_name"] == "laptop")
+        assert session["cwd"] == "/Users/dev/git/zerg"
         assert session["git_repo"] == "https://github.com/user/repo"
         assert session["git_branch"] == "main"
         assert session["project"] == "zerg"
@@ -143,6 +145,24 @@ def test_wall_filters_by_repo(tmp_path):
         assert "zerg" in data["sessions"][0]["git_repo"]
     finally:
         api_ref.dependency_overrides = {}
+
+def test_wall_repo_filter_matches_cwd(tmp_path):
+    """Wall repo filter also matches against cwd for non-git workspaces."""
+    SessionLocal = _make_db(tmp_path)
+    with SessionLocal() as db:
+        _seed_session(db, cwd="/Users/dev/git/zeta/athena-horizon", git_repo=None, project="athena-horizon")
+        _seed_session(db, cwd="/Users/dev/git/zerg", git_repo="https://github.com/user/other", project="zerg")
+
+    client, api_ref = _make_client(SessionLocal)
+    try:
+        resp = client.get("/api/agents/sessions/wall", params={"repo": "athena"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total"] == 1
+        assert data["sessions"][0]["cwd"] == "/Users/dev/git/zeta/athena-horizon"
+    finally:
+        api_ref.dependency_overrides = {}
+
 
 def test_wall_filters_by_project(tmp_path):
     """Wall query project filter returns only matching sessions."""

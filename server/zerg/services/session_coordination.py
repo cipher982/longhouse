@@ -74,7 +74,11 @@ def query_wall_sessions(
 
     if repo:
         repo_lower = repo.lower()
-        sessions = [session for session in sessions if session.git_repo and repo_lower in session.git_repo.lower()]
+        sessions = [
+            session
+            for session in sessions
+            if (session.git_repo and repo_lower in session.git_repo.lower()) or (session.cwd and repo_lower in session.cwd.lower())
+        ]
     sessions = sessions[:limit]
 
     session_ids = [session.id for session in sessions]
@@ -115,6 +119,7 @@ def query_wall_sessions(
                 device_name=getattr(session, "device_name", None)
                 or (session.device_id.replace("shipper-", "") if session.device_id else None),
                 device_id=session.device_id,
+                cwd=session.cwd,
                 git_repo=session.git_repo,
                 git_branch=session.git_branch,
                 project=session.project,
@@ -158,6 +163,8 @@ def build_peer_payloads(
                 "session_id": session.session_id,
                 "device_name": session.device_name,
                 "provider": session.provider,
+                "cwd": session.cwd,
+                "git_repo": session.git_repo,
                 "presence_state": session.presence_state,
                 "pending_inbound_messages": session.pending_inbound_messages,
                 "summary_title": session.summary_title,
