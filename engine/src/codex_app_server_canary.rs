@@ -20,6 +20,8 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+use crate::text::truncate_tail_chars;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppServerTransport {
@@ -1134,10 +1136,7 @@ impl RemoteTuiHandle {
 
     fn log_tail(&self, max_chars: usize) -> String {
         let text = fs::read_to_string(&self.log_path).unwrap_or_default();
-        if text.len() <= max_chars {
-            return text;
-        }
-        text[text.len() - max_chars..].to_string()
+        truncate_tail_chars(&text, max_chars)
     }
 
     async fn shutdown(&mut self) -> Result<()> {

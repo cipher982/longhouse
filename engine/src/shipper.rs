@@ -19,6 +19,7 @@ use crate::pipeline::parser::{self, ParseResult};
 use crate::shipping::client::{ShipResult, ShipperClient};
 use crate::state::file_state::FileState;
 use crate::state::spool::Spool;
+use crate::text::truncate_head_chars;
 
 /// Result of parsing + compressing a single file.
 pub struct ShipItem {
@@ -64,6 +65,10 @@ pub struct PreparedFile {
 }
 
 pub const SLOW_FILE_PROCESSING_MS: u128 = 5_000;
+
+fn truncate_http_body(body: &str) -> String {
+    truncate_head_chars(body, 200)
+}
 
 impl PreparedAction {
     fn event_count(&self) -> usize {
@@ -331,7 +336,7 @@ pub async fn ship_and_record(
             let err_msg = match &result {
                 ShipResult::RateLimited => "rate limited".to_string(),
                 ShipResult::ServerError(code, body) => {
-                    format!("{}:{}", code, &body[..body.len().min(200)])
+                    format!("{}:{}", code, truncate_http_body(body))
                 }
                 ShipResult::ConnectError(e) => e.clone(),
                 _ => unreachable!(),
@@ -385,7 +390,7 @@ pub async fn ship_and_record(
                 "Client error shipping {}: {} {}",
                 item.path_str,
                 code,
-                &body[..body.len().min(200)]
+                truncate_http_body(&body)
             );
             if code == 413 {
                 // 413 = payload too large. The data is valid but the payload
@@ -1073,7 +1078,7 @@ async fn attempt_ship(
             let error = match &result {
                 ShipResult::RateLimited => "rate limited".to_string(),
                 ShipResult::ServerError(code, body) => {
-                    format!("{}:{}", code, &body[..body.len().min(200)])
+                    format!("{}:{}", code, truncate_http_body(body))
                 }
                 ShipResult::ConnectError(error) => error.clone(),
                 _ => unreachable!(),
@@ -1103,7 +1108,7 @@ async fn attempt_ship(
                 "Client error shipping {}: {} {}",
                 item.path_str,
                 status_code,
-                &body[..body.len().min(200)]
+                truncate_http_body(&body)
             );
             AttemptedShip::ClientError {
                 item,
@@ -1547,11 +1552,8 @@ async fn replay_spool_entries(
                             continue 'entry_loop;
                         }
 
-                        let error = format!(
-                            "client error {}:{}",
-                            status_code,
-                            &body[..body.len().min(200)]
-                        );
+                        let error =
+                            format!("client error {}:{}", status_code, truncate_http_body(&body));
                         spool.record_dead(
                             &item.provider,
                             &item.path_str,
