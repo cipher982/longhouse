@@ -69,6 +69,7 @@ from zerg.services.managed_local_turns import mark_managed_local_turn_send_accep
 from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
 from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
 from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
+from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import prepare_claude_session_for_resume
 from zerg.services.session_continuity import prepare_codex_session_for_resume
@@ -436,18 +437,12 @@ def _assert_session_can_continue(source_session) -> None:
             detail=f"Only Claude and Codex sessions can be resumed (got {source_session.provider})",
         )
 
-    is_cloud_resume = source_session.execution_home != SessionExecutionHome.MANAGED_LOCAL.value
-    if is_cloud_resume and source_session.provider not in ("claude", "codex"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Cloud continuation is only supported for Claude and Codex (got {source_session.provider})",
-        )
-
 
 def _assert_live_session_send_available(source_session) -> None:
-    if live_session_dispatch.supports_live_text_dispatch(source_session):
+    capabilities = build_session_capabilities(source_session)
+    if capabilities.live_control_available:
         return
-    if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
+    if capabilities.host_reattach_available:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="This live session needs host attach before Longhouse can continue it.",
@@ -644,7 +639,7 @@ async def _dispatch_managed_local_text(
 ) -> JSONResponse:
     """Send text to a managed-local session and return acceptance status."""
     t0 = time.monotonic()
-    if getattr(source_session, "source_runner_id", None) is None:
+    if not build_session_capabilities(source_session).live_control_available:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Managed local session is missing live runner metadata",
@@ -1088,7 +1083,7 @@ async def _stream_managed_local_output(
 ) -> AsyncIterator[str]:
     if db is None:
         raise RuntimeError("Managed local chat requires a database session")
-    if getattr(source_session, "source_runner_id", None) is None:
+    if not build_session_capabilities(source_session).live_control_available:
         raise RuntimeError("Managed local session is missing live runner metadata")
 
     yield SSEEvent(

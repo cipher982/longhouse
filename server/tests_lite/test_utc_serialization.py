@@ -71,6 +71,12 @@ def test_session_response_model():
         thread_root_session_id="test-session-id",
         thread_head_session_id="test-session-id",
         thread_continuation_count=1,
+        capabilities={
+            "live_control_available": False,
+            "cloud_continuation_available": True,
+            "host_reattach_available": False,
+            "reply_to_live_session_available": False,
+        },
     )
     encoded = jsonable_encoder(resp)
     assert encoded["started_at"].endswith("Z"), f"started_at missing Z: {encoded['started_at']}"

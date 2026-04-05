@@ -62,7 +62,7 @@ vi.mock("../../components/workspace/WorkspaceShell", () => ({
 }));
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
-  return {
+  const session: AgentSession = {
     id: "session-codex",
     provider: "codex",
     project: "zerg",
@@ -101,6 +101,14 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     loop_mode: "manual",
     ...overrides,
   };
+  const liveControlAvailable = session.execution_home === "managed_local" && session.source_runner_id != null;
+  session.capabilities = overrides.capabilities ?? {
+    live_control_available: liveControlAvailable,
+    cloud_continuation_available: !liveControlAvailable && session.provider === "claude",
+    host_reattach_available: session.execution_home === "managed_local",
+    reply_to_live_session_available: liveControlAvailable,
+  };
+  return session;
 }
 
 function renderSessionDetailPage() {
@@ -296,7 +304,7 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "This Gemini session is still fully searchable here, but browser continuation is currently wired for Claude sessions only.",
+      "This Gemini session is still fully searchable here, but cloud continuation is not available from this session yet.",
     );
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
       "Web continuation unavailable for Gemini",

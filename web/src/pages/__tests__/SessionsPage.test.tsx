@@ -57,7 +57,7 @@ const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStrea
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
   const now = "2026-03-21T12:00:00Z";
-  return {
+  const session: AgentSession = {
     id: "session-1",
     provider: "codex",
     project: "zerg",
@@ -91,6 +91,14 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     loop_mode: "manual",
     ...overrides,
   };
+  const liveControlAvailable = session.execution_home === "managed_local" && session.source_runner_id != null;
+  session.capabilities = overrides.capabilities ?? {
+    live_control_available: liveControlAvailable,
+    cloud_continuation_available: !liveControlAvailable && session.provider === "claude",
+    host_reattach_available: session.execution_home === "managed_local",
+    reply_to_live_session_available: liveControlAvailable,
+  };
+  return session;
 }
 
 function makeTimelineCard(
@@ -372,7 +380,7 @@ describe("SessionsPage", () => {
     const capability = await screen.findByTestId("session-card-capability");
     expect(capability).toHaveTextContent("History only");
     expect(capability).toHaveTextContent(
-      "Search and inspect this Codex session here; direct continuation is not wired for this provider yet.",
+      "Search and inspect this Codex session here; cloud continuation is not available from this session yet.",
     );
   });
 

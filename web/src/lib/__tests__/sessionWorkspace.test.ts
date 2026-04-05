@@ -3,7 +3,7 @@ import { buildTimelineModel, getSessionInteractionCapabilities } from "../sessio
 import type { AgentSession, AgentSessionProjectionItem } from "../../services/api/agents";
 
 function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
-  return {
+  const session: AgentSession = {
     id: "session-1",
     provider: "claude",
     project: "zerg",
@@ -27,7 +27,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     continued_from_session_id: null,
     continuation_kind: "local",
     origin_label: "On this Mac",
-    execution_home: "local",
+    execution_home: "legacy",
     branched_from_event_id: null,
     is_writable_head: true,
     managed_transport: null,
@@ -37,6 +37,14 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     loop_mode: "manual",
     ...overrides,
   };
+  const liveControlAvailable = session.execution_home === "managed_local" && session.source_runner_id != null;
+  session.capabilities = overrides.capabilities ?? {
+    live_control_available: liveControlAvailable,
+    cloud_continuation_available: !liveControlAvailable && session.provider === "claude",
+    host_reattach_available: session.execution_home === "managed_local",
+    reply_to_live_session_available: liveControlAvailable,
+  };
+  return session;
 }
 
 describe("buildTimelineModel", () => {
@@ -162,7 +170,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.capabilityLabel).toBe("History only");
-    expect(capabilities.composerDisabledReason).toMatch(/currently wired for Claude sessions only/i);
+    expect(capabilities.composerDisabledReason).toMatch(/cloud continuation is not available/i);
     expect(capabilities.primaryActionLabel).toBe("Continue here");
   });
 });
