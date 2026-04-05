@@ -5651,6 +5651,8 @@ export interface components {
              * @description Runner name for managed local sessions
              */
             source_runner_name?: string | null;
+            /** @description Canonical session capability flags */
+            capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /**
              * @description Session loop mode: manual|assist|autopilot
              * @default manual
@@ -9505,6 +9507,33 @@ export interface components {
             /** User State */
             user_state: string;
         };
+        /** SessionCapabilitiesResponse */
+        SessionCapabilitiesResponse: {
+            /**
+             * Live Control Available
+             * @description True when Longhouse can inject into the live session now
+             * @default false
+             */
+            live_control_available: boolean;
+            /**
+             * Cloud Continuation Available
+             * @description True when Longhouse currently supports starting or continuing this session in cloud
+             * @default false
+             */
+            cloud_continuation_available: boolean;
+            /**
+             * Host Reattach Available
+             * @description True when this session can be resumed from its host terminal
+             * @default false
+             */
+            host_reattach_available: boolean;
+            /**
+             * Reply To Live Session Available
+             * @description True when operator flows may send a direct reply into the live session
+             * @default false
+             */
+            reply_to_live_session_available: boolean;
+        };
         /**
          * SessionExecutionHome
          * @description Where a coding session currently lives.
@@ -9971,6 +10000,8 @@ export interface components {
             attach_command?: string | null;
             /** @description Structured managed-launch metadata for debugging tmux-backed sessions */
             managed_launch_profile?: components["schemas"]["ManagedLaunchProfileResponse"] | null;
+            /** @description Canonical session capability flags */
+            capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /**
              * @description Session loop mode: manual|assist|autopilot
              * @default manual
