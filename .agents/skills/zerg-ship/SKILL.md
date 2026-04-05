@@ -78,6 +78,8 @@ What ships:
 Primary automation:
 - `deploy-control-plane.yml`
 
+The control-plane lane now waits for the matching `contract-first-ci.yml` run for the same SHA before any remote deploy step, and stale branch runs collapse automatically.
+
 Manual fallback:
 
 ```bash

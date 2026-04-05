@@ -15,10 +15,103 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
+  gate:
+    name: "Gate control-plane deploy on full CI"
+    runs-on: ubuntu-latest
+    outputs:
+      head_sha: ${{ steps.meta.outputs.head_sha }}
+      head_branch: ${{ steps.meta.outputs.head_branch }}
+      stale: ${{ steps.freshness.outputs.stale }}
+    steps:
+      - name: Resolve target commit
+        id: meta
+        run: |
+          {
+            echo "head_sha=${{ github.sha }}"
+            echo "head_branch=${{ github.ref_name }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Wait for full CI gate
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        uses: actions/github-script@v8
+        env:
+          HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
+          HEAD_BRANCH: ${{ steps.meta.outputs.head_branch }}
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const sha = process.env.HEAD_SHA;
+            const branch = process.env.HEAD_BRANCH;
+            const maxAttempts = 120;
+            const delayMs = 10000;
+
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: 'contract-first-ci.yml',
+                event: 'push',
+                branch,
+                head_sha: sha,
+                per_page: 10,
+              });
+
+              const run = data.workflow_runs.find((candidate) => candidate.head_sha === sha);
+              if (run) {
+                core.info(`push-pr-ci run ${run.id}: status=${run.status} conclusion=${run.conclusion}`);
+                if (run.status === 'completed') {
+                  if (run.conclusion === 'success') {
+                    return;
+                  }
+                  core.setFailed(`push-pr-ci concluded ${run.conclusion} for ${sha}`);
+                  return;
+                }
+              } else {
+                core.info(`No push-pr-ci run found yet for ${sha} on ${branch} (attempt ${attempt}/${maxAttempts})`);
+              }
+
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+            }
+
+            core.setFailed(`Timed out waiting for push-pr-ci to pass for ${sha}`);
+
+      - name: Check if commit is superseded
+        id: freshness
+        uses: actions/github-script@v8
+        env:
+          HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
+        with:
+          script: |
+            if (context.eventName === 'workflow_dispatch') {
+              core.setOutput('stale', 'false');
+              return;
+            }
+
+            const { data } = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: 'heads/main',
+            });
+            const stale = data.object.sha !== process.env.HEAD_SHA;
+            core.info(`Latest main SHA=${data.object.sha}; target SHA=${process.env.HEAD_SHA}; stale=${stale}`);
+            core.setOutput('stale', stale ? 'true' : 'false');
+
+      - name: Summary
+        if: ${{ steps.freshness.outputs.stale == 'true' }}
+        run: |
+          {
+            echo "## Control Plane Deploy Results"
+            echo ""
+            echo "- Skipped because commit \`${{ steps.meta.outputs.head_sha }}\` is no longer the head of \`main\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   deploy:
     name: "Deploy Control Plane"
     runs-on: cube-deploy
     timeout-minutes: 20
+    needs: gate
+    if: ${{ needs.gate.outputs.stale != 'true' }}
 
     env:
       CONTROL_PLANE_URL: https://control.longhouse.ai
@@ -26,6 +119,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
 
       - name: Setup SSH
         env:
@@ -53,4 +148,4 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Control plane:** $CONTROL_PLANE_URL" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Hosted canary:** https://$INSTANCE_SUBDOMAIN.longhouse.ai" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Commit:** ${{ github.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}" >> "$GITHUB_STEP_SUMMARY"
