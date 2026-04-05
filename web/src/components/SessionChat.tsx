@@ -73,7 +73,7 @@ interface SessionChatProps {
   submitLabel?: string;
   requireClickForFirstSend?: boolean;
   keyboardHintText?: string;
-  /** Managed-local sessions use fire-and-forget dispatch (response arrives via SSE stream). */
+  /** Managed-local sessions use explicit live-send with fast JSON ack. */
   chatMode?: "cloud" | "managed_local";
   composerDisabledReason?: string | null;
 }
@@ -306,10 +306,10 @@ export function SessionChat({
       setPendingManagedLocalMessage(message);
       setIsSubmitting(true);
       try {
-        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
+        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/send-live`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message, continuation_mode: "managed_local" }),
+          body: JSON.stringify({ message }),
           credentials: "include",
         });
 
@@ -372,7 +372,7 @@ export function SessionChat({
         const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/chat`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message, continuation_mode: "cloud" }),
+          body: JSON.stringify({ message }),
           credentials: "include",
           signal: abortControllerRef.current.signal,
         });

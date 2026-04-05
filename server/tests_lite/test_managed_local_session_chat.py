@@ -195,7 +195,7 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
 
         try:
             response = client.post(
-                f"/api/sessions/{source_session.id}/chat",
+                f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "continue"},
             )
             assert response.status_code == 200, response.text
@@ -255,7 +255,7 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
 
         try:
             response = client.post(
-                f"/api/sessions/{source_session.id}/chat",
+                f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "what about germany"},
             )
             assert response.status_code == 200
@@ -293,7 +293,7 @@ def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
 
         try:
             response = client.post(
-                f"/api/sessions/{source_session.id}/chat",
+                f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "continue"},
             )
             assert response.status_code == 502
@@ -342,13 +342,13 @@ def test_managed_local_dispatch_send_failure_releases_lock_for_retry(monkeypatch
 
         try:
             first = client.post(
-                f"/api/sessions/{source_session.id}/chat",
+                f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "continue"},
             )
             assert first.status_code == 502
 
             second = client.post(
-                f"/api/sessions/{source_session.id}/chat",
+                f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "retry"},
             )
             assert second.status_code == 502
@@ -401,7 +401,7 @@ def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, 
 
         try:
             response = client.post(
-                f"/api/sessions/{source_session.id}/chat",
+                f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "continue"},
             )
             # If this passes, cloud continuation was never attempted
@@ -439,13 +439,13 @@ def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path)
 
         try:
             first = client.post(
-                f"/api/sessions/{source_session.id}/chat",
+                f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "continue"},
             )
             assert first.status_code == 200
 
             second = client.post(
-                f"/api/sessions/{source_session.id}/chat",
+                f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "continue again"},
             )
             assert second.status_code == 409
@@ -482,7 +482,7 @@ def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(monkeypatch
 
         try:
             response = client.post(
-                f"/api/sessions/{source_session.id}/chat",
+                f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "continue"},
             )
             assert response.status_code == 200
