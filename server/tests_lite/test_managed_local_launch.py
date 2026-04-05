@@ -32,8 +32,10 @@ from zerg.services.managed_local_launcher import _build_launch_profile
 from zerg.services.managed_local_launcher import _build_managed_launch_env_exports
 from zerg.services.managed_local_launcher import _build_preflight_command
 from zerg.services.managed_local_launcher import _serialize_launch_profile
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_HISTORY_LIMIT
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES
 
 _MANAGED_LOCAL_PATH_EXPORT = (
     'export PATH="$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/opt/homebrew/sbin:'
@@ -536,15 +538,49 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
             assert auth.session_id == payload["session_id"]
             assert auth.project == "hiring"
             assert auth.device_id == runner.name
-            assert (
-                f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; "
-                "set-option -s escape-time 0 \\; "
-                "set-option -g status off \\; "
-                "set-option -g mouse on \\; "
-                f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT} \\; "
-                "set-option -g remain-on-exit failed \\; "
-                f"new-session -d -s"
-            ) in launch_inner
+            expected_tmux_commands = [
+                f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; ",
+                "set-option -s escape-time 0 \\; ",
+                "set-option -g status off \\; ",
+                "set-option -g mouse on \\; ",
+                f"set-option -g default-terminal {MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL} \\; ",
+                "set-option -gu terminal-features \\; ",
+                "set-option -as terminal-features ',*:RGB' \\; ",
+                f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT} \\; ",
+                "set-option -g remain-on-exit failed \\; ",
+                "unbind-key -T root WheelUpPane \\; ",
+                (
+                    'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" '
+                    '"send-keys -M" "copy-mode -e -t= \\; send-keys -X -N '
+                    f'{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up" \\; '
+                ),
+                "unbind-key -T copy-mode WheelUpPane \\; ",
+                "unbind-key -T copy-mode WheelDownPane \\; ",
+                (
+                    "bind-key -T copy-mode WheelUpPane send-keys -X -N "
+                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up \\; "
+                ),
+                (
+                    "bind-key -T copy-mode WheelDownPane send-keys -X -N "
+                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-down \\; "
+                ),
+                "unbind-key -T copy-mode-vi WheelUpPane \\; ",
+                "unbind-key -T copy-mode-vi WheelDownPane \\; ",
+                (
+                    "bind-key -T copy-mode-vi WheelUpPane send-keys -X -N "
+                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up \\; "
+                ),
+                (
+                    "bind-key -T copy-mode-vi WheelDownPane send-keys -X -N "
+                    f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-down \\; "
+                ),
+                "new-session -d -s",
+            ]
+            cursor = -1
+            for expected in expected_tmux_commands:
+                next_index = launch_inner.find(expected)
+                assert next_index > cursor
+                cursor = next_index
             assert "claude --dangerously-skip-permissions --session-id" in launch_inner
             assert (
                 f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} has-session -t {session.managed_session_name}"

@@ -1065,7 +1065,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Automation Runs */
+        /**
+         * List Automation Runs
+         * @description Return latest *limit* runs for the given automation (descending).
+         */
         get: operations["list_automation_runs_automations__automation_id__runs_get"];
         put?: never;
         post?: never;
@@ -7856,6 +7859,24 @@ export interface components {
             /** Tools */
             tools?: string[];
         };
+        /** ManagedLaunchProfileResponse */
+        ManagedLaunchProfileResponse: {
+            /**
+             * Required Commands
+             * @description Commands that must exist before managed launch
+             */
+            required_commands: string[];
+            /**
+             * Argv
+             * @description Structured argv Longhouse resolved for the managed launch
+             */
+            argv: string[];
+            /**
+             * Exported Env Keys
+             * @description Env var names Longhouse exported for the launch
+             */
+            exported_env_keys: string[];
+        };
         /**
          * ManagedLocalSessionLaunchRequest
          * @description Request to start a managed local AI agent session on a runner.
@@ -7902,6 +7923,13 @@ export interface components {
              * @default manual
              */
             loop_mode: components["schemas"]["SessionLoopMode"];
+            /**
+             * Claude Launch Env
+             * @description Optional allowlisted Claude launch env overrides to apply on the runner
+             */
+            claude_launch_env?: {
+                [key: string]: string;
+            } | null;
         };
         /**
          * ManagedLocalSessionLaunchResponse
@@ -7925,6 +7953,7 @@ export interface components {
             managed_session_name: string;
             /** Attach Command */
             attach_command: string;
+            managed_launch_profile?: components["schemas"]["ManagedLaunchProfileResponse"] | null;
         };
         /**
          * ManagedLocalThisDeviceLaunchRequest
@@ -9900,6 +9929,8 @@ export interface components {
              * @description Local reattach command for managed-local sessions
              */
             attach_command?: string | null;
+            /** @description Structured managed-launch metadata for debugging tmux-backed sessions */
+            managed_launch_profile?: components["schemas"]["ManagedLaunchProfileResponse"] | null;
             /**
              * @description Session loop mode: manual|assist|autopilot
              * @default manual

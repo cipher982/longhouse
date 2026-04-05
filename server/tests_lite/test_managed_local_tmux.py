@@ -1,9 +1,15 @@
 """Tests for deterministic managed-local tmux command builders."""
 
 import shlex
+import shutil
+import subprocess
 
+import pytest
+
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_HISTORY_LIMIT
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
+from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES
 from zerg.services.managed_local_tmux import build_managed_local_conditional_zshrc_source
 from zerg.services.managed_local_tmux import build_managed_local_path_export
 from zerg.services.managed_local_tmux import build_managed_local_shell_prelude
@@ -32,6 +38,7 @@ def test_normalize_tmux_session_name_sanitizes_and_prefixes():
 def test_normalize_tmux_session_name_rewrites_tmux_target_separator():
     assert normalize_tmux_session_name("colon:test") == "lh-colon-test"
 
+
 def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
     command = build_tmux_launch_command(
         session_name="lh-demo",
@@ -43,17 +50,89 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
     assert build_managed_local_path_export() in inner
     assert "if ! command -v tmux >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner
     assert "command -v tmux >/dev/null 2>&1" in inner
-    assert (
-        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; "
-        "set-option -s escape-time 0 \\; "
-        "set-option -g status off \\; "
-        "set-option -g mouse on \\; "
-        f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT} \\; "
-        "set-option -g remain-on-exit failed \\; "
-        "new-session -d -s lh-demo -c '/tmp/path with spaces' /tmp/longhouse-managed-lh-demo.zsh"
-    ) in inner
+    expected_commands = [
+        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} start-server \\; ",
+        "set-option -s escape-time 0 \\; ",
+        "set-option -g status off \\; ",
+        "set-option -g mouse on \\; ",
+        f"set-option -g default-terminal {MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL} \\; ",
+        "set-option -gu terminal-features \\; ",
+        "set-option -as terminal-features ',*:RGB' \\; ",
+        f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT} \\; ",
+        "set-option -g remain-on-exit failed \\; ",
+        "unbind-key -T root WheelUpPane \\; ",
+        (
+            'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" '
+            '"send-keys -M" "copy-mode -e -t= \\; send-keys -X -N '
+            f'{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up" \\; '
+        ),
+        "unbind-key -T copy-mode WheelUpPane \\; ",
+        "unbind-key -T copy-mode WheelDownPane \\; ",
+        (
+            "bind-key -T copy-mode WheelUpPane send-keys -X -N "
+            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up \\; "
+        ),
+        (
+            "bind-key -T copy-mode WheelDownPane send-keys -X -N "
+            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-down \\; "
+        ),
+        "unbind-key -T copy-mode-vi WheelUpPane \\; ",
+        "unbind-key -T copy-mode-vi WheelDownPane \\; ",
+        (
+            "bind-key -T copy-mode-vi WheelUpPane send-keys -X -N "
+            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up \\; "
+        ),
+        (
+            "bind-key -T copy-mode-vi WheelDownPane send-keys -X -N "
+            f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-down \\; "
+        ),
+        "new-session -d -s lh-demo -c '/tmp/path with spaces' /tmp/longhouse-managed-lh-demo.zsh",
+    ]
+    cursor = -1
+    for expected in expected_commands:
+        next_index = inner.find(expected)
+        assert next_index > cursor
+        cursor = next_index
     assert "cat > /tmp/longhouse-managed-lh-demo.zsh <<'__LONGHOUSE_MANAGED_LOCAL__'" in inner
     assert "exec claude --dangerously-skip-permissions" in inner
+
+
+def test_build_tmux_launch_command_resets_terminal_features_before_reapplying(monkeypatch, tmp_path):
+    if shutil.which("tmux") is None:
+        pytest.skip("tmux is not installed")
+
+    import zerg.services.managed_local_tmux as tmux_mod
+
+    socket = "lh-managed-rgb-reset-test"
+    monkeypatch.setattr(tmux_mod, "MANAGED_LOCAL_TMUX_SERVER_LABEL", socket)
+    workspace_one = tmp_path / "workspace-one"
+    workspace_two = tmp_path / "workspace-two"
+    workspace_one.mkdir()
+    workspace_two.mkdir()
+    base = ["tmux", "-L", socket]
+
+    try:
+        subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
+        for session_name, workspace in (
+            ("lh-demo-one", workspace_one),
+            ("lh-demo-two", workspace_two),
+        ):
+            command = tmux_mod.build_tmux_launch_command(
+                session_name=session_name,
+                cwd=str(workspace),
+                launch_command="sleep 30",
+            )
+            subprocess.run(command, shell=True, executable="/bin/zsh", check=True, capture_output=True, text=True)
+
+        features = subprocess.run(
+            base + ["show-options", "-gv", "terminal-features"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        assert features.splitlines().count("*:RGB") == 1
+    finally:
+        subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
 
 
 def test_build_tmux_has_session_command_targets_session():
@@ -64,8 +143,7 @@ def test_build_tmux_has_session_command_targets_session():
 def test_build_tmux_current_command_command_targets_session():
     inner = _wrapped_inner(build_tmux_current_command_command(session_name="lh-demo"))
     assert (
-        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} display-message -p -t lh-demo "
-        "'#{pane_current_command}'" in inner
+        f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} display-message -p -t lh-demo '#{{pane_current_command}}'" in inner
     )
 
 
