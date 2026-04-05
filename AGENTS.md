@@ -29,10 +29,9 @@ Skills-Dir: .agents/skills
 
 ## Task Tracking
 
-- **The external `docket` is the only task queue.** Track active, paused, and resumable work there.
 - **Do not create repo-local task files, backlogs, or TODO trackers** in this repo.
-- If a task needs local context, write a normal doc/spec/note with a real subject-driven name and link it from the docket item.
-- When work ships, close the docket item. Git history is the record for the repo side.
+- If work needs local context, write a normal doc/spec/note with a real subject-driven name.
+- Delete temporary planning artifacts when they stop being useful. Git history is the record.
 
 ## Quick Reference
 
@@ -339,7 +338,7 @@ Two separate things exist — don't conflate or rebuild:
 
 ## Learnings (High-Signal Only)
 
-<!-- Agents: keep this tight (<=10). Keep durable invariants only. If a learning is code-fixable confusion, open a docket item and remove it after the fix lands. -->
+<!-- Agents: keep this tight (<=10). Keep durable invariants only. If a learning is code-fixable confusion, track it outside the repo and remove it after the fix lands. -->
 - (2026-02-05) [db] Alembic migrations are deprecated for core app work; `server/alembic/versions` is intentionally empty. New models use `AgentsBase.metadata.create_all()` auto-creation. **New columns on existing models must also be added to `_migrate_agents_columns()` in `database.py`** — SQLite ignores new columns on existing tables and will 500 without the ALTER.
 - (2026-02-05) [security] Never store admin/device tokens in AI session notes; rotate immediately if exposed.
 - (2026-02-12) [arch] Agent infra models use `AgentsBase` (not `Base`), live in `models/agents.py` and `models/work.py`. Schema `agents.` gets translate-mapped to `None` for SQLite.
