@@ -150,6 +150,37 @@ async def test_dynamic_session_factory_routes_writes_by_context(tmp_path):
     assert commis_rows == ["commis-write"]
 
 
+@pytest.mark.asyncio
+async def test_execute_or_direct_prefers_fallback_db_for_testing_request_overrides(tmp_path, monkeypatch):
+    global_engine = make_engine(f"sqlite:///{tmp_path / 'global.db'}")
+    global_factory = make_sessionmaker(global_engine)
+    request_engine = make_engine(f"sqlite:///{tmp_path / 'request.db'}")
+    request_factory = make_sessionmaker(request_engine)
+
+    for engine in (global_engine, request_engine):
+        with engine.begin() as conn:
+            conn.exec_driver_sql("CREATE TABLE writes (id INTEGER PRIMARY KEY AUTOINCREMENT, label TEXT NOT NULL)")
+
+    serializer = WriteSerializer()
+    serializer.configure(global_factory)
+    monkeypatch.setenv("TESTING", "1")
+
+    with request_factory() as request_db:
+        await serializer.execute_or_direct(
+            lambda db: db.execute(sa_text("INSERT INTO writes(label) VALUES ('request-write')")),
+            request_db,
+            label="summary",
+        )
+
+    with global_factory() as db:
+        global_rows = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+    with request_factory() as db:
+        request_rows = [row[0] for row in db.execute(sa_text("SELECT label FROM writes ORDER BY id")).fetchall()]
+
+    assert global_rows == []
+    assert request_rows == ["request-write"]
+
+
 def test_full_app_ingest_succeeds_in_subprocess_without_testing_flag(tmp_path):
     """Regression: full-app ingest must work on the production-style writer path."""
 
