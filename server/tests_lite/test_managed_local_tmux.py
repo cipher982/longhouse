@@ -100,6 +100,9 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
 def test_build_tmux_launch_command_resets_terminal_features_before_reapplying(monkeypatch, tmp_path):
     if shutil.which("tmux") is None:
         pytest.skip("tmux is not installed")
+    shell_path = shutil.which("zsh")
+    if shell_path is None:
+        pytest.skip("zsh is not installed")
 
     import zerg.services.managed_local_tmux as tmux_mod
 
@@ -122,7 +125,7 @@ def test_build_tmux_launch_command_resets_terminal_features_before_reapplying(mo
                 cwd=str(workspace),
                 launch_command="sleep 30",
             )
-            subprocess.run(command, shell=True, executable="/bin/zsh", check=True, capture_output=True, text=True)
+            subprocess.run(command, shell=True, executable=shell_path, check=True, capture_output=True, text=True)
 
         features = subprocess.run(
             base + ["show-options", "-gv", "terminal-features"],

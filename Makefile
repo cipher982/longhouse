@@ -688,7 +688,7 @@ reprovision: ## Reprovision hosted instance — SUBDOMAIN=david010 (default). Wa
 	  lh_hosted_resolve_instance "$(or $(SUBDOMAIN),david010)" && \
 	  lh_hosted_reprovision "$$LH_INSTANCE_ID" && \
 	  echo "Reprovisioned $$LH_INSTANCE_SUBDOMAIN — waiting for health..." && \
-	  sleep 15 && \
+	  ./scripts/ci/wait-for-http.sh "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" "$$LH_INSTANCE_SUBDOMAIN health" 30 2 && \
 	  curl -sf "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" | \
 	    python3 -c "import sys,json; print(json.load(sys.stdin)[\"status\"])"'
 
