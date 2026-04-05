@@ -553,6 +553,8 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         session_name=managed_session_name,
         cwd=cwd,
         entry_command=str(entry_command or ""),
+        session_id=str(session.id),
+        provider=provider,
         tmux_tmpdir=managed_tmux_tmpdir,
     )
 

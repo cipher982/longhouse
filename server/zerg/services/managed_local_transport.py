@@ -107,6 +107,8 @@ def build_managed_local_launch_transport_plan(
     session_name: str,
     cwd: str,
     entry_command: str,
+    session_id: str | None = None,
+    provider: str | None = None,
     tmux_tmpdir: str | None = None,
 ) -> ManagedLocalLaunchTransportPlan:
     """Build a tmux launch plan for tmux-backed managed-local sessions."""
@@ -116,6 +118,8 @@ def build_managed_local_launch_transport_plan(
             session_name=session_name,
             cwd=cwd,
             launch_command=entry_command,
+            session_id=session_id,
+            provider=provider,
             tmux_tmpdir=tmux_tmpdir,
         ),
         verify_session_command=build_tmux_has_session_command(
@@ -137,6 +141,7 @@ def build_managed_local_launch_transport_plan(
         ),
         attach_command=build_tmux_attach_command(
             session_name=session_name,
+            session_id=session_id,
             tmux_tmpdir=tmux_tmpdir,
         ),
     )
@@ -171,6 +176,7 @@ def build_managed_local_attach_command(*, session: AgentSession) -> str | None:
         return None
     return build_tmux_attach_command(
         session_name=session_name,
+        session_id=str(getattr(session, "id", "") or "").strip() or None,
         tmux_tmpdir=getattr(session, "managed_tmux_tmpdir", None),
     )
 
