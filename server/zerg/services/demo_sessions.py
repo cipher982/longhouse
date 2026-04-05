@@ -948,7 +948,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="tool",
             tool_call_id="call_s8_01",
-            tool_output_text='{"results": [{"project": "longhouse", "summary": "Race condition in ingest upsert caused intermittent write failures."}, {"project": "sauron", "summary": "Naive datetime handling caused empty daily digest windows."}, {"project": "longhouse", "summary": "Embedding backfill exhausted memory on large datasets."}]}',
+            tool_output_text='{"matches": [{"session_id": "longhouse-incident-1", "chunk_index": 0, "score": 0.93, "total_events": 18, "context": [{"role": "assistant", "content_text": "Race condition in ingest upsert caused intermittent write failures."}]}, {"session_id": "sauron-digest-2", "chunk_index": 0, "score": 0.89, "total_events": 12, "context": [{"role": "assistant", "content_text": "Naive datetime handling caused empty daily digest windows."}]}, {"session_id": "longhouse-backfill-3", "chunk_index": 1, "score": 0.87, "total_events": 24, "context": [{"role": "assistant", "content_text": "Embedding backfill exhausted memory on large datasets."}]}], "total": 3}',
             timestamp=t8 + timedelta(minutes=1, seconds=3),
         ),
         EventIngest(
