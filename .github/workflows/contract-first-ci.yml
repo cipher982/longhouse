@@ -96,6 +96,14 @@ jobs:
     steps:
     - uses: actions/checkout@v6
 
+    - name: Restore Bun download cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          longhouse-bun-${{ runner.os }}-
+
     - name: Setup Node
       uses: actions/setup-node@v6
       with:
@@ -130,9 +138,26 @@ jobs:
       LIFE_HUB_URL: https://data.drose.io
       # Isolate E2E DBs per run to avoid cross-run contamination on shared runners
       E2E_DB_DIR: /tmp/zerg_e2e_dbs/${{ github.run_id }}-${{ github.run_attempt }}
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
     steps:
     - uses: actions/checkout@v6
+
+    - name: Restore Bun download cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          longhouse-bun-${{ runner.os }}-
+
+    - name: Restore Playwright browser cache
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+        key: longhouse-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+        restore-keys: |
+          longhouse-playwright-${{ runner.os }}-
 
     - name: Set up Python
       uses: actions/setup-python@v6
