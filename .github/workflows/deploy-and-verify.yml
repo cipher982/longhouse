@@ -5,7 +5,12 @@ on:
     workflows: ["Publish Runtime Image"]
     types: [completed]
     branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      runtime_image_tag:
+        description: "Override runtime image tag for manual demo deploys (defaults to target commit SHA)"
+        required: false
+        type: string
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('deploy-and-verify-manual-{0}', github.run_id) || format('deploy-and-verify-{0}', github.event.workflow_run.head_branch || github.ref_name) }}
@@ -23,13 +28,25 @@ jobs:
     outputs:
       head_sha: ${{ steps.meta.outputs.head_sha }}
       head_branch: ${{ steps.meta.outputs.head_branch }}
+      runtime_image_name: ${{ steps.meta.outputs.runtime_image_name }}
+      runtime_image_tag: ${{ steps.meta.outputs.runtime_image_tag }}
       stale: ${{ steps.freshness.outputs.stale }}
     steps:
       - name: Resolve target commit
         id: meta
         run: |
-          echo "head_sha=${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}" >> "$GITHUB_OUTPUT"
-          echo "head_branch=${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}" >> "$GITHUB_OUTPUT"
+          HEAD_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
+          HEAD_BRANCH="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}"
+          IMAGE_TAG="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.runtime_image_tag || '' }}"
+          if [[ -z "$IMAGE_TAG" ]]; then
+            IMAGE_TAG="$HEAD_SHA"
+          fi
+          {
+            echo "head_sha=$HEAD_SHA"
+            echo "head_branch=$HEAD_BRANCH"
+            echo "runtime_image_name=ghcr.io/${{ github.repository_owner }}/longhouse-runtime"
+            echo "runtime_image_tag=$IMAGE_TAG"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Wait for full CI gate
         if: ${{ github.event_name != 'workflow_dispatch' }}
@@ -141,7 +158,12 @@ jobs:
           echo "Previous canary image revision: ${SHORT_SHA:-unknown} (full: ${FULL_SHA:-unknown})"
 
       - name: Deploy public demo runtime
-        run: ./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
+        run: |
+          ./scripts/ops/coolify-deploy.sh \
+            longhouse-demo \
+            --docker-image "${{ needs.gate.outputs.runtime_image_name }}" \
+            --docker-tag "${{ needs.gate.outputs.runtime_image_tag }}" \
+            --timeout 900
 
   reprovision-canary:
     name: "Reprovision hosted canary"
@@ -241,6 +263,7 @@ jobs:
             echo "- **Public demo:** $PUBLIC_DEMO_URL"
             echo "- **Control plane:** $CONTROL_PLANE_URL"
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
+            echo "- **Demo image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
             echo "- **Previous canary SHA:** ${{ needs.deploy-demo.outputs.prev_sha }}"
             echo "- **Demo deploy job:** \`${{ needs.deploy-demo.result }}\`"
             echo "- **Canary reprovision job:** \`${{ needs.reprovision-canary.result }}\`"

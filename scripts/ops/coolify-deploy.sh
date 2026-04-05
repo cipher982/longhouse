@@ -6,7 +6,7 @@ usage() {
 coolify-deploy.sh - trigger a Coolify application deploy and wait for completion
 
 Usage:
-  ./scripts/ops/coolify-deploy.sh <app-name-or-uuid> [--timeout 900]
+  ./scripts/ops/coolify-deploy.sh <app-name-or-uuid> [--timeout 900] [--docker-image IMAGE --docker-tag TAG]
 
 Environment:
   COOLIFY_API_HOST   SSH host that has access to the Coolify API token
@@ -25,46 +25,63 @@ need_cmd() {
   }
 }
 
-if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  usage
-  exit 0
-fi
-
-APP_ID="${1:-}"
-if [[ $# -gt 0 ]]; then
-  shift
-fi
-
+APP_ID=""
 TIMEOUT="${COOLIFY_TIMEOUT:-900}"
 COOLIFY_API_HOST="${COOLIFY_API_HOST:-clifford}"
 COOLIFY_API_BASE="${COOLIFY_API_BASE:-http://localhost:8000/api/v1}"
 POLL_INTERVAL=5
+DOCKER_IMAGE=""
+DOCKER_TAG=""
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --timeout)
-      TIMEOUT="${2:-}"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      echo "Unknown argument: $1" >&2
-      usage >&2
+parse_args() {
+  if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+  fi
+
+  APP_ID="${1:-}"
+  if [[ $# -gt 0 ]]; then
+    shift
+  fi
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --timeout)
+        TIMEOUT="${2:-}"
+        shift 2
+        ;;
+      --docker-image)
+        DOCKER_IMAGE="${2:-}"
+        shift 2
+        ;;
+      --docker-tag)
+        DOCKER_TAG="${2:-}"
+        shift 2
+        ;;
+      -h|--help)
+        usage
+        exit 0
+        ;;
+      *)
+        echo "Unknown argument: $1" >&2
+        usage >&2
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ -z "$APP_ID" ]]; then
+    usage >&2
+    exit 1
+  fi
+
+  if [[ -n "$DOCKER_IMAGE" || -n "$DOCKER_TAG" ]]; then
+    if [[ -z "$DOCKER_IMAGE" || -z "$DOCKER_TAG" ]]; then
+      echo "--docker-image and --docker-tag must be provided together" >&2
       exit 1
-      ;;
-  esac
-done
-
-if [[ -z "$APP_ID" ]]; then
-  usage >&2
-  exit 1
-fi
-
-need_cmd ssh
-need_cmd python3
+    fi
+  fi
+}
 
 load_token() {
   ssh "$COOLIFY_API_HOST" "sudo cat /var/lib/docker/data/coolify-api/token.env | cut -d= -f2"
@@ -81,6 +98,13 @@ api_post_json() {
   local payload="$2"
   ssh "$COOLIFY_API_HOST" \
     "curl -fsS -X POST -H 'Authorization: Bearer ${COOLIFY_TOKEN}' -H 'Content-Type: application/json' -d '${payload}' '${COOLIFY_API_BASE}${path}'"
+}
+
+api_patch_json() {
+  local path="$1"
+  local payload="$2"
+  ssh "$COOLIFY_API_HOST" \
+    "curl -fsS -X PATCH -H 'Authorization: Bearer ${COOLIFY_TOKEN}' -H 'Content-Type: application/json' -d '${payload}' '${COOLIFY_API_BASE}${path}'"
 }
 
 resolve_app_uuid() {
@@ -105,6 +129,21 @@ for app in json.load(sys.stdin):
 
 raise SystemExit(f"Could not find Coolify application named {target!r}")
 ' "$candidate" <<<"$applications_json"
+}
+
+build_app_update_payload() {
+  local image_name="$1"
+  local image_tag="$2"
+  python3 - "$image_name" "$image_tag" <<'PY'
+import json
+import sys
+
+print(json.dumps({
+    "build_pack": "dockerimage",
+    "docker_registry_image_name": sys.argv[1],
+    "docker_registry_image_tag": sys.argv[2],
+}))
+PY
 }
 
 extract_deploy_uuid() {
@@ -162,46 +201,70 @@ for entry in logs[-10:]:
 '
 }
 
-COOLIFY_TOKEN="$(load_token)"
-APP_UUID="$(resolve_app_uuid "$APP_ID")"
-
-echo "Triggering Coolify deploy for ${APP_ID} (${APP_UUID})..."
-DEPLOY_RESPONSE="$(api_post_json "/deploy" "{\"uuid\":\"${APP_UUID}\"}")"
-DEPLOY_UUID="$(extract_deploy_uuid <<<"$DEPLOY_RESPONSE")"
-
-echo "Deployment UUID: ${DEPLOY_UUID}"
-echo "Waiting for Coolify deployment completion (timeout: ${TIMEOUT}s)..."
-
-start_epoch="$(date +%s)"
-while true; do
-  elapsed="$(( $(date +%s) - start_epoch ))"
-  if (( elapsed >= TIMEOUT )); then
-    echo "Timed out waiting for Coolify deployment ${DEPLOY_UUID}" >&2
-    exit 2
+update_app_source_if_requested() {
+  if [[ -z "$DOCKER_IMAGE" ]]; then
+    return 0
   fi
 
-  STATUS_RESPONSE="$(api_get "/deployments/${DEPLOY_UUID}")"
-  STATUS="$(deployment_status <<<"$STATUS_RESPONSE")"
+  local payload
+  payload="$(build_app_update_payload "$DOCKER_IMAGE" "$DOCKER_TAG")"
+  echo "Configuring Coolify app source: ${DOCKER_IMAGE}:${DOCKER_TAG}"
+  api_patch_json "/applications/${APP_UUID}" "$payload" >/dev/null
+}
 
-  case "$STATUS" in
-    finished)
-      echo ""
-      echo "Coolify deploy finished in ${elapsed}s"
-      exit 0
-      ;;
-    failed|cancelled*)
-      echo ""
-      echo "Coolify deploy ${STATUS} after ${elapsed}s" >&2
-      print_recent_logs <<<"$STATUS_RESPONSE" >&2 || true
-      exit 1
-      ;;
-    queued|in_progress)
-      printf "\r  status=%-12s elapsed=%ss" "$STATUS" "$elapsed"
-      sleep "$POLL_INTERVAL"
-      ;;
-    *)
-      printf "\r  status=%-12s elapsed=%ss" "$STATUS" "$elapsed"
-      sleep "$POLL_INTERVAL"
-      ;;
-  esac
-done
+main() {
+  parse_args "$@"
+
+  need_cmd ssh
+  need_cmd python3
+
+  COOLIFY_TOKEN="$(load_token)"
+  APP_UUID="$(resolve_app_uuid "$APP_ID")"
+
+  update_app_source_if_requested
+
+  echo "Triggering Coolify deploy for ${APP_ID} (${APP_UUID})..."
+  DEPLOY_RESPONSE="$(api_post_json "/deploy" "{\"uuid\":\"${APP_UUID}\"}")"
+  DEPLOY_UUID="$(extract_deploy_uuid <<<"$DEPLOY_RESPONSE")"
+
+  echo "Deployment UUID: ${DEPLOY_UUID}"
+  echo "Waiting for Coolify deployment completion (timeout: ${TIMEOUT}s)..."
+
+  start_epoch="$(date +%s)"
+  while true; do
+    elapsed="$(( $(date +%s) - start_epoch ))"
+    if (( elapsed >= TIMEOUT )); then
+      echo "Timed out waiting for Coolify deployment ${DEPLOY_UUID}" >&2
+      exit 2
+    fi
+
+    STATUS_RESPONSE="$(api_get "/deployments/${DEPLOY_UUID}")"
+    STATUS="$(deployment_status <<<"$STATUS_RESPONSE")"
+
+    case "$STATUS" in
+      finished)
+        echo ""
+        echo "Coolify deploy finished in ${elapsed}s"
+        exit 0
+        ;;
+      failed|cancelled*)
+        echo ""
+        echo "Coolify deploy ${STATUS} after ${elapsed}s" >&2
+        print_recent_logs <<<"$STATUS_RESPONSE" >&2 || true
+        exit 1
+        ;;
+      queued|in_progress)
+        printf "\r  status=%-12s elapsed=%ss" "$STATUS" "$elapsed"
+        sleep "$POLL_INTERVAL"
+        ;;
+      *)
+        printf "\r  status=%-12s elapsed=%ss" "$STATUS" "$elapsed"
+        sleep "$POLL_INTERVAL"
+        ;;
+    esac
+  done
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

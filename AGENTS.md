@@ -177,7 +177,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 8. **Stripe key rotation** — Use `~/git/me/mytech/scripts/update-stripe-key.sh sk_live_...`. It validates against Stripe before touching anything, then updates Coolify and redeploys.
 9. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.
 10. **Pre-commit hooks** — ruff, ruff-format, vulture (dead code), TS type-check, frontend lint. Vulture whitelist: `server/vulture-whitelist.py`. New `TYPE_CHECKING` imports need whitelisting or vulture will block commit.
-11. **Runtime deploys and control-plane deploys are separate lanes** — runtime-path pushes build the GHCR runtime image for hosted tenants, then deploy the public demo runtime and reprovision the hosted canary. `control-plane/**` pushes deploy only the control plane. Do not assume the public demo runtime or control plane pull the GHCR runtime image directly.
+11. **Runtime deploys and control-plane deploys are separate lanes** — runtime-path pushes build the GHCR runtime image, then deploy the public demo runtime from that image and reprovision the hosted canary. `control-plane/**` pushes deploy only the control plane. The control plane is still its own Coolify build.
 12. **Do not commit valid secret-shaped dummy values** — GitGuardian will flag Fernet-format placeholders even when they are fake. For dev/test/bootstrap paths, generate ephemeral secrets at runtime instead of checking in realistic-looking literals.
 13. **Stage only your changes** — Dirty trees are normal (other agents' WIP). When committing, `git add` specific files — never `git add -A`. If new code depends on unstaged changes from other files, include those files or the deploy will break.
 14. **Do NOT add `extra_body={"metadata": ...}` to LLM calls** — Instance calls go directly to providers (Groq, OpenAI, z.ai), NOT through the LiteLLM proxy. Groq rejects `metadata` with 400. The proxy at `llm.drose.io` is personal-dev only, not used by user instances. New models must be added to `~/git/litellm-proxy/config.yaml` AND `hooks/model_hints.py` (for personal-dev proxy use).
@@ -225,7 +225,7 @@ Treat deploys as **lanes**, not one linear checklist:
 
 For runtime pushes, `deploy-and-verify.yml` now waits for the matching `contract-first-ci.yml` run for the same SHA to finish green before any remote deploy action. Automatic deploy/live-QA runs also collapse superseded `main` commits; manual dispatch stays isolated so operators can still force a recovery run.
 
-Runtime lane builds `ghcr.io/cipher982/longhouse-runtime:latest` for hosted tenants only. The public demo runtime and control plane are separate Coolify builds from this repo; they do **not** pull the GHCR runtime image directly.
+Runtime lane builds `ghcr.io/cipher982/longhouse-runtime` with `:latest` and an immutable full-commit tag. The public demo runtime and hosted tenants now consume that shared runtime image; the control plane remains a separate Coolify build from this repo.
 
 If you manually ship, launch independent waits once and move on. Example: start a GHCR watch or a Coolify deploy wait, then do the next independent step. Do **not** sit in `pgrep`/health-check polling loops when a notification or blocking wait already exists.
 
