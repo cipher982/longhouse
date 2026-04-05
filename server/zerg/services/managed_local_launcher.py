@@ -258,10 +258,14 @@ def _build_codex_launch_profile(
 
 
 def _serialize_launch_profile(profile: ManagedLocalProviderLaunchProfile) -> dict[str, object]:
+    redacted_argv = list(profile.argv)
+    for index, arg in enumerate(redacted_argv[:-1]):
+        if arg in {"--session-id", "--resume"}:
+            redacted_argv[index + 1] = "<provider-session-id>"
     return {
         "required_commands": list(profile.required_commands),
         "exported_env_keys": list(profile.exported_env_keys),
-        "argv": list(profile.argv),
+        "argv": redacted_argv,
     }
 
 
