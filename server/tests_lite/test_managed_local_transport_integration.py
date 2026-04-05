@@ -191,6 +191,7 @@ def _make_fake_claude_home(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
         const args = process.argv.slice(2);
         let sessionId = null;
         let displayName = null;
+        let dangerousSkipPermissions = false;
 
         for (let i = 0; i < args.length; i += 1) {
           if (args[i] === "--session-id" && i + 1 < args.length) {
@@ -199,15 +200,24 @@ def _make_fake_claude_home(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
           if (args[i] === "-n" && i + 1 < args.length) {
             displayName = args[i + 1];
           }
+          if (args[i] === "--dangerously-skip-permissions") {
+            dangerousSkipPermissions = true;
+          }
         }
 
         const logPath = process.env.FAKE_CLAUDE_LOG;
         let turnCounter = 0;
         if (logPath) {
-          fs.appendFileSync(logPath, `START session=${sessionId} name=${displayName}\\n`, "utf8");
+          fs.appendFileSync(
+            logPath,
+            `START session=${sessionId} name=${displayName} dangerousSkipPermissions=${dangerousSkipPermissions}\\n`,
+            "utf8"
+          );
         }
 
-        console.log(`FAKE_CLAUDE_START session=${sessionId} name=${displayName}`);
+        console.log(
+          `FAKE_CLAUDE_START session=${sessionId} name=${displayName} dangerousSkipPermissions=${dangerousSkipPermissions}`
+        );
 
         process.stdin.setEncoding("utf8");
         process.stdin.on("data", (chunk) => {
@@ -385,11 +395,21 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport_with_shell_i
             assert response.status_code == 200, response.text
             payload = response.json()
             managed_session_name = payload["managed_session_name"]
+            assert payload["managed_launch_profile"]["argv"][:3] == [
+                "claude",
+                "--dangerously-skip-permissions",
+                "--session-id",
+            ]
 
             session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
             assert session.execution_home == "managed_local"
             assert session.source_runner_name == "cinder"
             assert session.managed_tmux_tmpdir == launcher_env["TMUX_TMPDIR"]
+            assert session.managed_launch_profile["argv"][:3] == [
+                "claude",
+                "--dangerously-skip-permissions",
+                "--session-id",
+            ]
             baseline_runtime_state = (
                 db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one_or_none()
             )
@@ -406,6 +426,7 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport_with_shell_i
             normalized_startup = startup_output.replace("\n", "")
             assert f"session={payload['provider_session_id']}" in normalized_startup
             assert "name=Managed Local Proof" in normalized_startup
+            assert "dangerousSkipPermissions=true" in normalized_startup
 
             wrong_tmux_tmpdir = tmp_path / "wrong-tmux"
             wrong_tmux_tmpdir.mkdir()
@@ -439,6 +460,7 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport_with_shell_i
 
             log_text = log_path.read_text(encoding="utf-8")
             assert "START session=" in log_text
+            assert "dangerousSkipPermissions=true" in log_text
             assert "USER:Enter" in log_text
             assert "TURN_STARTED:1:Enter" in log_text
         finally:
