@@ -192,7 +192,7 @@ export type SessionExecutionHome =
   | "managed_local"
   | "managed_hosted"
   | "cloud_takeover";
-export type ManagedSessionTransport = "tmux" | "codex_app_server";
+export type ManagedSessionTransport = "tmux" | "claude_channel_bridge" | "codex_app_server";
 
 export interface AgentEvent {
   id: number;

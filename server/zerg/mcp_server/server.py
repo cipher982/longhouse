@@ -342,41 +342,6 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
             return json.dumps({"error": str(exc)})
 
     # ------------------------------------------------------------------
-    # Tool: query_insights
-    # ------------------------------------------------------------------
-    @server.tool()
-    async def query_insights(
-        project: str | None = None,
-        insight_type: str | None = None,
-        since_hours: int = 168,
-        limit: int = 20,
-    ) -> str:
-        """Query past insights and learnings. Check before starting work for known gotchas.
-
-        Args:
-            project: Filter by project name (optional).
-            insight_type: Filter by type: pattern, failure, improvement, learning (optional).
-            since_hours: Hours to look back (default 168 = 7 days).
-            limit: Maximum results to return (default 20).
-        """
-        params: dict = {
-            "since_hours": since_hours,
-            "limit": limit,
-        }
-        if project is not None:
-            params["project"] = project
-        if insight_type is not None:
-            params["insight_type"] = insight_type
-
-        try:
-            resp = await client.get("/api/agents/insights", params=params)
-            if resp.status_code != 200:
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
-            return resp.text
-        except Exception as exc:
-            return json.dumps({"error": str(exc)})
-
-    # ------------------------------------------------------------------
     # Tool: recall
     # ------------------------------------------------------------------
     @server.tool()
@@ -517,15 +482,18 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 if current_resp.status_code == 200:
                     current_data = json.loads(current_resp.text)
                     git_repo = str(current_data.get("git_repo", "") or "").strip()
+                    cwd = str(current_data.get("cwd", "") or "").strip()
                     if git_repo:
                         resolved_repo = git_repo
+                    elif cwd:
+                        resolved_repo = cwd
             except Exception:
                 logger.debug("Failed to resolve current session repo for peers()", exc_info=True)
 
         if not resolved_repo:
             return json.dumps(
                 {
-                    "error": "peers requires repo or a current managed session with git_repo",
+                    "error": "peers requires repo or a current managed session with git_repo or cwd",
                 }
             )
 

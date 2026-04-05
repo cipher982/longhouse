@@ -20,32 +20,12 @@ def test_create_server_exposes_only_continuity_and_oikos_tools():
         "get_session_events",
         "notify_oikos",
         "log_insight",
-        "query_insights",
         "recall",
         "check_wall",
         "session_tail",
         "peers",
         "message_session",
     }
-
-
-@pytest.mark.asyncio
-async def test_query_insights_uses_machine_agents_route():
-    server = create_server("http://example.com", "test-token")
-    tool = server._tool_manager._tools["query_insights"]
-    response = type("Resp", (), {"status_code": 200, "text": '{"insights":[],"total":0}'})()
-
-    with patch(
-        "zerg.mcp_server.server.LonghouseAPIClient.get",
-        new=AsyncMock(return_value=response),
-    ) as mock_get:
-        result = await tool.run({"project": "zerg", "limit": 5})
-
-    assert result == '{"insights":[],"total":0}'
-    mock_get.assert_awaited_once_with(
-        "/api/agents/insights",
-        params={"since_hours": 168, "limit": 5, "project": "zerg"},
-    )
 
 
 @pytest.mark.asyncio
@@ -138,5 +118,41 @@ async def test_peers_infers_repo_from_current_session(monkeypatch):
     assert mock_get.await_args_list[1].args == ("/api/agents/sessions/wall",)
     assert mock_get.await_args_list[1].kwargs["params"] == {
         "repo": "git@github.com:cipher982/longhouse.git",
+        "days": 7,
+    }
+
+
+@pytest.mark.asyncio
+async def test_peers_falls_back_to_cwd_when_no_git_repo(monkeypatch):
+    server = create_server("http://example.com", "test-token")
+    tool = server._tool_manager._tools["peers"]
+    current_resp = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": '{"id":"11111111-1111-1111-1111-111111111111","git_repo":null,"cwd":"/Users/dev/git/zeta/athena-horizon"}',
+        },
+    )()
+    wall_resp = type(
+        "Resp",
+        (),
+        {
+            "status_code": 200,
+            "text": json.dumps({"sessions": [], "total": 0}),
+        },
+    )()
+
+    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    with patch(
+        "zerg.mcp_server.server.LonghouseAPIClient.get",
+        new=AsyncMock(side_effect=[current_resp, wall_resp]),
+    ) as mock_get:
+        result = await tool.run({})
+
+    payload = json.loads(result)
+    assert "error" not in payload
+    assert mock_get.await_args_list[1].kwargs["params"] == {
+        "repo": "/Users/dev/git/zeta/athena-horizon",
         "days": 7,
     }

@@ -1,5 +1,5 @@
 import { request } from "./base";
-import type { ManagedSessionTransport, SessionExecutionHome } from "./agents";
+import type { ManagedLaunchProfile, ManagedSessionTransport, SessionExecutionHome } from "./agents";
 
 export interface SessionLockInfo {
   locked: boolean;
@@ -27,6 +27,7 @@ export interface ManagedLocalSessionLaunchRequest {
   git_branch?: string | null;
   display_name?: string | null;
   loop_mode?: "manual" | "assist" | "autopilot";
+  claude_launch_env?: Record<string, string> | null;
 }
 
 export interface ManagedLocalSessionLaunchResponse {
@@ -40,6 +41,7 @@ export interface ManagedLocalSessionLaunchResponse {
   source_runner_name: string;
   managed_session_name: string;
   attach_command: string;
+  managed_launch_profile?: ManagedLaunchProfile | null;
 }
 
 export async function launchManagedLocalSession(
