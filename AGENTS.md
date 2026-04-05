@@ -30,7 +30,7 @@ Skills-Dir: .agents/skills
 ## Task Tracking
 
 - **The external `docket` is the primary queue.** Park paused or cross-session repo work there instead of leaving it in `docs/tasks/open/`.
-- **`TODO.md`** is a thin repo-local pointer, not a second backlog.
+- **`TODO.md` is deprecated.** Keep it only as a migration pointer while older habits/tools still look for it.
 - **Multi-commit work** that needs repo-local detail gets one file in `docs/tasks/open/`.
 - **When work ships:** delete the task file and any spec. Git history is the record.
 - **No `done/` folder, no backlog folder.** If it's not active, it doesn't belong here.

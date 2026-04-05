@@ -12,7 +12,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 - Unless explicitly marked otherwise, statements in this document describe the **target architecture**.
 - Sections labeled **Current State (as of YYYY-MM-DD)** are point-in-time implementation snapshots.
-- For operational truth and execution status, use `TODO.md` and `AGENTS.md`.
+- For operational truth and execution status, use the external docket and `AGENTS.md`; keep repo-local detail in `docs/tasks/open/` only when needed.
 
 ## Read Next
 
@@ -214,7 +214,7 @@ This is the product. Everything else supports it.
 **Current State (as of 2026-03-12):**
 - Commis uses CLI subprocess execution (workspace mode) and ingests resulting sessions into timeline storage.
 - Slim Oikos (Phase 3) complete: loop simplified, tools flattened, services decoupled, overlapping memory removed, optional Memory Files retained, skills progressive disclosure, MCP server, quality gates, multi-provider research.
-- Oikos in-process loop (`fiche_runner` + `oikos_react_engine`) still runs but is significantly slimmed; deferred items (dispatch contract, compaction API) tracked in TODO.
+- Oikos in-process loop (`fiche_runner` + `oikos_react_engine`) still runs but is significantly slimmed; deferred items (dispatch contract, compaction API) are parked in the docket until they become active repo work again.
 
 **Target end-state:**
 
