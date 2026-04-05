@@ -50,11 +50,6 @@ router = APIRouter(
     tags=["automation-connectors"],
 )
 
-legacy_router = APIRouter(
-    prefix="/fiches/{fiche_id}/connectors",
-    tags=["automation-connectors"],
-)
-
 
 def _get_automation_or_404(db: Session, automation_id: int, current_user: Any) -> AutomationProfile:
     """Get an automation and verify ownership."""
@@ -271,57 +266,3 @@ def delete_automation_connector(
 
     logger.info("Deleted %s credentials for automation %d", connector_type, automation_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@legacy_router.get("/", response_model=list[ConnectorStatusResponse])
-def list_legacy_fiche_connectors(
-    fiche_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> list[ConnectorStatusResponse]:
-    return list_automation_connectors(automation_id=fiche_id, db=db, current_user=current_user)
-
-
-@legacy_router.post("/", response_model=ConnectorSuccessResponse, status_code=status.HTTP_201_CREATED)
-def configure_legacy_fiche_connector(
-    request: ConnectorConfigureRequest,
-    fiche_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> ConnectorSuccessResponse:
-    return configure_automation_connector(request=request, automation_id=fiche_id, db=db, current_user=current_user)
-
-
-@legacy_router.post("/test", response_model=ConnectorTestResponse)
-def test_legacy_fiche_credentials_before_save(
-    request: ConnectorTestRequest,
-    fiche_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> ConnectorTestResponse:
-    return test_automation_credentials_before_save(request=request, automation_id=fiche_id, db=db, current_user=current_user)
-
-
-@legacy_router.post("/{connector_type}/test", response_model=ConnectorTestResponse)
-def test_legacy_fiche_connector(
-    connector_type: str = Path(...),
-    fiche_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> ConnectorTestResponse:
-    return test_configured_automation_connector(
-        connector_type=connector_type,
-        automation_id=fiche_id,
-        db=db,
-        current_user=current_user,
-    )
-
-
-@legacy_router.delete("/{connector_type}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_legacy_fiche_connector(
-    connector_type: str = Path(...),
-    fiche_id: int = Path(..., gt=0),
-    db: Session = Depends(get_db),
-    current_user: Any = Depends(get_current_user),
-) -> Response:
-    return delete_automation_connector(connector_type=connector_type, automation_id=fiche_id, db=db, current_user=current_user)

@@ -33,25 +33,22 @@ automation_router = APIRouter(
 )
 
 
-@router.get("/fiches/{fiche_id}/runs", response_model=List[RunOut], include_in_schema=False)
-def list_runs(
-    fiche_id: int,
-    limit: int = 20,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
+def _list_runs_for_automation(
+    automation_id: int,
+    *,
+    limit: int,
+    db: Session,
+    current_user,
 ):
-    """Return latest *limit* runs for the given fiche (descending)."""
-
-    fiche = get_fiche(db, fiche_id)
+    fiche = get_fiche(db, automation_id)
     if fiche is None:
-        raise HTTPException(status_code=404, detail="Fiche not found")
+        raise HTTPException(status_code=404, detail="Automation not found")
 
-    # Authorization: only owner or admin may view a fiche's runs
     is_admin = getattr(current_user, "role", "USER") == "ADMIN"
     if not is_admin and fiche.owner_id != current_user.id:
-        raise HTTPException(status_code=403, detail="Forbidden: not fiche owner")
+        raise HTTPException(status_code=403, detail="Forbidden: not automation owner")
 
-    return list_fiche_runs(db, fiche_id, limit=limit)
+    return list_fiche_runs(db, automation_id, limit=limit)
 
 
 @automation_router.get("/automations/{automation_id}/runs", response_model=List[RunOut])
@@ -61,7 +58,8 @@ def list_automation_runs(
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
-    return list_runs(automation_id, limit=limit, db=db, current_user=current_user)
+    """Return latest *limit* runs for the given automation (descending)."""
+    return _list_runs_for_automation(automation_id, limit=limit, db=db, current_user=current_user)
 
 
 @router.get("/runs/{run_id}", response_model=RunOut)

@@ -51,7 +51,6 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from zerg.constants import AUTOMATIONS_PREFIX
-from zerg.constants import FICHES_PREFIX
 from zerg.constants import MODELS_PREFIX
 from zerg.constants import THREADS_PREFIX
 from zerg.database import initialize_database
@@ -69,7 +68,6 @@ from zerg.routers.agents_search import router as agents_search_router
 from zerg.routers.agents_sessions import router as agents_sessions_router
 from zerg.routers.auth import router as auth_router
 from zerg.routers.auth_internal import router as auth_internal_router
-from zerg.routers.automation_connectors import legacy_router as fiche_connectors_router
 from zerg.routers.automation_connectors import router as automation_connectors_router
 from zerg.routers.capabilities import router as capabilities_router
 from zerg.routers.channels_webhooks import router as channels_webhooks_router
@@ -88,7 +86,6 @@ from zerg.routers.insights import router as insights_router
 from zerg.routers.job_settings import router as job_settings_router
 from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
-from zerg.routers.mcp_servers import legacy_router as mcp_servers_router
 from zerg.routers.mcp_servers import router as automation_mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
 from zerg.routers.models import router as models_router
@@ -1038,8 +1035,6 @@ app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 # Routers that previously used API_PREFIX ("/api") now use no prefix or their
 # relative sub-prefix since the /api mount point handles the top-level prefix.
 api_app.include_router(fiches_router, prefix=AUTOMATIONS_PREFIX)
-api_app.include_router(fiches_router, prefix=FICHES_PREFIX, include_in_schema=False)
-api_app.include_router(mcp_servers_router, include_in_schema=False)  # Hidden fiche-compat MCP server routes
 api_app.include_router(automation_mcp_servers_router)  # Canonical automation MCP server routes
 api_app.include_router(threads_router, prefix=THREADS_PREFIX)
 api_app.include_router(models_router, prefix=MODELS_PREFIX)
@@ -1070,7 +1065,6 @@ api_app.include_router(capabilities_router)  # LLM provider config + enhanced ca
 api_app.include_router(ops_router)
 api_app.include_router(ops_beacon_router)  # Public beacon (no auth)
 api_app.include_router(fiche_config_router)
-api_app.include_router(fiche_connectors_router, include_in_schema=False)  # Hidden fiche-compat connector routes
 api_app.include_router(automation_connectors_router)  # Canonical automation connector credentials
 api_app.include_router(account_connectors_router)  # Account-level connector credentials
 api_app.include_router(funnel_router)  # Funnel tracking

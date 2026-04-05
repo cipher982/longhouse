@@ -80,11 +80,6 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         assert list_payload[0]["id"] == automation_id
         assert list_payload[0]["display_type"] == "automation"
 
-        compatibility_response = client.get("/fiches")
-        assert compatibility_response.status_code == 200, compatibility_response.text
-        compatibility_payload = compatibility_response.json()
-        assert [row["id"] for row in compatibility_payload] == [automation_id]
-
         detail_response = client.get(f"/automations/{automation_id}")
         assert detail_response.status_code == 200, detail_response.text
         assert detail_response.json()["id"] == automation_id
@@ -172,12 +167,11 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         assert "/oikos/conversations" not in paths
         assert "/oikos/conversations/{conversation_id}" not in paths
 
+        compatibility_response = client.get("/fiches")
+        assert compatibility_response.status_code == 404, compatibility_response.text
+
         delete_response = client.delete(f"/automations/{automation_id}")
         assert delete_response.status_code == 204, delete_response.text
-
-        final_list_response = client.get("/fiches")
-        assert final_list_response.status_code == 200, final_list_response.text
-        assert final_list_response.json() == []
     finally:
         api_app.dependency_overrides.clear()
 
