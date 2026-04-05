@@ -113,6 +113,42 @@ def _print_continuation_stream(response: httpx.Response) -> int:
     return exit_code
 
 
+def _should_use_live_send(session_payload: dict[str, object]) -> bool:
+    capabilities = session_payload.get("capabilities")
+    if isinstance(capabilities, dict) and "live_control_available" in capabilities:
+        return bool(capabilities.get("live_control_available"))
+
+    execution_home = str(session_payload.get("execution_home") or "").strip().lower()
+    return execution_home == "managed_local" and session_payload.get("source_runner_id") is not None
+
+
+def _resolve_continue_route(
+    *,
+    client: httpx.Client,
+    base_url: str,
+    session_id: str,
+    headers: dict[str, str],
+) -> str:
+    try:
+        response = client.get(
+            f"{base_url.rstrip('/')}/api/agents/sessions/{session_id}",
+            headers=headers,
+        )
+    except httpx.HTTPError:
+        return "continue"
+
+    if response.status_code != 200:
+        return "continue"
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return "continue"
+    if not isinstance(payload, dict):
+        return "continue"
+    return "send-live" if _should_use_live_send(payload) else "continue"
+
+
 @app.command()
 def get(
     session_id: str = typer.Argument(..., help="Session UUID."),
@@ -369,9 +405,15 @@ def continue_session(
 
     try:
         with httpx.Client(timeout=None) as client:
+            route_name = _resolve_continue_route(
+                client=client,
+                base_url=base_url,
+                session_id=resolved_session_id,
+                headers=headers,
+            )
             with client.stream(
                 "POST",
-                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/continue",
+                f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/{route_name}",
                 headers=headers,
                 json={"message": message},
             ) as response:
