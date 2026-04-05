@@ -10,6 +10,8 @@ _TMUX_SAFE_CHARS = re.compile(r"[^A-Za-z0-9_.-]+")
 MANAGED_LOCAL_TMUX_SERVER_LABEL = "longhouse-managed"
 TMUX_NOT_INSTALLED_MESSAGE = "tmux is not installed"
 MANAGED_LOCAL_TMUX_HISTORY_LIMIT = 50000
+MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL = "tmux-256color"
+MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES = 1
 MANAGED_LOCAL_STANDARD_PATH_PREFIXES = (
     "$HOME/.local/bin",
     "$HOME/bin",
@@ -58,7 +60,8 @@ def build_managed_local_path_export() -> str:
 
 def build_managed_local_conditional_zshrc_source(*, required_commands: tuple[str, ...] = ()) -> str | None:
     """Source ~/.zshrc only when fast-path PATH resolution still misses a required binary."""
-    normalized = tuple(dict.fromkeys(str(command or "").strip() for command in required_commands if str(command or "").strip()))
+    cleaned_commands = (str(command or "").strip() for command in required_commands)
+    normalized = tuple(dict.fromkeys(command for command in cleaned_commands if command))
     if not normalized:
         return None
 
@@ -108,14 +111,37 @@ def _tmux_prefix() -> str:
     return f"tmux -L {_quote(MANAGED_LOCAL_TMUX_SERVER_LABEL)}"
 
 
+def _build_managed_local_wheel_binding(*, table: str, direction: str) -> str:
+    suffix = "Up" if direction == "up" else "Down"
+    command = f"send-keys -X -N {MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-{direction}"
+    return f"bind-key -T {table} Wheel{suffix}Pane {command}"
+
+
 def _managed_local_tmux_launch_options() -> tuple[str, ...]:
     """Options that make the dedicated managed tmux server less intrusive."""
     return (
         "set-option -s escape-time 0",
         "set-option -g status off",
         "set-option -g mouse on",
+        f"set-option -g default-terminal {MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL}",
+        "set-option -gu terminal-features",
+        "set-option -as terminal-features ',*:RGB'",
         f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT}",
         "set-option -g remain-on-exit failed",
+        "unbind-key -T root WheelUpPane",
+        (
+            'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" '
+            '"send-keys -M" "copy-mode -e -t= \\; send-keys -X -N '
+            f'{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} -t = scroll-up"'
+        ),
+        "unbind-key -T copy-mode WheelUpPane",
+        "unbind-key -T copy-mode WheelDownPane",
+        _build_managed_local_wheel_binding(table="copy-mode", direction="up"),
+        _build_managed_local_wheel_binding(table="copy-mode", direction="down"),
+        "unbind-key -T copy-mode-vi WheelUpPane",
+        "unbind-key -T copy-mode-vi WheelDownPane",
+        _build_managed_local_wheel_binding(table="copy-mode-vi", direction="up"),
+        _build_managed_local_wheel_binding(table="copy-mode-vi", direction="down"),
     )
 
 
