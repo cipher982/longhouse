@@ -190,7 +190,7 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
         def fake_schedule_lock_release(**kwargs):
             lock_release_calls.append(kwargs)
 
-        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", fake_schedule_lock_release)
 
         try:
@@ -250,7 +250,7 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
         ):
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
 
         try:
@@ -268,7 +268,7 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
 
 
 def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
-    """When send_text_to_managed_local_session fails, returns {accepted: false} with 502."""
+    """When live-session dispatch fails, returns {accepted: false} with 502."""
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -289,7 +289,7 @@ def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
         ):
             return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed")
 
-        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
 
         try:
             response = client.post(
@@ -338,7 +338,7 @@ def test_managed_local_dispatch_send_failure_releases_lock_for_retry(monkeypatch
             send_calls += 1
             return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed")
 
-        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
 
         try:
             first = client.post(
@@ -391,7 +391,7 @@ def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, 
         def fail_cloud_target(*_args, **_kwargs):
             raise AssertionError("managed_local should not create cloud continuations")
 
-        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
         monkeypatch.setattr(
             session_chat.AgentsStore,
@@ -434,7 +434,7 @@ def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path)
         ):
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
 
         try:
@@ -477,7 +477,7 @@ def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(monkeypatch
         ):
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-        monkeypatch.setattr("zerg.routers.session_chat.send_text_to_managed_local_session", fake_send_text)
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
 
         try:

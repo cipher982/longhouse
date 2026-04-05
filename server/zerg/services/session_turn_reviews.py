@@ -16,6 +16,7 @@ from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+import zerg.services.live_session_dispatch as live_session_dispatch
 from zerg.config import get_settings
 from zerg.models import CommisJob
 from zerg.models.agents import AgentEvent
@@ -23,7 +24,6 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionTurnReview
 from zerg.models.user import User
-from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_runtime import persist_managed_local_turn_idle
 from zerg.services.managed_local_runtime import persist_managed_local_turn_needs_user
 from zerg.services.managed_local_turns import attach_review_to_managed_local_turn
@@ -1401,13 +1401,15 @@ async def _continue_managed_local_session(
         )
         return False
 
-    send_result = await _send_follow_up_to_managed_local_session(
+    send_result = await live_session_dispatch.send_text_to_live_session(
         db=db,
         owner_id=int(review.owner_id),
         session=session,
         text=follow_up_prompt,
         commis_id=f"turn-review-{review.id}",
         timeout_secs=15,
+        verify_turn_started=True,
+        verification_timeout_secs=15.0,
     )
     if send_result.ok:
         return True
@@ -1427,27 +1429,6 @@ async def _continue_managed_local_session(
         actual_outcome="failed",
     )
     return False
-
-
-async def _send_follow_up_to_managed_local_session(
-    *,
-    db: Session,
-    owner_id: int,
-    session: AgentSession,
-    text: str,
-    commis_id: str | None = None,
-    timeout_secs: int = 15,
-):
-    return await send_text_to_managed_local_session(
-        db=db,
-        owner_id=owner_id,
-        session=session,
-        text=text,
-        commis_id=commis_id,
-        timeout_secs=timeout_secs,
-        verify_turn_started=True,
-        verification_timeout_secs=float(timeout_secs),
-    )
 
 
 async def approve_pending_turn_review(
@@ -1546,7 +1527,7 @@ async def reply_to_pending_turn_review(
     if not clean_reply:
         raise ValueError("reply text must not be empty")
 
-    send_result = await send_text_to_managed_local_session(
+    send_result = await live_session_dispatch.send_text_to_live_session(
         db=db,
         owner_id=int(review.owner_id or 0),
         session=session,

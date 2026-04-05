@@ -234,7 +234,7 @@ async def test_turn_review_autopilot_routes_claude_managed_local_continue_withou
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", _fake_send_text)
     monkeypatch.setattr(
         "zerg.services.session_turn_reviews._load_policy",
         lambda _db, _owner_id: OikosOperatorPolicy(
@@ -328,7 +328,7 @@ async def test_turn_review_autopilot_managed_local_codex_routes_tmux_follow_up(m
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", _fake_send_text)
     monkeypatch.setattr(
         "zerg.services.session_turn_reviews._load_policy",
         lambda _db, _owner_id: OikosOperatorPolicy(
@@ -411,7 +411,7 @@ async def test_reply_to_pending_turn_review_routes_claude_managed_local_reply_wi
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", _fake_send_text)
 
     with SessionLocal() as db:
         user = _create_user(db, allow_continue=False)
@@ -513,7 +513,7 @@ async def test_reply_to_pending_turn_review_routes_codex_managed_local_reply_wit
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", _fake_send_text)
 
     with SessionLocal() as db:
         user = _create_user(db, allow_continue=False)

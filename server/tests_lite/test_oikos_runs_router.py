@@ -750,7 +750,7 @@ def test_loop_inbox_approve_action_routes_claude_managed_local_continue_without_
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", _fake_send_text)
 
     with session_local() as db:
         owner = User(
@@ -1029,7 +1029,7 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", _fake_send_text)
 
     with session_local() as db:
         owner = User(
@@ -1158,7 +1158,7 @@ def test_loop_inbox_codex_managed_local_routes_remote_control_actions(monkeypatc
         )
         return SimpleNamespace(ok=True, exit_code=0, error=None)
 
-    monkeypatch.setattr("zerg.services.session_turn_reviews.send_text_to_managed_local_session", _fake_send_text)
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", _fake_send_text)
 
     with session_local() as db:
         owner = User(
