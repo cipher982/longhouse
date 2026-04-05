@@ -4006,7 +4006,7 @@ export interface paths {
         put?: never;
         /**
          * Chat With Session
-         * @description Start an explicit cloud continuation and stream the response via SSE.
+         * @description Start an explicit Claude cloud continuation and stream the response via SSE.
          */
         post: operations["chat_with_session_sessions__session_id__chat_post"];
         delete?: never;
@@ -4116,7 +4116,7 @@ export interface paths {
          * Continuation Readiness
          * @description Pre-flight check: can this instance run session continuations?
          *
-         *     Returns backend config and whether the required binary/keys are present.
+         *     Returns backend config and whether the required Claude binary/keys are present.
          *     Used by QA and the frontend to show actionable errors.
          */
         get: operations["continuation_readiness_sessions_continuation_readiness_get"];
