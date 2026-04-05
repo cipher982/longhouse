@@ -397,12 +397,6 @@ def connect(
         "-t",
         help="Device token (uses stored token if not specified)",
     ),
-    poll: bool = typer.Option(
-        False,
-        "--poll",
-        "-p",
-        help="Deprecated compatibility flag (ignored; engine always uses file watching + fallback scan)",
-    ),
     interval: int = typer.Option(
         300,
         "--interval",
@@ -458,7 +452,6 @@ def connect(
     Runtime behavior:
     - Uses OS file watching for near-real-time sync.
     - Runs a periodic fallback scan (default: 300s, configurable via --interval).
-    - No dedicated polling mode in the engine (--poll is ignored for compatibility).
 
     Service management:
         --install    Install background service + Claude Code hooks
@@ -509,7 +502,7 @@ def connect(
         return
 
     if install:
-        _handle_install(url=url, token=token, claude_dir=claude_dir, poll=poll, interval=interval, machine_name=machine_name)
+        _handle_install(url=url, token=token, claude_dir=claude_dir, interval=interval, machine_name=machine_name)
         return
 
     # Normal connect mode — exec longhouse-engine (replaces this process)
@@ -525,12 +518,6 @@ def connect(
     except RuntimeError as e:
         typer.secho(str(e), fg=typer.colors.RED)
         raise typer.Exit(code=1)
-
-    if poll:
-        typer.secho(
-            "Warning: --poll is deprecated and ignored. The Rust engine always uses " "file watching plus a periodic fallback scan.",
-            fg=typer.colors.YELLOW,
-        )
 
     engine_args = [engine, "connect", "--flush-ms", str(debounce)]
     if interval != 300:
@@ -779,7 +766,6 @@ def _handle_install(
     url: str,
     token: str | None,
     claude_dir: str | None,
-    poll: bool,
     interval: int,
     machine_name: str | None = None,
 ) -> None:

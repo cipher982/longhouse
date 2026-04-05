@@ -38,7 +38,6 @@ def test_handle_install_does_not_create_global_mcp_configs(tmp_path, monkeypatch
         url="https://example.com",
         token=None,
         claude_dir=str(claude_dir),
-        poll=False,
         interval=1,
         machine_name="test-box",
     )
