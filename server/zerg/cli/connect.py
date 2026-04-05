@@ -1,19 +1,4 @@
-"""Connect command for shipping Claude Code sessions to Longhouse.
-
-Commands:
-- auth: Authenticate with Longhouse and obtain a device token
-- ship: One-shot sync of all sessions
-- connect: Continuous sync via Rust engine (watch + fallback scan)
-- connect --install: Install as background service
-- connect --uninstall: Remove background service
-- connect --status: Check service status
-- recall: Search past sessions from the terminal
-
-Runtime behavior:
-- longhouse connect delegates to longhouse-engine connect
-- file watching is always enabled; fallback scan runs periodically
-- --poll is kept for backwards compatibility and ignored
-"""
+"""CLI helpers for auth, shipping, connect, and recall."""
 
 from __future__ import annotations
 
@@ -43,8 +28,6 @@ from zerg.services.shipper import save_zerg_url
 from zerg.services.shipper import uninstall_service
 from zerg.services.shipper.service import get_engine_executable
 
-app = typer.Typer(help="Ship Claude Code sessions to Longhouse")
-
 
 def _verify_and_warn_path() -> None:
     """Run fresh-shell PATH verification and print warnings if any."""
@@ -68,9 +51,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%H:%M:%S",
 )
-logger = logging.getLogger(__name__)
-
-
 # ---------------------------------------------------------------------------
 # Auto-token helpers
 # ---------------------------------------------------------------------------
@@ -155,7 +135,6 @@ def _auto_create_token(url: str, device_name: str | None = None) -> str | None:
     return None
 
 
-@app.command()
 def auth(
     url: str = typer.Option(
         None,
@@ -310,7 +289,6 @@ def _validate_token(url: str, token: str) -> bool:
         return False
 
 
-@app.command()
 def ship(
     url: str = typer.Option(
         None,
@@ -406,7 +384,6 @@ def ship(
     raise typer.Exit(code=result.returncode)
 
 
-@app.command()
 def connect(
     url: str = typer.Option(
         None,
@@ -572,7 +549,6 @@ def connect(
     os.execvpe(engine, engine_args, env)
 
 
-@app.command()
 def recall(
     query: str = typer.Argument(..., help="Search query for session content"),
     project: str = typer.Option(

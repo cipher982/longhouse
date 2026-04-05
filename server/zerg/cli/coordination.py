@@ -15,9 +15,7 @@ from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 
-app = typer.Typer(help="Session coordination commands")
 messages_app = typer.Typer(help="Durable session inbox commands")
-_CURRENT_SESSION_HEADER = CURRENT_SESSION_HEADER
 
 
 def _load_api_credentials(*, url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:
@@ -199,7 +197,6 @@ def _print_wall_session_summary(session: dict) -> None:
         typer.echo(f"  {title}")
 
 
-@app.command()
 def wall(
     repo: str | None = typer.Option(
         None,
@@ -280,7 +277,6 @@ def wall(
         typer.echo("")
 
 
-@app.command()
 def peers(
     repo: str | None = typer.Option(
         None,
@@ -393,7 +389,6 @@ def peers(
         typer.echo("")
 
 
-@app.command()
 def message(
     to_session_id: str = typer.Argument(..., help="Target session UUID."),
     text: str = typer.Argument(..., help="Message body."),
@@ -455,7 +450,7 @@ def message(
                 f"{base_url.rstrip('/')}/api/agents/messages",
                 headers={
                     "X-Agents-Token": resolved_token,
-                    _CURRENT_SESSION_HEADER: resolved_from_session_id,
+                    CURRENT_SESSION_HEADER: resolved_from_session_id,
                 },
                 json=body,
             )
@@ -494,7 +489,6 @@ def message(
         typer.echo(f"Delivered via: {delivered_via}")
 
 
-@app.command()
 def tail(
     session_id: str = typer.Argument(..., help="Session UUID."),
     limit: int = typer.Option(
@@ -636,7 +630,7 @@ def check_messages(
                 f"{base_url.rstrip('/')}/api/agents/messages",
                 headers={
                     "X-Agents-Token": resolved_token,
-                    _CURRENT_SESSION_HEADER: resolved_session_id,
+                    CURRENT_SESSION_HEADER: resolved_session_id,
                 },
                 params={
                     "direction": direction,
@@ -729,7 +723,7 @@ def ack_message(
                 f"{base_url.rstrip('/')}/api/agents/messages/{message_id}/ack",
                 headers={
                     "X-Agents-Token": resolved_token,
-                    _CURRENT_SESSION_HEADER: resolved_session_id,
+                    CURRENT_SESSION_HEADER: resolved_session_id,
                 },
                 json={},
             )
@@ -872,6 +866,3 @@ def messages_ack(
         token=token,
         claude_dir=claude_dir,
     )
-
-
-app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
