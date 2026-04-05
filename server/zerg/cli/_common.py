@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import subprocess
+import sys
+import webbrowser
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
@@ -11,6 +14,15 @@ import typer
 
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
+
+
+@dataclass(frozen=True)
+class ManagedLocalLaunchResponse:
+    session_id: str
+    provider_session_id: str
+    attach_command: str
+    source_runner_name: str
+    managed_transport: str | None = None
 
 
 def load_api_credentials(
@@ -64,3 +76,18 @@ def git_output(cwd: Path, *args: str) -> str | None:
         return None
     value = completed.stdout.strip()
     return value or None
+
+
+def interactive_stdio() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def build_session_url(url: str, session_id: str) -> str:
+    return f"{url.rstrip('/')}/timeline/{session_id}"
+
+
+def open_session_url(session_url: str) -> bool:
+    try:
+        return bool(webbrowser.open(session_url))
+    except Exception:
+        return False
