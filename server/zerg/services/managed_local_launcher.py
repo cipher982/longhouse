@@ -201,7 +201,7 @@ def _build_entry_command(
         )
     for key, value in _sanitize_claude_launch_env(claude_launch_env).items():
         env_exports.append(f"export {key}={shlex.quote(value)}")
-    parts = ["claude", "--session-id", provider_session_id]
+    parts = ["claude", "--dangerously-skip-permissions", "--session-id", provider_session_id]
     if display_name and display_name.strip():
         parts.extend(["-n", display_name.strip()])
     inner = "; ".join(

@@ -199,7 +199,8 @@ def test_build_entry_command_claude_includes_session_id():
     assert "export LONGHOUSE_MANAGED_SESSION_ID=abc-123" in inner
     assert _MANAGED_LOCAL_PATH_EXPORT in inner
     assert "if ! command -v claude >/dev/null 2>&1; then source ~/.zshrc >/dev/null 2>&1 || true; fi" in inner
-    assert "claude --session-id abc-123" in inner
+    assert "claude --dangerously-skip-permissions --session-id abc-123" in inner
+    assert "--session-id abc-123" in inner
     assert "codex" not in inner
 
 
@@ -215,7 +216,7 @@ def test_build_entry_command_claude_includes_hook_target_overrides():
     assert "export LONGHOUSE_MANAGED_SESSION_ID=abc-123" in inner
     assert "export LONGHOUSE_HOOK_URL=https://david010.longhouse.ai" in inner
     assert "export LONGHOUSE_HOOK_TOKEN=zdt_live_token" in inner
-    assert "claude --session-id abc-123" in inner
+    assert "claude --dangerously-skip-permissions --session-id abc-123" in inner
 
 
 def test_build_entry_command_claude_includes_allowlisted_launch_env():
@@ -421,7 +422,7 @@ def test_launch_managed_local_session_creates_session_and_dispatches_tmux(monkey
                 "set-option -g remain-on-exit failed \\; "
                 f"new-session -d -s"
             ) in launch_inner
-            assert "claude --session-id" in launch_inner
+            assert "claude --dangerously-skip-permissions --session-id" in launch_inner
             assert (
                 f"tmux -L {MANAGED_LOCAL_TMUX_SERVER_LABEL} has-session -t {session.managed_session_name}"
                 in has_session_inner
