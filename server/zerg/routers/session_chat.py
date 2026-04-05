@@ -330,6 +330,11 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
 class ManagedLocalSessionLaunchResponse(BaseModel):
     """Response after successfully starting a managed local session."""
 
+    class ManagedLaunchProfileDebug(BaseModel):
+        required_commands: list[str]
+        argv: list[str]
+        exported_env_keys: list[str]
+
     session_id: str
     provider: str
     provider_session_id: str
@@ -340,6 +345,7 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     source_runner_name: str
     managed_session_name: str
     attach_command: str
+    managed_launch_profile: ManagedLaunchProfileDebug | None = None
 
 
 class SessionLockInfo(BaseModel):
@@ -375,6 +381,7 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
 
 def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
     session = result.session
+    managed_launch_profile = getattr(session, "managed_launch_profile", None)
     return ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
         provider=session.provider or "claude",
@@ -386,6 +393,11 @@ def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
         source_runner_name=session.source_runner_name or "",
         managed_session_name=session.managed_session_name or "",
         attach_command=result.attach_command,
+        managed_launch_profile=(
+            ManagedLocalSessionLaunchResponse.ManagedLaunchProfileDebug.model_validate(managed_launch_profile)
+            if isinstance(managed_launch_profile, dict)
+            else None
+        ),
     )
 
 

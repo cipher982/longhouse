@@ -172,6 +172,11 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
             source_runner_id=9,
             source_runner_name="cinder",
             managed_session_name="lh-codex-managed-local",
+            managed_launch_profile={
+                "required_commands": ["codex"],
+                "exported_env_keys": ["LONGHOUSE_MANAGED_SESSION_ID"],
+                "argv": ["codex", "--enable", "codex_hooks", "--no-alt-screen"],
+            },
         )
         db.add(session)
         db.commit()
@@ -189,6 +194,11 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
         assert payload["execution_home"] == "managed_local"
         assert payload["source_runner_name"] == "cinder"
         assert payload["attach_command"] == build_tmux_attach_command(session_name="lh-codex-managed-local")
+        assert payload["managed_launch_profile"] == {
+            "required_commands": ["codex"],
+            "exported_env_keys": ["LONGHOUSE_MANAGED_SESSION_ID"],
+            "argv": ["codex", "--enable", "codex_hooks", "--no-alt-screen"],
+        }
         assert "load_session;dur=" in response.headers["server-timing"]
         assert "build_response;dur=" in response.headers["server-timing"]
     finally:

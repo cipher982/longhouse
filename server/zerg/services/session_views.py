@@ -93,9 +93,32 @@ def build_attach_command(session: AgentSession) -> str | None:
     return build_managed_local_attach_command(session=session)
 
 
+def _coerce_managed_launch_profile(value: Any) -> ManagedLaunchProfileResponse | None:
+    if not isinstance(value, dict):
+        return None
+    required_commands = value.get("required_commands")
+    argv = value.get("argv")
+    exported_env_keys = value.get("exported_env_keys")
+    if not isinstance(required_commands, list) or not isinstance(argv, list) or not isinstance(exported_env_keys, list):
+        return None
+    if not all(isinstance(item, str) for item in required_commands + argv + exported_env_keys):
+        return None
+    return ManagedLaunchProfileResponse(
+        required_commands=required_commands,
+        argv=argv,
+        exported_env_keys=exported_env_keys,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
+
+
+class ManagedLaunchProfileResponse(BaseModel):
+    required_commands: List[str] = Field(..., description="Commands that must exist before managed launch")
+    argv: List[str] = Field(..., description="Structured argv Longhouse resolved for the managed launch")
+    exported_env_keys: List[str] = Field(..., description="Env var names Longhouse exported for the launch")
 
 
 class SessionResponse(UTCBaseModel):
@@ -157,6 +180,10 @@ class SessionResponse(UTCBaseModel):
     source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
     source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
     attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
+    managed_launch_profile: Optional[ManagedLaunchProfileResponse] = Field(
+        None,
+        description="Structured managed-launch metadata for debugging tmux-backed sessions",
+    )
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
 
@@ -694,6 +721,7 @@ def build_session_response(
         source_runner_id=getattr(session, "source_runner_id", None),
         source_runner_name=getattr(session, "source_runner_name", None),
         attach_command=build_attach_command(session),
+        managed_launch_profile=_coerce_managed_launch_profile(getattr(session, "managed_launch_profile", None)),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
     )

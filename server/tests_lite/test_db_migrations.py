@@ -248,7 +248,7 @@ def test_startup_migration_adds_session_execution_home_columns(tmp_path):
             text(
                 """
                 SELECT execution_home, managed_transport, source_runner_id, source_runner_name,
-                       managed_session_name, managed_tmux_tmpdir
+                       managed_session_name, managed_tmux_tmpdir, managed_launch_profile
                 FROM sessions
                 LIMIT 1
                 """
@@ -261,7 +261,8 @@ def test_startup_migration_adds_session_execution_home_columns(tmp_path):
     assert "source_runner_name" in columns
     assert "managed_session_name" in columns
     assert "managed_tmux_tmpdir" in columns
-    assert row == ("legacy", None, None, None, None, None)
+    assert "managed_launch_profile" in columns
+    assert row == ("legacy", None, None, None, None, None, None)
 
 
 def test_startup_migration_adds_session_loop_mode_and_backfills_manual(tmp_path):

@@ -74,6 +74,7 @@ class ManagedLocalLaunchResult:
 class ManagedLocalProviderLaunchProfile:
     required_commands: tuple[str, ...]
     env_exports: tuple[str, ...]
+    exported_env_keys: tuple[str, ...]
     argv: tuple[str, ...]
 
 
@@ -198,6 +199,19 @@ def _build_managed_launch_env_exports(
     return env_exports
 
 
+def _build_exported_env_keys(*, env_exports: list[str]) -> tuple[str, ...]:
+    keys: list[str] = []
+    for export_line in env_exports:
+        normalized = str(export_line or "").strip()
+        if not normalized.startswith("export "):
+            continue
+        assignment = normalized[len("export ") :]
+        key = assignment.split("=", 1)[0].strip()
+        if key:
+            keys.append(key)
+    return tuple(keys)
+
+
 def _build_claude_launch_profile(
     *,
     provider_session_id: str,
@@ -219,6 +233,7 @@ def _build_claude_launch_profile(
     return ManagedLocalProviderLaunchProfile(
         required_commands=("claude",),
         env_exports=tuple(env_exports),
+        exported_env_keys=_build_exported_env_keys(env_exports=env_exports),
         argv=tuple(argv),
     )
 
@@ -229,42 +244,28 @@ def _build_codex_launch_profile(
     hook_url: str | None = None,
     hook_token: str | None = None,
 ) -> ManagedLocalProviderLaunchProfile:
+    env_exports = _build_managed_launch_env_exports(
+        managed_session_id=managed_session_id,
+        hook_url=hook_url,
+        hook_token=hook_token,
+    )
     return ManagedLocalProviderLaunchProfile(
         required_commands=("codex",),
-        env_exports=tuple(
-            _build_managed_launch_env_exports(
-                managed_session_id=managed_session_id,
-                hook_url=hook_url,
-                hook_token=hook_token,
-            )
-        ),
+        env_exports=tuple(env_exports),
+        exported_env_keys=_build_exported_env_keys(env_exports=env_exports),
         argv=("codex", "--enable", "codex_hooks", "--no-alt-screen"),
     )
 
 
-def _build_entry_command(
-    *,
-    provider: str,
-    provider_session_id: str,
-    display_name: str | None,
-    hook_url: str | None = None,
-    hook_token: str | None = None,
-    claude_launch_env: dict[str, str] | None = None,
-) -> str:
-    if provider == "codex":
-        launch_profile = _build_codex_launch_profile(
-            managed_session_id=provider_session_id,
-            hook_url=hook_url,
-            hook_token=hook_token,
-        )
-    else:
-        launch_profile = _build_claude_launch_profile(
-            provider_session_id=provider_session_id,
-            display_name=display_name,
-            hook_url=hook_url,
-            hook_token=hook_token,
-            claude_launch_env=claude_launch_env,
-        )
+def _serialize_launch_profile(profile: ManagedLocalProviderLaunchProfile) -> dict[str, object]:
+    return {
+        "required_commands": list(profile.required_commands),
+        "exported_env_keys": list(profile.exported_env_keys),
+        "argv": list(profile.argv),
+    }
+
+
+def _build_entry_command(*, launch_profile: ManagedLocalProviderLaunchProfile) -> str:
     inner = "; ".join(
         [
             *launch_profile.env_exports,
@@ -276,6 +277,30 @@ def _build_entry_command(
         ]
     )
     return f"zsh -lc {shlex.quote(inner)}"
+
+
+def _build_launch_profile(
+    *,
+    provider: str,
+    provider_session_id: str,
+    display_name: str | None,
+    hook_url: str | None = None,
+    hook_token: str | None = None,
+    claude_launch_env: dict[str, str] | None = None,
+) -> ManagedLocalProviderLaunchProfile:
+    if provider == "codex":
+        return _build_codex_launch_profile(
+            managed_session_id=provider_session_id,
+            hook_url=hook_url,
+            hook_token=hook_token,
+        )
+    return _build_claude_launch_profile(
+        provider_session_id=provider_session_id,
+        display_name=display_name,
+        hook_url=hook_url,
+        hook_token=hook_token,
+        claude_launch_env=claude_launch_env,
+    )
 
 
 def _build_preflight_command(
@@ -460,14 +485,18 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
             device_id=runner_name,
         )
 
-    entry_command = _build_entry_command(
-        provider=provider,
-        provider_session_id=provider_session_id,
-        display_name=params.display_name,
-        hook_url=params.hook_url,
-        hook_token=hook_token,
-        claude_launch_env=params.claude_launch_env,
-    )
+    launch_profile: ManagedLocalProviderLaunchProfile | None = None
+    entry_command: str | None = None
+    if transport == ManagedSessionTransport.TMUX:
+        launch_profile = _build_launch_profile(
+            provider=provider,
+            provider_session_id=provider_session_id,
+            display_name=params.display_name,
+            hook_url=params.hook_url,
+            hook_token=hook_token,
+            claude_launch_env=params.claude_launch_env,
+        )
+        entry_command = _build_entry_command(launch_profile=launch_profile)
     session = AgentSession(
         id=session_uuid,
         provider=provider,
@@ -496,6 +525,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
         source_runner_name=runner_name,
         managed_session_name=managed_session_name,
         managed_tmux_tmpdir=managed_tmux_tmpdir,
+        managed_launch_profile=(_serialize_launch_profile(launch_profile) if launch_profile is not None else None),
     )
     db.add(session)
     db.flush()
@@ -518,7 +548,7 @@ async def launch_managed_local_session(db: Session, params: ManagedLocalLaunchPa
     transport_plan = build_managed_local_launch_transport_plan(
         session_name=managed_session_name,
         cwd=cwd,
-        entry_command=entry_command,
+        entry_command=str(entry_command or ""),
         tmux_tmpdir=managed_tmux_tmpdir,
     )
 
