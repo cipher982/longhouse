@@ -20,7 +20,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "Why not just use ssh + tmux?",
-    answer: "If you only need one remote shell, ssh + tmux is simpler. Longhouse is for when you want the session itself to be searchable, addressable, messageable, and continuable from browser, CLI, or API."
+    answer: "If you only need one remote shell, ssh + tmux is simpler. Longhouse is for when you want the session itself to be searchable, addressable, messageable, and branchable from browser, CLI, or API."
   },
   {
     question: "Do you train AI models on my data?",
@@ -28,7 +28,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "What AI coding agents do you support?",
-    answer: "Claude Code currently has the strongest continuation path, hooks, and telemetry. Codex CLI and Gemini CLI already land in the same timeline and machine surface today, but direct continuation is still Claude-first. OpenCode and Cursor are coming soon."
+    answer: "Claude Code currently has the strongest cloud-branch path, hooks, and telemetry. Codex CLI and Gemini CLI already land in the same timeline and machine surface today, but direct cloud branching is not supported there yet. OpenCode and Cursor are coming soon."
   }
 ];
 

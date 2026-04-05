@@ -892,7 +892,7 @@ def test_sessions_continue_command_streams_cloud_output(monkeypatch):
         },
         {
             "method": "POST",
-            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/continue",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/branch-cloud",
             "headers": {
                 "X-Agents-Token": "zdt_test_token",
                 "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",

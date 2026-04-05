@@ -31,7 +31,7 @@ INGEST_TIMEOUT_SECONDS = 30
 _SKIP_PATHS = ("/readyz", "/health")
 
 # Path fragments that indicate a streaming / long-lived connection.
-_STREAMING_FRAGMENTS = ("/stream", "/chat", "/ws")
+_STREAMING_FRAGMENTS = ("/stream", "/chat", "/branch", "/ws")
 
 # Route-specific timeout overrides for legitimate long-running requests.
 _TIMEOUT_OVERRIDES = {

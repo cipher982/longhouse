@@ -144,14 +144,14 @@ describe("SessionChat", () => {
   it("renders a divider seam for the inline continuation dock", () => {
     const { container } = renderSessionChat({
       dockHeaderStyle: "divider",
-      introEyebrow: "Cloud continuation",
-      introTitle: "Cloud continuation began here",
+      introEyebrow: "Cloud branch",
+      introTitle: "Cloud branch began here",
       introDescription: "Earlier turns were synced from Local.",
       submitLabel: "Reply",
     });
 
     expect(screen.getByTestId("session-chat-divider")).toBeInTheDocument();
-    expect(screen.getByText("Cloud continuation began here")).toBeInTheDocument();
+    expect(screen.getByText("Cloud branch began here")).toBeInTheDocument();
     expect(screen.getByText("Earlier turns were synced from Local.")).toBeInTheDocument();
     expect(container.querySelector(".session-chat-callout")).toBeNull();
     expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
@@ -184,7 +184,7 @@ describe("SessionChat", () => {
     const onSessionChanged = vi.fn();
 
     mockSessionFetches(
-      "/chat",
+      "/branch-cloud",
       sseResponse([
         {
           event: "assistant_delta",
@@ -195,7 +195,7 @@ describe("SessionChat", () => {
           data: {
             session_id: "sess-2",
             shipped_session_id: "sess-2",
-            created_continuation: true,
+            created_branch: true,
             persisted_events: 4,
             sync_status: "complete",
             control_status: "completed",
@@ -212,11 +212,11 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "Continue in cloud");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    expect(getLastRequestBody("/chat")).toEqual({
+    expect(getLastRequestBody("/branch-cloud")).toEqual({
       message: "Continue in cloud",
     });
     await waitFor(() => expect(onSessionChanged).toHaveBeenCalledWith("sess-2", true));
-    expect(screen.queryByText(/could not save the continuation transcript/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not save the cloud branch transcript/i)).not.toBeInTheDocument();
   });
 
   it("keeps a non-error placeholder while managed-local transcript sync is pending", async () => {
@@ -224,14 +224,14 @@ describe("SessionChat", () => {
     const onSessionChanged = vi.fn();
 
     mockSessionFetches(
-      "/chat",
+      "/branch-cloud",
       sseResponse([
         {
           event: "done",
           data: {
             session_id: "sess-2",
             shipped_session_id: "sess-2",
-            created_continuation: true,
+            created_branch: true,
             persisted_events: 0,
             sync_status: "pending",
             control_status: "completed",
@@ -249,7 +249,7 @@ describe("SessionChat", () => {
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     expect(await screen.findByText("Completed locally. Transcript syncing...")).toBeInTheDocument();
-    expect(screen.queryByText(/could not save the continuation transcript/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/could not save the cloud branch transcript/i)).not.toBeInTheDocument();
     expect(onSessionChanged).not.toHaveBeenCalled();
   });
 
@@ -258,7 +258,7 @@ describe("SessionChat", () => {
     const onSessionChanged = vi.fn();
 
     mockSessionFetches(
-      "/chat",
+      "/branch-cloud",
       sseResponse([
         {
           event: "assistant_delta",
@@ -269,12 +269,12 @@ describe("SessionChat", () => {
           data: {
             session_id: "sess-2",
             shipped_session_id: null,
-            created_continuation: true,
+            created_branch: true,
             persisted_events: 0,
             sync_status: "failed",
             control_status: "completed",
             persistence_error:
-              "Response completed, but Longhouse could not save the continuation transcript to the timeline.",
+              "Response completed, but Longhouse could not save the cloud branch transcript to the timeline.",
             exit_code: 0,
             total_text_length: 12,
             timestamp: "2026-03-19T16:46:17Z",
@@ -289,7 +289,7 @@ describe("SessionChat", () => {
     await user.click(screen.getByRole("button", { name: /send/i }));
 
     expect(await screen.findByText("Saved nowhere")).toBeInTheDocument();
-    expect(await screen.findByText(/could not save the continuation transcript/i)).toBeInTheDocument();
+    expect(await screen.findByText(/could not save the cloud branch transcript/i)).toBeInTheDocument();
     expect(onSessionChanged).not.toHaveBeenCalled();
   });
 
@@ -304,14 +304,14 @@ describe("SessionChat", () => {
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
     mockSessionFetches(
-      "/chat",
+      "/branch-cloud",
       sseResponse([
         {
           event: "done",
           data: {
             session_id: "sess-1",
             shipped_session_id: "sess-1",
-            created_continuation: false,
+            created_branch: false,
             persisted_events: 0,
             sync_status: "pending",
             control_status: "completed",
@@ -347,7 +347,7 @@ describe("SessionChat", () => {
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
     mockSessionFetches(
-      "/chat",
+      "/branch-cloud",
       sseResponse([
         {
           event: "assistant_delta",
@@ -358,7 +358,7 @@ describe("SessionChat", () => {
           data: {
             session_id: "sess-1",
             shipped_session_id: "sess-1",
-            created_continuation: false,
+            created_branch: false,
             persisted_events: 4,
             sync_status: "complete",
             control_status: "completed",
@@ -469,7 +469,7 @@ describe("SessionChat", () => {
     const user = userEvent.setup();
 
     mockSessionFetches(
-      "/chat",
+      "/branch-cloud",
       sseResponse([
         {
           event: "assistant_delta",
@@ -480,7 +480,7 @@ describe("SessionChat", () => {
           data: {
             session_id: "sess-2",
             shipped_session_id: "sess-2",
-            created_continuation: true,
+            created_branch: true,
             persisted_events: 4,
             sync_status: "complete",
             control_status: "completed",
@@ -503,10 +503,10 @@ describe("SessionChat", () => {
     expect(screen.getByTestId("session-chat-explicit-submit-hint")).toHaveTextContent(
       "Click send to start the branch.",
     );
-    expect(getRequestCallCount("/chat")).toBe(0);
+    expect(getRequestCallCount("/branch-cloud")).toBe(0);
 
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(getRequestCallCount("/chat")).toBe(1));
+    await waitFor(() => expect(getRequestCallCount("/branch-cloud")).toBe(1));
   });
 });

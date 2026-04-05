@@ -2,10 +2,10 @@
  * SessionDetailPage - IDE-style session workspace for one synced transcript.
  *
  * Layout:
- * - Left: session context and continuation lineage
+ * - Left: session context and branch lineage
  * - Center: event timeline transcript
  * - Right: inspector for the selected event
- * - Bottom dock: inline live-session / cloud continuation composer
+ * - Bottom dock: inline live-session / cloud-branch composer
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -77,7 +77,7 @@ function SessionDetailWorkspaceRoute({
   const handleBack = useCallback(() => {
     navigate(returnTo);
   }, [navigate, returnTo]);
-  const handleOpenContinuation = useCallback(() => {
+  const handleOpenBranchDock = useCallback(() => {
     const panel = document.querySelector('[data-testid="session-continuation-panel"]');
     if (!(panel instanceof HTMLElement)) return;
     panel.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -164,17 +164,17 @@ function SessionDetailWorkspaceRoute({
   const displaySession =
     effectiveLoopMode === session.loop_mode ? session : { ...session, loop_mode: effectiveLoopMode };
 
-  const continuationSourceSession = currentThreadSession || session;
+  const branchSourceSession = currentThreadSession || session;
   const interaction = getSessionInteractionCapabilities({
-    session: continuationSourceSession,
+    session: branchSourceSession,
     isViewingHead,
     headThreadSession,
   });
 
   const sessionChatTarget: SessionChatTarget = {
-    id: continuationSourceSession.id,
-    project: continuationSourceSession.project,
-    provider: continuationSourceSession.provider,
+    id: branchSourceSession.id,
+    project: branchSourceSession.project,
+    provider: branchSourceSession.provider,
   };
 
   const inspectorSelection =
@@ -192,7 +192,7 @@ function SessionDetailWorkspaceRoute({
             isViewingHead={isViewingHead}
             onOpenSession={navigateToSession}
             onOpenLatest={() => headThreadSession && navigateToSession(headThreadSession.id)}
-            onPrimaryAction={handleOpenContinuation}
+            onPrimaryAction={handleOpenBranchDock}
             continuationNotice={interaction.notice}
             loopModePending={loopModePending}
             onLoopModeChange={handleLoopModeChange}
@@ -261,7 +261,7 @@ function SessionDetailWorkspaceRoute({
                 introEyebrow="Session control"
                 introTitle={interaction.title}
                 introDescription={interaction.description}
-                chatMode={interaction.mode === "managed_local" ? "managed_local" : "cloud"}
+                chatMode={interaction.mode === "managed_local" ? "managed_local" : "cloud_branch"}
                 composerPlaceholder={interaction.placeholder}
                 composerDisabledReason={interaction.composerDisabledReason}
                 submitLabel={interaction.submitLabel}

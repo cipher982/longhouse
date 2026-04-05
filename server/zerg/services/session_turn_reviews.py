@@ -32,7 +32,7 @@ from zerg.services.managed_local_turns import run_best_effort_managed_local_turn
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.presence_cache import get_presence_cache
-from zerg.services.session_capabilities import supports_cloud_continuation
+from zerg.services.session_capabilities import supports_cloud_branch
 from zerg.services.session_capabilities import supports_host_reattach
 from zerg.services.session_capabilities import supports_live_control
 from zerg.services.session_loop_controller import build_loop_controller_payload
@@ -156,14 +156,14 @@ def supports_live_turn_review_continue(session: AgentSession | None) -> bool:
     return supports_live_control(session)
 
 
-def supports_cloud_turn_review_continue(session: AgentSession | None) -> bool:
+def supports_cloud_turn_review_branch(session: AgentSession | None) -> bool:
     if supports_host_reattach(session):
         return False
-    return supports_cloud_continuation(session)
+    return supports_cloud_branch(session)
 
 
-def _cloud_continue_backend_for_session(session: AgentSession) -> str | None:
-    if not supports_cloud_turn_review_continue(session):
+def _cloud_branch_backend_for_session(session: AgentSession) -> str | None:
+    if not supports_cloud_turn_review_branch(session):
         return None
     # Claude resume on the hosted commis path uses hatch's Claude-compatible
     # runtime via the z.ai-backed wrapper.
@@ -398,7 +398,7 @@ def _serialize_dialog_tail(messages: list[_TurnMessage]) -> list[dict[str, Any]]
 
 def _loop_mode_profile(session: AgentSession, policy: OikosOperatorPolicy) -> tuple[str, str]:
     can_live_continue = supports_live_turn_review_continue(session)
-    can_continue_in_cloud = supports_cloud_turn_review_continue(session)
+    can_continue_in_cloud = supports_cloud_turn_review_branch(session)
     loop_mode = _coerce_loop_mode(getattr(session, "loop_mode", None))
     if loop_mode == SessionLoopMode.MANUAL:
         return (
@@ -1323,7 +1323,7 @@ def _enqueue_cloud_turn_review_continue_job(
         )
         return None
 
-    backend = _cloud_continue_backend_for_session(session)
+    backend = _cloud_branch_backend_for_session(session)
     if not backend:
         _mark_review_outcome(
             db,
@@ -1452,7 +1452,7 @@ async def approve_pending_turn_review(
         if not sent:
             raise RuntimeError(str(review.reason or "managed_local_send_failed"))
         job = None
-    elif supports_cloud_turn_review_continue(session):
+    elif supports_cloud_turn_review_branch(session):
         job = _enqueue_cloud_turn_review_continue_job(db=db, review=review, session=session)
         if job is None:
             if review.status != "failed":

@@ -9,7 +9,7 @@ from zerg.session_execution_home import SessionExecutionHome
 @dataclass(frozen=True)
 class SessionCapabilityFlags:
     live_control_available: bool
-    cloud_continuation_available: bool
+    cloud_branch_available: bool
     host_reattach_available: bool
     reply_to_live_session_available: bool
 
@@ -50,7 +50,7 @@ def supports_live_control(session: AgentSession | None) -> bool:
     return resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL and getattr(session, "source_runner_id", None) is not None
 
 
-def supports_cloud_continuation(session: AgentSession | None) -> bool:
+def supports_cloud_branch(session: AgentSession | None) -> bool:
     if session is None:
         return False
     if supports_live_control(session):
@@ -69,7 +69,7 @@ def build_session_capabilities(session: AgentSession | None) -> SessionCapabilit
     live_control_available = supports_live_control(session)
     return SessionCapabilityFlags(
         live_control_available=live_control_available,
-        cloud_continuation_available=supports_cloud_continuation(session),
+        cloud_branch_available=supports_cloud_branch(session),
         host_reattach_available=supports_host_reattach(session),
         reply_to_live_session_available=live_control_available,
     )

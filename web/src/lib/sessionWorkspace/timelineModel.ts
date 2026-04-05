@@ -23,7 +23,7 @@ function buildTimelineSeam(item: AgentSessionProjectionItem): TimelineSeam {
       key: `seam:${item.session_id}:${item.timestamp}`,
       sessionId: item.session_id,
       label: "Cloud branch begins",
-      description: "Everything below continues on this cloud branch from the saved split point.",
+      description: "Everything below branches from the earlier cloud branch at this saved split point.",
       timestamp: item.timestamp,
     };
   }
@@ -32,8 +32,8 @@ function buildTimelineSeam(item: AgentSessionProjectionItem): TimelineSeam {
     return {
       key: `seam:${item.session_id}:${item.timestamp}`,
       sessionId: item.session_id,
-      label: "Cloud continuation begins",
-      description: `Synced ${parentOrigin} history above. Cloud-native messages below.`,
+      label: "Cloud branch begins",
+      description: `Synced ${parentOrigin} history above. New cloud-branch messages below.`,
       timestamp: item.timestamp,
     };
   }

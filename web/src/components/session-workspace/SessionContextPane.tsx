@@ -89,19 +89,19 @@ export function SessionContextPane({
       : canDriveManagedLocalFromBrowser
         ? "Loop Mode changes review posture only. Keep driving the live session from Longhouse below or by reattaching on the host machine."
         : interaction.canChatFromBrowser
-          ? "Loop Mode changes review posture only. Start or keep the cloud continuation from Longhouse below, or reattach on the host machine when available."
-        : isManagedLocalCodex
-          ? "For live Codex sessions, Loop Mode changes review posture only. Keep driving the live session from the host terminal."
+          ? "Loop Mode changes review posture only. Start or keep the cloud branch from Longhouse below, or reattach on the host machine when available."
+          : isManagedLocalCodex
+            ? "For live Codex sessions, Loop Mode changes review posture only. Keep driving the live session from the host terminal."
           : "Loop Mode changes review posture only. Keep driving the live session from the host terminal.";
   const primaryActionDescription = interaction.canChatFromBrowser
     ? interaction.mode === "managed_local"
       ? "Open the dock below and send the next prompt into the live session."
       : interaction.mode === "head"
-        ? "Open the dock below and continue this session in cloud from Longhouse."
+        ? "Open the dock below and keep working in this cloud branch from Longhouse."
         : interaction.mode === "promote"
-          ? "Open the dock below and start a cloud continuation from this session."
+          ? "Open the dock below and start a cloud branch from this session."
           : interaction.mode === "branch"
-            ? "Open the dock below and start a branched cloud continuation from this point."
+            ? "Open the dock below and start a cloud branch from this point."
             : "Open the dock below and continue from this session in the browser."
     : interaction.composerDisabledReason ?? interaction.notice?.body ?? interaction.capabilitySummary;
 
@@ -161,7 +161,7 @@ export function SessionContextPane({
           className="session-pane-callout session-pane-callout--warning session-branch-banner"
           data-testid="session-branch-banner"
         >
-          <div className="session-pane-callout-title">This is not the latest continuation</div>
+          <div className="session-pane-callout-title">This is not the latest branch</div>
           <div className="session-pane-callout-copy">
             Latest head: {getSessionOriginLabel(headThreadSession)} from{" "}
             {formatContinuationStamp(headThreadSession.started_at)}.

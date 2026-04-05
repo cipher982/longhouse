@@ -86,7 +86,7 @@ def build_session_capabilities_response(session: AgentSession | None) -> Session
     capability_flags = build_session_capabilities(session)
     return SessionCapabilitiesResponse(
         live_control_available=capability_flags.live_control_available,
-        cloud_continuation_available=capability_flags.cloud_continuation_available,
+        cloud_branch_available=capability_flags.cloud_branch_available,
         host_reattach_available=capability_flags.host_reattach_available,
         reply_to_live_session_available=capability_flags.reply_to_live_session_available,
     )
@@ -105,9 +105,9 @@ class ManagedLaunchProfileResponse(BaseModel):
 
 class SessionCapabilitiesResponse(BaseModel):
     live_control_available: bool = Field(False, description="True when Longhouse can inject into the live session now")
-    cloud_continuation_available: bool = Field(
+    cloud_branch_available: bool = Field(
         False,
-        description="True when Longhouse currently supports starting or continuing this session in cloud",
+        description="True when Longhouse currently supports starting or keeping a cloud branch from this session",
     )
     host_reattach_available: bool = Field(False, description="True when this session can be resumed from its host terminal")
     reply_to_live_session_available: bool = Field(

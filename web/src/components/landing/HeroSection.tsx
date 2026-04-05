@@ -45,7 +45,7 @@ export function HeroSection({
           <p className="landing-hero-note">
             Works on your laptop. Shines on a machine that stays on. Self-host free where the work lives,
             or use hosted beta later if you want us to run the box. Claude remains the strongest direct
-            continuation path today.
+            cloud-branch path today.
           </p>
 
           <div className="landing-hero-ctas">
@@ -105,7 +105,7 @@ export function HeroSection({
               </div>
               <div className="landing-hero-signal-card">
                 <p className="landing-hero-signal-card-title">Control channel</p>
-                <p>Start through Longhouse or wrappers so the same session can still be messaged or continued later.</p>
+                <p>Start through Longhouse so the live session can still be messaged later, or branch new cloud work from synced thread context.</p>
               </div>
               <div className="landing-hero-signal-card">
                 <p className="landing-hero-signal-card-title">Coordination</p>

@@ -358,7 +358,7 @@ async def ship_session_to_zerg(
         ended_at = metadata.ended_at.isoformat() if metadata.ended_at else None
 
     # Build ingest payload.
-    # Explicit lineage/session ids let cloud continuation update a known child row
+    # Explicit lineage/session ids let cloud branching update a known child row
     # instead of silently inventing a sibling session on every resume.
     device_id = f"zerg-commis-{platform.node()}:{provider_session_id}"
     payload = {

@@ -5,7 +5,7 @@ import type { AgentSession, AgentSessionProjectionItem, SessionCapabilities } fr
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
-    cloud_continuation_available: true,
+    cloud_branch_available: true,
     host_reattach_available: false,
     reply_to_live_session_available: false,
     ...overrides,
@@ -101,7 +101,7 @@ describe("getSessionInteractionCapabilities", () => {
         source_runner_name: "cinder",
         capabilities: makeCapabilities({
           live_control_available: true,
-          cloud_continuation_available: false,
+          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         }),
@@ -112,7 +112,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(true);
     expect(capabilities.capabilityLabel).toBe("Live control");
     expect(capabilities.composerDisabledReason).toBeNull();
-    expect(capabilities.primaryActionLabel).toBe("Continue here");
+    expect(capabilities.primaryActionLabel).toBe("Open live dock");
     expect(capabilities.submitLabel).toBe("Send");
   });
 
@@ -123,7 +123,7 @@ describe("getSessionInteractionCapabilities", () => {
         execution_home: "managed_local",
         managed_transport: "codex_app_server",
         capabilities: makeCapabilities({
-          cloud_continuation_available: false,
+          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
@@ -133,11 +133,11 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.capabilityLabel).toBe("Reattach on host");
     expect(capabilities.composerDisabledReason).toMatch(/host control channel/i);
-    expect(capabilities.primaryActionLabel).toBe("Continue here");
+    expect(capabilities.primaryActionLabel).toBe("Unavailable");
     expect(capabilities.notice?.title).toMatch(/Codex session needs host attach/i);
   });
 
-  it("lets managed-local Claude sessions fall back to browser continuation when the live control channel is gone", () => {
+  it("lets managed-local Claude sessions start a browser cloud branch when the live control channel is gone", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "claude",
@@ -146,7 +146,7 @@ describe("getSessionInteractionCapabilities", () => {
         source_runner_id: null,
         source_runner_name: null,
         capabilities: makeCapabilities({
-          cloud_continuation_available: true,
+          cloud_branch_available: true,
           host_reattach_available: true,
         }),
       }),
@@ -155,15 +155,16 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("promote");
     expect(capabilities.canChatFromBrowser).toBe(true);
-    expect(capabilities.capabilityLabel).toBe("Web continue");
-    expect(capabilities.capabilitySummary).toBe("Start a cloud continuation from this session.");
-    expect(capabilities.title).toBe("Continue in Cloud");
-    expect(capabilities.description).toContain("starts a cloud continuation from this session in Longhouse");
-    expect(capabilities.submitLabel).toBe("Start in Cloud");
+    expect(capabilities.capabilityLabel).toBe("Cloud branch");
+    expect(capabilities.capabilitySummary).toBe("Start a cloud branch from this session.");
+    expect(capabilities.title).toBe("Start Cloud Branch");
+    expect(capabilities.description).toContain("starts a new cloud branch from this session in Longhouse");
+    expect(capabilities.submitLabel).toBe("Start Cloud Branch");
     expect(capabilities.composerDisabledReason).toBeNull();
+    expect(capabilities.primaryActionLabel).toBe("Open branch dock");
   });
 
-  it("treats a synced Claude transcript on the head as promotable to cloud continuation", () => {
+  it("treats a synced Claude transcript on the head as promotable to a cloud branch", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession(),
       isViewingHead: true,
@@ -171,10 +172,11 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("promote");
     expect(capabilities.canChatFromBrowser).toBe(true);
-    expect(capabilities.capabilityLabel).toBe("Web continue");
-    expect(capabilities.capabilitySummary).toBe("Start a cloud continuation from this session.");
-    expect(capabilities.title).toBe("Continue in Cloud");
-    expect(capabilities.submitLabel).toBe("Start in Cloud");
+    expect(capabilities.capabilityLabel).toBe("Cloud branch");
+    expect(capabilities.capabilitySummary).toBe("Start a cloud branch from this session.");
+    expect(capabilities.title).toBe("Start Cloud Branch");
+    expect(capabilities.submitLabel).toBe("Start Cloud Branch");
+    expect(capabilities.primaryActionLabel).toBe("Open branch dock");
   });
 
   it("treats unsupported providers as searchable context only", () => {
@@ -182,7 +184,7 @@ describe("getSessionInteractionCapabilities", () => {
       session: makeSession({
         provider: "gemini",
         capabilities: makeCapabilities({
-          cloud_continuation_available: false,
+          cloud_branch_available: false,
         }),
       }),
     });
@@ -190,7 +192,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.capabilityLabel).toBe("History only");
-    expect(capabilities.composerDisabledReason).toMatch(/cloud continuation is not available/i);
-    expect(capabilities.primaryActionLabel).toBe("Continue here");
+    expect(capabilities.composerDisabledReason).toMatch(/cloud branching is not available/i);
+    expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 });

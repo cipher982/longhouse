@@ -35,7 +35,7 @@ export default function DocsPage() {
       <main className="info-page-content">
         <h1 className="info-page-title">Documentation</h1>
         <p className="info-page-subtitle">
-          Get started fast, bring sessions into one timeline, then keep more control over that same session by starting through Longhouse.
+          Get started fast, bring sessions into one timeline, then start live control or cloud branches from synced thread context when you need them.
         </p>
 
         <nav className="docs-nav">
@@ -89,13 +89,13 @@ longhouse ship</code></pre>
           <h3>4. Start through Longhouse when you want live control</h3>
           <p>
             All sessions live in the same timeline. Starting through Longhouse adds live control to that
-            same session later:
+            session later:
           </p>
           <pre><code>longhouse claude
 longhouse codex</code></pre>
           <p>
-            Claude is the strongest continuation path today. Codex and Gemini are already useful in the
-            archive and machine surface.
+            Claude is the strongest cloud-branch path today. Codex and Gemini are already useful in the
+            archive, machine surface, and managed-local control path.
           </p>
 
           <h3>5. Optional: keep typing bare claude or codex</h3>
@@ -150,9 +150,9 @@ longhouse wrap --status</code></pre>
 
           <h3>Current Support</h3>
           <ul>
-            <li><strong>Claude Code</strong> — strongest continuation path today: timeline sync, hooks, and direct browser continuation</li>
-            <li><strong>Codex CLI</strong> — timeline sync, search/detail, control-ready launches through Longhouse, and opt-in default-launcher wrappers today; continuation is still Claude-first</li>
-            <li><strong>Gemini CLI</strong> — timeline sync and search/detail today; continuation is still Claude-first</li>
+            <li><strong>Claude Code</strong> — strongest cloud-branch path today: timeline sync, hooks, and direct browser branching</li>
+            <li><strong>Codex CLI</strong> — timeline sync, search/detail, and control-ready launches through Longhouse today; direct cloud branching is not supported yet</li>
+            <li><strong>Gemini CLI</strong> — timeline sync and search/detail today; direct cloud branching is not supported yet</li>
           </ul>
 
           <h3>Coming Soon</h3>

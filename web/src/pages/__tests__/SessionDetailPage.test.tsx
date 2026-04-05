@@ -64,7 +64,7 @@ vi.mock("../../components/workspace/WorkspaceShell", () => ({
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: true,
-    cloud_continuation_available: false,
+    cloud_branch_available: false,
     host_reattach_available: true,
     reply_to_live_session_available: true,
     ...overrides,
@@ -243,7 +243,7 @@ describe("SessionDetailPage", () => {
     expect(screen.getByText("Output")).toBeInTheDocument();
   });
 
-  it("keeps the dock visible for searchable-only sessions and explains why continuation is disabled", () => {
+  it("keeps the dock visible for searchable-only sessions and explains why cloud branching is disabled", () => {
     const session = makeSession({
       provider: "gemini",
       execution_home: "local",
@@ -255,7 +255,7 @@ describe("SessionDetailPage", () => {
       id: "session-gemini",
       capabilities: makeCapabilities({
         live_control_available: false,
-        cloud_continuation_available: false,
+        cloud_branch_available: false,
         host_reattach_available: false,
         reply_to_live_session_available: false,
       }),
@@ -313,10 +313,10 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "This Gemini session is still fully searchable here, but cloud continuation is not available from this session yet.",
+      "This Gemini session is still fully searchable here, but cloud branching is not available from this session yet.",
     );
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
-      "Web continuation unavailable for Gemini",
+      "Cloud branching unavailable for Gemini",
     );
   });
 });

@@ -300,7 +300,7 @@ def test_validate_managed_local_chat_done_payload_accepts_successful_zero_exit_c
     error = validate_managed_local_chat_done_payload(
         session_id=session_id,
         done_payload={
-            "created_continuation": False,
+            "created_branch": False,
             "shipped_session_id": session_id,
             "persisted_events": 2,
             "sync_status": "complete",
@@ -318,7 +318,7 @@ def test_validate_managed_local_chat_done_payload_accepts_sync_pending_without_p
     error = validate_managed_local_chat_done_payload(
         session_id=session_id,
         done_payload={
-            "created_continuation": False,
+            "created_branch": False,
             "shipped_session_id": session_id,
             "persisted_events": 0,
             "sync_status": "pending",
@@ -336,7 +336,7 @@ def test_validate_managed_local_chat_done_payload_rejects_nonzero_exit_code():
     error = validate_managed_local_chat_done_payload(
         session_id=session_id,
         done_payload={
-            "created_continuation": False,
+            "created_branch": False,
             "shipped_session_id": session_id,
             "persisted_events": 2,
             "sync_status": "complete",

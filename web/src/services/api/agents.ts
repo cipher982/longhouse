@@ -78,7 +78,7 @@ export interface ManagedLaunchProfile {
 
 export interface SessionCapabilities {
   live_control_available: boolean;
-  cloud_continuation_available: boolean;
+  cloud_branch_available: boolean;
   host_reattach_available: boolean;
   reply_to_live_session_available: boolean;
 }

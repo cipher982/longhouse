@@ -1076,7 +1076,7 @@ api_app.include_router(traces_router)  # Trace Explorer (admin only)
 api_app.include_router(reliability_router)  # Reliability Dashboard (admin only)
 api_app.include_router(skills_router)  # Skills Platform for workspace-scoped tools
 api_app.include_router(session_chat_router)  # Timeline session drop-in chat
-api_app.include_router(agents_session_chat_router)  # Machine-facing session continuation
+api_app.include_router(agents_session_chat_router)  # Machine-facing live-send and cloud-branch control
 api_app.include_router(timeline_router)  # Browser-owned timeline/session archive API
 api_app.include_router(agents_ingest_router)
 api_app.include_router(agents_search_router)  # Before sessions — literal /sessions/semantic must match before /sessions/{id}

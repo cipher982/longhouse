@@ -18,7 +18,7 @@ export function getSessionInteractionCapabilities({
   }
   const {
     live_control_available: liveControlAvailable,
-    cloud_continuation_available: cloudContinuationAvailable,
+    cloud_branch_available: cloudBranchAvailable,
     host_reattach_available: hostReattachAvailable,
   } = session.capabilities;
   const isManagedLocalSession = liveControlAvailable || hostReattachAvailable;
@@ -28,7 +28,7 @@ export function getSessionInteractionCapabilities({
 
   const mode: SessionInteractionMode = liveControlAvailable
     ? "managed_local"
-    : cloudContinuationAvailable
+    : cloudBranchAvailable
       ? !isViewingHead
         ? "branch"
         : session.continuation_kind === "cloud"
@@ -42,18 +42,20 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? "Send"
       : mode === "branch"
-        ? "Branch in Cloud"
+        ? "Branch from Here"
         : mode === "promote"
-          ? "Start in Cloud"
-          : "Reply";
+          ? "Start Cloud Branch"
+          : mode === "head"
+            ? "Reply in Cloud"
+            : "Reply";
 
   const capabilityLabel =
     mode === "managed_local"
       ? "Live control"
       : mode === "managed_local_unavailable"
         ? "Reattach on host"
-        : cloudContinuationAvailable
-          ? "Web continue"
+        : cloudBranchAvailable
+          ? "Cloud branch"
           : "History only";
 
   const capabilityVariant =
@@ -69,22 +71,22 @@ export function getSessionInteractionCapabilities({
       : mode === "managed_local_unavailable"
         ? `This live ${providerLabel} session is visible here, but you need the host terminal to keep driving it.`
         : mode === "head"
-          ? "Continue this session in cloud from the browser."
+          ? "Keep working in this cloud branch from the browser."
           : mode === "promote"
-            ? "Start a cloud continuation from this session."
+            ? "Start a cloud branch from this session."
             : mode === "branch"
-              ? "Start a new cloud continuation from this point."
-              : `Search and inspect this ${providerLabel} session here; cloud continuation is not available from this session yet.`;
+              ? "Start a new cloud branch from this point."
+              : `Search and inspect this ${providerLabel} session here; cloud branching is not available from this session yet.`;
 
   const title =
     mode === "managed_local"
       ? "Continue this session"
       : mode === "head"
-        ? "Continue in Cloud"
+        ? "Cloud Branch"
         : mode === "promote"
-          ? "Continue in Cloud"
+          ? "Start Cloud Branch"
           : mode === "branch"
-            ? "Branch in Cloud"
+            ? "Branch from Here"
             : mode === "managed_local_unavailable"
               ? "Continue this session on the host"
               : "Search and inspect this session";
@@ -93,41 +95,41 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
       : mode === "head"
-        ? `Earlier turns were synced from ${sourceOriginLabel}. New messages below continue this session in cloud from Longhouse.`
+        ? `Earlier turns were synced from ${sourceOriginLabel}. New messages below keep working in this cloud branch from Longhouse.`
         : mode === "promote"
-          ? `Earlier turns were synced from ${sourceOriginLabel}. Your next message below starts a cloud continuation from this session in Longhouse.`
+          ? `Earlier turns were synced from ${sourceOriginLabel}. Your next message below starts a new cloud branch from this session in Longhouse.`
           : mode === "branch"
-            ? `Earlier turns were synced from ${sourceOriginLabel}. Your next message starts a new cloud continuation from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
+            ? `Earlier turns were synced from ${sourceOriginLabel}. Your next message starts a new cloud branch from this point${headOriginLabel ? ` and leaves the latest ${headOriginLabel} head untouched` : ""}.`
             : mode === "managed_local_unavailable"
               ? `This live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts right now. Reattach on the host machine to continue.`
-              : `This ${providerLabel} session is fully searchable here, but cloud continuation is not available from this session yet.`;
+              : `This ${providerLabel} session is fully searchable here, but cloud branching is not available from this session yet.`;
 
   const placeholder =
     mode === "managed_local"
       ? `Send a message to the live ${providerLabel} session...`
       : mode === "branch"
-        ? "Branch from this point in cloud..."
+        ? "Start a cloud branch from this point..."
         : mode === "promote"
-          ? "Continue this thread in the cloud..."
+          ? "Start a cloud branch from this session..."
           : "Type a message...";
 
   const keyboardHint =
     mode === "branch"
-      ? 'Press the "Branch in Cloud" button to confirm the new branch.'
+      ? 'Press the "Branch from Here" button to confirm the new cloud branch.'
       : mode === "promote"
-        ? 'Press the "Start in Cloud" button to confirm the first cloud message.'
+        ? 'Press the "Start Cloud Branch" button to confirm the first cloud-branch message.'
         : undefined;
 
   const notice =
     mode === "managed_local_unavailable"
-      ? {
-          title: isManagedLocalCodex ? "Codex session needs host attach" : "Live session needs host attach",
-          body: `This live ${providerLabel} session is visible here, but Longhouse cannot reach its host control channel right now. Reattach on the host machine to continue.`,
-        }
+        ? {
+            title: isManagedLocalCodex ? "Codex session needs host attach" : "Live session needs host attach",
+            body: `This live ${providerLabel} session is visible here, but Longhouse cannot reach its host control channel right now. Reattach on the host machine to continue.`,
+          }
       : mode === "unsupported"
         ? {
-            title: `Web continuation unavailable for ${providerLabel}`,
-            body: `This ${providerLabel} session is still fully searchable here, but cloud continuation is not available from this session yet.`,
+            title: `Cloud branching unavailable for ${providerLabel}`,
+            body: `This ${providerLabel} session is still fully searchable here, but cloud branching is not available from this session yet.`,
           }
         : null;
 
@@ -142,14 +144,14 @@ export function getSessionInteractionCapabilities({
     isManagedLocalSession,
     isManagedLocalCodex,
     liveControlAvailable,
-    cloudContinuationAvailable,
+    cloudBranchAvailable,
     hostReattachAvailable,
-    canChatFromBrowser: liveControlAvailable || cloudContinuationAvailable,
+    canChatFromBrowser: liveControlAvailable || cloudBranchAvailable,
     capabilityLabel,
     capabilityVariant,
     capabilitySummary,
     composerDisabledReason,
-    primaryActionLabel: "Continue here",
+    primaryActionLabel: liveControlAvailable ? "Open live dock" : cloudBranchAvailable ? "Open branch dock" : "Unavailable",
     submitLabel,
     title,
     description,

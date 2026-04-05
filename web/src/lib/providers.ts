@@ -15,7 +15,7 @@ export type LaunchProviderSupport = {
   statusLabel: string;
   archiveVisibility: "live";
   cloudSessionStart: "live";
-  directWebContinuation: "live" | "later";
+  directWebBranching: "live" | "later";
   hooksSupport: "live" | "none";
   telemetryQuality: "rich" | "structured" | "basic";
 };
@@ -24,11 +24,11 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   claude: {
     id: "claude",
     marketingName: "Claude Code",
-    cardDescription: "Import, search, and direct web continuation",
+    cardDescription: "Import, search, and direct cloud branching",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
-    directWebContinuation: "live",
+    directWebBranching: "live",
     hooksSupport: "live",
     telemetryQuality: "rich",
   },
@@ -39,18 +39,18 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
-    directWebContinuation: "later",
+    directWebBranching: "later",
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
   gemini: {
     id: "gemini",
     marketingName: "Gemini CLI",
-    cardDescription: "Import and search today; direct web continuation later",
+    cardDescription: "Import and search today; direct cloud branching later",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
-    directWebContinuation: "later",
+    directWebBranching: "later",
     hooksSupport: "none",
     telemetryQuality: "basic",
   },
@@ -108,7 +108,7 @@ export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
   ];
 }
 
-/** Whether a provider supports direct web continuation from a cloud transcript. */
-export function supportsDirectWebContinuation(provider: string): boolean {
-  return getLaunchProviderSupport(provider)?.directWebContinuation === "live";
+/** Whether a provider supports direct web branching from synced session context. */
+export function supportsDirectWebBranching(provider: string): boolean {
+  return getLaunchProviderSupport(provider)?.directWebBranching === "live";
 }

@@ -3995,7 +3995,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/{session_id}/chat": {
+    "/api/sessions/{session_id}/branch-cloud": {
         parameters: {
             query?: never;
             header?: never;
@@ -4005,10 +4005,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Chat With Session
-         * @description Start an explicit Claude cloud continuation and stream the response via SSE.
+         * Branch Session In Cloud
+         * @description Start an explicit cloud branch and stream the response via SSE.
          */
-        post: operations["chat_with_session_sessions__session_id__chat_post"];
+        post: operations["branch_session_in_cloud_sessions__session_id__branch_cloud_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4105,7 +4105,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/continuation-readiness": {
+    "/api/sessions/branch-cloud-readiness": {
         parameters: {
             query?: never;
             header?: never;
@@ -4113,13 +4113,13 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Continuation Readiness
-         * @description Pre-flight check: can this instance run session continuations?
+         * Cloud Branch Readiness
+         * @description Pre-flight check: can this instance run cloud branches from session context?
          *
          *     Returns backend config and whether the required Claude binary/keys are present.
          *     Used by QA and the frontend to show actionable errors.
          */
-        get: operations["continuation_readiness_sessions_continuation_readiness_get"];
+        get: operations["cloud_branch_readiness_sessions_branch_cloud_readiness_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4128,7 +4128,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/sessions/{session_id}/continue": {
+    "/api/agents/sessions/{session_id}/branch-cloud": {
         parameters: {
             query?: never;
             header?: never;
@@ -4138,10 +4138,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Continue Session
-         * @description Continue a session through the canonical machine-facing agents surface.
+         * Branch Session In Cloud Agents
+         * @description Start a cloud branch through the canonical machine-facing agents surface.
          */
-        post: operations["continue_session_agents_sessions__session_id__continue_post"];
+        post: operations["branch_session_in_cloud_agents_agents_sessions__session_id__branch_cloud_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9516,11 +9516,11 @@ export interface components {
              */
             live_control_available: boolean;
             /**
-             * Cloud Continuation Available
-             * @description True when Longhouse currently supports starting or continuing this session in cloud
+             * Cloud Branch Available
+             * @description True when Longhouse currently supports starting or keeping a cloud branch from this session
              * @default false
              */
-            cloud_continuation_available: boolean;
+            cloud_branch_available: boolean;
             /**
              * Host Reattach Available
              * @description True when this session can be resumed from its host terminal
@@ -9601,7 +9601,7 @@ export interface components {
         };
         /**
          * SessionMessageRequest
-         * @description Request to send one message into an explicit continuation path.
+         * @description Request to send one message into an explicit session interaction path.
          */
         SessionMessageRequest: {
             /**
@@ -18351,7 +18351,7 @@ export interface operations {
             };
         };
     };
-    chat_with_session_sessions__session_id__chat_post: {
+    branch_session_in_cloud_sessions__session_id__branch_cloud_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;
@@ -18573,7 +18573,7 @@ export interface operations {
             };
         };
     };
-    continuation_readiness_sessions_continuation_readiness_get: {
+    cloud_branch_readiness_sessions_branch_cloud_readiness_get: {
         parameters: {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
@@ -18608,7 +18608,7 @@ export interface operations {
             };
         };
     };
-    continue_session_agents_sessions__session_id__continue_post: {
+    branch_session_in_cloud_agents_agents_sessions__session_id__branch_cloud_post: {
         parameters: {
             query?: {
                 session_factory?: unknown;

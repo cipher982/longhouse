@@ -59,7 +59,7 @@ const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStrea
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
-    cloud_continuation_available: false,
+    cloud_branch_available: false,
     host_reattach_available: false,
     reply_to_live_session_available: false,
     ...overrides,
@@ -384,7 +384,7 @@ describe("SessionsPage", () => {
     const capability = await screen.findByTestId("session-card-capability");
     expect(capability).toHaveTextContent("History only");
     expect(capability).toHaveTextContent(
-      "Search and inspect this Codex session here; cloud continuation is not available from this session yet.",
+      "Search and inspect this Codex session here; cloud branching is not available from this session yet.",
     );
   });
 

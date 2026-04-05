@@ -1,7 +1,7 @@
-"""Session continuation router for explicit live-send and cloud-continue flows.
+"""Session control router for explicit live-send and cloud-branch flows.
 
 Enables interactive chat with synced CLI sessions.
-Cloud continuation shells out to Claude Code (`claude --resume`) while
+Cloud branching currently shells out to Claude Code (`claude --resume`) while
 managed-local live send injects into the active local session.
 
 Security:
@@ -94,7 +94,7 @@ SESSION_CHAT_BACKEND_ZAI = "zai"
 SESSION_CHAT_BACKEND_BEDROCK = "bedrock"
 SESSION_CHAT_BACKEND_ANTHROPIC = "anthropic"
 DEFAULT_SESSION_CHAT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
-# Anthropic-ecosystem model defaults for session continuation (not in models.json —
+# Anthropic-ecosystem model defaults for cloud branching (not in models.json —
 # these are Claude Code resume models, not OpenAI-compatible chat models).
 # Override at runtime via SESSION_CHAT_MODEL env var.
 DEFAULT_SESSION_CHAT_ZAI_MODEL = "glm-5"
@@ -123,16 +123,16 @@ _MANAGED_LOCAL_SYNC_PENDING_NOTE = "".join(
         "to Longhouse.",
     ]
 )
-_CONTINUATION_PERSISTENCE_ERROR = "".join(
+_CLOUD_BRANCH_PERSISTENCE_ERROR = "".join(
     [
         "Response completed, but Longhouse could not save the ",
-        "continuation transcript to the timeline.",
+        "cloud branch transcript to the timeline.",
     ]
 )
-_CONTINUATION_EMPTY_EVENTS_ERROR = "".join(
+_CLOUD_BRANCH_EMPTY_EVENTS_ERROR = "".join(
     [
         "Response completed, but Longhouse could not extract any new ",
-        "timeline events from the continuation transcript.",
+        "timeline events from the cloud branch transcript.",
     ]
 )
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
@@ -182,7 +182,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
     backend = _get_session_chat_backend()
     if not _check_claude_binary():
         raise RuntimeError(
-            "Session continuation requires the 'claude' CLI but it is not installed. "
+            "Cloud branching currently requires the 'claude' CLI but it is not installed. "
             "Install @anthropic-ai/claude-code (npm install -g @anthropic-ai/claude-code)."
         )
 
@@ -246,7 +246,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
 
 
 class SessionMessageRequest(BaseModel):
-    """Request to send one message into an explicit continuation path."""
+    """Request to send one message into an explicit session interaction path."""
 
     message: str = Field(..., min_length=1, max_length=10000, description="User message")
 
@@ -389,17 +389,17 @@ def _load_session_for_continuation(db: Session, session_id: str):
     return source_session
 
 
-def _assert_cloud_continuation_available(source_session) -> None:
+def _assert_cloud_branch_available(source_session) -> None:
     capabilities = build_session_capabilities(source_session)
     provider = str(source_session.provider or "").strip().lower()
     provider_label = "Codex" if provider == "codex" else "Claude" if provider == "claude" else provider or "This"
 
-    if capabilities.cloud_continuation_available:
+    if capabilities.cloud_branch_available:
         return
     if capabilities.live_control_available:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This session currently has live Longhouse control. Use live send instead of cloud continuation.",
+            detail="This session currently has live Longhouse control. Use live send instead of starting a cloud branch.",
         )
     if capabilities.host_reattach_available:
         raise HTTPException(
@@ -409,11 +409,11 @@ def _assert_cloud_continuation_available(source_session) -> None:
     if provider == "codex":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Codex sessions are not yet available for cloud continuation from Longhouse.",
+            detail="Codex sessions are not yet available for cloud branching from Longhouse.",
         )
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail=f"{provider_label} sessions are not available for cloud continuation from Longhouse.",
+        detail=f"{provider_label} sessions are not available for cloud branching from Longhouse.",
     )
 
 
@@ -463,7 +463,7 @@ def _authorize_agents_session_continue(
             return
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Machine continuation requires a device token",
+            detail="Machine cloud branching requires a device token",
         )
 
     token_session_id: UUID | None = None
@@ -504,7 +504,7 @@ def _authorize_agents_session_continue(
     if token_session_id is None and header_session_id is None and (not token_device_id or token_device_id != session_device_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Machine continuation requires current session context or a matching device token",
+            detail="Machine cloud branching requires current session context or a matching device token",
         )
 
 
@@ -719,7 +719,7 @@ async def _dispatch_managed_local_text(
     )
 
 
-async def _build_cloud_continuation_chat_response(
+async def _build_cloud_branch_response(
     *,
     source_session,
     message: str,
@@ -728,7 +728,7 @@ async def _build_cloud_continuation_chat_response(
     db: Session,
 ) -> StreamingResponse:
     store = AgentsStore(db)
-    target_session, created_continuation = store.ensure_cloud_continuation_target(source_session.id)
+    target_session, created_branch = store.ensure_cloud_continuation_target(source_session.id)
     db.commit()
 
     resolved_workspace = await workspace_resolver.resolve(
@@ -766,12 +766,12 @@ async def _build_cloud_continuation_chat_response(
     async def generate():
         try:
             continued_from_session_id = str(target_session.continued_from_session_id) if target_session.continued_from_session_id else None
-            async for event in stream_session_continuation_output(
+            async for event in stream_session_cloud_branch_output(
                 source_session_id=str(source_session.id),
                 target_session_id=str(target_session.id),
                 thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
                 continued_from_session_id=continued_from_session_id,
-                created_continuation=created_continuation,
+                created_branch=created_branch,
                 branched_from_event_id=target_session.branched_from_event_id,
                 provider_session_id=provider_session_id,
                 workspace_path=resolved_workspace.path,
@@ -1068,7 +1068,7 @@ async def _stream_managed_local_output(
                 "continued_from_session_id": (
                     str(source_session.continued_from_session_id) if source_session.continued_from_session_id else None
                 ),
-                "created_continuation": False,
+                "created_branch": False,
                 "provider_session_id": source_session.provider_session_id,
                 "execution_home": source_session.execution_home,
                 "origin_label": source_session.origin_label,
@@ -1128,7 +1128,7 @@ async def _stream_managed_local_output(
                     "session_id": str(source_session.id),
                     "source_session_id": str(source_session.id),
                     "shipped_session_id": None,
-                    "created_continuation": False,
+                    "created_branch": False,
                     "control_status": MANAGED_LOCAL_CONTROL_STATUS_FAILED,
                     "sync_status": MANAGED_LOCAL_SYNC_STATUS_FAILED,
                     "exit_code": 1,
@@ -1282,7 +1282,7 @@ async def _stream_managed_local_output(
                     "session_id": str(source_session.id),
                     "source_session_id": str(source_session.id),
                     "shipped_session_id": None,
-                    "created_continuation": False,
+                    "created_branch": False,
                     "control_status": MANAGED_LOCAL_CONTROL_STATUS_FAILED,
                     "sync_status": MANAGED_LOCAL_SYNC_STATUS_FAILED,
                     "exit_code": 0,
@@ -1312,7 +1312,7 @@ async def _stream_managed_local_output(
                     "session_id": str(source_session.id),
                     "source_session_id": str(source_session.id),
                     "shipped_session_id": str(source_session.id),
-                    "created_continuation": False,
+                    "created_branch": False,
                     "control_status": control_status,
                     "sync_status": MANAGED_LOCAL_SYNC_STATUS_PENDING,
                     "exit_code": 0,
@@ -1352,7 +1352,7 @@ async def _stream_managed_local_output(
                 "session_id": str(source_session.id),
                 "source_session_id": str(source_session.id),
                 "shipped_session_id": str(source_session.id),
-                "created_continuation": False,
+                "created_branch": False,
                 "control_status": control_status,
                 "sync_status": MANAGED_LOCAL_SYNC_STATUS_COMPLETE,
                 "exit_code": 0,
@@ -1383,13 +1383,13 @@ class SSEEvent:
         return f"event: {self.event}\ndata: {self.data}\n\n"
 
 
-async def _stream_fake_session_continuation_output(
+async def _stream_fake_session_cloud_branch_output(
     *,
     source_session_id: str,
     target_session_id: str,
     thread_root_session_id: str,
     continued_from_session_id: str | None,
-    created_continuation: bool,
+    created_branch: bool,
     branched_from_event_id: int | None,
     provider_session_id: str,
     workspace_path: Path,
@@ -1397,7 +1397,7 @@ async def _stream_fake_session_continuation_output(
     db: Session | None = None,
 ) -> AsyncIterator[str]:
     timestamp = datetime.now(timezone.utc).isoformat()
-    assistant_text = f"Test continuation reply to: {message}"
+    assistant_text = f"Test cloud-branch reply to: {message}"
 
     yield SSEEvent(
         event="system",
@@ -1408,7 +1408,7 @@ async def _stream_fake_session_continuation_output(
                 "source_session_id": source_session_id,
                 "thread_root_session_id": thread_root_session_id,
                 "continued_from_session_id": continued_from_session_id,
-                "created_continuation": created_continuation,
+                "created_branch": created_branch,
                 "provider_session_id": provider_session_id,
                 "workspace": str(workspace_path),
                 "timestamp": timestamp,
@@ -1440,12 +1440,12 @@ async def _stream_fake_session_continuation_output(
     except Exception as exc:
         if db is not None:
             db.rollback()
-        logger.warning("Failed to persist fake continuation turn for %s: %s", target_session_id, exc)
+        logger.warning("Failed to persist fake cloud-branch turn for %s: %s", target_session_id, exc)
         ship_result = None
-        persistence_error = _CONTINUATION_PERSISTENCE_ERROR
+        persistence_error = _CLOUD_BRANCH_PERSISTENCE_ERROR
 
     if ship_result is not None and ship_result.events_inserted <= 0 and persistence_error is None:
-        persistence_error = _CONTINUATION_EMPTY_EVENTS_ERROR
+        persistence_error = _CLOUD_BRANCH_EMPTY_EVENTS_ERROR
 
     yield SSEEvent(
         event="done",
@@ -1454,7 +1454,7 @@ async def _stream_fake_session_continuation_output(
                 "session_id": target_session_id,
                 "source_session_id": source_session_id,
                 "shipped_session_id": ship_result.session_id if ship_result else None,
-                "created_continuation": created_continuation,
+                "created_branch": created_branch,
                 "branched_from_event_id": branched_from_event_id,
                 "exit_code": 0,
                 "total_text_length": len(assistant_text),
@@ -1596,13 +1596,13 @@ def _persist_fake_continuation_turn(
     )
 
 
-async def stream_session_continuation_output(
+async def stream_session_cloud_branch_output(
     *,
     source_session_id: str,
     target_session_id: str,
     thread_root_session_id: str,
     continued_from_session_id: str | None,
-    created_continuation: bool,
+    created_branch: bool,
     branched_from_event_id: int | None,
     provider_session_id: str,
     workspace_path: Path,
@@ -1610,7 +1610,7 @@ async def stream_session_continuation_output(
     request_id: str,
     db: Session | None = None,
 ) -> AsyncIterator[str]:
-    """Stream Claude cloud continuation output as SSE events.
+    """Stream explicit cloud-branch output as SSE events.
 
     Yields SSE events:
     - system: Session info, status updates
@@ -1622,12 +1622,12 @@ async def stream_session_continuation_output(
     proc = None
     try:
         if _truthy_env("TESTING") and _truthy_env("E2E_FAKE_SESSION_CHAT"):
-            async for event in _stream_fake_session_continuation_output(
+            async for event in _stream_fake_session_cloud_branch_output(
                 source_session_id=source_session_id,
                 target_session_id=target_session_id,
                 thread_root_session_id=thread_root_session_id,
                 continued_from_session_id=continued_from_session_id,
-                created_continuation=created_continuation,
+                created_branch=created_branch,
                 branched_from_event_id=branched_from_event_id,
                 provider_session_id=provider_session_id,
                 workspace_path=workspace_path,
@@ -1648,7 +1648,7 @@ async def stream_session_continuation_output(
                     "source_session_id": source_session_id,
                     "thread_root_session_id": thread_root_session_id,
                     "continued_from_session_id": continued_from_session_id,
-                    "created_continuation": created_continuation,
+                    "created_branch": created_branch,
                     "provider_session_id": provider_session_id,
                     "workspace": str(workspace_path),
                     "execution_backend": runtime.backend,
@@ -1784,13 +1784,13 @@ async def stream_session_continuation_output(
                     else:
                         persistence_error = (
                             "Response completed, but Longhouse could not extract any new timeline events "
-                            "from the continuation transcript."
+                            "from the cloud branch transcript."
                         )
-                        logger.warning("[%s] Shipped continuation contained no new events", request_id)
+                        logger.warning("[%s] Shipped cloud branch contained no new events", request_id)
                 else:
-                    persistence_error = _CONTINUATION_PERSISTENCE_ERROR
+                    persistence_error = _CLOUD_BRANCH_PERSISTENCE_ERROR
             except Exception as e:
-                persistence_error = _CONTINUATION_PERSISTENCE_ERROR
+                persistence_error = _CLOUD_BRANCH_PERSISTENCE_ERROR
                 logger.warning(f"[{request_id}] Failed to ship session to Longhouse: {e}")
 
         yield SSEEvent(
@@ -1800,7 +1800,7 @@ async def stream_session_continuation_output(
                     "session_id": target_session_id,
                     "source_session_id": source_session_id,
                     "shipped_session_id": shipped_id,
-                    "created_continuation": created_continuation,
+                    "created_branch": created_branch,
                     "branched_from_event_id": branched_from_event_id,
                     "exit_code": proc.returncode,
                     "execution_backend": runtime.backend if "runtime" in locals() else SESSION_CHAT_BACKEND_AMBIENT,
@@ -1827,7 +1827,7 @@ async def stream_session_continuation_output(
         raise
 
     except Exception as e:
-        logger.exception(f"[{request_id}] Error streaming continuation output")
+        logger.exception(f"[{request_id}] Error streaming cloud branch output")
         yield SSEEvent(
             event="error",
             data=json.dumps({"error": str(e)[:500]}),
@@ -1838,21 +1838,21 @@ async def stream_session_continuation_output(
             proc.terminate()
 
 
-@router.post("/{session_id}/chat")
-async def chat_with_session(
+@router.post("/{session_id}/branch-cloud")
+async def branch_session_in_cloud(
     session_id: str,
     body: SessionMessageRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_oikos_user),
 ):
-    """Start an explicit Claude cloud continuation and stream the response via SSE."""
+    """Start an explicit cloud branch and stream the response via SSE."""
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
-    logger.info(f"[{request_id}] Cloud continuation request for session {source_session.id}")
-    _assert_cloud_continuation_available(source_session)
+    logger.info(f"[{request_id}] Cloud branch request for session {source_session.id}")
+    _assert_cloud_branch_available(source_session)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
     try:
-        return await _build_cloud_continuation_chat_response(
+        return await _build_cloud_branch_response(
             source_session=source_session,
             message=body.message,
             request_id=request_id,
@@ -1864,7 +1864,7 @@ async def chat_with_session(
         raise
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, request_id)
-        logger.exception(f"[{request_id}] Error in chat_with_session")
+        logger.exception(f"[{request_id}] Error in branch_session_in_cloud")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
@@ -1905,8 +1905,8 @@ async def send_to_live_session(
         ) from exc
 
 
-@agents_router.post("/{session_id}/continue")
-async def continue_session(
+@agents_router.post("/{session_id}/branch-cloud")
+async def branch_session_in_cloud_agents(
     session_id: str,
     body: SessionMessageRequest,
     request: Request,
@@ -1914,7 +1914,7 @@ async def continue_session(
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ):
-    """Continue a session through the canonical machine-facing agents surface."""
+    """Start a cloud branch through the canonical machine-facing agents surface."""
     settings = get_settings()
     resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
 
@@ -1926,11 +1926,11 @@ async def continue_session(
         source_session=source_session,
         auth_disabled=settings.auth_disabled,
     )
-    _assert_cloud_continuation_available(source_session)
+    _assert_cloud_branch_available(source_session)
     lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
 
     try:
-        return await _build_cloud_continuation_chat_response(
+        return await _build_cloud_branch_response(
             source_session=source_session,
             message=body.message,
             request_id=request_id,
@@ -1942,7 +1942,7 @@ async def continue_session(
         raise
     except Exception as exc:
         await session_lock_manager.release(lock_scope_id, request_id)
-        logger.exception(f"[{request_id}] Error in continue_session")
+        logger.exception(f"[{request_id}] Error in branch_session_in_cloud_agents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
@@ -2130,11 +2130,11 @@ async def force_release_lock(
     }
 
 
-@router.get("/continuation-readiness")
-async def continuation_readiness(
+@router.get("/branch-cloud-readiness")
+async def cloud_branch_readiness(
     _current_user=Depends(get_current_oikos_user),
 ) -> dict:
-    """Pre-flight check: can this instance run session continuations?
+    """Pre-flight check: can this instance run cloud branches from session context?
 
     Returns backend config and whether the required Claude binary/keys are present.
     Used by QA and the frontend to show actionable errors.
@@ -2145,7 +2145,7 @@ async def continuation_readiness(
     claude_available = _check_claude_binary()
 
     if not claude_available:
-        issues.append("'claude' CLI not found on PATH (required for Claude session continuation)")
+        issues.append("'claude' CLI not found on PATH (required for Claude-backed cloud branching)")
 
     if backend == SESSION_CHAT_BACKEND_ZAI:
         if not os.getenv("ZAI_API_KEY", "").strip():

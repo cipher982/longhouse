@@ -427,8 +427,8 @@ describe("useSessionWorkspace", () => {
       seam: {
         key: "seam:session-child:2026-03-19T16:45:00Z",
         sessionId: "session-child",
-        label: "Cloud continuation begins",
-        description: "Synced Local history above. Cloud-native messages below.",
+        label: "Cloud branch begins",
+        description: "Synced Local history above. New cloud-branch messages below.",
         timestamp: "2026-03-19T16:45:00Z",
       },
     });

@@ -8,7 +8,7 @@ import type { SessionTurnReview } from "../../../services/api/oikos";
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
-    cloud_continuation_available: true,
+    cloud_branch_available: true,
     host_reattach_available: false,
     reply_to_live_session_available: false,
     ...overrides,
@@ -143,7 +143,7 @@ describe("SessionContextPane", () => {
         execution_home: "managed_local",
         managed_transport: "codex_app_server",
         capabilities: makeCapabilities({
-          cloud_continuation_available: false,
+          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
@@ -170,7 +170,7 @@ describe("SessionContextPane", () => {
         source_runner_name: "cinder",
         capabilities: makeCapabilities({
           live_control_available: true,
-          cloud_continuation_available: false,
+          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         }),
@@ -178,7 +178,7 @@ describe("SessionContextPane", () => {
       onPrimaryAction,
     });
 
-    const button = screen.getByRole("button", { name: "Continue here" });
+    const button = screen.getByRole("button", { name: "Open live dock" });
     expect(button).toBeEnabled();
     expect(screen.getByText("Open the dock below and send the next prompt into the live session.")).toBeInTheDocument();
 
@@ -192,23 +192,23 @@ describe("SessionContextPane", () => {
       session: makeSession({
         provider: "gemini",
         capabilities: makeCapabilities({
-          cloud_continuation_available: false,
+          cloud_branch_available: false,
         }),
       }),
     });
 
-    const button = screen.getByRole("button", { name: "Continue here" });
+    const button = screen.getByRole("button", { name: "Unavailable" });
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute(
       "title",
-      "This Gemini session is still fully searchable here, but cloud continuation is not available from this session yet.",
+      "This Gemini session is still fully searchable here, but cloud branching is not available from this session yet.",
     );
     expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
-      "Search and inspect this Gemini session here; cloud continuation is not available from this session yet.",
+      "Search and inspect this Gemini session here; cloud branching is not available from this session yet.",
     );
   });
 
-  it("keeps browser continuation available when a managed-local Claude session loses its live control channel", () => {
+  it("keeps browser cloud branching available when a managed-local Claude session loses its live control channel", () => {
     renderPane({
       session: makeSession({
         provider: "claude",
@@ -218,20 +218,20 @@ describe("SessionContextPane", () => {
         source_runner_name: "cinder",
         attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-claude'",
         capabilities: makeCapabilities({
-          cloud_continuation_available: true,
+          cloud_branch_available: true,
           host_reattach_available: true,
         }),
       }),
     });
 
-    const button = screen.getByRole("button", { name: "Continue here" });
+    const button = screen.getByRole("button", { name: "Open branch dock" });
     expect(button).toBeEnabled();
-    expect(screen.getByText("Open the dock below and start a cloud continuation from this session.")).toBeInTheDocument();
+    expect(screen.getByText("Open the dock below and start a cloud branch from this session.")).toBeInTheDocument();
     expect(
-      screen.getByText(/Start or keep the cloud continuation from Longhouse below, or reattach on the host machine when available/i),
+      screen.getByText(/Start or keep the cloud branch from Longhouse below, or reattach on the host machine when available/i),
     ).toBeInTheDocument();
     expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
-      "Start a cloud continuation from this session.",
+      "Start a cloud branch from this session.",
     );
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach on the host machine");
   });
@@ -245,7 +245,7 @@ describe("SessionContextPane", () => {
         attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
         capabilities: makeCapabilities({
           live_control_available: true,
-          cloud_continuation_available: false,
+          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         }),
@@ -295,7 +295,7 @@ describe("SessionContextPane", () => {
         attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
         capabilities: makeCapabilities({
           live_control_available: true,
-          cloud_continuation_available: false,
+          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         }),

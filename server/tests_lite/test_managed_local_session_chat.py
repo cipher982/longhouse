@@ -367,7 +367,7 @@ def test_managed_local_dispatch_send_failure_releases_lock_for_retry(monkeypatch
 
 
 def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, tmp_path):
-    """Managed-local chat must not create cloud continuation sessions."""
+    """Managed-local chat must not create cloud branch sessions."""
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -389,7 +389,7 @@ def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, 
             return SimpleNamespace(ok=True, exit_code=0, error=None)
 
         def fail_cloud_target(*_args, **_kwargs):
-            raise AssertionError("managed_local should not create cloud continuations")
+            raise AssertionError("managed_local should not create cloud branches")
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
@@ -404,7 +404,7 @@ def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, 
                 f"/api/sessions/{source_session.id}/send-live",
                 json={"message": "continue"},
             )
-            # If this passes, cloud continuation was never attempted
+            # If this passes, cloud branching was never attempted
             assert response.status_code == 200
             assert response.json()["accepted"] is True
         finally:

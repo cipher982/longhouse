@@ -154,7 +154,7 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
     async def fake_resolve(*_args, **_kwargs):
         return ResolvedWorkspace(path=workspace, is_temp=False)
 
-    async def fake_stream_session_continuation_output(**kwargs):
+    async def fake_stream_session_cloud_branch_output(**kwargs):
         yield session_chat.SSEEvent(
             event="system",
             data=json.dumps(
@@ -162,7 +162,7 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
                     "type": "session_started",
                     "source_session_id": kwargs["source_session_id"],
                     "session_id": kwargs["target_session_id"],
-                    "created_continuation": kwargs["created_continuation"],
+                    "created_branch": kwargs["created_branch"],
                 }
             ),
         ).encode()
@@ -173,7 +173,7 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
                     "session_id": kwargs["target_session_id"],
                     "source_session_id": kwargs["source_session_id"],
                     "shipped_session_id": kwargs["target_session_id"],
-                    "created_continuation": kwargs["created_continuation"],
+                    "created_branch": kwargs["created_branch"],
                     "exit_code": 0,
                     "total_text_length": 0,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -183,7 +183,7 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
 
     monkeypatch.setattr("zerg.services.session_continuity.httpx.AsyncClient.get", fail_get)
     monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
-    monkeypatch.setattr(session_chat, "stream_session_continuation_output", fake_stream_session_continuation_output)
+    monkeypatch.setattr(session_chat, "stream_session_cloud_branch_output", fake_stream_session_cloud_branch_output)
 
     from zerg.main import api_app
     from zerg.main import app
@@ -206,12 +206,12 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
         try:
             client = TestClient(app, backend="asyncio")
             response = client.post(
-                f"/api/sessions/{source_session_id}/chat",
+                f"/api/sessions/{source_session_id}/branch-cloud",
                 json={"message": "anything else?"},
             )
             assert response.status_code == 200
             body = response.text
-            assert '"created_continuation": true' in body
+            assert '"created_branch": true' in body
             assert "event: done" in body
 
             sessions = db.query(AgentSession).filter(AgentSession.thread_root_session_id == source_session_id).all()
@@ -238,7 +238,7 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
     async def fail_get(*_args, **_kwargs):
         raise AssertionError("session chat should not self-fetch exported sessions over HTTP")
 
-    async def fake_stream_session_continuation_output(**kwargs):
+    async def fake_stream_session_cloud_branch_output(**kwargs):
         captured["workspace_path"] = kwargs["workspace_path"]
         captured["target_session_id"] = kwargs["target_session_id"]
         yield session_chat.SSEEvent(
@@ -248,7 +248,7 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
                     "type": "session_started",
                     "source_session_id": kwargs["source_session_id"],
                     "session_id": kwargs["target_session_id"],
-                    "created_continuation": kwargs["created_continuation"],
+                    "created_branch": kwargs["created_branch"],
                     "workspace": str(kwargs["workspace_path"]),
                 }
             ),
@@ -260,7 +260,7 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
                     "session_id": kwargs["target_session_id"],
                     "source_session_id": kwargs["source_session_id"],
                     "shipped_session_id": kwargs["target_session_id"],
-                    "created_continuation": kwargs["created_continuation"],
+                    "created_branch": kwargs["created_branch"],
                     "exit_code": 0,
                     "total_text_length": 0,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -279,8 +279,8 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
     )
     monkeypatch.setattr(
         session_chat,
-        "stream_session_continuation_output",
-        fake_stream_session_continuation_output,
+        "stream_session_cloud_branch_output",
+        fake_stream_session_cloud_branch_output,
     )
 
     from zerg.main import api_app
@@ -309,11 +309,11 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
         try:
             client = TestClient(app, backend="asyncio")
             response = client.post(
-                f"/api/sessions/{source_session_id}/chat",
+                f"/api/sessions/{source_session_id}/branch-cloud",
                 json={"message": "continue from cloud"},
             )
             assert response.status_code == 200
-            assert '"created_continuation": true' in response.text
+            assert '"created_branch": true' in response.text
 
             target_session_id = str(captured["target_session_id"])
             expected_workspace = managed_base / f"session-{target_session_id}"
@@ -453,7 +453,7 @@ def test_build_claude_resume_runtime_requires_zai_key(monkeypatch):
         )
 
 
-def test_stream_session_continuation_output_uses_zai_env(monkeypatch, tmp_path):
+def test_stream_session_cloud_branch_output_uses_zai_env(monkeypatch, tmp_path):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
@@ -520,12 +520,12 @@ def test_stream_session_continuation_output_uses_zai_env(monkeypatch, tmp_path):
     async def collect_events():
         return [
             event
-            async for event in session_chat.stream_session_continuation_output(
+            async for event in session_chat.stream_session_cloud_branch_output(
                 source_session_id=str(uuid4()),
                 target_session_id=str(uuid4()),
                 thread_root_session_id=str(uuid4()),
                 continued_from_session_id=str(uuid4()),
-                created_continuation=True,
+                created_branch=True,
                 branched_from_event_id=7,
                 provider_session_id="resume-root",
                 workspace_path=tmp_path,
@@ -561,7 +561,7 @@ def test_stream_session_continuation_output_uses_zai_env(monkeypatch, tmp_path):
     assert any("event: done" in event for event in events)
 
 
-def test_stream_session_continuation_output_reports_persistence_failure(monkeypatch, tmp_path):
+def test_stream_session_cloud_branch_output_reports_persistence_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
@@ -616,12 +616,12 @@ def test_stream_session_continuation_output_reports_persistence_failure(monkeypa
     async def collect_events():
         return [
             event
-            async for event in session_chat.stream_session_continuation_output(
+            async for event in session_chat.stream_session_cloud_branch_output(
                 source_session_id=str(uuid4()),
                 target_session_id=str(uuid4()),
                 thread_root_session_id=str(uuid4()),
                 continued_from_session_id=str(uuid4()),
-                created_continuation=True,
+                created_branch=True,
                 branched_from_event_id=7,
                 provider_session_id="resume-root",
                 workspace_path=tmp_path,
@@ -634,10 +634,10 @@ def test_stream_session_continuation_output_reports_persistence_failure(monkeypa
     done_event = next(event for event in events if event.startswith("event: done"))
     assert '"shipped_session_id": null' in done_event
     assert '"persisted_events": 0' in done_event
-    assert "could not save the continuation transcript" in done_event
+    assert "could not save the cloud branch transcript" in done_event
 
 
-def test_stream_session_continuation_output_fake_mode_persists_turn_for_e2e(monkeypatch, tmp_path):
+def test_stream_session_cloud_branch_output_fake_mode_persists_turn_for_e2e(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     monkeypatch.setenv("TESTING", "1")
     monkeypatch.setenv("E2E_FAKE_SESSION_CHAT", "1")
@@ -652,12 +652,12 @@ def test_stream_session_continuation_output_fake_mode_persists_turn_for_e2e(monk
         async def collect_events():
             return [
                 event
-                async for event in session_chat.stream_session_continuation_output(
+                async for event in session_chat.stream_session_cloud_branch_output(
                     source_session_id=str(source_session_id),
                     target_session_id=str(target_session.id),
                     thread_root_session_id=str(target_session.thread_root_session_id or target_session.id),
                     continued_from_session_id=str(target_session.continued_from_session_id),
-                    created_continuation=True,
+                    created_branch=True,
                     branched_from_event_id=target_session.branched_from_event_id,
                     provider_session_id="resume-root",
                     workspace_path=tmp_path / "workspace",
@@ -677,7 +677,7 @@ def test_stream_session_continuation_output_fake_mode_persists_turn_for_e2e(monk
         persisted_texts = [event.content_text for event in persisted_events if event.content_text]
         assert persisted_texts == [
             "anything else?",
-            "Test continuation reply to: anything else?",
+            "Test cloud-branch reply to: anything else?",
         ]
 
 
