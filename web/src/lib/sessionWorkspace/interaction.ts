@@ -15,22 +15,22 @@ export function getSessionInteractionCapabilities({
   const providerLabel = getProviderLabel(session.provider);
   const isManagedLocalSession = session.execution_home === "managed_local";
   const canDriveManagedLocalSession = isManagedLocalSession && session.source_runner_id != null;
-  const canContinueInCloud = !isManagedLocalSession && supportsDirectWebContinuation(session.provider);
+  const canContinueInCloud = !canDriveManagedLocalSession && supportsDirectWebContinuation(session.provider);
   const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
 
   const mode: SessionInteractionMode = canDriveManagedLocalSession
     ? "managed_local"
-    : isManagedLocalSession
-      ? "managed_local_unavailable"
-      : !canContinueInCloud
-        ? "unsupported"
-        : !isViewingHead
-          ? "branch"
-          : session.continuation_kind === "cloud"
-            ? "head"
-            : "promote";
+    : canContinueInCloud
+      ? !isViewingHead
+        ? "branch"
+        : session.continuation_kind === "cloud"
+          ? "head"
+          : "promote"
+      : isManagedLocalSession
+        ? "managed_local_unavailable"
+        : "unsupported";
 
   const submitLabel =
     mode === "managed_local"

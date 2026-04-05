@@ -116,6 +116,25 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.notice?.title).toMatch(/Codex session needs host attach/i);
   });
 
+  it("lets managed-local Claude sessions fall back to browser continuation when the live control channel is gone", () => {
+    const capabilities = getSessionInteractionCapabilities({
+      session: makeSession({
+        provider: "claude",
+        execution_home: "managed_local",
+        managed_transport: "tmux",
+        source_runner_id: null,
+        source_runner_name: null,
+      }),
+      isViewingHead: true,
+    });
+
+    expect(capabilities.mode).toBe("promote");
+    expect(capabilities.canChatFromBrowser).toBe(true);
+    expect(capabilities.capabilityLabel).toBe("Web continue");
+    expect(capabilities.submitLabel).toBe("Start in Cloud");
+    expect(capabilities.composerDisabledReason).toBeNull();
+  });
+
   it("treats a synced Claude transcript on the head as promotable to cloud continuation", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession(),

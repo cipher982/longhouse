@@ -167,6 +167,143 @@ def test_fake_cloud_continuation_persists_turn_for_follow_up_requests(monkeypatc
         api_app_ref.dependency_overrides = {}
 
 
+def test_managed_local_claude_without_live_control_falls_back_to_fake_cloud_continuation(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"resume-send-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="session-chat-managed-local@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project="managed-local-fallback",
+                device_id="cinder",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on laptop before Longhouse lost the live channel",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = "tmux"
+        source_session.source_runner_id = None
+        source_session.source_runner_name = "cinder"
+        source_session.managed_session_name = "lh-claude-no-runner"
+        db.commit()
+        user_id = user.id
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="session-chat-managed-local@test.local", role=UserRole.USER.value),
+    )
+    monkeypatch.setenv("E2E_FAKE_SESSION_CHAT", "1")
+
+    async def fake_resolve(*, original_cwd, git_repo, git_branch, session_id):
+        return SimpleNamespace(path=Path("/tmp"), is_temp=False, error=None)
+
+    async def fake_prepare(*, session_id, workspace_path, db):
+        return provider_session_id
+
+    monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
+    monkeypatch.setattr(session_chat, "prepare_claude_session_for_resume", fake_prepare)
+
+    try:
+        response = client.post(
+            f"/api/sessions/{source_session_id}/chat",
+            json={"message": "continue from Longhouse"},
+        )
+        assert response.status_code == 200, response.text
+        assert '"created_continuation": true' in response.text
+        assert '"persisted_events": 2' in response.text
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_managed_local_codex_without_live_control_requires_host_attach(tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"codex-managed-local-{uuid4().hex[:8]}"
+
+    with session_local() as db:
+        user = User(email="session-chat-managed-local-codex@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="codex",
+                environment="Cinder",
+                project="managed-local-codex-host-attach",
+                device_id="cinder",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on laptop before Longhouse lost the Codex channel",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = "codex_app_server"
+        source_session.source_runner_id = None
+        source_session.source_runner_name = "cinder"
+        source_session.managed_session_name = "lh-codex-no-runner"
+        db.commit()
+        user_id = user.id
+
+    client, api_app_ref = _make_client(
+        session_local,
+        SimpleNamespace(id=user_id, email="session-chat-managed-local-codex@test.local", role=UserRole.USER.value),
+    )
+
+    try:
+        response = client.post(
+            f"/api/sessions/{source_session_id}/chat",
+            json={"message": "continue from Longhouse"},
+        )
+        assert response.status_code == 409, response.text
+        assert response.json()["detail"] == "This live session needs host attach before Longhouse can continue it."
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_agents_continue_route_supports_fake_cloud_continuation(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     project = "agents-continue-test"

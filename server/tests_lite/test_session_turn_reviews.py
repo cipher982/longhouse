@@ -584,6 +584,58 @@ async def test_reply_to_pending_turn_review_routes_codex_managed_local_reply_wit
 
 
 @pytest.mark.asyncio
+async def test_reply_to_pending_turn_review_rejects_session_without_live_dispatch(tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_reply_requires_live_dispatch.db")
+
+    with SessionLocal() as db:
+        user = _create_user(db, allow_continue=False)
+        session_id = _seed_session(
+            db,
+            loop_mode="assist",
+            user_text="keep the hiring task moving",
+            assistant_text="I finished the last turn and need your direction on what to do next.",
+            provider="claude",
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.execution_home = "managed_local"
+        session.managed_transport = "tmux"
+        session.managed_session_name = "lh-managed-local-no-runner"
+        db.commit()
+        db.refresh(session)
+
+        review = SessionTurnReview(
+            session_id=session_id,
+            owner_id=user.id,
+            assistant_event_id=2,
+            turn_index=1,
+            trigger_type="turn.completed",
+            loop_mode="assist",
+            decision="wait",
+            summary="Awaiting your direction on the next hiring step.",
+            rationale="The finished turn needs a human reply rather than autonomous continuation.",
+            turn_excerpt="I finished the last turn and need your direction on what to do next.",
+            mode_capability="notify_only",
+            mode_summary="Suggest or escalate from completed turns, but wait for user approval before continuing.",
+            execution_state="needs_human",
+            recommended_action="wait",
+            follow_up_prompt=None,
+            blocked_reasons=[],
+            status="enqueued",
+            reason="notify_user",
+        )
+        db.add(review)
+        db.commit()
+        db.refresh(review)
+
+        with pytest.raises(ValueError, match="Longhouse can drive the live session"):
+            await reply_to_pending_turn_review(
+                db=db,
+                review=review,
+                reply_text="keep going with the hiring shortlist",
+            )
+
+
+@pytest.mark.asyncio
 async def test_turn_review_assist_enqueues_operator_wakeup(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_assist_operator.db")
     calls: list[dict[str, object]] = []

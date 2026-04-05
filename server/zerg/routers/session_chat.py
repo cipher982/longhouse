@@ -446,6 +446,10 @@ def _assert_session_can_continue(source_session) -> None:
         )
 
 
+def _supports_managed_local_cloud_fallback(source_session) -> bool:
+    return str(getattr(source_session, "provider", "") or "").strip().lower() == "claude"
+
+
 def _parse_current_session_header(request: Request) -> UUID | None:
     raw = str(request.headers.get(_CURRENT_SESSION_HEADER, "") or "").strip()
     if not raw:
@@ -1924,7 +1928,7 @@ async def _continue_session_response(
         )
 
     try:
-        if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
+        if live_session_dispatch.supports_live_text_dispatch(source_session):
             return await _build_managed_local_chat_response(
                 source_session=source_session,
                 owner_id=managed_local_owner_id,
@@ -1932,6 +1936,13 @@ async def _continue_session_response(
                 request_id=request_id,
                 lock_scope_id=lock_scope_id,
                 db=db,
+            )
+        if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value and not _supports_managed_local_cloud_fallback(
+            source_session
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This live session needs host attach before Longhouse can continue it.",
             )
         return await _build_cloud_continuation_chat_response(
             source_session=source_session,

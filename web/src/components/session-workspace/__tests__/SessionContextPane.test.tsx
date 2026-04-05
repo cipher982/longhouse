@@ -121,6 +121,7 @@ describe("SessionContextPane", () => {
   it("uses runtime semantics instead of ended_at to describe session state", () => {
     renderPane({
       session: makeSession({
+        provider: "codex",
         ended_at: "2026-03-17T10:04:00Z",
         status: "working",
         presence_state: "running",
@@ -129,13 +130,14 @@ describe("SessionContextPane", () => {
         confidence: "live",
         runtime_source: "managed_local_transport",
         execution_home: "managed_local",
+        managed_transport: "codex_app_server",
       }),
     });
 
     expect(screen.getAllByText("Running bash")).toHaveLength(2);
     expect(screen.getByText("Reattach on host")).toBeInTheDocument();
     expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
-      "This live Claude session is visible here, but you need the host terminal to keep driving it.",
+      "This live Codex session is visible here, but you need the host terminal to keep driving it.",
     );
     expect(screen.queryByText("Completed")).not.toBeInTheDocument();
   });
@@ -174,6 +176,27 @@ describe("SessionContextPane", () => {
     const button = screen.getByRole("button", { name: "Continue here" });
     expect(button).toBeDisabled();
     expect(screen.getByText(/browser continuation is currently wired for Claude sessions only/i)).toBeInTheDocument();
+  });
+
+  it("keeps browser continuation available when a managed-local Claude session loses its live control channel", () => {
+    renderPane({
+      session: makeSession({
+        provider: "claude",
+        execution_home: "managed_local",
+        managed_transport: "tmux",
+        source_runner_id: null,
+        source_runner_name: "cinder",
+        attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-claude'",
+      }),
+    });
+
+    const button = screen.getByRole("button", { name: "Continue here" });
+    expect(button).toBeEnabled();
+    expect(screen.getByText("Open the dock below and continue from this session in the browser.")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Keep driving this session from Longhouse below, or reattach on the host machine when available/i),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach on the host machine");
   });
 
   it("shows the host reattach command for live-controlled sessions", () => {

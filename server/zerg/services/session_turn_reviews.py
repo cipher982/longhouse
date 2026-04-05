@@ -154,12 +154,6 @@ def _supports_resume(session: AgentSession) -> bool:
     return (session.provider or "").strip().lower() == "claude"
 
 
-def _is_managed_local_codex_session(session: AgentSession) -> bool:
-    return (session.provider or "").strip().lower() == "codex" and (
-        str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value
-    )
-
-
 def _is_managed_local_session(session: AgentSession | None) -> bool:
     if session is None:
         return False
@@ -167,9 +161,10 @@ def _is_managed_local_session(session: AgentSession | None) -> bool:
     return execution_home == SessionExecutionHome.MANAGED_LOCAL.value
 
 
-def _supports_same_session_continue(session: AgentSession) -> bool:
-    provider = (session.provider or "").strip().lower()
-    return provider == "claude" or _is_managed_local_codex_session(session)
+def supports_same_session_continue(session: AgentSession | None) -> bool:
+    if session is None:
+        return False
+    return _supports_resume(session) or live_session_dispatch.supports_live_text_dispatch(session)
 
 
 def _resume_backend_for_session(session: AgentSession) -> str | None:
@@ -423,7 +418,7 @@ def _loop_mode_profile(session: AgentSession, policy: OikosOperatorPolicy) -> tu
             "observe_only",
             "Assist mode is set, but proactive notifications are disabled right now.",
         )
-    if policy.allow_continue and _supports_same_session_continue(session):
+    if policy.allow_continue and supports_same_session_continue(session):
         return (
             "bounded_autonomy",
             "Continue one bounded next step automatically when the finished turn clearly leaves one.",
@@ -1374,7 +1369,7 @@ def _enqueue_same_session_continue_job(
     return job
 
 
-async def _continue_managed_local_session(
+async def _continue_live_dispatch_session(
     *,
     db: Session,
     review: SessionTurnReview,
@@ -1416,7 +1411,7 @@ async def _continue_managed_local_session(
 
     error_reason = str(send_result.error or "managed_local_send_failed")
     logger.warning(
-        "Managed local continue failed for review %s session %s: %s",
+        "Live dispatch continue failed for review %s session %s: %s",
         review.id,
         review.session_id,
         error_reason,
@@ -1455,8 +1450,8 @@ async def approve_pending_turn_review(
         )
         raise RuntimeError("missing_session")
     job: CommisJob | None
-    if str(getattr(session, "execution_home", "") or "").strip() == SessionExecutionHome.MANAGED_LOCAL.value:
-        sent = await _continue_managed_local_session(db=db, review=review, session=session)
+    if live_session_dispatch.supports_live_text_dispatch(session):
+        sent = await _continue_live_dispatch_session(db=db, review=review, session=session)
         if not sent:
             raise RuntimeError(str(review.reason or "managed_local_send_failed"))
         job = None
@@ -1521,8 +1516,8 @@ async def reply_to_pending_turn_review(
         )
         raise RuntimeError("missing_session")
 
-    if str(getattr(session, "execution_home", "") or "").strip() != SessionExecutionHome.MANAGED_LOCAL.value:
-        raise ValueError("reply is only supported for managed local sessions")
+    if not live_session_dispatch.supports_live_text_dispatch(session):
+        raise ValueError("reply is only supported when Longhouse can drive the live session")
     clean_reply = str(reply_text or "").strip()
     if not clean_reply:
         raise ValueError("reply text must not be empty")

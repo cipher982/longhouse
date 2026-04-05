@@ -1129,6 +1129,91 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
             api_app_ref.dependency_overrides = {}
 
 
+def test_loop_inbox_hides_reply_for_managed_local_claude_without_live_control_and_still_queues_continue(
+    monkeypatch, tmp_path
+):
+    session_local = _make_db(tmp_path)
+
+    async def _unexpected_send_text(**_kwargs):
+        raise AssertionError("live session dispatch should not run when the control channel is unavailable")
+
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", _unexpected_send_text)
+
+    with session_local() as db:
+        owner = User(
+            email="owner@local",
+            role=UserRole.USER.value,
+            context={
+                "preferences": {
+                    "operator_mode": {
+                        "enabled": True,
+                        "allow_continue": True,
+                        "allow_notify": True,
+                    }
+                }
+            },
+        )
+        db.add(owner)
+        db.commit()
+        db.refresh(owner)
+
+        session = _create_session(
+            db,
+            loop_mode="assist",
+            summary_title="Lost local control channel",
+            project="zerg",
+            device_id="cinder",
+            provider="claude",
+            execution_home="managed_local",
+            managed_transport="tmux",
+            managed_session_name="lh-mac-no-runner",
+        )
+        _, assistant_event = _add_turn(
+            db,
+            session_id=session.id,
+            user_text="what should we do next?",
+            assistant_text="Only targeted verification remains. Run the pending targeted tests.",
+        )
+        review = _add_review(
+            db,
+            owner_id=owner.id,
+            session=session,
+            assistant_event_id=assistant_event.id,
+            created_at=datetime(2026, 3, 21, 12, 12, tzinfo=timezone.utc),
+            execution_state="awaiting_user_approval",
+        )
+
+        client, api_app_ref = _make_client(db, owner)
+        try:
+            card_response = client.get(f"/api/oikos/loop-inbox/cards/{review.id}")
+            assert card_response.status_code == 200, card_response.text
+            card_payload = card_response.json()
+            assert card_payload["available_actions"] == [
+                "approve_recommended_action",
+                "not_now",
+                "open_full_session",
+            ]
+
+            action_response = client.post(
+                f"/api/oikos/loop-inbox/cards/{review.id}/actions",
+                json={"action": "approve_recommended_action"},
+            )
+            assert action_response.status_code == 200, action_response.text
+            action_payload = action_response.json()
+            assert action_payload["action"] == "approve_recommended_action"
+            assert action_payload["status"] == "acted"
+            assert action_payload["reason"] == "continue_session"
+            assert action_payload["queued_job_id"] is not None
+
+            queued_jobs = db.query(CommisJob).all()
+            assert len(queued_jobs) == 1
+            assert queued_jobs[0].task == "Run the pending targeted tests."
+            assert queued_jobs[0].config["resume_session_id"] == str(session.id)
+            assert queued_jobs[0].config["backend"] == "zai"
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_loop_inbox_codex_managed_local_routes_remote_control_actions(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     calls: list[dict[str, object]] = []
