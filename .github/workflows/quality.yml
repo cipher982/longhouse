@@ -20,9 +20,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
 
 jobs:
-  lighthouse:
+  build-frontend:
     runs-on: ubuntu-latest
-    name: "🔦 Lighthouse CI"
+    name: "🏗️ Build frontend once"
 
     steps:
       - uses: actions/checkout@v6
@@ -42,6 +42,32 @@ jobs:
 
       - name: Build frontend
         run: cd web && bun run build
+
+      - name: Upload built frontend
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-dist-${{ github.run_id }}
+          path: web/dist
+          retention-days: 3
+
+  lighthouse:
+    runs-on: ubuntu-latest
+    name: "🔦 Lighthouse CI"
+    needs: build-frontend
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+
+      - name: Download built frontend
+        uses: actions/download-artifact@v8
+        with:
+          name: web-dist-${{ github.run_id }}
+          path: web/dist
 
       - name: Install Lighthouse CI
         run: npm install -g @lhci/cli
@@ -53,6 +79,7 @@ jobs:
   bundle-size:
     runs-on: ubuntu-latest
     name: "📦 Bundle Size"
+    needs: build-frontend
 
     steps:
       - uses: actions/checkout@v6
@@ -62,19 +89,14 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
+      - name: Download built frontend
+        uses: actions/download-artifact@v8
         with:
-          bun-version: "1.2.20"
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build frontend
-        run: cd web && bun run build
+          name: web-dist-${{ github.run_id }}
+          path: web/dist
 
       - name: Check bundle size
-        run: cd web && bun run validate:bundle-size
+        run: cd web && node ./scripts/check-bundle-size.mjs
 
   image-size:
     runs-on: ubuntu-latest
