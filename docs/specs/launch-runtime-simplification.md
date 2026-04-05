@@ -109,7 +109,7 @@ The key `VISION.md` moves are still right:
 - **Agents talk to each other through sessions**
 - **CLI/API-first public primitives**
 - **MCP is an adapter, not the boundary**
-- **Longhouse as the integrated distribution**
+- **Longhouse as the bundled product around the session-control kernel**
 
 What changes here is the **launch emphasis**:
 
