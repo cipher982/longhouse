@@ -10,8 +10,8 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('hosted-live-qa-manual-{0}', github.run_id) || format('hosted-live-qa-{0}', github.event.workflow_run.head_branch || github.ref_name) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  group: ${{ (github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'workflow_dispatch') && format('hosted-live-qa-manual-{0}', github.event_name == 'workflow_dispatch' && github.run_id || github.event.workflow_run.id) || format('hosted-live-qa-{0}', github.event.workflow_run.head_branch || github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.event.workflow_run.event != 'workflow_dispatch' }}
 
 permissions:
   contents: read
@@ -38,7 +38,10 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
-            if (context.eventName === 'workflow_dispatch') {
+            if (
+              context.eventName === 'workflow_dispatch' ||
+              context.payload.workflow_run?.event === 'workflow_dispatch'
+            ) {
               core.setOutput('stale', 'false');
               return;
             }
