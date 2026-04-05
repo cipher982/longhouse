@@ -50,6 +50,13 @@ def _truthy(value: str | None) -> bool:  # noqa: D401 – small helper
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_or_fallback(primary: str, fallback: str) -> str | None:
+    """Return primary env when explicitly set, otherwise fall back."""
+    if primary in os.environ:
+        return os.getenv(primary)
+    return os.getenv(fallback)
+
+
 def resolve_app_mode() -> AppMode:
     """Resolve the application mode from environment variables.
 
@@ -188,6 +195,11 @@ class Settings:  # noqa: D401 – simple data container
     # Oikos tool output storage -----------------------------------
     oikos_tool_output_max_chars: int  # Max tool output chars before storing (0 = disabled)
     oikos_tool_output_preview_chars: int  # Preview size for stored tool outputs
+
+    # Frontend analytics --------------------------------------------
+    umami_website_id: str | None = None
+    umami_script_src: str | None = None
+    umami_domains: str | None = None
 
     # Telegram channel integration ------------------------------------
     telegram_bot_token: str | None = None  # TELEGRAM_BOT_TOKEN from @BotFather
@@ -472,6 +484,9 @@ def _load_settings() -> Settings:  # noqa: D401 – helper
         app_public_url=os.getenv("APP_PUBLIC_URL") or os.getenv("PUBLIC_SITE_URL"),
         public_site_url=os.getenv("PUBLIC_SITE_URL") or os.getenv("APP_PUBLIC_URL"),
         public_api_url=os.getenv("PUBLIC_API_URL"),
+        umami_website_id=_env_or_fallback("UMAMI_WEBSITE_ID", "VITE_UMAMI_WEBSITE_ID"),
+        umami_script_src=_env_or_fallback("UMAMI_SCRIPT_SRC", "VITE_UMAMI_SCRIPT_SRC"),
+        umami_domains=_env_or_fallback("UMAMI_DOMAINS", "VITE_UMAMI_DOMAINS"),
         runner_docker_image=os.getenv("RUNNER_DOCKER_IMAGE", "ghcr.io/cipher982/longhouse-runner:latest"),
         runner_binary_tag=os.getenv("RUNNER_BINARY_TAG", "runner-v0.1.7"),
         pubsub_audience=os.getenv("PUBSUB_AUDIENCE"),

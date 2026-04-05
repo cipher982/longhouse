@@ -3,6 +3,7 @@
 # CRITICAL: Load environment variables FIRST - before ANY other imports that might use os.getenv()
 # Use override=False in test/e2e contexts so Node-spawned overrides (ENVIRONMENT, TESTING, etc.)
 # are preserved; override=True for normal dev/prod to keep .env authoritative and strip quotes.
+import json
 import os
 
 from dotenv import load_dotenv
@@ -1137,19 +1138,20 @@ async def serve_config_js():
                     _emb_avail_bool = (_db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "embedding").first()) is not None
         except Exception:
             pass  # Fall through with env-only check
-    _llm_avail = "true" if _llm_avail_bool else "false"
-    _emb_avail = "true" if _emb_avail_bool else "false"
     google_client_id = "" if _settings.control_plane_url else (_settings.google_client_id or "")
-
-    js = (
-        f'window.API_BASE_URL="/api";\n'
-        f'window.WS_BASE_URL="{ws_host or ""}";\n'
-        f'window.__APP_MODE__="{_settings.app_mode.value}";\n'
-        f'window.__GOOGLE_CLIENT_ID__="{google_client_id}";\n'
-        f"window.__SINGLE_TENANT__={'true' if _settings.single_tenant else 'false'};\n"
-        f"window.__LLM_AVAILABLE__={_llm_avail};\n"
-        f"window.__EMBEDDINGS_AVAILABLE__={_emb_avail};\n"
-    )
+    runtime_config = {
+        "API_BASE_URL": "/api",
+        "WS_BASE_URL": ws_host or "",
+        "__APP_MODE__": _settings.app_mode.value,
+        "__GOOGLE_CLIENT_ID__": google_client_id,
+        "__SINGLE_TENANT__": _settings.single_tenant,
+        "__LLM_AVAILABLE__": _llm_avail_bool,
+        "__EMBEDDINGS_AVAILABLE__": _emb_avail_bool,
+        "__UMAMI_WEBSITE_ID__": _settings.umami_website_id or "",
+        "__UMAMI_SCRIPT_SRC__": _settings.umami_script_src or "",
+        "__UMAMI_DOMAINS__": _settings.umami_domains or "",
+    }
+    js = "".join(f"window.{key}={json.dumps(value)};\n" for key, value in runtime_config.items())
     return Response(
         content=js,
         media_type="application/javascript",

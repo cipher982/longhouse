@@ -11,6 +11,9 @@ declare global {
     __GOOGLE_CLIENT_ID__?: string;
     __LLM_AVAILABLE__?: boolean;
     __EMBEDDINGS_AVAILABLE__?: boolean;
+    __UMAMI_WEBSITE_ID__?: string;
+    __UMAMI_SCRIPT_SRC__?: string;
+    __UMAMI_DOMAINS__?: string;
   }
 }
 
@@ -61,6 +64,11 @@ export interface AppConfig {
   // LLM availability (quick signal from /config.js, env-var only)
   llmAvailable: boolean;
   embeddingsAvailable: boolean;
+
+  // Analytics
+  umamiWebsiteId: string;
+  umamiScriptSrc: string;
+  umamiDomains: string;
 
   // Features
   enablePerformanceMonitoring: boolean;
@@ -131,6 +139,9 @@ function loadConfig(): AppConfig {
   const isProduction = import.meta.env.MODE === 'production';
   const isTesting = import.meta.env.MODE === 'test';
   const demoMode = appMode === 'demo';
+  const runtimeUmamiWebsiteId = typeof window !== 'undefined' ? window.__UMAMI_WEBSITE_ID__ : undefined;
+  const runtimeUmamiScriptSrc = typeof window !== 'undefined' ? window.__UMAMI_SCRIPT_SRC__ : undefined;
+  const runtimeUmamiDomains = typeof window !== 'undefined' ? window.__UMAMI_DOMAINS__ : undefined;
 
   // FAIL FAST: No fallbacks, no silent defaults
   // Production MUST have config.js loaded with API_BASE_URL and WS_BASE_URL
@@ -198,6 +209,14 @@ function loadConfig(): AppConfig {
     // LLM availability (quick signal from /config.js)
     llmAvailable: typeof window !== 'undefined' && window.__LLM_AVAILABLE__ === true,
     embeddingsAvailable: typeof window !== 'undefined' && window.__EMBEDDINGS_AVAILABLE__ === true,
+
+    // Analytics
+    umamiWebsiteId: runtimeUmamiWebsiteId ?? import.meta.env.VITE_UMAMI_WEBSITE_ID ?? "",
+    umamiScriptSrc:
+      runtimeUmamiScriptSrc !== undefined
+        ? runtimeUmamiScriptSrc || "https://analytics.drose.io/script.js"
+        : import.meta.env.VITE_UMAMI_SCRIPT_SRC || "https://analytics.drose.io/script.js",
+    umamiDomains: runtimeUmamiDomains ?? import.meta.env.VITE_UMAMI_DOMAINS ?? "",
 
     // Environment
     isDevelopment,
