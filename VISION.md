@@ -1,10 +1,10 @@
 # Longhouse Vision (2026)
 
-Longhouse is an always-on cloud and session kernel for your coding agents. Close your laptop, your agents keep running. Pick up from any device. Every session is live, resumable, and can talk to every other session.
+Longhouse turns CLI agent sessions into durable objects you can find, address, message, and continue. Every session is live, resumable, and can talk to every other session.
 
-Longhouse is also the integrated distribution of a broader agent ecosystem. The pieces are designed to work together, but the important ones must also be usable as standalone public interfaces from the terminal or over HTTP.
+Longhouse is a session-control kernel with a bundled human view. Timeline, search, Oikos, managed-local control, and related pieces can ship together, but the important ones must also be usable as standalone public interfaces from the terminal or over HTTP.
 
-The product must feel instant, always-on, and magical. Agents run on Longhouse, not on your laptop.
+The product must feel instant and magical. Works on your laptop. Shines on a machine that stays on.
 
 This is a living vision doc. It captures both the direction and the reasoning that got us here, so we can make fast decisions without re-litigating the fundamentals.
 
@@ -46,13 +46,14 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 ## North Star
 
-1. **Always-on agents from anywhere**: Close your laptop, your agents keep working. Resume from phone, tablet, another machine. The cloud is the primary home for agent work.
-2. **The session is the durable object**: Sessions are not dead transcripts. A session is the live, addressable endpoint with transcript, presence, workspace context, and control path.
-3. **Agents talk to each other through sessions**: Agent A does not scrape Agent B's logs; it addresses Agent B's session and gets a real answer in context.
-4. **CLI/API-first public primitives**: The core surfaces must work from terminal and HTTP first. MCP, web UI, and chat channels are adapters on top, not the foundation.
-5. **Unified timeline across providers**: Claude Code, Codex, Gemini sessions in one searchable archive. The shipper is the onramp — local sessions appear in Longhouse, then users transition to cloud-native.
-6. **$5/mo and never think about it**: Hosted is the primary product. Self-host is the free tier and onramp.
-7. Fast iteration as a solo founder: avoid multi-tenant security complexity unless required.
+1. **The session is the durable object**: Sessions are not dead transcripts. A session is the live, addressable endpoint with transcript, presence, workspace context, and control path.
+2. **Agents talk to each other through sessions**: Agent A does not scrape Agent B's logs; it addresses Agent B's session and gets a real answer in context.
+3. **CLI/API-first public primitives**: The core surfaces must work from terminal and HTTP first. MCP, web UI, and chat channels are adapters on top, not the foundation.
+4. **Unified timeline across providers**: Claude Code, Codex, Gemini sessions in one searchable archive. The shipper is the onramp — local sessions appear in Longhouse automatically.
+5. **Works on your laptop, shines on a machine that stays on**: The product is useful the moment you install it. A durable box (VPS, homelab, Mac mini) unlocks always-on sessions. Hosted is the convenience path — we run that box for you.
+6. Fast iteration as a solo founder: avoid multi-tenant security complexity unless required.
+
+**Endgame aspiration:** The laptop becomes the terminal to the mainframe. All agent processes live on infrastructure — close the lid, they keep going. Longhouse gives you session-level control instead of SSH+tmux terminal forwarding. But this is where the product pulls you, not where it demands you start.
 
 ---
 
@@ -60,7 +61,7 @@ This is a living vision doc. It captures both the direction and the reasoning th
 
 Three promises, in order of importance:
 
-1. **Your agents, always on, from anywhere** — Agents run on Longhouse. Close your laptop, they keep working. Pick up from any device — browser, TUI, phone. No VPS setup, no SSH tunnels, no VNC nightmares.
+1. **Your sessions, durable and addressable** — Every CLI session becomes a live object you can find, message, and continue. On a durable box, they survive lid-close and are reachable from any device. Hosted means we run that box for you.
 
 2. **Every session is interactive** — Click any session in the Timeline, send a message, get a response. Sessions are live endpoints, not static logs. Resume a session from last week with full context intact.
 
@@ -74,11 +75,11 @@ Three promises, in order of importance:
 
 ## Product Journey
 
-Users move through three phases. The product must support all three, but the endgame is phase 3.
+Users move through three phases. The product is useful at every phase — each one compounds.
 
-1. **Onramp (hook)**: Install shipper → local sessions appear in Timeline → "wow, I can see all my sessions with summaries and search." This is genuinely better than `/.resume` in Claude Code.
-2. **Transition**: User starts spawning sessions on Longhouse directly. Discovers they can resume sessions from their phone. Starts preferring cloud over laptop for agent work.
-3. **Endgame**: All agents live on Longhouse. Laptop is optional. Agents cross-reference and talk to each other. The user manages a fleet of agents, not individual terminal sessions.
+1. **Findable (hook)**: Install Longhouse → local sessions appear in Timeline → "wow, I can see all my sessions with summaries and search." This is genuinely better than `/.resume` in Claude Code.
+2. **Controllable (the product)**: User starts Longhouse sessions and discovers they can message, continue, and coordinate them after launch. The session becomes a durable object, not a terminal pane.
+3. **Always-on (the pull)**: User moves Longhouse to a durable box (VPS, homelab, Mac mini, or hosted). Sessions survive lid-close. Agents cross-reference and talk to each other. The laptop becomes the control surface, not the engine.
 
 The shipper is one-directional and that's fine — it's the gateway, not the product. Once sessions live on Longhouse, there's no sync problem because there's only one source of truth.
 
@@ -90,7 +91,7 @@ The shipper is one-directional and that's fine — it's the gateway, not the pro
 
 **Primary machine UX: CLI + API.** Nearly everything important should be operable from the terminal or over HTTP. Agents, scripts, CI, and background automations should not need a browser and should not depend on MCP to get real work done.
 
-**Integrated distribution: Longhouse.** Longhouse is the best bundled experience: timeline, session interaction, always-on hosting, search, continuity, Oikos, managed-local control, and future TUI.
+**Bundled product: Longhouse.** Longhouse bundles the human view and the support layers around the session-control kernel: timeline, session interaction, search, continuity, Oikos, managed-local control, and future TUI. The kernel is the center; the bundle makes it easier to use.
 
 **Public primitives inside the suite:**
 - **Session kernel**: sessions, events, presence, addressing, message delivery
@@ -100,7 +101,7 @@ The shipper is one-directional and that's fine — it's the gateway, not the pro
 - **Engine / shipper**: get local sessions into the unified archive
 - **Runner**: remote command execution on user infrastructure
 
-These pieces are designed to compose cleanly, but each should also be legible and usable on its own if one of them becomes a distribution wedge.
+These pieces are designed to compose cleanly, but they are not equal. The session-control kernel is the product center; the rest either expose it or support it. Some may later split into their own distribution wedges, but they should not define the story now.
 
 **Secondary: Oikos.** A lightweight assistant / receptionist, not a middleman in the session flow. Oikos handles quick questions, spawns sessions, and surfaces insights. It does not sit between the user and their sessions.
 
@@ -109,7 +110,8 @@ These pieces are designed to compose cleanly, but each should also be legible an
 **MCP and chat channels are adapters.** They are useful integration surfaces, but not the canonical contract. The system should still make sense if a user never configures MCP.
 
 **What this means for execution:**
-- Timeline + session interaction is still the critical path for the integrated product
+- Timeline + session interaction is the critical path for the bundled human surface
+- Control of real sessions after launch is the core wedge; archive/search supports it
 - CLI/API contracts come before MCP wrappers
 - Oikos is a convenience layer, not a dependency for the core flow
 - Separate by capability now; decide branding later, only after real pull exists
@@ -380,7 +382,9 @@ Both end up in Life Hub, so Longhouse depends on Life Hub. We are reversing that
 
 ## Product Paths
 
-### Hosted (primary — the product)
+Three deployment modes, same product loop. The session kernel, coordination primitives, and machine surface work identically everywhere. The only variable is where Longhouse runs and who keeps it running.
+
+### Hosted (convenience path)
 ```
 Sign in with Google -> provision isolated instance -> always-on
 ```
@@ -393,12 +397,12 @@ Sign in with Google -> provision isolated instance -> always-on
 
 **Hosted path diagram:**
 ```
-User signs up → Instance provisioned → Ship local sessions (onramp)
-  → Start running sessions on Longhouse directly (transition)
-  → All agents live on Longhouse, laptop optional (endgame)
+User signs up → Instance provisioned → Ship existing sessions (findable)
+  → Start Longhouse sessions (controllable)
+  → Sessions always-on, laptop is the window
 ```
 
-### OSS Local (free tier / onramp)
+### Self-hosted (the default)
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve
@@ -411,7 +415,7 @@ longhouse serve
 
 (Homebrew formula planned for future.)
 
-**Hosted path diagram:**
+**Hosted provisioning architecture:**
 ```
 User -> Control Plane -> Provision Longhouse instance (per-user)
      -> user.longhouse.ai -> Longhouse (UI+API) + DB
@@ -1335,150 +1339,18 @@ This is David's personal integration. OSS users don't need Life Hub at all.
 _This section consolidates the former standalone SQLite pivot doc so VISION is the single source of truth._
 
 
-**Status:** Active
-**Goal:** `pip install longhouse && longhouse serve` — cloud agent ops center in under 5 minutes (SQLite only)
-**Reality check:** Postgres remains for legacy/dev paths and control plane; OSS/runtime is SQLite-only.
+**Status:** Complete
+**Goal:** `pip install longhouse && longhouse serve` — session kernel in under 5 minutes (SQLite only)
+**Reality check:** Postgres remains for control plane only; OSS/runtime is SQLite-only.
 **Naming note:** Public brand is Longhouse; Python package is still `zerg` internally.
 
 ---
 
-### Current State Findings (2026-01-31)
-
-These are the concrete mismatches between today’s codebase and the SQLite-only target. This section is here so we can plan from reality instead of aspiration.
-
-✅ **Phases 1–3 complete:**
-- SQLite URLs allowed in `make_engine`; startup no longer blocks SQLite.
-- Schema handling is conditional (`DB_SCHEMA`/`AGENTS_SCHEMA` become `None` on SQLite) with schema translate map; `_apply_search_path()` is a no-op on SQLite.
-- SQLite pragmas configured (WAL, busy_timeout, foreign_keys, etc).
-- UUID/JSONB compatibility via GUID TypeDecorator + JSON.with_variant; Python-side defaults replace `gen_random_uuid()` on SQLite.
-- Partial indexes include `sqlite_where`.
-- Agents API now SQLite-safe: dialect-agnostic upsert, dedupe with `on_conflict_do_nothing()`, and `require_postgres()` removed.
-- `lite_mode` detection handles quoted DATABASE_URLs via a shared `db_utils.is_sqlite_url()` helper.
-- **SQLite minimum version enforced at startup: 3.35+** (RETURNING support).
-- Lite test suite expanded (SQLite boot, agents ingest/models, GUID round-trips, db_is_sqlite detection, version check).
-
-✅ **Phases 4–7 complete (2026-02-01):**
-- Job claiming uses SQLite-specific `commis_job_queue.py`: `UPDATE ... RETURNING` with atomic claiming (Postgres `FOR UPDATE SKIP LOCKED` path was removed during SQLite-only pivot).
-- Heartbeat + stale job reclaim implemented for both dialects.
-- Checkpoints are durable on SQLite via `langgraph-checkpoint-sqlite` (`SqliteSaver`).
-- CLI has `longhouse serve` command (`cli/serve.py`) with lite mode defaults.
-- README defaults to SQLite for OSS quick start.
-
-**Status: SQLite pivot is complete.** The `pip install longhouse && longhouse serve` flow is functional.
+**Implementation (2026-02-01):** All phases complete. SQLite pivot is done — flat tables (no schemas), WAL mode, 3.35+ enforced, RETURNING-based job claiming, durable checkpoints via `langgraph-checkpoint-sqlite`, bundled frontend. Key decisions locked: SQLite minimum 3.35+, flat tables, SQLite-backed job queue, bundled `web/dist`. See git history for phase-by-phase details.
 
 ---
 
-### Decisions to Lock (before implementation)
-
-1. **SQLite minimum version**: **require 3.35+** (RETURNING support). Enforced at startup; fail fast.
-2. **SQLite schema strategy**: recommended = **flat tables, no schemas** (there are no name collisions with agents tables). Postgres keeps schemas.
-3. **Durable job queue**: **SQLite-backed `zerg.jobs.queue`** for OSS/Sauron. `ops.job_queue` (Postgres) is not required in lite.
-4. **Durable checkpoints**: recommended = **use `langgraph-checkpoint-sqlite`** for SQLite so resumes survive restarts.
-5. **Static frontend packaging**: recommended = **bundle `web/dist` in the python package** and mount via FastAPI.
-
----
-
-### Detailed Execution Plan (SQLite Lite Mode)
-
-#### Phase 0 — Preflight Decisions + Flags
-
-**Goal:** Establish SQLite vs Postgres mode cleanly so the rest of the system can branch safely.
-
-- Add a computed `lite_mode` (or `db_is_sqlite`) flag in `zerg.config.get_settings()` based on `database_url` scheme (handles quoted URLs).
-- Enforce SQLite >= 3.35 at startup (RETURNING support).
-- Decide schema strategy (flat tables) and write it down in this doc.
-- Decide job queue scope (disable ops job queue in lite).
-- Decide durable checkpoints (sqlite checkpointer).
-
-#### Phase 1 — Core DB Boot on SQLite
-
-**Goal:** `longhouse serve` boots on SQLite without crashing. **Status: ✅ complete**
-
-- **database.py**
-  - Allow sqlite URLs (remove hard error).
-  - Skip `_apply_search_path()` for sqlite.
-  - Make `DB_SCHEMA` and `AGENTS_SCHEMA` conditional; use `None` for sqlite.
-  - Enforce SQLite >= 3.35 at startup (fail fast).
-  - Set SQLite pragmas on connect: `journal_mode=WAL`, `busy_timeout`, `foreign_keys=ON`.
-- **main.py**
-  - Remove PostgreSQL-only guard in `lifespan()`. Replace with a warning if SQLite (locks/features are degraded).
-- **initialize_database()**
-  - Skip schema creation for sqlite and avoid schema-qualified introspection.
-
-**Test:** `DATABASE_URL=sqlite:///~/.longhouse/longhouse.db longhouse serve` starts and `/api/health` works.
-
-#### Phase 2 — Model Compatibility (Core + Agents)
-
-**Goal:** All tables can be created on SQLite. **Status: ✅ complete**
-
-- Replace `UUID` columns with `String(36)` (or `String`) + `uuid4()` defaults.
-- Replace `JSONB` with `JSON().with_variant(JSONB, "postgresql")` or plain `JSON`.
-- Replace `gen_random_uuid()` defaults with Python-side defaults on sqlite.
-- Update partial indexes to include `sqlite_where` or drop them if not supported.
-- Make `agents` metadata schema conditional (None for sqlite).
-
-**Files:** `models/agents.py`, `models/device_token.py`, `models/llm_audit.py`, `models/run.py`, `models/models.py`
-
-**Test:** `initialize_database()` succeeds on SQLite; `sqlite3 ~/.longhouse/longhouse.db .tables` shows all tables.
-
-#### Phase 3 — Agents API + Ingest
-
-**Goal:** Shipper ingestion + Timeline endpoints work on SQLite. **Status: ✅ complete**
-
-- Replace `postgresql.insert` with dialect-agnostic upsert:
-  - If sqlite: use `sqlalchemy.dialects.sqlite.insert(...).on_conflict_do_nothing()` or catch `IntegrityError`.
-  - If postgres: keep current `on_conflict_do_nothing` with partial index.
-- Remove `require_postgres()` guard; keep `require_single_tenant()` if needed.
-- Ensure dedupe index works without schema-qualified names.
-
-**Files:** `services/agents_store.py`, `routers/agents.py`, `models/agents.py`, `alembic/versions/0002_agents_schema.py` (+ follow-on migrations)
-
-**Test:** Shipper syncs session; sessions appear in Timeline UI on SQLite.
-
-#### Phase 4 — Job Queue + Concurrency (SQLite-safe)
-
-**Goal:** Multiple commis can run concurrently without PG locks.
-
-- Replace `FOR UPDATE SKIP LOCKED` with `BEGIN IMMEDIATE` + atomic `UPDATE ... RETURNING`.
-- Add heartbeat fields + reclaim logic for stale jobs.
-- Replace advisory locks with file locks or status-guarded updates.
-- For SQLite: disable `ops.job_queue` paths (or gate behind `job_queue_enabled && not lite_mode`).
-
-**Files:** `services/commis_job_processor.py`, `jobs/queue.py`, `services/commis_resume.py`, `services/single_tenant.py`, `services/fiche_locks.py`, `tools/builtin/email_tools.py`, `tools/builtin/sms_tools.py`
-
-**Test:** Spawn 3 commis jobs, kill server, restart, jobs resume.
-
-#### Phase 5 — Durable Checkpoints (SQLite)
-
-**Goal:** Interrupt/resume survives process restart in lite mode.
-
-- Replace MemorySaver for sqlite with `langgraph-checkpoint-sqlite` backed by the same `~/.longhouse/longhouse.db`.
-- Ensure migrations/setup are idempotent for sqlite.
-
-**Files:** `services/checkpointer.py`
-
-**Test:** Interrupt a run, restart server, resume continues correctly.
-
-#### Phase 6 — CLI + Frontend Bundle
-
-**Goal:** `pip install longhouse && longhouse serve` is real.
-
-- Add `longhouse serve` command (typer) that runs uvicorn with sane defaults (`0.0.0.0:8080`).
-- Bundle frontend `dist` into the python package (hatch config).
-- Update FastAPI static mount to use packaged assets when available.
-
-**Files:** `cli/main.py`, `pyproject.toml`, `main.py`, `web/dist`
-
-**Test:** fresh venv → `pip install longhouse` → `longhouse serve` → open `/dashboard` and `/chat`.
-
-#### Phase 7 — Onboarding Smoke + Docs
-
-**Goal:** Validate the full OSS onboarding flow.
-
-- Add/extend `make onboarding-smoke` to run SQLite boot + basic API checks.
-- Update README quick-start to default to SQLite.
-
-**Test:** `make onboarding-smoke` passes on a clean machine.
+_Detailed execution plan (Phases 0–7) and day-by-day implementation plan completed 2026-02-01. See git history for step-by-step details._
 
 ---
 
@@ -1674,127 +1546,6 @@ with open(f"~/.longhouse/locks/{resource}.lock", 'w') as f:
 
 ---
 
-### Implementation Phases
-
-#### Phase 1: SQLite Backend (Day 1-2)
-
-**Goal:** Accept SQLite URLs, prove it works
-
-**Files:**
-- `database.py` — Remove Postgres-only guard, accept `sqlite:///`
-- `main.py` — Remove startup check
-- `config/` — Add `lite_mode` detection (auto from URL scheme)
-
-**Test:**
-```bash
-DATABASE_URL=sqlite:///~/.longhouse/longhouse.db longhouse serve
-### Server starts, basic endpoints work
-```
-
-#### Phase 2: Agents Models (Day 2-3)
-
-**Goal:** Claude session sync works with SQLite
-
-**Changes:**
-```python
-### models/agents.py
-### Before
-id = Column(postgresql.UUID(as_uuid=True), primary_key=True)
-raw_json = Column(postgresql.JSONB)
-
-### After
-id = Column(String(36), primary_key=True, default=lambda: str(uuid4()))
-raw_json = Column(JSON)  # SQLite JSON1
-```
-
-**Files:**
-- `models/agents.py` — UUID→String, JSONB→JSON, drop schema
-- `services/agents_store.py` — Dialect-agnostic upsert
-- `routers/agents.py` — Remove `require_postgres()` guard
-
-**Test:** Shipper syncs session → appears in Timeline
-
-#### Phase 3: Job Queue (Day 3-4)
-
-**Goal:** Durable job queue with SQLite
-
-**Changes:**
-- Replace `FOR UPDATE SKIP LOCKED` with `BEGIN IMMEDIATE` pattern
-- Add heartbeat column for stale job detection
-- File locks for critical sections (optional)
-
-**Files:**
-- `jobs/queue.py` — SQLite-compatible claim logic
-- `services/commis_job_processor.py` — Heartbeat updates
-
-**Test:**
-```bash
-### Start server, spawn 3 commis, kill server, restart
-### Jobs resume from where they left off
-```
-
-#### Phase 4: Single-Process Concurrency (Day 4-5)
-
-**Goal:** Multiple commis in one process
-
-**Architecture:**
-```python
-### Commis pool as async tasks
-class CommisPool:
-    def __init__(self, max_workers=10):
-        self.semaphore = asyncio.Semaphore(max_workers)
-
-    async def spawn(self, job):
-        async with self.semaphore:
-            await run_commis(job)
-```
-
-**Test:** Spawn 5 concurrent commis, all make progress
-
-#### Phase 5: CLI + Frontend Bundle (Day 5-6)
-
-**Goal:** `pip install longhouse && longhouse serve` works
-
-**CLI:**
-```bash
-longhouse serve              # Start server (default: 127.0.0.1:8080)
-longhouse serve --port 8080  # Custom port
-longhouse status             # Show current configuration
-# Note: `longhouse logs` command planned but not yet implemented
-```
-
-**Frontend:** Pre-built React app served from FastAPI static mount
-
-**Test:** Fresh virtualenv, pip install, longhouse serve, open browser, see UI
-
-#### Phase 6: PyPI Publishing (Day 6-7)
-
-**Goal:** Available on PyPI
-
-```bash
-pip install longhouse
-```
-
----
-
-### File Structure (After)
-
-```
-~/.longhouse/
-├── longhouse.db              # SQLite database (WAL mode)
-├── config.toml          # Optional config overrides
-├── locks/               # File locks for coordination
-└── logs/                # Job logs
-
-$ longhouse serve
-→ http://127.0.0.1:8080
-→ SQLite: ~/.longhouse/longhouse.db
-```
-
-Logs are written to `~/.longhouse/server.log` (server) and `~/.claude/logs/engine.log.*` (engine daemon).
-
----
-
 ### Feature Matrix
 
 | Feature | Lite (SQLite) | Full (Postgres) |
@@ -1812,48 +1563,7 @@ Logs are written to `~/.longhouse/server.log` (server) and `~/.claude/logs/engin
 
 ---
 
-### Config
-
-```toml
-### ~/.longhouse/config.toml (optional — sensible defaults work)
-
-[server]
-host = "0.0.0.0"
-port = 8080
-
-[commis]
-max_concurrent = 5      # How many agents can run at once
-heartbeat_interval = 30 # Seconds between heartbeats
-stale_threshold = 120   # Reclaim jobs with no heartbeat after this
-
-[database]
-### Default: sqlite:///~/.longhouse/longhouse.db
-### For scale: postgresql://user:pass@host/db
-url = "sqlite:///~/.longhouse/longhouse.db"
-
-[llm]
-anthropic_api_key = "sk-ant-..."
-openai_api_key = "sk-..."
-```
-
----
-
-### Success Criteria
-
-1. **Deploy:** `pip install longhouse && longhouse serve` on fresh VPS
-2. **Concurrent:** 5 commis running simultaneously
-3. **Durable:** Kill process, restart, jobs resume
-4. **Mobile:** Access from phone, see agent progress
-5. **Resources:** <500MB RAM with 5 active agents
-
----
-
-### Open Questions
-
-- [x] Package name: `longhouse` available on PyPI? → **Yes, published as `longhouse` v0.1.1**
-- [x] Frontend bundle size? → **Measured 2026-02-11. See below.**
-
-#### Frontend Bundle Size Baseline (2026-02-11)
+### Frontend Bundle Size Baseline (2026-02-11)
 
 Measured via `bun run build` (Vite 5.4, production mode, gzip sizes reported by Vite).
 
@@ -1886,111 +1596,12 @@ Measured via `bun run build` (Vite 5.4, production mode, gzip sizes reported by 
 
 ---
 
-### The Pitch
+### SQLite Prior Art
 
-**Before:**
-```
-5 Claude terminals → context switching hell → close laptop = pause → no mobile
-```
-
-**After:**
-```
-pip install longhouse
-longhouse serve
-
-### Spawn agents from phone
-### Close laptop, they keep working
-### Wake up to completed PRs
-```
-
-Your personal cloud agent team. Always on. SQLite simple. Actually works.
+Key tools: [Litestream](https://litestream.io/) (streaming replication), [LiteFS](https://fly.io/docs/litefs/) (distributed FUSE), [rqlite](https://rqlite.io/) (Raft replication), [Datasette + sqlite-utils](https://datasette.io/) (inspection). Key SQLite facts: WAL is single-writer, `busy_timeout` is required, `BEGIN IMMEDIATE` for atomic claims, 3.35+ for RETURNING.
 
 ---
-
-### Prior Art & SQLite Best Practices (Sources)
-
-Curated sources we can lean on when pushing SQLite to its limits, plus the concrete behaviors that matter for Longhouse’s design.
-
-#### Key Learnings (What we take into the plan)
-
-- **WAL is concurrent but single-writer.** Readers + one writer can coexist; multiple writers serialize. WAL needs shared memory and is unsafe on network filesystems.
-- **Checkpoint starvation is a real operational risk.** Long-lived readers can prevent WAL checkpoints; WAL can grow unbounded without active checkpointing.
-- **BEGIN IMMEDIATE is the right pattern for atomic job claims.** It grabs the write lock up front and fails fast if another writer is active.
-- **busy_timeout is required for reliability under contention.** Set it on every connection so writes wait instead of throwing SQLITE_BUSY.
-- **Minimum SQLite version: 3.35+.** We require RETURNING for SQLite-safe job claiming.
-- **UPSERT + RETURNING are available.** Use ON CONFLICT for dedupe and RETURNING for atomic claim patterns.
-- **Durability is a tradeoff.** `PRAGMA synchronous` and WAL checkpoint policy directly affect durability vs speed.
-- **JSON1 is good enough for our needs.** JSON operators and functions exist, and JSON5 inputs are supported on newer SQLite builds.
-
-#### Concurrency & Locking Reality
-
-- **WAL improves read/write concurrency, but still single-writer.** Readers and writers can run concurrently, but only one writer at a time. WAL also requires shared memory and does not work over network filesystems.
-  https://sqlite.org/wal.html
-  https://www.sqlite.org/isolation.html
-- **Checkpoint starvation is real.** Long-lived readers can prevent WAL checkpoint completion, letting the WAL grow without bound.
-  https://sqlite.org/wal.html
-  https://wchargin.com/better-sqlite3/performance.html
-- **BEGIN IMMEDIATE grabs the write lock up-front.** It can return `SQLITE_BUSY` if another writer is active; DEFERRED upgrades on first write and can also hit `SQLITE_BUSY`.
-  https://www.sqlite.org/lang_transaction.html
-- **Timeouts matter under contention.** `PRAGMA busy_timeout` / `sqlite3_busy_timeout()` make writes wait instead of failing; high concurrency often needs longer timeouts than you expect.
-  https://www.sqlite.org/c3ref/busy_timeout.html
-  https://blog.skypilot.co/abusing-sqlite-to-handle-concurrency/
-
-#### DML Features We Can Rely On
-
-- **UPSERT (ON CONFLICT)** is supported and designed for unique constraints (SQLite 3.24+).
-  https://www.sqlite.org/lang_upsert.html
-- **RETURNING** is supported (SQLite 3.35+), but output order is unspecified.
-  https://www.sqlite.org/lang_returning.html
-
-#### Durability Tuning in WAL
-
-- **`PRAGMA synchronous` tradeoffs**: `FULL` adds durability; `NORMAL` is faster but can reduce durability in WAL mode.
-  https://www.sqlite.org/pragma.html
-- **Auto-checkpoint defaults**: WAL checkpoints trigger at ~1000 pages by default; disabling checkpoints can let WAL grow unbounded.
-  https://sqlite.org/wal.html
-
-#### JSON Support
-
-- **JSON1 functions and operators** (`json_*`, `->`, `->>`) exist; JSON5 extensions are supported in newer SQLite builds.
-  https://www.sqlite.org/json1.html
-
-#### Tooling / Prior Art
-
-- **Litestream** — streaming replication of SQLite (WAL-aware) to object storage for backups/DR.
-  https://litestream.io/how-it-works/
-  https://litestream.io/reference/replicate/
-- **LiteFS** — distributed SQLite via a FUSE filesystem + single-writer leases; production caveats are documented.
-  https://fly.io/docs/litefs/
-  https://fly.io/blog/introducing-litefs/
-- **rqlite** — Raft-based replication of SQLite commands; single leader handles writes.
-  https://rqlite.io/docs/design/
-- **dqlite** — Canonical’s Raft-based HA SQLite (used in LXD).
-  https://canonical.com/dqlite
-  https://documentation.ubuntu.com/lxd/latest/reference/dqlite-internals/
-- **Datasette + sqlite-utils** — ecosystem for creating/inspecting SQLite DBs; `sqlite-utils` CLI is great for migration/debugging.
-  https://datasette.io/tools/sqlite-utils
-  https://docs.datasette.io/en/0.56/ecosystem.html
-
----
-
-### References
-
-- [OpenClaw](https://github.com/moltbot/moltbot) — Lightweight agent platform
-- [Datasette](https://datasette.io/) — SQLite-powered data tool
-- [Litestream](https://litestream.io/) — SQLite replication (future?)
-- [SQLite WAL mode](https://www.sqlite.org/wal.html) — Concurrent reads
-
----
-
-### Changelog
-
-- **2026-01-30:** Initial draft
-- **2026-01-30:** Pivoted from "viewer" to "cloud agent ops center"
-- **2026-01-30:** Proved SQLite + concurrent agents works — durable queue stays
-- **2026-02-02:** Added User Value Proposition, Session Discovery architecture, "Fast to Fun" principle
-- **2026-02-02:** Renamed Forum → Timeline throughout; elevated Resume as key feature
 
 ## Summary
 
-Longhouse becomes the canonical home for agent sessions and the integrated distribution of a broader agent ecosystem. Life Hub becomes a dashboard consumer. The durable kernel is the session. The important primitives must work over CLI and HTTP first, with MCP as an optional adapter. The core product remains single-tenant and OSS-friendly, while hosted is per-user, always-on, and simple to explain. This gives Longhouse a clean story today and preserves the option for breakout standalone surfaces later without rewriting the platform.
+Longhouse turns CLI agent sessions into durable, controllable objects and bundles the human view around that kernel. Life Hub becomes a dashboard consumer. The durable kernel is the session. The important primitives must work over CLI and HTTP first, with MCP as an optional adapter. The core product remains single-tenant and OSS-friendly. Self-hosted is the default path; hosted is convenience. This gives Longhouse a clean story today and preserves the option for breakout standalone surfaces later without rewriting the platform.
