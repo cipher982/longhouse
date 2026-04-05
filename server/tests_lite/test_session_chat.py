@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timezone
@@ -167,7 +168,7 @@ def test_fake_cloud_continuation_persists_turn_for_follow_up_requests(monkeypatc
         api_app_ref.dependency_overrides = {}
 
 
-def test_managed_local_claude_without_live_control_requires_explicit_cloud_mode(tmp_path):
+def test_managed_local_claude_live_send_requires_live_control(tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
     provider_session_id = f"resume-send-{uuid4().hex[:8]}"
@@ -221,7 +222,7 @@ def test_managed_local_claude_without_live_control_requires_explicit_cloud_mode(
 
     try:
         response = client.post(
-            f"/api/sessions/{source_session_id}/chat",
+            f"/api/sessions/{source_session_id}/send-live",
             json={"message": "continue from Longhouse"},
         )
         assert response.status_code == 409, response.text
@@ -230,7 +231,7 @@ def test_managed_local_claude_without_live_control_requires_explicit_cloud_mode(
         api_app_ref.dependency_overrides = {}
 
 
-def test_managed_local_claude_without_live_control_can_continue_in_cloud_when_explicit(monkeypatch, tmp_path):
+def test_managed_local_claude_cloud_chat_can_continue_when_live_control_is_gone(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
     provider_session_id = f"resume-send-{uuid4().hex[:8]}"
@@ -295,7 +296,7 @@ def test_managed_local_claude_without_live_control_can_continue_in_cloud_when_ex
     try:
         response = client.post(
             f"/api/sessions/{source_session_id}/chat",
-            json={"message": "continue from Longhouse", "continuation_mode": "cloud"},
+            json={"message": "continue from Longhouse"},
         )
         assert response.status_code == 200, response.text
         assert '"created_continuation": true' in response.text
@@ -304,7 +305,7 @@ def test_managed_local_claude_without_live_control_can_continue_in_cloud_when_ex
         api_app_ref.dependency_overrides = {}
 
 
-def test_managed_local_codex_without_live_control_requires_host_attach(tmp_path):
+def test_managed_local_codex_live_send_requires_host_attach(tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
     provider_session_id = f"codex-managed-local-{uuid4().hex[:8]}"
@@ -358,7 +359,7 @@ def test_managed_local_codex_without_live_control_requires_host_attach(tmp_path)
 
     try:
         response = client.post(
-            f"/api/sessions/{source_session_id}/chat",
+            f"/api/sessions/{source_session_id}/send-live",
             json={"message": "continue from Longhouse"},
         )
         assert response.status_code == 409, response.text
@@ -438,6 +439,101 @@ def test_agents_continue_route_supports_fake_cloud_continuation(monkeypatch, tmp
             assert target_session.id != source_session_id
             assert target_session.project == project
     finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_agents_send_live_route_supports_managed_local_dispatch(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    source_session_id = uuid4()
+    provider_session_id = f"managed-live-{uuid4().hex[:8]}"
+    calls: list[dict[str, object]] = []
+
+    with session_local() as db:
+        user = User(email="agents-send-live@test.local", role=UserRole.USER.value)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        store = AgentsStore(db)
+        started_at = datetime.now(timezone.utc)
+        store.ingest_session(
+            SessionIngest(
+                id=source_session_id,
+                provider="claude",
+                environment="Cinder",
+                project="agents-send-live",
+                device_id="agent-device",
+                cwd="/tmp",
+                git_repo=None,
+                git_branch=None,
+                provider_session_id=provider_session_id,
+                started_at=started_at,
+                ended_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="Started on agent-device before live send",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+        source_session = store.get_session(source_session_id)
+        assert source_session is not None
+        source_session.execution_home = "managed_local"
+        source_session.managed_transport = "tmux"
+        source_session.source_runner_id = 1
+        source_session.source_runner_name = "agent-device"
+        source_session.managed_session_name = "lh-agent-send-live"
+        db.commit()
+        token = DeviceToken(owner_id=user.id, device_id="agent-device", token_hash="test")
+
+    client, api_app_ref = _make_machine_client(session_local, token)
+
+    async def fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
+        calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+                "commis_id": commis_id,
+                "verify_turn_started": verify_turn_started,
+                "verification_timeout_secs": verification_timeout_secs,
+            }
+        )
+        return SimpleNamespace(ok=True, exit_code=0, error=None)
+
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
+    monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
+
+    try:
+        response = client.post(
+            f"/api/agents/sessions/{source_session_id}/send-live",
+            json={"message": "continue locally from the API"},
+        )
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["accepted"] is True
+        assert payload["session_id"] == str(source_session_id)
+        assert len(calls) == 1
+        assert calls[0]["owner_id"] == token.owner_id
+        assert calls[0]["text"] == "continue locally from the API"
+        assert calls[0]["verify_turn_started"] is True
+        assert calls[0]["verification_timeout_secs"] == 15.0
+    finally:
+        asyncio.run(session_chat.session_lock_manager.release(str(source_session_id)))
         api_app_ref.dependency_overrides = {}
 
 

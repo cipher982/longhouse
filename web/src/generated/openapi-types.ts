@@ -4006,9 +4006,29 @@ export interface paths {
         put?: never;
         /**
          * Chat With Session
-         * @description Chat with a resumable session and stream the response via SSE.
+         * @description Start an explicit cloud continuation and stream the response via SSE.
          */
         post: operations["chat_with_session_sessions__session_id__chat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sessions/{session_id}/send-live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send To Live Session
+         * @description Send text into the live managed-local session and return a fast JSON ack.
+         */
+        post: operations["send_to_live_session_sessions__session_id__send_live_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4122,6 +4142,26 @@ export interface paths {
          * @description Continue a session through the canonical machine-facing agents surface.
          */
         post: operations["continue_session_agents_sessions__session_id__continue_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/send-live": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send To Live Session Agents
+         * @description Machine-facing explicit live-send surface for managed-local sessions.
+         */
+        post: operations["send_to_live_session_agents_agents_sessions__session_id__send_live_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -9466,22 +9506,6 @@ export interface components {
             user_state: string;
         };
         /**
-         * SessionChatRequest
-         * @description Request to chat with a session.
-         */
-        SessionChatRequest: {
-            /**
-             * Message
-             * @description User message
-             */
-            message: string;
-            /**
-             * Continuation Mode
-             * @description Explicitly choose live managed-local control or cloud continuation.
-             */
-            continuation_mode?: ("managed_local" | "cloud") | null;
-        };
-        /**
          * SessionExecutionHome
          * @description Where a coding session currently lives.
          * @enum {string}
@@ -9545,6 +9569,17 @@ export interface components {
             text: string;
             /** Source Event Id */
             source_event_id?: number | null;
+        };
+        /**
+         * SessionMessageRequest
+         * @description Request to send one message into an explicit continuation path.
+         */
+        SessionMessageRequest: {
+            /**
+             * Message
+             * @description User message
+             */
+            message: string;
         };
         /**
          * SessionPreviewMessage
@@ -18300,7 +18335,46 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SessionChatRequest"];
+                "application/json": components["schemas"]["SessionMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_to_live_session_sessions__session_id__send_live_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
+                token?: string | null;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionMessageRequest"];
             };
         };
         responses: {
@@ -18516,7 +18590,44 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["SessionChatRequest"];
+                "application/json": components["schemas"]["SessionMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_to_live_session_agents_agents_sessions__session_id__send_live_post: {
+        parameters: {
+            query?: {
+                session_factory?: unknown;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SessionMessageRequest"];
             };
         };
         responses: {

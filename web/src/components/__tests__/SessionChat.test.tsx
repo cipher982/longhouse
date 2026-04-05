@@ -57,26 +57,26 @@ function sseResponse(events: Array<{ event: string; data: unknown }>): Response 
   );
 }
 
-function mockSessionChatFetches(chatResponse: Response) {
+function mockSessionFetches(pathSuffix: string, response: Response) {
   fetchWithRefreshMock.mockImplementation((url: string) => {
-    if (url.endsWith("/chat")) {
-      return Promise.resolve(chatResponse);
+    if (url.endsWith(pathSuffix)) {
+      return Promise.resolve(response);
     }
 
     return Promise.reject(new Error(`Unexpected request: ${url}`));
   });
 }
 
-function getChatCallCount() {
-  return fetchWithRefreshMock.mock.calls.filter(([url]) => String(url).endsWith("/chat")).length;
+function getRequestCallCount(pathSuffix: string) {
+  return fetchWithRefreshMock.mock.calls.filter(([url]) => String(url).endsWith(pathSuffix)).length;
 }
 
-function getLastChatRequestBody() {
-  const chatCall = [...fetchWithRefreshMock.mock.calls].reverse().find(([url]) => String(url).endsWith("/chat"));
-  if (!chatCall) {
-    throw new Error("Expected a /chat request");
+function getLastRequestBody(pathSuffix: string) {
+  const call = [...fetchWithRefreshMock.mock.calls].reverse().find(([url]) => String(url).endsWith(pathSuffix));
+  if (!call) {
+    throw new Error(`Expected a ${pathSuffix} request`);
   }
-  const options = chatCall[1] as RequestInit | undefined;
+  const options = call[1] as RequestInit | undefined;
   return JSON.parse(String(options?.body ?? "{}"));
 }
 
@@ -183,7 +183,8 @@ describe("SessionChat", () => {
     const user = userEvent.setup();
     const onSessionChanged = vi.fn();
 
-    mockSessionChatFetches(
+    mockSessionFetches(
+      "/chat",
       sseResponse([
         {
           event: "assistant_delta",
@@ -211,9 +212,8 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "Continue in cloud");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    expect(getLastChatRequestBody()).toEqual({
+    expect(getLastRequestBody("/chat")).toEqual({
       message: "Continue in cloud",
-      continuation_mode: "cloud",
     });
     await waitFor(() => expect(onSessionChanged).toHaveBeenCalledWith("sess-2", true));
     expect(screen.queryByText(/could not save the continuation transcript/i)).not.toBeInTheDocument();
@@ -223,7 +223,8 @@ describe("SessionChat", () => {
     const user = userEvent.setup();
     const onSessionChanged = vi.fn();
 
-    mockSessionChatFetches(
+    mockSessionFetches(
+      "/chat",
       sseResponse([
         {
           event: "done",
@@ -256,7 +257,8 @@ describe("SessionChat", () => {
     const user = userEvent.setup();
     const onSessionChanged = vi.fn();
 
-    mockSessionChatFetches(
+    mockSessionFetches(
+      "/chat",
       sseResponse([
         {
           event: "assistant_delta",
@@ -301,7 +303,8 @@ describe("SessionChat", () => {
     });
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
-    mockSessionChatFetches(
+    mockSessionFetches(
+      "/chat",
       sseResponse([
         {
           event: "done",
@@ -343,7 +346,8 @@ describe("SessionChat", () => {
     });
     const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
 
-    mockSessionChatFetches(
+    mockSessionFetches(
+      "/chat",
       sseResponse([
         {
           event: "assistant_delta",
@@ -420,7 +424,7 @@ describe("SessionChat", () => {
     });
 
     fetchWithRefreshMock.mockImplementation((url: string) => {
-      if (url.endsWith("/chat")) {
+      if (url.endsWith("/send-live")) {
         return deferred.promise;
       }
       return Promise.reject(new Error(`Unexpected request: ${url}`));
@@ -431,9 +435,8 @@ describe("SessionChat", () => {
     await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    expect(getLastChatRequestBody()).toEqual({
+    expect(getLastRequestBody("/send-live")).toEqual({
       message: "Continue locally",
-      continuation_mode: "managed_local",
     });
     await waitFor(() => {
       expect(screen.getByRole("textbox")).toBeDisabled();
@@ -465,7 +468,8 @@ describe("SessionChat", () => {
   it("requires an explicit click for the first branching message", async () => {
     const user = userEvent.setup();
 
-    mockSessionChatFetches(
+    mockSessionFetches(
+      "/chat",
       sseResponse([
         {
           event: "assistant_delta",
@@ -499,10 +503,10 @@ describe("SessionChat", () => {
     expect(screen.getByTestId("session-chat-explicit-submit-hint")).toHaveTextContent(
       "Click send to start the branch.",
     );
-    expect(getChatCallCount()).toBe(0);
+    expect(getRequestCallCount("/chat")).toBe(0);
 
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(getChatCallCount()).toBe(1));
+    await waitFor(() => expect(getRequestCallCount("/chat")).toBe(1));
   });
 });

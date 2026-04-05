@@ -1,9 +1,9 @@
-"""Session chat router for live-session drop-in functionality.
+"""Session continuation router for explicit live-send and cloud-continue flows.
 
 Enables interactive chat with synced CLI sessions.
 Cloud continuation shells out to the provider CLI (`claude --resume`,
-`codex exec resume`) while managed-local chat injects into the live local
-session.
+`codex exec resume`) while managed-local live send injects into the active
+local session.
 
 Security:
 - Workspace path derived server-side from session metadata (not client)
@@ -25,7 +25,6 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from typing import AsyncIterator
-from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter
@@ -286,14 +285,10 @@ def _build_codex_resume_runtime(*, provider_session_id: str, message: str) -> Co
 # ---------------------------------------------------------------------------
 
 
-class SessionChatRequest(BaseModel):
-    """Request to chat with a session."""
+class SessionMessageRequest(BaseModel):
+    """Request to send one message into an explicit continuation path."""
 
     message: str = Field(..., min_length=1, max_length=10000, description="User message")
-    continuation_mode: Literal["managed_local", "cloud"] | None = Field(
-        None,
-        description="Explicitly choose live managed-local control or cloud continuation.",
-    )
 
 
 class ManagedLocalSessionLaunchRequest(BaseModel):
@@ -447,6 +442,20 @@ def _assert_session_can_continue(source_session) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Cloud continuation is only supported for Claude and Codex (got {source_session.provider})",
         )
+
+
+def _assert_live_session_send_available(source_session) -> None:
+    if live_session_dispatch.supports_live_text_dispatch(source_session):
+        return
+    if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This live session needs host attach before Longhouse can continue it.",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="This session does not have a live Longhouse control channel.",
+    )
 
 
 def _parse_current_session_header(request: Request) -> UUID | None:
@@ -823,6 +832,34 @@ def _lock_scope_id_for_session(db: Session, session_id: str) -> str:
     if session is None:
         return session_id
     return str(session.thread_root_session_id or session.id)
+
+
+async def _acquire_session_lock_or_raise(*, source_session, request_id: str) -> str:
+    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
+    lock = await session_lock_manager.acquire(
+        session_id=lock_scope_id,
+        holder=request_id,
+        ttl_seconds=300,
+    )
+
+    if lock:
+        return lock_scope_id
+
+    existing_lock = await session_lock_manager.get_lock_info(lock_scope_id)
+    lock_info = SessionLockInfo(
+        locked=True,
+        holder=existing_lock.holder if existing_lock else None,
+        time_remaining_seconds=existing_lock.time_remaining if existing_lock else None,
+        fork_available=True,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "Session is currently in use",
+            "code": "SESSION_LOCKED",
+            "lock_info": lock_info.model_dump(),
+        },
+    )
 
 
 def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_id: int) -> list[AgentEvent]:
@@ -1891,120 +1928,68 @@ async def stream_session_continuation_output(
             proc.terminate()
 
 
-async def _continue_session_response(
-    *,
-    source_session,
-    message: str,
-    request_id: str,
-    managed_local_owner_id: int,
-    db: Session,
-    continuation_mode: Literal["managed_local", "cloud"] | None = None,
+@router.post("/{session_id}/chat")
+async def chat_with_session(
+    session_id: str,
+    body: SessionMessageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_oikos_user),
 ):
-    logger.info(f"[{request_id}] Chat request for session {source_session.id}")
+    """Start an explicit cloud continuation and stream the response via SSE."""
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    logger.info(f"[{request_id}] Cloud continuation request for session {source_session.id}")
     _assert_session_can_continue(source_session)
-
-    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
-    lock = await session_lock_manager.acquire(
-        session_id=lock_scope_id,
-        holder=request_id,
-        ttl_seconds=300,
-    )
-
-    if not lock:
-        existing_lock = await session_lock_manager.get_lock_info(lock_scope_id)
-        lock_info = SessionLockInfo(
-            locked=True,
-            holder=existing_lock.holder if existing_lock else None,
-            time_remaining_seconds=existing_lock.time_remaining if existing_lock else None,
-            fork_available=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail={
-                "error": "Session is currently in use",
-                "code": "SESSION_LOCKED",
-                "lock_info": lock_info.model_dump(),
-            },
-        )
-
+    lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
     try:
-        if continuation_mode == "managed_local":
-            if not live_session_dispatch.supports_live_text_dispatch(source_session):
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail="This live session needs host attach before Longhouse can continue it.",
-                )
-            return await _build_managed_local_chat_response(
-                source_session=source_session,
-                owner_id=managed_local_owner_id,
-                message=message,
-                request_id=request_id,
-                lock_scope_id=lock_scope_id,
-                db=db,
-            )
-        if continuation_mode == "cloud":
-            return await _build_cloud_continuation_chat_response(
-                source_session=source_session,
-                message=message,
-                request_id=request_id,
-                lock_scope_id=lock_scope_id,
-                db=db,
-            )
-        if live_session_dispatch.supports_live_text_dispatch(source_session):
-            return await _build_managed_local_chat_response(
-                source_session=source_session,
-                owner_id=managed_local_owner_id,
-                message=message,
-                request_id=request_id,
-                lock_scope_id=lock_scope_id,
-                db=db,
-            )
-        if source_session.execution_home == SessionExecutionHome.MANAGED_LOCAL.value:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="This live session needs host attach before Longhouse can continue it.",
-            )
         return await _build_cloud_continuation_chat_response(
             source_session=source_session,
-            message=message,
+            message=body.message,
             request_id=request_id,
             lock_scope_id=lock_scope_id,
             db=db,
         )
-
     except HTTPException:
         await session_lock_manager.release(lock_scope_id, request_id)
         raise
-
-    except Exception:
+    except Exception as exc:
         await session_lock_manager.release(lock_scope_id, request_id)
-        logger.exception(f"[{request_id}] Error in session continuation")
-        raise
+        logger.exception(f"[{request_id}] Error in chat_with_session")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error: {str(exc)[:200]}",
+        ) from exc
 
 
-@router.post("/{session_id}/chat")
-async def chat_with_session(
+@router.post("/{session_id}/send-live")
+async def send_to_live_session(
     session_id: str,
-    body: SessionChatRequest,
+    body: SessionMessageRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_oikos_user),
 ):
-    """Chat with a resumable session and stream the response via SSE."""
+    """Send text into the live managed-local session and return a fast JSON ack."""
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
+    logger.info(f"[{request_id}] Live session send request for session {source_session.id}")
+    _assert_session_can_continue(source_session)
+    _assert_live_session_send_available(source_session)
+    lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
     try:
-        return await _continue_session_response(
+        return await _build_managed_local_chat_response(
             source_session=source_session,
+            owner_id=current_user.id,
             message=body.message,
             request_id=request_id,
-            managed_local_owner_id=current_user.id,
+            lock_scope_id=lock_scope_id,
             db=db,
-            continuation_mode=body.continuation_mode,
         )
     except HTTPException:
+        await session_lock_manager.release(lock_scope_id, request_id)
         raise
     except Exception as exc:
-        logger.exception(f"[{request_id}] Error in chat_with_session")
+        await session_lock_manager.release(lock_scope_id, request_id)
+        logger.exception(f"[{request_id}] Error in send_to_live_session")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
@@ -2014,7 +1999,7 @@ async def chat_with_session(
 @agents_router.post("/{session_id}/continue")
 async def continue_session(
     session_id: str,
-    body: SessionChatRequest,
+    body: SessionMessageRequest,
     request: Request,
     db: Session = Depends(get_db),
     device_token: DeviceToken | None = Depends(verify_agents_token),
@@ -2032,21 +2017,70 @@ async def continue_session(
         source_session=source_session,
         auth_disabled=settings.auth_disabled,
     )
-    owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    _assert_session_can_continue(source_session)
+    lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
 
     try:
-        return await _continue_session_response(
+        return await _build_cloud_continuation_chat_response(
             source_session=source_session,
             message=body.message,
             request_id=request_id,
-            managed_local_owner_id=owner_id,
+            lock_scope_id=lock_scope_id,
             db=db,
-            continuation_mode=body.continuation_mode,
         )
     except HTTPException:
+        await session_lock_manager.release(lock_scope_id, request_id)
         raise
     except Exception as exc:
+        await session_lock_manager.release(lock_scope_id, request_id)
         logger.exception(f"[{request_id}] Error in continue_session")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error: {str(exc)[:200]}",
+        ) from exc
+
+
+@agents_router.post("/{session_id}/send-live")
+async def send_to_live_session_agents(
+    session_id: str,
+    body: SessionMessageRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    device_token: DeviceToken | None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+):
+    """Machine-facing explicit live-send surface for managed-local sessions."""
+    settings = get_settings()
+    resolved_device_token = device_token if isinstance(device_token, DeviceToken) else None
+
+    request_id = str(uuid.uuid4())[:8]
+    source_session = _load_session_for_continuation(db, session_id)
+    _authorize_agents_session_continue(
+        request=request,
+        device_token=resolved_device_token,
+        source_session=source_session,
+        auth_disabled=settings.auth_disabled,
+    )
+    _assert_session_can_continue(source_session)
+    _assert_live_session_send_available(source_session)
+    owner_id = _resolve_agents_owner_id(db, resolved_device_token)
+    lock_scope_id = await _acquire_session_lock_or_raise(source_session=source_session, request_id=request_id)
+
+    try:
+        return await _build_managed_local_chat_response(
+            source_session=source_session,
+            owner_id=owner_id,
+            message=body.message,
+            request_id=request_id,
+            lock_scope_id=lock_scope_id,
+            db=db,
+        )
+    except HTTPException:
+        await session_lock_manager.release(lock_scope_id, request_id)
+        raise
+    except Exception as exc:
+        await session_lock_manager.release(lock_scope_id, request_id)
+        logger.exception(f"[{request_id}] Error in send_to_live_session_agents")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
