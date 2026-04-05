@@ -1,28 +1,4 @@
-"""Main CLI entry point for Longhouse.
-
-Usage:
-    longhouse serve         # Start the server
-    longhouse status        # Show configuration
-    longhouse claude        # Launch a Longhouse Claude session on this machine
-    longhouse codex         # Launch a Longhouse Codex session on this machine
-    longhouse wall          # Read the raw coordination wall
-    longhouse peers         # Find live peer sessions for the current repo
-    longhouse message       # Send a message to another session
-    longhouse tail          # Read the recent tail of a session
-    longhouse messages      # Inspect durable session messages
-    longhouse messages ack  # Acknowledge an inbound session message
-    longhouse sessions get    # Inspect one session
-    longhouse continue        # Continue a session from the terminal
-    longhouse sessions events # Inspect session events
-    longhouse config show   # Show effective configuration
-    longhouse ship          # One-shot sync
-    longhouse connect       # Foreground engine sync (watch + fallback scan)
-    longhouse recall        # Search past sessions
-    longhouse migrate       # Plan/apply heavy legacy DB migrations
-    longhouse onboard       # Run onboarding wizard
-    longhouse doctor        # Self-diagnosis
-    longhouse --help        # Show help
-"""
+"""Main CLI entry point for Longhouse."""
 
 import json
 from importlib import metadata
@@ -50,7 +26,6 @@ from zerg.cli.serve import status
 from zerg.cli.sessions import app as sessions_app
 from zerg.cli.sessions import continue_session
 
-# Create main app
 app = typer.Typer(
     name="longhouse",
     help="Longhouse AI Agent Platform CLI",
@@ -78,7 +53,6 @@ def app_callback(
     """Longhouse AI Agent Platform CLI."""
 
 
-# Config subcommand group
 config_app = typer.Typer(help="Configuration management")
 
 
@@ -112,14 +86,11 @@ def config_show() -> None:
         typer.echo(f"  {key}: {value} {source_indicator}")
 
 
-# Add subcommands from connect module
 app.add_typer(messages_app, name="messages", help="Durable session inbox commands")
 app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
 
-# Top-level commands for quick access
-# Server commands (primary use case)
 app.command(name="serve")(serve)
 app.command(name="status")(status)
 
@@ -207,13 +178,10 @@ def migrate(
         raise typer.Exit(code=1)
 
 
-# Onboarding wizard
 app.command(name="onboard")(onboard)
 
-# Self-diagnosis
 app.command(name="doctor")(doctor)
 
-# MCP server
 app.command(name="mcp-server", hidden=True)(mcp_server)
 
 

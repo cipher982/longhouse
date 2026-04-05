@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from uuid import UUID
 
 import httpx
 import typer
 
+from zerg.cli._common import git_output
+from zerg.cli._common import load_api_credentials
+from zerg.cli._common import parse_uuid_or_exit
 from zerg.services.managed_session_env import CURRENT_SESSION_HEADER
 from zerg.services.managed_session_env import get_managed_session_id
 from zerg.services.shipper import get_zerg_url
@@ -19,38 +21,13 @@ messages_app = typer.Typer(help="Durable session inbox commands")
 
 
 def _load_api_credentials(*, url: str | None, token: str | None, config_dir: Path | None) -> tuple[str, str]:
-    resolved_url = (url or get_zerg_url(config_dir) or "").strip()
-    if not resolved_url:
-        typer.secho("No Longhouse URL configured. Run 'longhouse auth' first.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-    resolved_token = (token or load_token(config_dir) or "").strip()
-    if not resolved_token:
-        typer.secho("No device token found. Run 'longhouse auth' first.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-    return resolved_url, resolved_token
-
-
-def _parse_uuid_or_exit(raw: str, *, label: str) -> str:
-    try:
-        return str(UUID(str(raw).strip()))
-    except ValueError:
-        typer.secho(f"{label} must be a valid UUID.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-
-def _git_output(cwd: Path, *args: str) -> str | None:
-    completed = subprocess.run(
-        ["git", "-C", str(cwd), *args],
-        check=False,
-        capture_output=True,
-        text=True,
+    return load_api_credentials(
+        url=url,
+        token=token,
+        config_dir=config_dir,
+        resolve_url=get_zerg_url,
+        resolve_token=load_token,
     )
-    if completed.returncode != 0:
-        return None
-    value = completed.stdout.strip()
-    return value or None
 
 
 def _resolve_repo_context(*, explicit_repo: str | None, base_url: str, token: str) -> tuple[str | None, str | None]:
@@ -81,11 +58,11 @@ def _resolve_repo_context(*, explicit_repo: str | None, base_url: str, token: st
             pass
 
     cwd = Path.cwd()
-    local_repo = _git_output(cwd, "rev-parse", "--show-toplevel")
+    local_repo = git_output(cwd, "rev-parse", "--show-toplevel")
     if local_repo:
         return local_repo, current_session_id or None
 
-    remote_repo = _git_output(cwd, "config", "--get", "remote.origin.url")
+    remote_repo = git_output(cwd, "config", "--get", "remote.origin.url")
     if remote_repo:
         return remote_repo, current_session_id or None
 
@@ -121,11 +98,7 @@ def _print_tail_event(event: dict) -> None:
 
 
 def _resolve_session_context(raw: str | None, *, label: str, guidance: str) -> str:
-    value = str(raw or "").strip()
-    if not value:
-        typer.secho(guidance, fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    return _parse_uuid_or_exit(value, label=label)
+    return parse_uuid_or_exit(raw, label=label, missing_message=guidance)
 
 
 def _print_message_summary(message: dict) -> None:
@@ -430,7 +403,7 @@ def message(
     """Send a directed message to another session."""
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    resolved_to_session_id = _parse_uuid_or_exit(to_session_id, label="to_session_id")
+    resolved_to_session_id = parse_uuid_or_exit(to_session_id, label="to_session_id")
     resolved_from_session_id = _resolve_session_context(
         from_session_id or get_managed_session_id(),
         label="from_session_id",
@@ -524,7 +497,7 @@ def tail(
     """Read the recent tail of a session."""
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
-    resolved_session_id = _parse_uuid_or_exit(session_id, label="session_id")
+    resolved_session_id = parse_uuid_or_exit(session_id, label="session_id")
 
     try:
         with httpx.Client(timeout=15) as client:
