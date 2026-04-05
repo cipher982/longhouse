@@ -233,6 +233,13 @@ def _make_fake_claude_home(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
           for (const rawLine of chunk.split(/\\r?\\n/)) {
             const line = rawLine.trimEnd();
             if (!line) continue;
+            if (!dangerousSkipPermissions) {
+              if (logPath) {
+                fs.appendFileSync(logPath, `PERMISSION_BLOCKED:${line}\\n`, "utf8");
+              }
+              console.log(`PERMISSION_BLOCKED:${line}`);
+              continue;
+            }
             turnCounter += 1;
             if (logPath) {
               fs.appendFileSync(logPath, `USER:${line}\\n`, "utf8");
@@ -462,6 +469,7 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport_with_shell_i
             )
             assert "USER:Enter" in turn_output
             assert "ASSISTANT: received Enter" in turn_output
+            assert "PERMISSION_BLOCKED:Enter" not in turn_output
 
             runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == session.id).one_or_none()
             assert (runtime_state.phase if runtime_state is not None else None) == baseline_phase
@@ -470,6 +478,7 @@ def test_managed_local_launch_and_send_text_use_real_tmux_transport_with_shell_i
             log_text = log_path.read_text(encoding="utf-8")
             assert "START session=" in log_text
             assert "dangerousSkipPermissions=true" in log_text
+            assert "PERMISSION_BLOCKED:Enter" not in log_text
             assert "USER:Enter" in log_text
             assert "TURN_STARTED:1:Enter" in log_text
         finally:
