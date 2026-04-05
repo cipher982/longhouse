@@ -20,7 +20,6 @@ def test_create_server_exposes_only_continuity_and_oikos_tools():
         "get_session_events",
         "notify_oikos",
         "log_insight",
-        "query_insights",
         "recall",
         "check_wall",
         "session_tail",
@@ -57,39 +56,6 @@ async def test_message_session_uses_current_managed_session_env(monkeypatch):
             "text": "hello",
         },
         headers={"X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111"},
-    )
-
-
-@pytest.mark.asyncio
-async def test_query_insights_uses_machine_insights_endpoint():
-    server = create_server("http://example.com", "test-token")
-    tool = server._tool_manager._tools["query_insights"]
-    response = type(
-        "Resp",
-        (),
-        {
-            "status_code": 200,
-            "text": '{"insights":[{"title":"Race condition"}],"total":1}',
-        },
-    )()
-
-    with patch(
-        "zerg.mcp_server.server.LonghouseAPIClient.get",
-        new=AsyncMock(return_value=response),
-    ) as mock_get:
-        result = await tool.run({"project": "longhouse", "insight_type": "failure", "limit": 5})
-
-    assert json.loads(result) == {"insights": [{"title": "Race condition"}], "total": 1}
-    mock_get.assert_awaited_once_with(
-        "/api/agents/insights",
-        params={
-            "project": "longhouse",
-            "insight_type": "failure",
-            "since_hours": 168,
-            "limit": 5,
-            "include_system": False,
-            "include_archived": False,
-        },
     )
 
 

@@ -63,9 +63,9 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         ),
         EventIngest(
             role="assistant",
-            tool_name="mcp__longhouse__query_insights",
+            tool_name="mcp__longhouse__search_sessions",
             tool_call_id="call_s1_03",
-            tool_input_json={"project": "longhouse", "insight_type": "pattern"},
+            tool_input_json={"project": "longhouse", "query": "embedding semantic search", "days_back": 30, "limit": 3},
             timestamp=t1 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -88,7 +88,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="tool",
             tool_call_id="call_s1_03",
-            tool_output_text='{"insights": [{"title": "FTS5 search uses BM25 ranking", "description": "Events indexed via virtual table triggers on insert."}]}',
+            tool_output_text='{"sessions": [{"project": "longhouse", "summary_title": "Semantic search ranking pass"}, {"project": "longhouse", "summary_title": "Embeddings backfill for timeline search"}]}',
             timestamp=t1 + timedelta(minutes=1, seconds=3),
         ),
         EventIngest(
@@ -233,9 +233,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="exec_command",
             tool_call_id="call_s2_02",
-            tool_input_json={
-                "cmd": "grep -n 'ingest_session\\|provider_session_id' server/zerg/services/agents_store.py | head -20"
-            },
+            tool_input_json={"cmd": "grep -n 'ingest_session\\|provider_session_id' server/zerg/services/agents_store.py | head -20"},
             timestamp=t2 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -641,9 +639,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
             role="assistant",
             tool_name="exec_command",
             tool_call_id="call_s5_02",
-            tool_input_json={
-                "cmd": "grep -rn 'useSearch\\|searchQuery\\|query=' web/src/pages/SessionsPage.tsx | head -20"
-            },
+            tool_input_json={"cmd": "grep -rn 'useSearch\\|searchQuery\\|query=' web/src/pages/SessionsPage.tsx | head -20"},
             timestamp=t5 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -937,9 +933,9 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         ),
         EventIngest(
             role="assistant",
-            tool_name="mcp__longhouse__query_insights",
+            tool_name="mcp__longhouse__recall",
             tool_call_id="call_s8_01",
-            tool_input_json={"since_hours": 168, "insight_type": "failure", "limit": 20},
+            tool_input_json={"query": "common failure patterns across my projects this week", "since_days": 7, "max_results": 5},
             timestamp=t8 + timedelta(minutes=1),
         ),
         EventIngest(
@@ -952,7 +948,7 @@ def build_demo_agent_sessions(now: datetime | None = None) -> list[SessionIngest
         EventIngest(
             role="tool",
             tool_call_id="call_s8_01",
-            tool_output_text='{"insights": [{"project": "longhouse", "title": "Race condition in ingest upsert", "severity": "warning"}, {"project": "sauron", "title": "Naive datetime in digest job", "severity": "warning"}, {"project": "longhouse", "title": "Embedding backfill OOM under 10k sessions", "severity": "critical"}]}',
+            tool_output_text='{"results": [{"project": "longhouse", "summary": "Race condition in ingest upsert caused intermittent write failures."}, {"project": "sauron", "summary": "Naive datetime handling caused empty daily digest windows."}, {"project": "longhouse", "summary": "Embedding backfill exhausted memory on large datasets."}]}',
             timestamp=t8 + timedelta(minutes=1, seconds=3),
         ),
         EventIngest(

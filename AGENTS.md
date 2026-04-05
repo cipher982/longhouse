@@ -132,7 +132,7 @@ No shared conftest. Each test file creates its own DB via `_make_db(tmp_path)` u
 | **Recall** | `GET /api/agents/recall?query=` | SessionsPage (Recall panel) | `recall` | Turn-level knowledge retrieval with context windows |
 | Embeddings | `POST /api/agents/backfill-embeddings` | — | — | Auto-generated on ingest; backfill for existing sessions |
 | Oikos (chat) | WebSocket `/ws/oikos` | OikosPage | — | Voice/text AI assistant with tool use |
-| Insights | `GET /api/insights`, `POST /api/insights/:id/archive`, `POST /api/insights/:id/unarchive` (browser); `GET /api/agents/insights` + `POST /api/insights` (machine) | InsightsPage | `log_insight`, `query_insights` | Curated continuity memory; browser users can archive/restore rows and machine reads stay separate |
+| Insights | `GET /api/insights`, `POST /api/insights/:id/archive`, `POST /api/insights/:id/unarchive` (browser); `GET /api/agents/insights` + `POST /api/insights` (machine) | InsightsPage | `log_insight` | Curated continuity memory; browser users can archive/restore rows and machine reads stay separate |
 | Reflection / briefings | `POST /api/agents/reflect`, `GET /api/agents/reflections`, `GET /api/timeline/briefing` | BriefingsPage | — | Briefings are the user-facing continuity surface; reflection remains optional admin tooling and the cron job is paused by default |
 | Jobs/Scheduler | `GET /api/jobs` | JobsPage | — | Cron jobs with enable/disable, secrets |
 | Runner daemon | WebSocket from runner binary | — | — | Remote command execution on user infra |
