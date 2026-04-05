@@ -76,6 +76,7 @@ export default function LaunchSessionModal({
       : launchMutation.error
         ? String(launchMutation.error)
         : null;
+  const launchProfile = launchMutation.data?.managed_launch_profile ?? null;
 
   return (
     <div className="modal-overlay" onClick={handleClose}>
@@ -112,6 +113,44 @@ export default function LaunchSessionModal({
               <pre className="code-block" style={{ marginTop: "var(--space-2)" }}>
                 <code>{launchMutation.data.attach_command}</code>
               </pre>
+              {launchProfile ? (
+                <div
+                  data-testid="launch-session-profile"
+                  style={{
+                    marginTop: "var(--space-3)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "var(--space-2)",
+                  }}
+                >
+                  <p style={{ color: "var(--color-text-primary)", fontWeight: 500, margin: 0 }}>
+                    Launch profile
+                  </p>
+                  <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--font-size-sm)", margin: 0 }}>
+                    Redacted debug metadata for how Longhouse launched this managed session.
+                  </p>
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: "var(--space-2)",
+                      fontSize: "var(--font-size-sm)",
+                      color: "var(--color-text-secondary)",
+                    }}
+                  >
+                    <div>
+                      <strong style={{ color: "var(--color-text-primary)" }}>Required commands:</strong>{" "}
+                      {launchProfile.required_commands.join(", ") || "None"}
+                    </div>
+                    <div>
+                      <strong style={{ color: "var(--color-text-primary)" }}>Exported env keys:</strong>{" "}
+                      {launchProfile.exported_env_keys.join(", ") || "None"}
+                    </div>
+                  </div>
+                  <pre className="code-block" style={{ margin: 0 }} data-testid="launch-session-profile-argv">
+                    <code>{launchProfile.argv.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ")}</code>
+                  </pre>
+                </div>
+              ) : null}
               {launchMutation.data.provider === "codex" ? (
                 <p
                   style={{
