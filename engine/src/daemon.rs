@@ -548,7 +548,8 @@ async fn prepare_file_for_job(
         let mut session_id_override = binding.get(&canonical)?;
         if session_id_override.is_none() {
             let file_state = crate::state::file_state::FileState::new(&conn);
-            let current_offset = file_state.get_offset(&canonical)
+            let current_offset = file_state
+                .get_offset(&canonical)
                 .or_else(|_| file_state.get_offset(&path.to_string_lossy()))?;
             if current_offset == 0 {
                 std::thread::sleep(std::time::Duration::from_millis(300));
