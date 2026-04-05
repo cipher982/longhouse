@@ -223,6 +223,8 @@ Treat deploys as **lanes**, not one linear checklist:
 - **Control-plane lane** (`control-plane/**`): push triggers `deploy-control-plane.yml`. That path deploys **only** the control plane and runs smoke/credential checks.
 - **Manual ship** is fallback/recovery, not the default path.
 
+For runtime pushes, `deploy-and-verify.yml` now waits for the matching `contract-first-ci.yml` run for the same SHA to finish green before any remote deploy action. Automatic deploy/live-QA runs also collapse superseded `main` commits; manual dispatch stays isolated so operators can still force a recovery run.
+
 Runtime lane builds `ghcr.io/cipher982/longhouse-runtime:latest` for hosted tenants only. The public demo runtime and control plane are separate Coolify builds from this repo; they do **not** pull the GHCR runtime image directly.
 
 If you manually ship, launch independent waits once and move on. Example: start a GHCR watch or a Coolify deploy wait, then do the next independent step. Do **not** sit in `pgrep`/health-check polling loops when a notification or blocking wait already exists.
