@@ -223,7 +223,7 @@ app.command(name="onboard")(onboard)
 app.command(name="doctor")(doctor)
 
 # MCP server
-app.command(name="mcp-server")(mcp_server)
+app.command(name="mcp-server", hidden=True)(mcp_server)
 
 
 def main():
