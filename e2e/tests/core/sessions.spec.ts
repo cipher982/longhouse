@@ -1254,7 +1254,7 @@ test.describe("Session Detail Page", () => {
         });
       });
 
-      await page.route(`**/api/sessions/${sessionId}/chat`, async (route) => {
+      await page.route(`**/api/sessions/${sessionId}/send-live`, async (route) => {
         chatRequests += 1;
         expect(route.request().method()).toBe("POST");
         expect(route.request().postDataJSON()).toMatchObject({
