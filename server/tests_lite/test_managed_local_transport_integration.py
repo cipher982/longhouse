@@ -18,6 +18,11 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+# These are real tmux/node transport canaries, not unit-level fakes. The
+# default 10s pytest timeout is tight on clean machines once shell bootstrap,
+# hook install, and a full send/receive turn all happen for real.
+pytestmark = pytest.mark.timeout(30)
+
 from zerg.database import get_db
 from zerg.database import initialize_database
 from zerg.database import make_engine
