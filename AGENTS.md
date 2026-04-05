@@ -29,8 +29,9 @@ Skills-Dir: .agents/skills
 
 ## Task Tracking
 
-- **`TODO.md`** is a slim index of current work only.
-- **Multi-commit work** gets one file in `docs/tasks/open/` linked from `TODO.md`.
+- **The external `docket` is the primary queue.** Park paused or cross-session repo work there instead of leaving it in `docs/tasks/open/`.
+- **`TODO.md`** is a thin repo-local pointer, not a second backlog.
+- **Multi-commit work** that needs repo-local detail gets one file in `docs/tasks/open/`.
 - **When work ships:** delete the task file and any spec. Git history is the record.
 - **No `done/` folder, no backlog folder.** If it's not active, it doesn't belong here.
 
