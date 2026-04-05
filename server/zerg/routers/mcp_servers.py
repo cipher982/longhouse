@@ -38,12 +38,6 @@ router = APIRouter(
     dependencies=[Depends(get_current_user)],
 )
 
-legacy_router = APIRouter(
-    prefix="/fiches/{fiche_id}/mcp-servers",
-    tags=["mcp-servers"],
-    dependencies=[Depends(get_current_user)],
-)
-
 
 # Pydantic models for request/response
 class MCPServerAddRequest(BaseModel):
@@ -477,56 +471,3 @@ async def get_available_automation_tools(
         "builtin": builtin_tools,
         "mcp": mcp_tools,
     }
-
-
-@legacy_router.get("/", response_model=List[MCPServerResponse])
-async def list_legacy_fiche_mcp_servers(
-    fiche_id: int,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    return await list_automation_mcp_servers(automation_id=fiche_id, db=db, current_user=current_user)
-
-
-@legacy_router.post("/", response_model=Automation, status_code=status.HTTP_201_CREATED)
-async def add_legacy_fiche_mcp_server(
-    fiche_id: int,
-    request: MCPServerAddRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    return await add_automation_mcp_server(automation_id=fiche_id, request=request, db=db, current_user=current_user)
-
-
-@legacy_router.delete("/{server_name}", status_code=status.HTTP_204_NO_CONTENT)
-async def remove_legacy_fiche_mcp_server(
-    fiche_id: int,
-    server_name: str,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    return await remove_automation_mcp_server(
-        automation_id=fiche_id,
-        server_name=server_name,
-        db=db,
-        current_user=current_user,
-    )
-
-
-@legacy_router.post("/test", response_model=MCPTestConnectionResponse)
-async def test_legacy_fiche_mcp_connection(
-    fiche_id: int,
-    request: MCPServerAddRequest,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    return await test_automation_mcp_connection(automation_id=fiche_id, request=request, db=db, current_user=current_user)
-
-
-@legacy_router.get("/available-tools", response_model=Dict[str, Any])
-async def get_available_legacy_fiche_tools(
-    fiche_id: int,
-    db: Session = Depends(get_db),
-    current_user=Depends(get_current_user),
-):
-    return await get_available_automation_tools(automation_id=fiche_id, db=db, current_user=current_user)
