@@ -115,11 +115,7 @@ def _print_branch_stream(response: httpx.Response) -> int:
 
 def _should_use_live_send(session_payload: dict[str, object]) -> bool:
     capabilities = session_payload.get("capabilities")
-    if isinstance(capabilities, dict) and "live_control_available" in capabilities:
-        return bool(capabilities.get("live_control_available"))
-
-    execution_home = str(session_payload.get("execution_home") or "").strip().lower()
-    return execution_home == "managed_local" and session_payload.get("source_runner_id") is not None
+    return bool(capabilities.get("live_control_available")) if isinstance(capabilities, dict) else False
 
 
 def _resolve_continue_route(

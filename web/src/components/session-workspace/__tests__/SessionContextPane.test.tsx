@@ -284,6 +284,30 @@ describe("SessionContextPane", () => {
     );
   });
 
+  it("drives reattach metadata from capabilities instead of raw execution home", () => {
+    renderPane({
+      session: makeSession({
+        execution_home: "legacy",
+        source_runner_name: "cinder",
+        attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+        capabilities: makeCapabilities({
+          host_reattach_available: true,
+        }),
+        managed_launch_profile: {
+          required_commands: ["claude"],
+          exported_env_keys: ["LONGHOUSE_MANAGED_SESSION_ID"],
+          argv: ["claude", "--session-id", "<provider-session-id>"],
+        },
+      }),
+    });
+
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach on the host machine");
+    expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
+      "tmux -L longhouse-managed attach -t lh-codex",
+    );
+    expect(screen.getByTestId("session-launch-profile")).toHaveTextContent("Managed-local launcher contract");
+  });
+
   it("clarifies the live-session contract for managed-local Codex", () => {
     renderPane({
       session: makeSession({

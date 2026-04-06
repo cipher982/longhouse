@@ -78,10 +78,8 @@ export function SessionContextPane({
     : runtime.needsAttention
       ? "warning"
       : "neutral";
-  const attachCommand =
-    session.execution_home === "managed_local" ? session.attach_command?.trim() || null : null;
-  const managedLaunchProfile =
-    session.execution_home === "managed_local" ? session.managed_launch_profile ?? null : null;
+  const attachCommand = interaction.hostReattachAvailable ? session.attach_command?.trim() || null : null;
+  const managedLaunchProfile = interaction.hostReattachAvailable ? session.managed_launch_profile ?? null : null;
   const attachRunnerLabel = session.source_runner_name?.trim() || "this machine";
   const loopModeCaption =
     session.execution_home !== "managed_local"
