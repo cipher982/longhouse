@@ -429,17 +429,6 @@ def _session_title(session: AgentSession | None, session_id: str) -> str:
     return f"Session {session_id[:8]}"
 
 
-def _home_label(session: AgentSession | None) -> str | None:
-    execution_home = str(getattr(session, "execution_home", "") or "").strip()
-    if execution_home == "managed_local":
-        return "On this Mac"
-    if execution_home == "managed_hosted":
-        return "Hosted"
-    if execution_home == "cloud_takeover":
-        return "Moved to cloud"
-    return None
-
-
 def _available_loop_actions(review: SessionTurnReview, session: AgentSession | None) -> List[str]:
     session_capabilities = build_session_capabilities(session)
     can_approve_continue = supports_live_turn_review_continue(session) or supports_cloud_turn_review_branch(session)
@@ -679,6 +668,7 @@ def _build_loop_inbox_item(
     superseded_by_card_id: int | None = None,
 ) -> LoopInboxItem:
     session_id = str(review.session_id)
+    session_capabilities = build_session_capabilities(session)
     return LoopInboxItem(
         card_id=int(review.id),
         session_id=session_id,
@@ -686,8 +676,8 @@ def _build_loop_inbox_item(
         project=getattr(session, "project", None),
         machine=getattr(session, "device_id", None),
         provider=getattr(session, "provider", None),
-        execution_home=str(getattr(session, "execution_home", "") or "").strip() or None,
-        home_label=_home_label(session),
+        execution_home=(session_capabilities.execution_home.value if session is not None else None),
+        home_label=session_capabilities.home_label if session is not None else None,
         loop_mode=review.loop_mode,
         decision=review.decision,
         execution_state=review.execution_state,

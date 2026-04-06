@@ -234,6 +234,40 @@ def _create_session(
     return session
 
 
+def test_build_loop_inbox_item_uses_resolved_execution_home_for_labels():
+    created_at = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
+    review = SimpleNamespace(
+        id=1,
+        session_id=uuid4(),
+        loop_mode="assist",
+        decision="wait",
+        execution_state="needs_human",
+        summary="Need a follow-up",
+        recommended_action="wait",
+        follow_up_prompt=None,
+        blocked_reasons=[],
+        created_at=created_at,
+    )
+    session = SimpleNamespace(
+        summary_title="Cloud branch",
+        project="zerg",
+        device_id="cloud-runner",
+        provider="claude",
+        cwd="/tmp/zerg",
+        execution_home="legacy",
+        continuation_kind="cloud",
+        origin_label="Cloud",
+        environment="cloud",
+        managed_transport=None,
+        source_runner_id=None,
+    )
+
+    item = oikos_runs_router._build_loop_inbox_item(review, session)
+
+    assert item.execution_home == "cloud_takeover"
+    assert item.home_label == "Moved to cloud"
+
+
 def _add_turn(db, *, session_id, user_text: str, assistant_text: str, timestamp: datetime | None = None):
     timestamp = timestamp or datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
     user_event = AgentEvent(

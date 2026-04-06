@@ -27,7 +27,6 @@ from zerg.models.agents import SessionPresence
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.session_capabilities import build_session_capabilities
-from zerg.services.session_capabilities import resolve_execution_home
 from zerg.services.session_runtime import SessionRuntimeView
 from zerg.services.session_runtime import build_fallback_runtime_view
 from zerg.services.session_runtime import build_runtime_view
@@ -52,15 +51,6 @@ def _coerce_session_loop_mode(value: str | None) -> SessionLoopMode:
         return SessionLoopMode.MANUAL
 
 
-def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
-    if value is None or not str(value).strip():
-        return None
-    try:
-        return ManagedSessionTransport(str(value).strip())
-    except ValueError:
-        return None
-
-
 def build_attach_command(session: AgentSession) -> str | None:
     return build_managed_local_attach_command(session=session)
 
@@ -82,8 +72,12 @@ def _coerce_managed_launch_profile(value: Any) -> ManagedLaunchProfileResponse |
     )
 
 
-def build_session_capabilities_response(session: AgentSession | None) -> SessionCapabilitiesResponse:
-    capability_flags = build_session_capabilities(session)
+def build_session_capabilities_response(
+    session: AgentSession | None = None,
+    *,
+    capability_flags=None,
+) -> SessionCapabilitiesResponse:
+    capability_flags = capability_flags or build_session_capabilities(session)
     return SessionCapabilitiesResponse(
         live_control_available=capability_flags.live_control_available,
         cloud_branch_available=capability_flags.cloud_branch_available,
@@ -673,6 +667,7 @@ def build_session_response(
     cache = thread_cache if thread_cache is not None else {}
     thread_head_session_id, thread_continuation_count = get_thread_meta(store, session, cache)
     include_runtime = should_include_runtime_view(session=session, runtime_view=runtime_overlay)
+    capability_flags = build_session_capabilities(session)
     return SessionResponse(
         id=str(session.id),
         provider=session.provider,
@@ -716,18 +711,77 @@ def build_session_response(
         continued_from_session_id=(str(session.continued_from_session_id) if session.continued_from_session_id else None),
         continuation_kind=session.continuation_kind,
         origin_label=session.origin_label,
-        execution_home=resolve_execution_home(session),
+        execution_home=capability_flags.execution_home,
         branched_from_event_id=session.branched_from_event_id,
         is_writable_head=bool(session.is_writable_head),
         is_sidechain=bool(session.is_sidechain or False),
-        managed_transport=_coerce_managed_transport(getattr(session, "managed_transport", None)),
+        managed_transport=capability_flags.managed_transport,
         source_runner_id=getattr(session, "source_runner_id", None),
         source_runner_name=getattr(session, "source_runner_name", None),
-        attach_command=build_attach_command(session),
+        attach_command=(build_attach_command(session) if capability_flags.host_reattach_available else None),
         managed_launch_profile=_coerce_managed_launch_profile(getattr(session, "managed_launch_profile", None)),
-        capabilities=build_session_capabilities_response(session),
+        capabilities=build_session_capabilities_response(capability_flags=capability_flags),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
+    )
+
+
+def build_active_session_response(
+    session: AgentSession,
+    *,
+    last_activity_at: datetime,
+    runtime_overlay: SessionRuntimeView,
+    last_user_message: str | None,
+    last_assistant_message: str | None,
+    attention: str,
+    now: datetime,
+) -> ActiveSessionResponse:
+    capability_flags = build_session_capabilities(session)
+    _started = (
+        session.started_at.replace(tzinfo=timezone.utc) if session.started_at and session.started_at.tzinfo is None else session.started_at
+    )
+    _ended = session.ended_at.replace(tzinfo=timezone.utc) if session.ended_at and session.ended_at.tzinfo is None else session.ended_at
+    end_time = _ended or now
+    duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0
+    message_count = (session.user_messages or 0) + (session.assistant_messages or 0)
+
+    return ActiveSessionResponse(
+        id=str(session.id),
+        project=session.project,
+        provider=session.provider,
+        cwd=session.cwd,
+        git_branch=session.git_branch,
+        started_at=session.started_at,
+        ended_at=session.ended_at,
+        last_activity_at=last_activity_at,
+        timeline_anchor_at=runtime_overlay.timeline_anchor_at,
+        runtime_phase=runtime_overlay.runtime_phase,
+        phase_started_at=runtime_overlay.phase_started_at,
+        last_progress_at=runtime_overlay.last_progress_at,
+        runtime_source=runtime_overlay.runtime_source,
+        terminal_state=runtime_overlay.terminal_state,
+        runtime_version=runtime_overlay.runtime_version,
+        status=runtime_overlay.status,
+        attention=attention,
+        duration_minutes=duration_minutes,
+        last_user_message=last_user_message,
+        last_assistant_message=last_assistant_message,
+        message_count=message_count,
+        tool_calls=session.tool_calls or 0,
+        presence_state=runtime_overlay.presence_state,
+        presence_tool=runtime_overlay.presence_tool,
+        presence_updated_at=runtime_overlay.presence_updated_at,
+        last_live_at=runtime_overlay.last_live_at,
+        display_phase=runtime_overlay.display_phase,
+        active_tool=runtime_overlay.active_tool,
+        confidence=runtime_overlay.confidence,
+        user_state=session.user_state or "active",
+        execution_home=capability_flags.execution_home,
+        managed_transport=capability_flags.managed_transport,
+        source_runner_id=getattr(session, "source_runner_id", None),
+        source_runner_name=getattr(session, "source_runner_name", None),
+        capabilities=build_session_capabilities_response(capability_flags=capability_flags),
+        loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )
 
 
