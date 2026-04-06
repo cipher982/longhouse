@@ -233,10 +233,8 @@ def build_tmux_launch_command(
             ),
             "__LONGHOUSE_MANAGED_LOCAL_EXIT__",
             (
-                'if [ -n "${TMUX_PANE:-}" ]; then '
-                f'{_tmux_prefix()} capture-pane -p -t "$TMUX_PANE" -S -{MANAGED_LOCAL_ARTIFACT_PANE_TAIL_LINES} '
-                '> "$LONGHOUSE_MANAGED_ARTIFACT_DIR/pane-tail.txt" 2>/dev/null || true; '
-                "fi"
+                f'{_tmux_prefix()} capture-pane -pt "{name}" -S -{MANAGED_LOCAL_ARTIFACT_PANE_TAIL_LINES} '
+                '> "$LONGHOUSE_MANAGED_ARTIFACT_DIR/pane-tail.txt" 2>/dev/null || true'
             ),
             "exit $exit_code",
         ]
