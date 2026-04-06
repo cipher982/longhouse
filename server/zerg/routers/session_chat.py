@@ -740,7 +740,7 @@ async def _dispatch_managed_local_text(
     )
     t_sent = time.monotonic()
 
-    if not send_result.ok:
+    if not send_result.ok or not bool(getattr(send_result, "verified_turn_started", False)):
         run_best_effort_managed_local_turn_write(
             db_bind=db.get_bind(),
             label="send_failed",
@@ -751,7 +751,7 @@ async def _dispatch_managed_local_text(
                 error_code="send_failed",
             ),
         )
-        error_message = str(send_result.error or "Failed to send text to managed local session")
+        error_message = str(send_result.error or "Managed local session did not acknowledge the prompt after send")
         await session_lock_manager.release(lock_scope_id, request_id)
         logger.info(f"[{request_id}] Managed local chat dispatch failed, lock released")
         return JSONResponse(

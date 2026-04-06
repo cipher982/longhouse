@@ -21,6 +21,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.services.agents_store import AgentsStore
+from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_local_transport import ManagedLocalTransportError
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
 from zerg.services.presence_cache import get_presence_cache
@@ -400,6 +401,75 @@ async def await_managed_local_turn_events(
     return []
 
 
+def _managed_local_events_include_expected_user_prompt(
+    *,
+    events: list[AgentEvent],
+    expected_user_text: str,
+) -> bool:
+    expected = str(expected_user_text or "")
+    if not expected:
+        return False
+    for event in events:
+        role = str(getattr(event, "role", "") or "").strip().lower()
+        if role != "user":
+            continue
+        content_text = str(getattr(event, "content_text", "") or "")
+        if strip_claude_channel_wrapper(content_text) == expected:
+            return True
+    return False
+
+
+async def await_managed_local_persisted_user_prompt(
+    *,
+    db_bind,
+    session_id: UUID,
+    after_event_id: int,
+    expected_user_text: str,
+    timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
+    poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
+) -> AgentEvent | None:
+    """Wait until the injected user prompt is durably visible in managed-local events."""
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout_secs
+    latest_seen = after_event_id
+    stable_polls = 0
+
+    while loop.time() < deadline:
+        with Session(bind=db_bind) as poll_db:
+            latest_event_id = int(get_managed_local_latest_event_id(db=poll_db, session_id=session_id) or 0)
+        if latest_event_id > after_event_id:
+            if latest_event_id == latest_seen:
+                stable_polls += 1
+            else:
+                latest_seen = latest_event_id
+                stable_polls = 0
+
+            if stable_polls >= MANAGED_LOCAL_STABLE_POLLS:
+                events = _fetch_managed_local_events_since(
+                    db_bind=db_bind,
+                    session_id=session_id,
+                    after_event_id=after_event_id,
+                )
+                if not _managed_local_events_include_expected_user_prompt(
+                    events=events,
+                    expected_user_text=expected_user_text,
+                ):
+                    await asyncio.sleep(poll_interval_secs)
+                    continue
+                for event in events:
+                    role = str(getattr(event, "role", "") or "").strip().lower()
+                    if role != "user":
+                        continue
+                    content_text = str(getattr(event, "content_text", "") or "")
+                    if strip_claude_channel_wrapper(content_text) == str(expected_user_text or ""):
+                        return event
+
+        await asyncio.sleep(poll_interval_secs)
+
+    return None
+
+
 async def send_text_to_managed_local_session(
     *,
     db: Session,
@@ -423,16 +493,17 @@ async def send_text_to_managed_local_session(
     if runner_id is None:
         return ManagedLocalSendResult(ok=False, error="Managed local session is missing source runner metadata")
 
-    # CLAUDE_CHANNEL_BRIDGE injects via MCP channel notification, not keyboard
-    # input — UserPromptSubmit never fires, so phase verification always times
-    # out.  Skip it unconditionally for this transport.
     transport = str(getattr(session, "managed_transport", "") or "").strip()
-    effective_verify = verify_turn_started and transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+    effective_verify = bool(verify_turn_started)
 
     baseline_event_id = get_managed_local_latest_event_id(db=db, session_id=session.id)
-    baseline_hook_runtime_event_id = get_managed_local_latest_hook_runtime_event_id(db=db, session_id=session.id) if effective_verify else 0
+    baseline_hook_runtime_event_id = (
+        get_managed_local_latest_hook_runtime_event_id(db=db, session_id=session.id)
+        if effective_verify and transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+        else 0
+    )
     baseline_presence_updated_at = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET
-    if effective_verify:
+    if effective_verify and transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
         baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=session.id)
     try:
         command = build_managed_local_send_text_command(session=session, text=text)
@@ -471,22 +542,39 @@ async def send_text_to_managed_local_session(
         verification_timeout = float(
             verification_timeout_secs if verification_timeout_secs is not None else MANAGED_LOCAL_EVENT_TIMEOUT_SECS
         )
-        hook_event = await await_managed_local_hook_phase_update(
-            db_bind=db.get_bind(),
-            session_id=session.id,
-            after_runtime_event_id=baseline_hook_runtime_event_id,
-            after_presence_updated_at=baseline_presence_updated_at,
-            phases=set(_MANAGED_LOCAL_ACTIVE_HOOK_PHASES),
-            timeout_secs=verification_timeout,
-        )
-        if hook_event is None:
-            return ManagedLocalSendResult(
-                ok=False,
-                exit_code=0,
-                baseline_event_id=baseline_event_id,
-                error="Managed local session did not acknowledge the prompt after send",
-                verified_turn_started=False,
+        if transport == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
+            persisted_prompt = await await_managed_local_persisted_user_prompt(
+                db_bind=db.get_bind(),
+                session_id=session.id,
+                after_event_id=baseline_event_id,
+                expected_user_text=text,
+                timeout_secs=verification_timeout,
             )
+            if persisted_prompt is None:
+                return ManagedLocalSendResult(
+                    ok=False,
+                    exit_code=0,
+                    baseline_event_id=baseline_event_id,
+                    error="Managed local session did not acknowledge the prompt after send",
+                    verified_turn_started=False,
+                )
+        else:
+            hook_event = await await_managed_local_hook_phase_update(
+                db_bind=db.get_bind(),
+                session_id=session.id,
+                after_runtime_event_id=baseline_hook_runtime_event_id,
+                after_presence_updated_at=baseline_presence_updated_at,
+                phases=set(_MANAGED_LOCAL_ACTIVE_HOOK_PHASES),
+                timeout_secs=verification_timeout,
+            )
+            if hook_event is None:
+                return ManagedLocalSendResult(
+                    ok=False,
+                    exit_code=0,
+                    baseline_event_id=baseline_event_id,
+                    error="Managed local session did not acknowledge the prompt after send",
+                    verified_turn_started=False,
+                )
 
     return ManagedLocalSendResult(
         ok=True,
