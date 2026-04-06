@@ -158,11 +158,15 @@ def wait_for_claude_channel_state(
     last_state: dict[str, Any] | None = None
     while time.monotonic() < deadline:
         if state_path.exists():
-            last_state = read_claude_channel_state(
-                session_id=session_id,
-                state_root=state_root,
-                claude_dir=claude_dir,
-            )
+            try:
+                last_state = read_claude_channel_state(
+                    session_id=session_id,
+                    state_root=state_root,
+                    claude_dir=claude_dir,
+                )
+            except (json.JSONDecodeError, OSError, ValueError):
+                time.sleep(poll_interval_secs)
+                continue
             if not require_ready or bool(last_state.get("ready")):
                 return last_state
         time.sleep(poll_interval_secs)
