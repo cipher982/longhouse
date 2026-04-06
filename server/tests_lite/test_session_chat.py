@@ -645,7 +645,7 @@ def test_agents_continue_route_rejects_codex_cloud_continuation(tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
-def test_agents_send_live_route_supports_managed_local_dispatch(monkeypatch, tmp_path):
+def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
     provider_session_id = f"managed-live-{uuid4().hex[:8]}"
@@ -691,7 +691,7 @@ def test_agents_send_live_route_supports_managed_local_dispatch(monkeypatch, tmp
         source_session.source_runner_name = "agent-device"
         source_session.managed_session_name = "lh-agent-send-live"
         db.commit()
-        token = DeviceToken(owner_id=user.id, device_id="agent-device", token_hash="test")
+        token = DeviceToken(owner_id=user.id, device_id="different-machine-label", token_hash="test")
 
     client, api_app_ref = _make_machine_client(session_local, token)
 
@@ -740,7 +740,7 @@ def test_agents_send_live_route_supports_managed_local_dispatch(monkeypatch, tmp
         api_app_ref.dependency_overrides = {}
 
 
-def test_agents_continue_route_rejects_other_device(monkeypatch, tmp_path):
+def test_agents_branch_cloud_route_rejects_other_device(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
     provider_session_id = f"resume-send-{uuid4().hex[:8]}"
@@ -854,7 +854,7 @@ def test_agents_continue_route_allows_auth_disabled_without_device_token(monkeyp
         api_app_ref.dependency_overrides = {}
 
 
-def test_agents_continue_route_auth_disabled_still_rejects_wrong_current_session_header(monkeypatch, tmp_path):
+def test_agents_branch_cloud_auth_disabled_still_rejects_wrong_current_session_header(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
     provider_session_id = f"resume-send-{uuid4().hex[:8]}"

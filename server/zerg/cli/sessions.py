@@ -407,12 +407,6 @@ def continue_session(
                 session_id=resolved_session_id,
                 headers=headers,
             )
-            # When routing to a live session with no managed session context, set the
-            # target session as the explicit current-session header. This proves targeting
-            # intent and avoids device-id cross-check false positives (runner.name vs
-            # token.device_id can diverge even on the same machine).
-            if route_name == "send-live" and CURRENT_SESSION_HEADER not in headers:
-                headers[CURRENT_SESSION_HEADER] = resolved_session_id
             with client.stream(
                 "POST",
                 f"{base_url.rstrip('/')}/api/agents/sessions/{resolved_session_id}/{route_name}",
