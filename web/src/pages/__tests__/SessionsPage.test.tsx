@@ -96,7 +96,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     continued_from_session_id: null,
     continuation_kind: null,
     origin_label: "laptop",
-    execution_home: "legacy",
+    home_label: null,
     branched_from_event_id: null,
     is_writable_head: true,
     control: null,
@@ -558,7 +558,7 @@ describe("SessionsPage", () => {
       thread_root_session_id: "thread-1",
       thread_head_session_id: "head-session",
       thread_continuation_count: 3,
-      execution_home: "legacy",
+      home_label: null,
       status: "completed",
       display_phase: "Completed",
     });
@@ -572,7 +572,7 @@ describe("SessionsPage", () => {
       thread_root_session_id: "thread-1",
       thread_head_session_id: "head-session",
       thread_continuation_count: 3,
-      execution_home: "managed_local",
+      home_label: "On this Mac",
       status: "working",
       presence_state: "running",
       display_phase: "Running bash",
@@ -835,12 +835,12 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
-  it("shows execution-home badges directly on the main timeline cards", async () => {
+  it("shows home badges directly on the main timeline cards", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {
         sessions: [
           makeTimelineCard({
-            execution_home: "managed_local",
+            home_label: "On this Mac",
             origin_label: "cinder",
             capabilities: makeCapabilities({
               live_control_available: true,
@@ -852,7 +852,7 @@ describe("SessionsPage", () => {
             id: "session-2",
             project: "cloud",
             summary_title: "Cloud branch",
-            execution_home: "cloud_takeover",
+            home_label: "Moved to cloud",
             origin_label: "Cloud",
             thread_root_session_id: "session-2",
             thread_head_session_id: "session-2",
@@ -868,7 +868,8 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findAllByText("Live control")).toHaveLength(2);
+    expect(await screen.findAllByText("Live control")).toHaveLength(1);
+    expect(screen.getByText("This machine")).toBeInTheDocument();
     expect(screen.getByText("Cloud")).toBeInTheDocument();
     expect(screen.getByText("Head: cinder")).toBeInTheDocument();
     expect(screen.queryByText("Head: Cloud")).not.toBeInTheDocument();
@@ -935,7 +936,6 @@ describe("SessionsPage", () => {
         sessions: [
           makeTimelineCard({
             ended_at: null,
-            execution_home: "managed_local",
             runtime_source: "managed_local_transport",
             status: "active",
             confidence: "live",
@@ -977,7 +977,6 @@ describe("SessionsPage", () => {
         sessions: [
           makeTimelineCard({
             ended_at: null,
-            execution_home: "managed_local",
             runtime_source: "managed_local_transport",
             status: "active",
             confidence: "live",

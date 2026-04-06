@@ -194,7 +194,7 @@ def test_sessions_list_marks_old_open_session_idle_without_live_signal(tmp_path)
         assert data["confidence"] is None
 
 
-def test_sessions_list_exposes_execution_home_from_existing_session_metadata(tmp_path):
+def test_sessions_list_exposes_home_label_from_existing_session_metadata(tmp_path):
     factory = _make_db(tmp_path, "execution_home.db")
     now = datetime.now(timezone.utc)
 
@@ -225,9 +225,9 @@ def test_sessions_list_exposes_execution_home_from_existing_session_metadata(tmp
         assert resp.status_code == 200, resp.text
         rows = {row["project"]: row for row in resp.json()["sessions"]}
         assert rows["legacy-local"]["id"] == str(legacy.id)
-        assert rows["legacy-local"]["execution_home"] == "legacy"
+        assert rows["legacy-local"]["home_label"] is None
         assert rows["cloud-branch"]["id"] == str(cloud.id)
-        assert rows["cloud-branch"]["execution_home"] == "cloud_takeover"
+        assert rows["cloud-branch"]["home_label"] == "Moved to cloud"
 
 
 def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):

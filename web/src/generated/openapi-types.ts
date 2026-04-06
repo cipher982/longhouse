@@ -5612,10 +5612,10 @@ export interface components {
              */
             user_state: string;
             /**
-             * @description Execution home: legacy|managed_local|managed_hosted|cloud_takeover
-             * @default legacy
+             * Home Label
+             * @description User-facing home label, e.g. On this Mac|Hosted|Moved to cloud
              */
-            execution_home: components["schemas"]["SessionExecutionHome"];
+            home_label?: string | null;
             /** @description Host-control and managed-launch debugging detail */
             control?: components["schemas"]["SessionControlResponse"] | null;
             /** @description Canonical session capability flags */
@@ -9949,10 +9949,10 @@ export interface components {
              */
             origin_label?: string | null;
             /**
-             * @description Execution home: legacy|managed_local|managed_hosted|cloud_takeover
-             * @default legacy
+             * Home Label
+             * @description User-facing home label, e.g. On this Mac|Hosted|Moved to cloud
              */
-            execution_home: components["schemas"]["SessionExecutionHome"];
+            home_label?: string | null;
             /**
              * Branched From Event Id
              * @description Event id where this continuation branched

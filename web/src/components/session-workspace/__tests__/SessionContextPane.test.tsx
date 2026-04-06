@@ -40,7 +40,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     continued_from_session_id: null,
     continuation_kind: "local",
     origin_label: "Cinder",
-    execution_home: "legacy",
+    home_label: null,
     branched_from_event_id: null,
     is_writable_head: true,
     control: null,
@@ -141,7 +141,7 @@ describe("SessionContextPane", () => {
         display_phase: "Running bash",
         confidence: "live",
         runtime_source: "managed_local_transport",
-        execution_home: "managed_local",
+        home_label: "On this Mac",
         control: {
           managed_transport: "codex_app_server",
           source_runner_id: null,
@@ -169,7 +169,7 @@ describe("SessionContextPane", () => {
     renderPane({
       session: makeSession({
         provider: "codex",
-        execution_home: "managed_local",
+        home_label: "On this Mac",
         control: {
           managed_transport: "codex_app_server",
           source_runner_id: 7,
@@ -219,7 +219,7 @@ describe("SessionContextPane", () => {
     renderPane({
       session: makeSession({
         provider: "claude",
-        execution_home: "managed_local",
+        home_label: "On this Mac",
         control: {
           managed_transport: "tmux",
           source_runner_id: null,
@@ -248,7 +248,7 @@ describe("SessionContextPane", () => {
   it("shows the host reattach command for live-controlled sessions", () => {
     renderPane({
       session: makeSession({
-        execution_home: "managed_local",
+        home_label: "On this Mac",
         control: {
           managed_transport: "tmux",
           source_runner_id: null,
@@ -296,10 +296,10 @@ describe("SessionContextPane", () => {
     );
   });
 
-  it("drives reattach metadata from capabilities instead of raw execution home", () => {
+  it("drives reattach metadata from capabilities instead of display home", () => {
     renderPane({
       session: makeSession({
-        execution_home: "legacy",
+        home_label: null,
         control: {
           managed_transport: "tmux",
           source_runner_id: null,
@@ -331,7 +331,7 @@ describe("SessionContextPane", () => {
     renderPane({
       session: makeSession({
         provider: "codex",
-        execution_home: "managed_local",
+        home_label: "On this Mac",
         control: {
           managed_transport: "codex_app_server",
           source_runner_id: 7,

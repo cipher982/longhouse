@@ -33,7 +33,6 @@ from zerg.services.session_runtime import build_runtime_view
 from zerg.services.session_runtime import load_runtime_state_map  # noqa: F401 — re-exported
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.session_execution_home import ManagedSessionTransport
-from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
 from zerg.utils.time import UTCBaseModel
 
@@ -197,10 +196,7 @@ class SessionResponse(UTCBaseModel):
     continued_from_session_id: Optional[str] = Field(None, description="Parent continuation session UUID")
     continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
     origin_label: Optional[str] = Field(None, description="User-facing execution origin label")
-    execution_home: SessionExecutionHome = Field(
-        SessionExecutionHome.LEGACY,
-        description="Execution home: legacy|managed_local|managed_hosted|cloud_takeover",
-    )
+    home_label: Optional[str] = Field(None, description="User-facing home label, e.g. On this Mac|Hosted|Moved to cloud")
     branched_from_event_id: Optional[int] = Field(None, description="Event id where this continuation branched")
     is_writable_head: bool = Field(False, description="True when this session is the current writable head")
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
@@ -301,10 +297,7 @@ class ActiveSessionResponse(UTCBaseModel):
     active_tool: Optional[str] = Field(None, description="Active tool label for runtime display")
     confidence: Optional[str] = Field(None, description="Runtime confidence: live|inferred|stale")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
-    execution_home: SessionExecutionHome = Field(
-        SessionExecutionHome.LEGACY,
-        description="Execution home: legacy|managed_local|managed_hosted|cloud_takeover",
-    )
+    home_label: Optional[str] = Field(None, description="User-facing home label, e.g. On this Mac|Hosted|Moved to cloud")
     control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
@@ -738,7 +731,7 @@ def build_session_response(
         continued_from_session_id=(str(session.continued_from_session_id) if session.continued_from_session_id else None),
         continuation_kind=session.continuation_kind,
         origin_label=session.origin_label,
-        execution_home=capability_flags.execution_home,
+        home_label=capability_flags.home_label,
         branched_from_event_id=session.branched_from_event_id,
         is_writable_head=bool(session.is_writable_head),
         is_sidechain=bool(session.is_sidechain or False),
@@ -799,7 +792,7 @@ def build_active_session_response(
         active_tool=runtime_overlay.active_tool,
         confidence=runtime_overlay.confidence,
         user_state=session.user_state or "active",
-        execution_home=capability_flags.execution_home,
+        home_label=capability_flags.home_label,
         control=build_session_control_response(session, capability_flags=capability_flags),
         capabilities=build_session_capabilities_response(capability_flags=capability_flags),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),

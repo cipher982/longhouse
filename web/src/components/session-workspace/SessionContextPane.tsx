@@ -1,6 +1,6 @@
 import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
-import { getExecutionHomeLabel } from "../../lib/sessionExecutionHome";
+import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
 import type { SessionTurnReview } from "../../services/api/oikos";
 import {
@@ -71,8 +71,7 @@ export function SessionContextPane({
   const canDriveManagedLocalFromBrowser = interaction.liveControlAvailable;
   const turnCount = session.user_messages + session.assistant_messages;
   const runtime = resolveSessionRuntimeState(session);
-  const executionHomeLabel =
-    session.execution_home === "legacy" ? null : getExecutionHomeLabel(session.execution_home);
+  const homeLabel = normalizeExecutionVenueLabel(session.home_label);
   const runtimeBadgeVariant = runtime.isExecuting
     ? "success"
     : runtime.needsAttention
@@ -125,7 +124,7 @@ export function SessionContextPane({
           <Badge variant={interaction.capabilityVariant}>{interaction.capabilityLabel}</Badge>
           <Badge variant="neutral">{turnCount} turns</Badge>
           <Badge variant="neutral">{session.tool_calls} tools</Badge>
-          {executionHomeLabel ? <Badge variant="neutral">{executionHomeLabel}</Badge> : null}
+          {homeLabel ? <Badge variant="neutral">{homeLabel}</Badge> : null}
           {session.environment && session.environment !== "production" ? (
             <Badge variant="warning">{session.environment}</Badge>
           ) : null}

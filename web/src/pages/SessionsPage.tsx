@@ -48,7 +48,7 @@ import { PresenceBadge } from "../components/PresenceBadge";
 import AddRunnerModal from "../components/AddRunnerModal";
 import LaunchSessionModal from "../components/LaunchSessionModal";
 import { parseUTC } from "../lib/dateUtils";
-import { getExecutionHomeLabel } from "../lib/sessionExecutionHome";
+import { normalizeExecutionVenueLabel } from "../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
 import {
   getProviderColor,
@@ -525,11 +525,11 @@ function SessionCard({
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
-  const executionHomeLabel = getExecutionHomeLabel(session.execution_home);
+  const homeLabel = normalizeExecutionVenueLabel(session.home_label);
   const headOriginLabel = normalizeSessionOriginLabel(thread.head_origin_label);
   const startedOriginLabel = normalizeSessionOriginLabel(thread.started_origin_label);
   const showHeadOriginLabel =
-    !compatibilityMode && !!headOriginLabel && headOriginLabel !== executionHomeLabel;
+    !compatibilityMode && !!headOriginLabel && headOriginLabel !== homeLabel;
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
@@ -563,7 +563,6 @@ function SessionCard({
       data-session-id={detailSession.id}
       data-thread-id={thread.thread_id}
       data-runtime-tone={runtime.tone}
-      data-execution-home={session.execution_home || "legacy"}
     >
       {!confirming && (
         <button
@@ -599,15 +598,9 @@ function SessionCard({
               {session.git_branch}
             </span>
           )}
-          {executionHomeLabel && (
-            <span
-              className={
-                executionHomeLabel === "Legacy"
-                  ? "environment-badge environment-badge--secondary"
-                  : "environment-badge"
-              }
-            >
-              {executionHomeLabel}
+          {homeLabel && (
+            <span className="environment-badge">
+              {homeLabel}
             </span>
           )}
           {showHeadOriginLabel && (

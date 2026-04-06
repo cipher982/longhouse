@@ -96,7 +96,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     continued_from_session_id: null,
     continuation_kind: "local",
     origin_label: "On this Mac",
-    execution_home: "managed_local",
+    home_label: "On this Mac",
     branched_from_event_id: null,
     is_writable_head: true,
     control: {
@@ -212,7 +212,7 @@ describe("SessionDetailPage", () => {
     renderSessionDetailPage();
 
     expect(screen.queryByTestId("session-continuation-unavailable")).not.toBeInTheDocument();
-    expect(screen.getAllByText("Live control")).toHaveLength(2);
+    expect(screen.getAllByText("Live control")).toHaveLength(1);
     expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
       "Message this live Codex session from Longhouse, or reattach on the host machine.",
     );
@@ -248,7 +248,7 @@ describe("SessionDetailPage", () => {
   it("keeps the dock visible for searchable-only sessions and explains why cloud branching is disabled", () => {
     const session = makeSession({
       provider: "gemini",
-      execution_home: "legacy",
+      home_label: null,
       control: null,
       continuation_kind: "local",
       id: "session-gemini",

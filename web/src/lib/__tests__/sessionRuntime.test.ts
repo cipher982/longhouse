@@ -7,7 +7,7 @@ function makeSession(overrides: Partial<TimelineRuntimeSession> = {}): TimelineR
     ended_at: "2026-03-21T12:00:00Z",
     last_activity_at: "2026-03-21T12:00:00Z",
     timeline_anchor_at: "2026-03-21T12:00:00Z",
-    execution_home: "legacy",
+    capabilities: null,
     ...overrides,
   };
 }
@@ -35,7 +35,12 @@ describe("resolveSessionRuntimeState", () => {
   it("treats managed-local needs-user as trusted attention, not execution", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
-        execution_home: "managed_local",
+        capabilities: {
+          live_control_available: false,
+          cloud_branch_available: false,
+          host_reattach_available: true,
+          reply_to_live_session_available: false,
+        },
         status: "active",
         confidence: "live",
         runtime_source: "managed_local_transport",

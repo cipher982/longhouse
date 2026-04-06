@@ -1,7 +1,6 @@
 import type {
   AgentSession,
   AgentSessionStatus,
-  SessionExecutionHome,
 } from "../services/api/agents";
 
 export type KnownPresenceState = "thinking" | "running" | "idle" | "needs_user" | "blocked";
@@ -18,12 +17,12 @@ type TimelineRuntimeOverlay = {
   display_phase?: string | null;
   active_tool?: string | null;
   confidence?: string | null;
-  execution_home?: SessionExecutionHome | null;
+  capabilities?: AgentSession["capabilities"] | null;
 };
 
 export type TimelineRuntimeSession = Pick<
   AgentSession,
-  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "execution_home"
+  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "capabilities"
 > &
   Partial<TimelineRuntimeOverlay>;
 
@@ -109,10 +108,10 @@ function getRuntimeTruthTier(
   const confidence = overlay?.confidence ?? null;
   const presenceState = normalizePresenceState(overlay?.presence_state ?? null);
   const runtimeSource = normalizeRuntimeSource(overlay?.runtime_source ?? null);
-  const executionHome = overlay?.execution_home ?? null;
+  const hostReattachAvailable = overlay?.capabilities?.host_reattach_available === true;
   const hasFreshSignal = hasFreshRuntimeSignal({ confidence, runtimeSource, presenceState });
 
-  if (executionHome === "managed_local" && hasFreshSignal && confidence !== "stale") {
+  if (hostReattachAvailable && hasFreshSignal && confidence !== "stale") {
     return "managed-local";
   }
   if (hasFreshSignal && confidence !== "stale") {
