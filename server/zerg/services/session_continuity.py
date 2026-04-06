@@ -30,6 +30,8 @@ from uuid import UUID
 import httpx
 from sqlalchemy.orm import Session
 
+from zerg.session_execution_home import SessionExecutionHome
+
 if TYPE_CHECKING:
     pass
 
@@ -376,6 +378,10 @@ async def ship_session_to_zerg(
         "continuation_kind": continuation_kind or "cloud",
         "origin_label": origin_label or "Cloud",
     }
+    if (continuation_kind or "").strip().lower() == "cloud":
+        payload["execution_home"] = SessionExecutionHome.CLOUD_TAKEOVER.value
+    elif (continuation_kind or "").strip().lower() == "runner":
+        payload["execution_home"] = SessionExecutionHome.MANAGED_HOSTED.value
     if session_id:
         payload["id"] = session_id
     if thread_root_session_id:

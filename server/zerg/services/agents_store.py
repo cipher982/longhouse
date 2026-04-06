@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 _GENERIC_ENVIRONMENT_LABELS = {"production", "development", "dev", "test", "e2e"}
 _CONTINUATION_KIND_LOCAL = "local"
 _CONTINUATION_KIND_CLOUD = "cloud"
+_CONTINUATION_KIND_RUNNER = "runner"
 
 
 def _is_generic_environment_label(value: str | None) -> bool:
@@ -75,6 +76,78 @@ def _normalize_label(value: str | None) -> str | None:
     return normalized or None
 
 
+def _coerce_execution_home(value: str | None) -> SessionExecutionHome | None:
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return SessionExecutionHome(str(value).strip())
+    except ValueError:
+        return None
+
+
+def _execution_home_for_continuation_kind(kind: str | None) -> SessionExecutionHome | None:
+    normalized = str(kind or "").strip().lower()
+    if normalized == _CONTINUATION_KIND_CLOUD:
+        return SessionExecutionHome.CLOUD_TAKEOVER
+    if normalized == _CONTINUATION_KIND_RUNNER:
+        return SessionExecutionHome.MANAGED_HOSTED
+    return None
+
+
+def _continuation_kind_for_execution_home(execution_home: SessionExecutionHome | None) -> str | None:
+    if execution_home == SessionExecutionHome.CLOUD_TAKEOVER:
+        return _CONTINUATION_KIND_CLOUD
+    if execution_home == SessionExecutionHome.MANAGED_HOSTED:
+        return _CONTINUATION_KIND_RUNNER
+    return None
+
+
+def _origin_label_for_execution_home(execution_home: SessionExecutionHome | None) -> str | None:
+    if execution_home == SessionExecutionHome.CLOUD_TAKEOVER:
+        return "Cloud"
+    if execution_home == SessionExecutionHome.MANAGED_HOSTED:
+        return "Hosted"
+    return None
+
+
+def _infer_execution_home_from_ingest(data: "SessionIngest") -> SessionExecutionHome:
+    explicit = _coerce_execution_home(getattr(data, "execution_home", None))
+    if explicit is not None and explicit != SessionExecutionHome.LEGACY:
+        return explicit
+
+    from_kind = _execution_home_for_continuation_kind(data.continuation_kind)
+    if from_kind is not None:
+        return from_kind
+
+    origin_label = str(getattr(data, "origin_label", "") or "").strip().lower()
+    environment = str(getattr(data, "environment", "") or "").strip().lower()
+    if origin_label == "cloud" or environment == "cloud":
+        return SessionExecutionHome.CLOUD_TAKEOVER
+    if origin_label == "hosted" or environment == "hosted":
+        return SessionExecutionHome.MANAGED_HOSTED
+
+    return explicit or SessionExecutionHome.LEGACY
+
+
+def _infer_execution_home_from_session(session: AgentSession) -> SessionExecutionHome:
+    explicit = _coerce_execution_home(getattr(session, "execution_home", None))
+    if explicit is not None and explicit != SessionExecutionHome.LEGACY:
+        return explicit
+
+    from_kind = _execution_home_for_continuation_kind(getattr(session, "continuation_kind", None))
+    if from_kind is not None:
+        return from_kind
+
+    origin_label = str(getattr(session, "origin_label", "") or "").strip().lower()
+    environment = str(getattr(session, "environment", "") or "").strip().lower()
+    if origin_label == "cloud" or environment == "cloud":
+        return SessionExecutionHome.CLOUD_TAKEOVER
+    if origin_label == "hosted" or environment == "hosted":
+        return SessionExecutionHome.MANAGED_HOSTED
+
+    return explicit or SessionExecutionHome.LEGACY
+
+
 def _should_replace_managed_local_codex_provider_session_id(session: AgentSession, incoming_provider_session_id: str) -> bool:
     current_provider_session_id = str(session.provider_session_id or "").strip()
     if not current_provider_session_id:
@@ -91,9 +164,10 @@ def _should_replace_managed_local_codex_provider_session_id(session: AgentSessio
 def _infer_continuation_kind_from_ingest(data: "SessionIngest") -> str:
     if data.continuation_kind:
         return data.continuation_kind
-    device_id = (data.device_id or "").strip().lower()
-    if device_id.startswith("zerg-commis-"):
-        return _CONTINUATION_KIND_CLOUD
+    explicit_home = _infer_execution_home_from_ingest(data)
+    from_home = _continuation_kind_for_execution_home(explicit_home)
+    if from_home:
+        return from_home
     return _CONTINUATION_KIND_LOCAL
 
 
@@ -101,9 +175,9 @@ def _infer_origin_label_from_ingest(data: "SessionIngest") -> str:
     explicit = _normalize_label(data.origin_label)
     if explicit:
         return explicit
-    inferred_kind = _infer_continuation_kind_from_ingest(data)
-    if inferred_kind == _CONTINUATION_KIND_CLOUD:
-        return "Cloud"
+    from_home = _origin_label_for_execution_home(_infer_execution_home_from_ingest(data))
+    if from_home:
+        return from_home
     env = _normalize_label(data.environment)
     if env and not _is_generic_environment_label(env):
         return env
@@ -118,9 +192,9 @@ def _infer_origin_label_from_ingest(data: "SessionIngest") -> str:
 def _infer_continuation_kind_from_session(session: AgentSession) -> str:
     if session.continuation_kind:
         return session.continuation_kind
-    device_id = (session.device_id or "").strip().lower()
-    if device_id.startswith("zerg-commis-"):
-        return _CONTINUATION_KIND_CLOUD
+    from_home = _continuation_kind_for_execution_home(_infer_execution_home_from_session(session))
+    if from_home:
+        return from_home
     return _CONTINUATION_KIND_LOCAL
 
 
@@ -128,9 +202,9 @@ def _infer_origin_label_from_session(session: AgentSession) -> str:
     explicit = _normalize_label(session.origin_label)
     if explicit:
         return explicit
-    inferred_kind = _infer_continuation_kind_from_session(session)
-    if inferred_kind == _CONTINUATION_KIND_CLOUD:
-        return "Cloud"
+    from_home = _origin_label_for_execution_home(_infer_execution_home_from_session(session))
+    if from_home:
+        return from_home
     env = _normalize_label(session.environment)
     if env and not _is_generic_environment_label(env):
         return env
@@ -216,6 +290,10 @@ class SessionIngest(BaseModel):
     continued_from_session_id: Optional[UUID] = Field(None, description="Parent continuation session UUID")
     continuation_kind: Optional[str] = Field(None, description="Continuation kind: local|cloud|runner")
     origin_label: Optional[str] = Field(None, description="User-facing execution origin label, e.g. Cinder or Cloud")
+    execution_home: Optional[str] = Field(
+        None,
+        description="Internal execution home: legacy|managed_local|managed_hosted|cloud_takeover",
+    )
     branched_from_event_id: Optional[int] = Field(None, description="Event ID where this continuation branched from its parent")
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (isSidechain:true in JSONL)")
     events: List[EventIngest] = Field(default_factory=list, description="Session events")
@@ -274,6 +352,10 @@ class AgentsStore:
             session.continuation_kind = _infer_continuation_kind_from_session(session)
         if not _normalize_label(session.origin_label):
             session.origin_label = _infer_origin_label_from_session(session)
+        if _infer_execution_home_from_session(session) != SessionExecutionHome.LEGACY and (
+            _coerce_execution_home(getattr(session, "execution_home", None)) in {None, SessionExecutionHome.LEGACY}
+        ):
+            session.execution_home = _infer_execution_home_from_session(session).value
         if session.is_writable_head is None:
             session.is_writable_head = 1
 
@@ -565,6 +647,7 @@ class AgentsStore:
             tool_calls=0,
             is_writable_head=1,
             is_sidechain=1 if parent.is_sidechain else 0,
+            execution_home=(_execution_home_for_continuation_kind(continuation_kind) or SessionExecutionHome.LEGACY).value,
         )
         self.db.add(session)
         self.db.flush()
@@ -608,6 +691,7 @@ class AgentsStore:
     def _refresh_existing_session_metadata(self, session: AgentSession, data: SessionIngest) -> None:
         """Backfill richer session metadata when the same session is ingested again."""
         self._coerce_session_lineage_defaults(session)
+        incoming_execution_home = _infer_execution_home_from_ingest(data)
 
         incoming_started_at = _normalize_utc_naive(data.started_at)
         existing_started_at = _normalize_utc_naive(session.started_at)
@@ -655,6 +739,11 @@ class AgentsStore:
             session.continuation_kind = data.continuation_kind
         if data.origin_label and not session.origin_label:
             session.origin_label = data.origin_label
+        if incoming_execution_home != SessionExecutionHome.LEGACY and _coerce_execution_home(getattr(session, "execution_home", None)) in {
+            None,
+            SessionExecutionHome.LEGACY,
+        }:
+            session.execution_home = incoming_execution_home.value
         if data.branched_from_event_id and not session.branched_from_event_id:
             session.branched_from_event_id = data.branched_from_event_id
 
@@ -1460,6 +1549,7 @@ class AgentsStore:
         session_id = data.id if data.id else uuid4()
         incoming_kind = _infer_continuation_kind_from_ingest(data)
         incoming_origin = _infer_origin_label_from_ingest(data)
+        incoming_execution_home = _infer_execution_home_from_ingest(data)
         incoming_provider_session_id = data.provider_session_id
 
         existing = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
@@ -1525,6 +1615,7 @@ class AgentsStore:
                 tool_calls=0,
                 is_writable_head=1,
                 is_sidechain=1 if data.is_sidechain else 0,
+                execution_home=incoming_execution_home.value,
             )
             self.db.add(session)
             self.db.flush()
