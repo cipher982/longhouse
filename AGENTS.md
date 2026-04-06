@@ -177,7 +177,7 @@ Import from `../components/ui`. **Check here before building custom UI.**
 3. **AGENTS.md is canonical** — `CLAUDE.md` is a symlink, edit AGENTS.md only.
 4. **Auth disabled in dev** — `AUTH_DISABLED=1` set by dev.sh.
 5. **Coolify env var changes need redeploy** — restart doesn't pick up new vars.
-6. **Task tracking:** See § Task Tracking above. Delete task/spec files when work ships.
+6. **Task tracking:** Keep execution tracking out of this repo. Use normal design/spec docs only when the repo itself needs enduring product or technical context.
 7. **Backend README required** — pyproject.toml needs it; don't delete `server/README.md`.
 8. **Stripe key rotation** — Use `~/git/me/mytech/scripts/update-stripe-key.sh sk_live_...`. It validates against Stripe before touching anything, then updates Coolify and redeploys.
 9. **Coolify container names are random hashes** — Don't `docker ps --filter name=X` to find Coolify apps. Use `docker ps` and check labels: `coolify.serviceName` has the logical name (e.g., `longhouse-control-plane`). Or use `coolify app status <name>`.

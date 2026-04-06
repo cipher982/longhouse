@@ -879,7 +879,7 @@ def inject_commis_hooks(
     # Notification hook — always added so Oikos knows the commis finished.
     # PLACEHOLDER: Currently just prints to stderr.  Will be replaced with an
     # actual MCP ``notify_oikos`` call once the Claude Code hook protocol
-    # supports MCP tool invocation from hooks (tracked in TODO.md).
+    # supports MCP tool invocation from hooks.
     stop_hooks.append(
         {
             "hooks": [
