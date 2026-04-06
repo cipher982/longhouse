@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+import pytest
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
@@ -75,6 +76,48 @@ def _make_machine_client(session_local, device_token):
     api_app.dependency_overrides[verify_agents_token] = override_verify
     api_app.dependency_overrides[require_single_tenant] = lambda: None
     return TestClient(app, backend="asyncio"), api_app
+
+
+def test_managed_local_launch_response_requires_managed_local_execution_home():
+    result = SimpleNamespace(
+        session=SimpleNamespace(
+            id=uuid4(),
+            provider="claude",
+            provider_session_id="provider-session",
+            execution_home="legacy",
+            managed_transport="tmux",
+            loop_mode="manual",
+            source_runner_id=1,
+            source_runner_name="cinder",
+            managed_session_name="lh-test",
+            managed_launch_profile=None,
+        ),
+        attach_command="tmux attach -t lh-test",
+    )
+
+    with pytest.raises(RuntimeError, match="managed_local session"):
+        session_chat._managed_local_launch_response(result)
+
+
+def test_managed_local_launch_response_requires_managed_transport():
+    result = SimpleNamespace(
+        session=SimpleNamespace(
+            id=uuid4(),
+            provider="claude",
+            provider_session_id="provider-session",
+            execution_home="managed_local",
+            managed_transport=None,
+            loop_mode="manual",
+            source_runner_id=1,
+            source_runner_name="cinder",
+            managed_session_name="lh-test",
+            managed_launch_profile=None,
+        ),
+        attach_command="tmux attach -t lh-test",
+    )
+
+    with pytest.raises(RuntimeError, match="managed transport metadata"):
+        session_chat._managed_local_launch_response(result)
 
 
 def test_fake_cloud_continuation_persists_turn_for_follow_up_requests(monkeypatch, tmp_path):
