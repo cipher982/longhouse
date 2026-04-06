@@ -234,6 +234,8 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
         ),
     )
     monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: True)
+    # Simulate a non-Bedrock environment so force_flag_capable_path stays False.
+    monkeypatch.setattr(claude_cli, "_collect_claude_launch_env", lambda: {})
     monkeypatch.setattr(
         claude_cli,
         "_ensure_native_claude_prereqs",
