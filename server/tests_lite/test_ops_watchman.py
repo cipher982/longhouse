@@ -106,6 +106,22 @@ def test_collect_observations_includes_recent_session_activity(monkeypatch, tmp_
     assert payload["distinct_source_paths"] == 1
 
 
+def test_watchman_model_config_defaults_to_openrouter(monkeypatch):
+    monkeypatch.delenv("OPS_WATCHMAN_MODEL", raising=False)
+    monkeypatch.delenv("OPS_WATCHMAN_BASE_URL", raising=False)
+    monkeypatch.delenv("OPS_WATCHMAN_API_KEY_ENV", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.delenv("OPS_WATCHMAN_REASONING_EFFORT", raising=False)
+
+    model_id, base_url, api_key_env, api_key, reasoning = ops_watchman._watchman_model_config()
+
+    assert model_id == "x-ai/grok-4.1-fast"
+    assert base_url == "https://openrouter.ai/api/v1"
+    assert api_key_env == "OPENROUTER_API_KEY"
+    assert api_key is None
+    assert reasoning == {"effort": "low"}
+
+
 @pytest.mark.asyncio
 async def test_run_watchman_cycle_persists_run_observations_and_incident(monkeypatch, tmp_path):
     SessionLocal, db_path = _make_db(tmp_path)
