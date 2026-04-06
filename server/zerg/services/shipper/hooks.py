@@ -150,7 +150,7 @@ exit 0
 
 SESSION_START_HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse SessionStart hook — shows recent sessions on new session
+# Longhouse SessionStart hook — injects recent session summaries on startup
 # Installed by: longhouse connect --install
 INPUT=$(cat)
 CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
@@ -178,19 +178,51 @@ PROJECT_ENC=$(
     || printf '%s' "$PROJECT"
 )
 
-RESPONSE=$(curl -sf --max-time 4 \\
+RESPONSE=$(curl -sf --max-time 5 \\
   -H "X-Agents-Token: $TOKEN" \\
-  "${URL}/api/agents/sessions?project=${PROJECT_ENC}&limit=5&days_back=7" 2>/dev/null)
+  "${URL}/api/agents/sessions?project=${PROJECT_ENC}&limit=30&days_back=14&hide_autonomous=true" 2>/dev/null)
 if [[ $? -ne 0 ]] || [[ -z "$RESPONSE" ]]; then exit 0; fi
 
 TOTAL=$(echo "$RESPONSE" | jq -r '.total // 0')
 if [[ "$TOTAL" -eq 0 ]]; then exit 0; fi
 
-LINES=$(echo "$RESPONSE" | jq -r '
-  .sessions[:5][] |
-  "  \\(.started_at | split("T")[0]) \\(.provider // "?") \\(.project // "?") (\\(.tool_calls // 0) tools)"
-')
-MSG="Longhouse: ${TOTAL} sessions in ${PROJECT} (7d):\\n${LINES}"
+# Build lines: metadata + summary for sessions that have a summary.
+# Each session renders as:
+#   [DATE] PROVIDER Nt — TITLE
+#     SUMMARY (truncated to 200 chars)
+LINES=$(echo "$RESPONSE" | python3 -c "
+import json, sys, textwrap
+
+# strict=False handles embedded control characters that can appear in session summaries
+data = json.loads(sys.stdin.read(), strict=False)
+out = []
+for s in data.get('sessions', []):
+    summary = (s.get('summary') or '').strip()
+    if not summary:
+        continue
+    date = (s.get('started_at') or '')[:10]
+    provider = s.get('provider') or '?'
+    tools = s.get('tool_calls') or 0
+    title = (s.get('summary_title') or '').strip()
+    # Truncate summary to keep total size reasonable
+    summary_short = summary[:200] + ('...' if len(summary) > 200 else '')
+    header = f'[{date}] {provider} {tools}t'
+    if title:
+        header += f' — {title}'
+    # Wrap summary at 100 chars, indent 2 spaces
+    wrapped = textwrap.fill(summary_short, width=100, initial_indent='  ', subsequent_indent='  ')
+    out.append(header)
+    out.append(wrapped)
+    if len(out) >= 60:  # ~20 sessions * 3 lines each
+        break
+
+print('\n'.join(out))
+" 2>/dev/null)
+
+if [[ -z "$LINES" ]]; then exit 0; fi
+
+SHOWN=$(echo "$LINES" | grep -c '^\\[' 2>/dev/null || echo "?")
+MSG="Longhouse: ${TOTAL} sessions in ${PROJECT} (14d) · ${SHOWN} with summaries:\\n\\n${LINES}"
 
 jq -nc --arg msg "$MSG" '{"systemMessage": $msg}'
 exit 0
