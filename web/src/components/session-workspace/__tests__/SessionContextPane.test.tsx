@@ -322,6 +322,9 @@ describe("SessionContextPane", () => {
       "tmux -L longhouse-managed attach -t lh-codex",
     );
     expect(screen.getByTestId("session-launch-profile")).toHaveTextContent("Managed-local launcher contract");
+    expect(
+      screen.getByText(/Start or keep the cloud branch from Longhouse below, or reattach on the host machine when available/i),
+    ).toBeInTheDocument();
   });
 
   it("clarifies the live-session contract for managed-local Codex", () => {

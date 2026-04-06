@@ -83,7 +83,7 @@ export function SessionContextPane({
   const managedLaunchProfile = interaction.hostReattachAvailable ? sessionControl?.managed_launch_profile ?? null : null;
   const attachRunnerLabel = sessionControl?.source_runner_name?.trim() || "this machine";
   const loopModeCaption =
-    session.execution_home !== "managed_local"
+    !interaction.isManagedLocalSession
       ? "Stored session preference for what Oikos may do after each completed assistant turn."
       : canDriveManagedLocalFromBrowser
         ? "Loop Mode changes review posture only. Keep driving the live session from Longhouse below or by reattaching on the host machine."
