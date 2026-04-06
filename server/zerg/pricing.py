@@ -20,12 +20,12 @@ MODEL_PRICES_USD_PER_1K: dict[str, Tuple[float, float]] = {
     "x-ai/grok-4.1-fast": (0.0002, 0.0005),
     "x-ai/grok-4": (0.003, 0.015),
     "openai/gpt-5-mini": (0.0003, 0.0012),
+    "meta-llama/llama-4-scout-17b-16e-instruct": (0.00008, 0.0003),
+    "qwen/qwen3-32b": (0.00008, 0.00024),
     # Direct xAI (legacy) — same underlying pricing
     "grok-4-1-fast-reasoning": (0.0002, 0.0005),
     "grok-4-1-fast-non-reasoning": (0.0002, 0.0005),
-    # Groq (OSS fallback) — prices per 1K tokens
-    "qwen/qwen3-32b": (0.00029, 0.00059),
-    "meta-llama/llama-4-scout-17b-16e-instruct": (0.00011, 0.00034),
+    # Groq-hosted models — prices per 1K tokens
     "llama-3.3-70b-versatile": (0.00059, 0.00079),
     "llama-3.1-8b-instant": (0.00005, 0.00008),
     # OpenAI (direct) — approximate rates

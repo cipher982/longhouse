@@ -43,6 +43,19 @@ pub async fn drain_outbox(dir: &Path, client: &ShipperClient) -> (usize, usize) 
             None => continue,
         };
         if !file_name.ends_with(".json") || file_name.starts_with('.') {
+            // Prune stale dot-files (orphaned atomic-write temps) — they will never
+            // be renamed to prs.*.json and would otherwise accumulate forever.
+            if file_name.starts_with('.') {
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if let Ok(age) = now.duration_since(modified) {
+                            if age > Duration::from_secs(STALE_SECS) {
+                                let _ = std::fs::remove_file(&path);
+                            }
+                        }
+                    }
+                }
+            }
             continue;
         }
 
