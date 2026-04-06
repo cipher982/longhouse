@@ -704,6 +704,9 @@ reprovision: ## Reprovision hosted instance — SUBDOMAIN=david010 (default), op
 	  curl -sf "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" | \
 	    python3 -c "import sys,json; print(json.load(sys.stdin)[\"status\"])"'
 
+deploy-status: ## Show deployed SHA, health, and uptime for all Longhouse surfaces
+	@./scripts/ops/deploy-status.sh
+
 qa-live-perf: ## Profile hosted timeline -> session detail journey on the live instance
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/run-prod-e2e.sh tests/live/user-instance-perf.spec.ts --timeout=90000 --reporter=line

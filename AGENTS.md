@@ -260,10 +260,11 @@ make reprovision                    # david010 (default) — auto-fetches admin 
 make reprovision SUBDOMAIN=other
 make reprovision IMAGE="ghcr.io/cipher982/longhouse-runtime:<tag>"
 ```
-Data is safe — SQLite lives on a host bind mount at `/var/app-data/longhouse/<subdomain>`. Waits 15s and prints health status. Admin token is auto-fetched from the control-plane container on zerg; set `CONTROL_PLANE_ADMIN_TOKEN` explicitly in CI.
+**What reprovision does:** stop+remove container, then re-create with current env vars and the latest (or specified) runtime image. Data is safe — SQLite lives on a host bind mount at `/var/app-data/longhouse/<subdomain>`, not inside the container. Waits 15s and prints health status. Admin token is auto-fetched from the control-plane container on zerg; set `CONTROL_PLANE_ADMIN_TOKEN` explicitly in CI. API: `POST /api/instances/{id}/reprovision`. If secrets change on the control plane, instances must be reprovisioned to pick them up. A reprovision can briefly return `500` with a Docker name-conflict (`409`) even when the replacement eventually succeeds — verify `StartedAt`, `/api/health`, and startup logs before retrying.
 
 ### Verify Deploy
 ```bash
+make deploy-status                                     # SHA, health, and uptime for all surfaces
 make verify-prod                                       # API + browser validation
 curl -s https://longhouse.ai/api/health                # Public demo runtime health
 curl -s https://control.longhouse.ai/health            # Control plane health
@@ -352,8 +353,7 @@ Two separate things exist — don't conflate or rebuild:
 - (2026-02-05) [security] Never store admin/device tokens in AI session notes; rotate immediately if exposed.
 - (2026-02-12) [arch] Agent infra models use `AgentsBase` (not `Base`), live in `models/agents.py` and `models/work.py`. Schema `agents.` gets translate-mapped to `None` for SQLite.
 - (2026-02-12) [frontend] Frontend API errors: `ApiError` class has `status`, `url`, `body` (already-parsed object, not string). FastAPI wraps HTTPException detail in `{detail: ...}`, so structured error data is at `body.detail.field`.
-- (2026-02-14) [ops] **Reprovisioning an instance** = stop+remove container, then re-create with current env vars. Data is safe — SQLite lives on a host bind mount (`/var/app-data/longhouse/<subdomain>`), not inside the container. Use the admin API: `POST /api/instances/{id}/reprovision`. If secrets change on the control plane, instances must be reprovisioned to pick them up.
-- (2026-03-08) [ops] Control-plane reprovision can briefly return `500` with a Docker name-conflict (`409`) even when the replacement eventually succeeds. After a failed reprovision, verify the instance `StartedAt`, `/api/health`, and startup logs before retrying or assuming it stayed on the old image.
+- (2026-02-14) [ops] Reprovision semantics are documented inline in § Manual Canary Reprovision above.
 - (2026-02-26) [ops] Instance LLM calls go directly to providers (Groq, OpenAI, z.ai) — NOT through `llm.drose.io`. Do NOT add `extra_body={"metadata": ...}` to any app code; Groq rejects it with 400. The LiteLLM proxy is personal-dev only.
 - (2026-02-16) [ops] `get_llm_client_with_db_fallback()` checks DB `LlmProviderConfig` table before env vars. Stale DB rows with wrong API keys silently override env config → 401s. Delete stale rows: `db.query(LlmProviderConfig).filter(...).delete()`.
 - (2026-02-20) [arch] **Python shipper is deleted.** Rust engine (`longhouse-engine`) owns all session shipping. `longhouse connect` manages the service only. Stop hook: `exec /abs/path/to/longhouse-engine ship --file "$TRANSCRIPT"` — absolute path baked at install time, no Python overhead. After any engine source change run `make install-engine` (build + codesign). `~/.local/bin/longhouse-engine` is a symlink to `target/release/` — never copy it.
