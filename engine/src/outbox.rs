@@ -529,4 +529,52 @@ mod tests {
         let logged = paths.lock().unwrap().clone();
         assert_eq!(logged.len(), 0, "no POSTs for malformed file");
     }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_drain_outbox_deletes_stale_tmp_files() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        // Server that must NOT be called — stale dot-files get deleted, never POSTed.
+        let (addr, paths, server) = spawn_http_server(204).await;
+        let dir = tempfile::tempdir().unwrap();
+
+        // Two stale dot-file variants the hook can produce:
+        //   1. .tmp.XXXXXX          — orphaned before mv (killed mid-write)
+        //   2. .tmp.XXXXXX.json     — old buggy hook pattern
+        let stale_no_ext = dir.path().join(".tmp.STALE1");
+        let stale_with_ext = dir.path().join(".tmp.STALE2.json");
+        fs::write(&stale_no_ext, b"{}").unwrap();
+        fs::write(&stale_with_ext, b"{}").unwrap();
+
+        // Backdate both past STALE_SECS (600s) using touch(1).
+        // Using a timestamp clearly in the past (1970-01-02 = +86400s epoch).
+        for path in [&stale_no_ext, &stale_with_ext] {
+            std::process::Command::new("touch")
+                .args(["-t", "197001020000", path.to_str().unwrap()])
+                .status()
+                .expect("touch failed");
+        }
+
+        // One fresh in-progress temp — must NOT be touched (age ~0).
+        let fresh_tmp = dir.path().join(".tmp.FRESH1");
+        fs::write(&fresh_tmp, b"{}").unwrap();
+
+        let url = format!("http://{}", addr);
+        let cfg = ShipperConfig::default().with_overrides(Some(&url), None, None, None, None, None);
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let (sent, kept) = drain_outbox(dir.path(), &client).await;
+
+        assert_eq!(sent, 0, "stale dot-files must not be POSTed");
+        assert_eq!(kept, 0, "stale dot-files must not be kept for retry");
+        assert!(!stale_no_ext.exists(), ".tmp.STALE1 must be deleted");
+        assert!(!stale_with_ext.exists(), ".tmp.STALE2.json must be deleted");
+        assert!(fresh_tmp.exists(), "fresh in-progress .tmp must be left alone");
+
+        server.abort();
+        let logged = paths.lock().unwrap().clone();
+        assert_eq!(logged.len(), 0, "no POSTs — stale dot-files never sent");
+    }
 }
