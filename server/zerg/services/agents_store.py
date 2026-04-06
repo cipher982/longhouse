@@ -42,13 +42,17 @@ from zerg.services.raw_json_compression import CODEC_ZSTD
 from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.session_execution_home import SessionExecutionHome
+from zerg.session_execution_home import coerce_execution_home
+from zerg.session_execution_home import continuation_kind_for_execution_home
+from zerg.session_execution_home import execution_home_for_continuation_kind
+from zerg.session_execution_home import infer_execution_home
+from zerg.session_execution_home import origin_label_for_execution_home
 
 logger = logging.getLogger(__name__)
 
 _GENERIC_ENVIRONMENT_LABELS = {"production", "development", "dev", "test", "e2e"}
 _CONTINUATION_KIND_LOCAL = "local"
 _CONTINUATION_KIND_CLOUD = "cloud"
-_CONTINUATION_KIND_RUNNER = "runner"
 
 
 def _is_generic_environment_label(value: str | None) -> bool:
@@ -76,76 +80,22 @@ def _normalize_label(value: str | None) -> str | None:
     return normalized or None
 
 
-def _coerce_execution_home(value: str | None) -> SessionExecutionHome | None:
-    if value is None or not str(value).strip():
-        return None
-    try:
-        return SessionExecutionHome(str(value).strip())
-    except ValueError:
-        return None
-
-
-def _execution_home_for_continuation_kind(kind: str | None) -> SessionExecutionHome | None:
-    normalized = str(kind or "").strip().lower()
-    if normalized == _CONTINUATION_KIND_CLOUD:
-        return SessionExecutionHome.CLOUD_TAKEOVER
-    if normalized == _CONTINUATION_KIND_RUNNER:
-        return SessionExecutionHome.MANAGED_HOSTED
-    return None
-
-
-def _continuation_kind_for_execution_home(execution_home: SessionExecutionHome | None) -> str | None:
-    if execution_home == SessionExecutionHome.CLOUD_TAKEOVER:
-        return _CONTINUATION_KIND_CLOUD
-    if execution_home == SessionExecutionHome.MANAGED_HOSTED:
-        return _CONTINUATION_KIND_RUNNER
-    return None
-
-
-def _origin_label_for_execution_home(execution_home: SessionExecutionHome | None) -> str | None:
-    if execution_home == SessionExecutionHome.CLOUD_TAKEOVER:
-        return "Cloud"
-    if execution_home == SessionExecutionHome.MANAGED_HOSTED:
-        return "Hosted"
-    return None
-
-
 def _infer_execution_home_from_ingest(data: "SessionIngest") -> SessionExecutionHome:
-    explicit = _coerce_execution_home(getattr(data, "execution_home", None))
-    if explicit is not None and explicit != SessionExecutionHome.LEGACY:
-        return explicit
-
-    from_kind = _execution_home_for_continuation_kind(data.continuation_kind)
-    if from_kind is not None:
-        return from_kind
-
-    origin_label = str(getattr(data, "origin_label", "") or "").strip().lower()
-    environment = str(getattr(data, "environment", "") or "").strip().lower()
-    if origin_label == "cloud" or environment == "cloud":
-        return SessionExecutionHome.CLOUD_TAKEOVER
-    if origin_label == "hosted" or environment == "hosted":
-        return SessionExecutionHome.MANAGED_HOSTED
-
-    return explicit or SessionExecutionHome.LEGACY
+    return infer_execution_home(
+        execution_home=getattr(data, "execution_home", None),
+        continuation_kind=getattr(data, "continuation_kind", None),
+        origin_label=getattr(data, "origin_label", None),
+        environment=getattr(data, "environment", None),
+    )
 
 
 def _infer_execution_home_from_session(session: AgentSession) -> SessionExecutionHome:
-    explicit = _coerce_execution_home(getattr(session, "execution_home", None))
-    if explicit is not None and explicit != SessionExecutionHome.LEGACY:
-        return explicit
-
-    from_kind = _execution_home_for_continuation_kind(getattr(session, "continuation_kind", None))
-    if from_kind is not None:
-        return from_kind
-
-    origin_label = str(getattr(session, "origin_label", "") or "").strip().lower()
-    environment = str(getattr(session, "environment", "") or "").strip().lower()
-    if origin_label == "cloud" or environment == "cloud":
-        return SessionExecutionHome.CLOUD_TAKEOVER
-    if origin_label == "hosted" or environment == "hosted":
-        return SessionExecutionHome.MANAGED_HOSTED
-
-    return explicit or SessionExecutionHome.LEGACY
+    return infer_execution_home(
+        execution_home=getattr(session, "execution_home", None),
+        continuation_kind=getattr(session, "continuation_kind", None),
+        origin_label=getattr(session, "origin_label", None),
+        environment=getattr(session, "environment", None),
+    )
 
 
 def _should_replace_managed_local_codex_provider_session_id(session: AgentSession, incoming_provider_session_id: str) -> bool:
@@ -165,7 +115,7 @@ def _infer_continuation_kind_from_ingest(data: "SessionIngest") -> str:
     if data.continuation_kind:
         return data.continuation_kind
     explicit_home = _infer_execution_home_from_ingest(data)
-    from_home = _continuation_kind_for_execution_home(explicit_home)
+    from_home = continuation_kind_for_execution_home(explicit_home)
     if from_home:
         return from_home
     return _CONTINUATION_KIND_LOCAL
@@ -175,7 +125,7 @@ def _infer_origin_label_from_ingest(data: "SessionIngest") -> str:
     explicit = _normalize_label(data.origin_label)
     if explicit:
         return explicit
-    from_home = _origin_label_for_execution_home(_infer_execution_home_from_ingest(data))
+    from_home = origin_label_for_execution_home(_infer_execution_home_from_ingest(data))
     if from_home:
         return from_home
     env = _normalize_label(data.environment)
@@ -192,7 +142,7 @@ def _infer_origin_label_from_ingest(data: "SessionIngest") -> str:
 def _infer_continuation_kind_from_session(session: AgentSession) -> str:
     if session.continuation_kind:
         return session.continuation_kind
-    from_home = _continuation_kind_for_execution_home(_infer_execution_home_from_session(session))
+    from_home = continuation_kind_for_execution_home(_infer_execution_home_from_session(session))
     if from_home:
         return from_home
     return _CONTINUATION_KIND_LOCAL
@@ -202,7 +152,7 @@ def _infer_origin_label_from_session(session: AgentSession) -> str:
     explicit = _normalize_label(session.origin_label)
     if explicit:
         return explicit
-    from_home = _origin_label_for_execution_home(_infer_execution_home_from_session(session))
+    from_home = origin_label_for_execution_home(_infer_execution_home_from_session(session))
     if from_home:
         return from_home
     env = _normalize_label(session.environment)
@@ -353,7 +303,7 @@ class AgentsStore:
         if not _normalize_label(session.origin_label):
             session.origin_label = _infer_origin_label_from_session(session)
         if _infer_execution_home_from_session(session) != SessionExecutionHome.LEGACY and (
-            _coerce_execution_home(getattr(session, "execution_home", None)) in {None, SessionExecutionHome.LEGACY}
+            coerce_execution_home(getattr(session, "execution_home", None)) in {None, SessionExecutionHome.LEGACY}
         ):
             session.execution_home = _infer_execution_home_from_session(session).value
         if session.is_writable_head is None:
@@ -647,7 +597,7 @@ class AgentsStore:
             tool_calls=0,
             is_writable_head=1,
             is_sidechain=1 if parent.is_sidechain else 0,
-            execution_home=(_execution_home_for_continuation_kind(continuation_kind) or SessionExecutionHome.LEGACY).value,
+            execution_home=(execution_home_for_continuation_kind(continuation_kind) or SessionExecutionHome.LEGACY).value,
         )
         self.db.add(session)
         self.db.flush()
@@ -739,7 +689,7 @@ class AgentsStore:
             session.continuation_kind = data.continuation_kind
         if data.origin_label and not session.origin_label:
             session.origin_label = data.origin_label
-        if incoming_execution_home != SessionExecutionHome.LEGACY and _coerce_execution_home(getattr(session, "execution_home", None)) in {
+        if incoming_execution_home != SessionExecutionHome.LEGACY and coerce_execution_home(getattr(session, "execution_home", None)) in {
             None,
             SessionExecutionHome.LEGACY,
         }:

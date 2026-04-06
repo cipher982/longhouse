@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from zerg.models.agents import AgentSession
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
+from zerg.session_execution_home import infer_execution_home
 
 
 @dataclass(frozen=True)
@@ -17,15 +18,6 @@ class SessionCapabilityFlags:
     reply_to_live_session_available: bool
     home_label: str | None
     requires_managed_local_tmux_reconcile: bool
-
-
-def _coerce_execution_home(value: str | None) -> SessionExecutionHome | None:
-    if value is None or not str(value).strip():
-        return None
-    try:
-        return SessionExecutionHome(str(value).strip())
-    except ValueError:
-        return None
 
 
 def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
@@ -48,24 +40,12 @@ def _execution_home_label(execution_home: SessionExecutionHome) -> str | None:
 
 
 def resolve_execution_home(session: AgentSession) -> SessionExecutionHome:
-    stored = _coerce_execution_home(getattr(session, "execution_home", None))
-    if stored is not None and stored != SessionExecutionHome.LEGACY:
-        return stored
-
-    continuation_kind = str(getattr(session, "continuation_kind", "") or "").strip().lower()
-    if continuation_kind == "cloud":
-        return SessionExecutionHome.CLOUD_TAKEOVER
-    if continuation_kind == "runner":
-        return SessionExecutionHome.MANAGED_HOSTED
-
-    origin_label = str(getattr(session, "origin_label", "") or "").strip().lower()
-    environment = str(getattr(session, "environment", "") or "").strip().lower()
-    if origin_label == "cloud" or environment == "cloud":
-        return SessionExecutionHome.CLOUD_TAKEOVER
-    if origin_label == "hosted" or environment == "hosted":
-        return SessionExecutionHome.MANAGED_HOSTED
-
-    return stored or SessionExecutionHome.LEGACY
+    return infer_execution_home(
+        execution_home=getattr(session, "execution_home", None),
+        continuation_kind=getattr(session, "continuation_kind", None),
+        origin_label=getattr(session, "origin_label", None),
+        environment=getattr(session, "environment", None),
+    )
 
 
 def resolve_managed_transport(session: AgentSession | None) -> ManagedSessionTransport | None:
