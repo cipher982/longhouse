@@ -92,6 +92,36 @@ def origin_label_for_execution_home(execution_home: SessionExecutionHome | None)
     return None
 
 
+def _legacy_execution_home_from_labels(
+    *,
+    origin_label: str | None,
+    environment: str | None,
+) -> SessionExecutionHome | None:
+    for value in (origin_label, environment):
+        normalized = str(value or "").strip().lower()
+        if normalized == "cloud":
+            return SessionExecutionHome.CLOUD_TAKEOVER
+        if normalized == "hosted":
+            return SessionExecutionHome.MANAGED_HOSTED
+    return None
+
+
+def _legacy_origin_label_from_context(
+    *,
+    environment: str | None,
+    device_id: str | None,
+) -> str | None:
+    normalized_environment = normalize_session_label(environment)
+    if normalized_environment and not is_generic_environment_label(normalized_environment):
+        return normalized_environment
+
+    normalized_device_id = normalize_session_label(device_id)
+    if normalized_device_id:
+        return normalized_device_id.replace("shipper-", "")
+
+    return normalized_environment
+
+
 def infer_execution_home(
     *,
     execution_home: str | None,
@@ -107,12 +137,9 @@ def infer_execution_home(
     if from_kind is not None:
         return from_kind
 
-    normalized_origin = str(origin_label or "").strip().lower()
-    normalized_environment = str(environment or "").strip().lower()
-    if normalized_origin == "cloud" or normalized_environment == "cloud":
-        return SessionExecutionHome.CLOUD_TAKEOVER
-    if normalized_origin == "hosted" or normalized_environment == "hosted":
-        return SessionExecutionHome.MANAGED_HOSTED
+    legacy = _legacy_execution_home_from_labels(origin_label=origin_label, environment=environment)
+    if legacy is not None:
+        return legacy
 
     return explicit or SessionExecutionHome.LEGACY
 
@@ -164,14 +191,7 @@ def infer_origin_label(
     if from_home:
         return from_home
 
-    normalized_environment = normalize_session_label(environment)
-    if normalized_environment and not is_generic_environment_label(normalized_environment):
-        return normalized_environment
-
-    normalized_device_id = normalize_session_label(device_id)
-    if normalized_device_id:
-        return normalized_device_id.replace("shipper-", "")
-
-    if normalized_environment:
-        return normalized_environment
+    legacy = _legacy_origin_label_from_context(environment=environment, device_id=device_id)
+    if legacy:
+        return legacy
     return "Local"
