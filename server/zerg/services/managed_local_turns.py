@@ -18,6 +18,10 @@ from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 
 logger = logging.getLogger(__name__)
 
+MANAGED_LOCAL_TURN_ERROR_SEND_FAILED = "send_failed"
+MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT = "verification_timeout"
+MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT = "turn_timeout"
+
 
 @dataclass(frozen=True)
 class ManagedLocalTurnSnapshot:
@@ -159,7 +163,13 @@ def maybe_mark_managed_local_turn_durable(db: Session, *, session_id: UUID) -> M
         turn.durable_user_event_id = int(user_event.id)
         turn.durable_assistant_event_id = int(assistant_event.id)
         turn.durable_at = datetime.now(timezone.utc)
-        if turn.error_code == "turn_timeout":
+        if turn.error_code in {MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT, MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT}:
+            logger.info(
+                "Managed-local turn %s for session %s became durable after %s",
+                str(turn.request_id or ""),
+                str(session_id),
+                turn.error_code,
+            )
             turn.error_code = None
         db.flush()
         return turn
