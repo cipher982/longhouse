@@ -15,7 +15,7 @@ TMUX_NOT_INSTALLED_MESSAGE = "tmux is not installed"
 MANAGED_LOCAL_TMUX_HISTORY_LIMIT = 50000
 MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL = "tmux-256color"
 MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES = 1
-MANAGED_LOCAL_TMUX_REMAIN_ON_EXIT = "on"
+MANAGED_LOCAL_TMUX_REMAIN_ON_EXIT = "failed"
 MANAGED_LOCAL_ARTIFACT_ROOT = "${HOME}/.claude/longhouse-managed"
 MANAGED_LOCAL_ARTIFACT_PANE_TAIL_LINES = 2000
 MANAGED_LOCAL_ATTACH_POSTMORTEM_TAIL_LINES = 120
@@ -133,6 +133,10 @@ def _build_managed_local_wheel_binding(*, table: str, direction: str) -> str:
     return f"bind-key -T {table} Wheel{suffix}Pane {command}"
 
 
+def _build_managed_local_copy_drag_end_binding(*, table: str) -> str:
+    return f"bind-key -T {table} MouseDragEnd1Pane send-keys -X copy-selection-and-cancel"
+
+
 def _build_managed_local_root_wheel_binding() -> str:
     return (
         'bind-key -T root WheelUpPane if-shell -F "#{||:#{pane_in_mode},#{mouse_any_flag}}" '
@@ -147,24 +151,29 @@ def _managed_local_tmux_launch_options() -> tuple[str, ...]:
         "set-option -s escape-time 0",
         "set-option -g status off",
         "set-option -g mouse on",
+        "set-option -g set-clipboard external",
         f"set-option -g default-terminal {MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL}",
         "set-option -gu terminal-features",
         "set-option -as terminal-features ',*:RGB'",
+        "set-option -as terminal-features ',*:clipboard'",
         f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT}",
-        # Keep the dead pane for postmortem attach/capture even after a clean
-        # provider exit. Losing the only pane transcript makes managed-local
-        # failures look like tmux crashes and destroys the debugging surface.
+        # Clean user/provider exits should drop the user back to their normal
+        # shell. Failed exits still keep the pane for postmortem attach/capture.
         f"set-option -g remain-on-exit {MANAGED_LOCAL_TMUX_REMAIN_ON_EXIT}",
         "unbind-key -T root WheelUpPane",
         _build_managed_local_root_wheel_binding(),
         "unbind-key -T copy-mode WheelUpPane",
         "unbind-key -T copy-mode WheelDownPane",
+        "unbind-key -T copy-mode MouseDragEnd1Pane",
         _build_managed_local_wheel_binding(table="copy-mode", direction="up"),
         _build_managed_local_wheel_binding(table="copy-mode", direction="down"),
+        _build_managed_local_copy_drag_end_binding(table="copy-mode"),
         "unbind-key -T copy-mode-vi WheelUpPane",
         "unbind-key -T copy-mode-vi WheelDownPane",
+        "unbind-key -T copy-mode-vi MouseDragEnd1Pane",
         _build_managed_local_wheel_binding(table="copy-mode-vi", direction="up"),
         _build_managed_local_wheel_binding(table="copy-mode-vi", direction="down"),
+        _build_managed_local_copy_drag_end_binding(table="copy-mode-vi"),
     )
 
 

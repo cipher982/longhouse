@@ -62,9 +62,11 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
         "set-option -s escape-time 0 \\; ",
         "set-option -g status off \\; ",
         "set-option -g mouse on \\; ",
+        "set-option -g set-clipboard external \\; ",
         f"set-option -g default-terminal {MANAGED_LOCAL_TMUX_DEFAULT_TERMINAL} \\; ",
         "set-option -gu terminal-features \\; ",
         "set-option -as terminal-features ',*:RGB' \\; ",
+        "set-option -as terminal-features ',*:clipboard' \\; ",
         f"set-option -g history-limit {MANAGED_LOCAL_TMUX_HISTORY_LIMIT} \\; ",
         f"set-option -g remain-on-exit {MANAGED_LOCAL_TMUX_REMAIN_ON_EXIT} \\; ",
         "unbind-key -T root WheelUpPane \\; ",
@@ -75,13 +77,16 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
         ),
         "unbind-key -T copy-mode WheelUpPane \\; ",
         "unbind-key -T copy-mode WheelDownPane \\; ",
+        "unbind-key -T copy-mode MouseDragEnd1Pane \\; ",
         (f"bind-key -T copy-mode WheelUpPane send-keys -X -N {MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up \\; "),
         (
             "bind-key -T copy-mode WheelDownPane send-keys -X -N "
             f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-down \\; "
         ),
+        "bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-selection-and-cancel \\; ",
         "unbind-key -T copy-mode-vi WheelUpPane \\; ",
         "unbind-key -T copy-mode-vi WheelDownPane \\; ",
+        "unbind-key -T copy-mode-vi MouseDragEnd1Pane \\; ",
         (
             "bind-key -T copy-mode-vi WheelUpPane send-keys -X -N "
             f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-up \\; "
@@ -90,6 +95,7 @@ def test_build_tmux_launch_command_wraps_cwd_and_entry_command():
             "bind-key -T copy-mode-vi WheelDownPane send-keys -X -N "
             f"{MANAGED_LOCAL_TMUX_WHEEL_SCROLL_LINES} scroll-down \\; "
         ),
+        "bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-selection-and-cancel \\; ",
         "new-session -d -s lh-demo -c '/tmp/path with spaces' /tmp/longhouse-managed-lh-demo.zsh",
     ]
     cursor = -1
@@ -139,6 +145,7 @@ def test_build_tmux_launch_command_resets_terminal_features_before_reapplying(mo
             text=True,
         ).stdout
         assert features.splitlines().count("*:RGB") == 1
+        assert features.splitlines().count("*:clipboard") == 1
     finally:
         subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
 
@@ -180,7 +187,7 @@ def test_managed_local_root_wheel_binding_executes_cleanly_in_tmux(monkeypatch, 
         subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
 
 
-def test_build_tmux_launch_command_keeps_session_after_clean_exit(monkeypatch, tmp_path):
+def test_build_tmux_launch_command_closes_session_after_clean_exit(monkeypatch, tmp_path):
     if shutil.which("tmux") is None:
         pytest.skip("tmux is not installed")
     shell_path = shutil.which("zsh")
@@ -211,6 +218,68 @@ def test_build_tmux_launch_command_keeps_session_after_clean_exit(monkeypatch, t
         subprocess.run(command, shell=True, executable=shell_path, check=True, capture_output=True, text=True, env=env)
         time.sleep(0.4)
 
+        has_session = None
+        for _ in range(20):
+            has_session = subprocess.run(
+                base + ["has-session", "-t", session_name],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if has_session.returncode != 0:
+                break
+            time.sleep(0.1)
+        assert has_session is not None
+        assert has_session.returncode != 0
+
+        artifact_root = Path(str(tmp_path / ".claude" / "longhouse-managed"))
+        launch_artifact = artifact_root / "session-clean-exit" / "launch.json"
+        exit_artifact = artifact_root / "session-clean-exit" / "exit.json"
+        pane_tail = artifact_root / "session-clean-exit" / "pane-tail.txt"
+        for _ in range(20):
+            if launch_artifact.exists() and exit_artifact.exists() and pane_tail.exists():
+                break
+            time.sleep(0.1)
+        assert launch_artifact.exists()
+        assert exit_artifact.exists()
+        assert pane_tail.exists()
+        assert '"exit_classification":"provider_clean_exit"' in exit_artifact.read_text(encoding="utf-8")
+        assert "managed-local-clean-exit" in pane_tail.read_text(encoding="utf-8")
+    finally:
+        subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
+
+
+def test_build_tmux_launch_command_keeps_failed_session_for_postmortem(monkeypatch, tmp_path):
+    if shutil.which("tmux") is None:
+        pytest.skip("tmux is not installed")
+    shell_path = shutil.which("zsh")
+    if shell_path is None:
+        pytest.skip("zsh is not installed")
+
+    import zerg.services.managed_local_tmux as tmux_mod
+
+    socket = "lh-managed-failed-exit-test"
+    monkeypatch.setattr(tmux_mod, "MANAGED_LOCAL_TMUX_SERVER_LABEL", socket)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    session_name = "lh-failed-exit"
+    session_id = "session-failed-exit"
+    command = tmux_mod.build_tmux_launch_command(
+        session_name=session_name,
+        cwd=str(workspace),
+        launch_command="zsh -lc 'printf managed-local-failed-exit && exit 23'",
+        session_id=session_id,
+        provider="claude",
+    )
+    base = ["tmux", "-L", socket]
+    env = dict(os.environ)
+    env["HOME"] = str(tmp_path)
+
+    try:
+        subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
+        subprocess.run(command, shell=True, executable=shell_path, check=True, capture_output=True, text=True, env=env)
+        time.sleep(0.4)
+
         has_session = subprocess.run(
             base + ["has-session", "-t", session_name],
             check=False,
@@ -227,24 +296,22 @@ def test_build_tmux_launch_command_keeps_session_after_clean_exit(monkeypatch, t
                 capture_output=True,
                 text=True,
             ).stdout
-            if "managed-local-clean-exit" in capture:
+            if "managed-local-failed-exit" in capture:
                 break
             time.sleep(0.1)
-        assert "managed-local-clean-exit" in capture
+        assert "managed-local-failed-exit" in capture
 
         artifact_root = Path(str(tmp_path / ".claude" / "longhouse-managed"))
-        launch_artifact = artifact_root / "session-clean-exit" / "launch.json"
-        exit_artifact = artifact_root / "session-clean-exit" / "exit.json"
-        pane_tail = artifact_root / "session-clean-exit" / "pane-tail.txt"
+        exit_artifact = artifact_root / "session-failed-exit" / "exit.json"
+        pane_tail = artifact_root / "session-failed-exit" / "pane-tail.txt"
         for _ in range(20):
-            if launch_artifact.exists() and exit_artifact.exists() and pane_tail.exists():
+            if exit_artifact.exists() and pane_tail.exists():
                 break
             time.sleep(0.1)
-        assert launch_artifact.exists()
         assert exit_artifact.exists()
         assert pane_tail.exists()
-        assert '"exit_classification":"provider_clean_exit"' in exit_artifact.read_text(encoding="utf-8")
-        assert "managed-local-clean-exit" in pane_tail.read_text(encoding="utf-8")
+        assert '"exit_classification":"provider_nonzero_exit"' in exit_artifact.read_text(encoding="utf-8")
+        assert "managed-local-failed-exit" in pane_tail.read_text(encoding="utf-8")
     finally:
         subprocess.run(base + ["kill-server"], check=False, capture_output=True, text=True)
 
