@@ -19,7 +19,7 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            One timeline for every session. The same session gets more control when Longhouse is in the loop.
+            One timeline for every session. Longhouse adds explicit control capabilities when it is in the launch path.
           </blockquote>
           <div className="landing-footer-cta-buttons">
             <Button variant="primary" size="lg" onClick={handleSelfHost}>

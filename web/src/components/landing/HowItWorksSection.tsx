@@ -27,7 +27,7 @@ const steps: Step[] = [
     number: "4",
     title: "Start through Longhouse for live control",
     description:
-      "When Longhouse is in the launch path, the same session stays steerable later from browser, CLI, or API.",
+      "When Longhouse is in the launch path, the session stays reachable later from browser, CLI, or API through an explicit control capability.",
   },
   {
     number: "5",
@@ -45,7 +45,7 @@ export function HowItWorksSection() {
         <h2 className="landing-section-title">One timeline. Then keep control.</h2>
         <p className="landing-section-subtitle">
           First you recover something you already solved. Then you see that the same timeline can still
-          steer a session later when Longhouse kept the control channel open.
+          steer live work later when Longhouse kept the control path open.
         </p>
 
         <div className="landing-journey-grid">

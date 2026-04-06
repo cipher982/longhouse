@@ -39,7 +39,8 @@ export function HeroSection({
 
           <p className="landing-hero-subhead">
             Bring Claude Code, Codex, and Gemini sessions into one searchable timeline. When Longhouse
-            is in the launch path, that same session stays messageable and continuable later.
+            is in the launch path, the session stays reachable later through live control, host reattach,
+            or an explicit cloud branch.
           </p>
 
           <p className="landing-hero-note">
@@ -65,7 +66,7 @@ export function HeroSection({
           <div className="landing-hero-friction-reducers">
             <span>One timeline first</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>Same session, more control</span>
+            <span>One session model, explicit control</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
             <span>CLI / API first</span>
           </div>
@@ -82,7 +83,8 @@ export function HeroSection({
             </div>
             <p className="landing-hero-install-note">
               Every session lands in the same timeline. When a session starts through Longhouse or its
-              wrappers, browser, CLI, and <code>/api/agents/*</code> all share the same control path later.
+              launch commands, browser, CLI, and <code>/api/agents/*</code> all share the same session
+              surface later.
               Use <code> longhouse serve --demo</code> only when you want a safe preview before importing real work.
             </p>
           </div>

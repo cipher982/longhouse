@@ -12,7 +12,7 @@ export function DemoSection({ screenshotTheme }: DemoSectionProps) {
         <h2 className="landing-section-title">The UI is where the control proof becomes visible.</h2>
         <p className="landing-section-subtitle">
           Keep the timeline, search, and session detail views. Just present them as the bundled human view
-          over the same session object you can search, message, and continue from other surfaces.
+          over the session surface you can search, message, and keep working from other interfaces.
         </p>
 
         <ProductShowcase screenshotTheme={screenshotTheme} />

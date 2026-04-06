@@ -84,7 +84,7 @@ Longhouse should assume:
 - sessions run on the machine where Longhouse is installed
 - users may install Longhouse on a laptop, VPS, Mac mini, homelab box, or future hosted instance
 - users can still ship/import existing sessions, and that is often the fastest first-value path
-- the distinction is capability, not object type: when Longhouse is in the launch path, the same session stays controllable later
+- the distinction is capability, not object type: when Longhouse is in the launch path, the session stays reachable later through live control, host reattach, or an explicit cloud branch
 
 This keeps the environment honest. It avoids promising that untracked files, `.env`, local networking, ports, or machine-specific setup somehow moved just because the transcript did.
 
@@ -172,7 +172,7 @@ This is the fastest "oh cool" moment and should remain a co-equal first beat, no
 
 **Beat 2: Longhouse keeps the control path attached**
 
-Start a real Claude or Codex session through Longhouse on the machine where work should live. Later, find that same session, message it, and continue it from anywhere.
+Start a real Claude or Codex session through Longhouse on the machine where work should live. Later, find that session, message it, and either steer it live, reopen it on the host, or branch from its synced context honestly.
 
 That machine might be:
 
@@ -186,7 +186,7 @@ The machine choice is secondary. The session loop is the product.
 
 ### One honest sentence
 
-**Every session lands in one timeline. When Longhouse is in the launch path, that same session stays controllable.**
+**Every session lands in one timeline. When Longhouse is in the launch path, that session stays reachable through an explicit control capability.**
 
 ## Capability, Not Type
 
@@ -195,7 +195,7 @@ Longhouse should not teach users that there are different species of sessions.
 The correct model is:
 
 - every item in the timeline is a session
-- Longhouse-first launch adds a control path to that same session
+- Longhouse-first launch adds a control path to that session
 - capability changes state, not ontology
 
 Good product language:

@@ -88,8 +88,8 @@ longhouse ship</code></pre>
 
           <h3>4. Start through Longhouse when you want live control</h3>
           <p>
-            All sessions live in the same timeline. Starting through Longhouse adds live control to that
-            session later:
+            All sessions live in the same timeline. Starting through Longhouse adds an explicit control
+            capability later:
           </p>
           <pre><code>longhouse claude
 longhouse codex</code></pre>
@@ -98,16 +98,16 @@ longhouse codex</code></pre>
             archive, machine surface, and managed-local control path.
           </p>
 
-          <h3>5. Optional: keep typing bare claude or codex</h3>
+          <h3>5. Optional: start future sessions through Longhouse by habit</h3>
           <p>
-            Default install stays non-invasive. If you want bare interactive launches to route through
-            Longhouse by default, opt in explicitly:
+            Default install stays non-invasive. The cleanest prelaunch habit is to start control-ready
+            sessions explicitly:
           </p>
-          <pre><code>longhouse wrap --install
-longhouse wrap --status</code></pre>
+          <pre><code>longhouse claude
+longhouse codex</code></pre>
           <p>
-            Wrapper mode is passthrough-first and reversible. Help, auth, non-interactive commands, and
-            setup failures still fall back to the native CLI.
+            Keep using bare provider CLIs when you only want local work. Use the Longhouse launch commands
+            when you want the session to stay reachable from the timeline later.
           </p>
 
           <h3>6. Want a safe preview first?</h3>
