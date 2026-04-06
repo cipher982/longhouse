@@ -215,3 +215,23 @@ def test_wait_for_claude_channel_state_waits_for_ready_transition(tmp_path):
 
     assert state["ready"] is True
     assert state["port"] == 1234
+
+
+def test_wait_for_claude_channel_state_ignores_partial_json_writes(tmp_path):
+    session_id = "33333333-3333-3333-3333-333333333333"
+    state_root = tmp_path / "bridge-state"
+    state_path = build_claude_channel_state_file(session_id=session_id, state_root=state_root)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text("", encoding="utf-8")
+
+    def _mark_ready() -> None:
+        time.sleep(0.2)
+        state_path.write_text(json.dumps({"ready": True, "port": 3210}) + "\n", encoding="utf-8")
+
+    writer = threading.Thread(target=_mark_ready, daemon=True)
+    writer.start()
+
+    state = wait_for_claude_channel_state(session_id=session_id, state_root=state_root, timeout_secs=2.0)
+
+    assert state["ready"] is True
+    assert state["port"] == 3210
