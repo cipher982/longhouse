@@ -38,6 +38,7 @@ _CLAUDE_LAUNCH_ENV_KEYS = (
     "AWS_DEFAULT_REGION",
     "ANTHROPIC_MODEL",
 )
+_FORCE_NATIVE_CLAUDE_CHANNELS_ENV = "LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS"
 EXIT_SETUP_FAILED = 78
 
 
@@ -89,6 +90,14 @@ def _collect_claude_launch_env() -> dict[str, str]:
 
 def _launch_env_requires_flag_capable_claude_path(claude_launch_env: dict[str, str]) -> bool:
     return bool(str(claude_launch_env.get("CLAUDE_CODE_USE_BEDROCK") or "").strip())
+
+
+def _is_truthy_env_value(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _force_native_claude_channels_enabled() -> bool:
+    return _is_truthy_env_value(os.environ.get(_FORCE_NATIVE_CLAUDE_CHANNELS_ENV))
 
 
 def _result_uses_native_claude_bridge(result: ManagedLocalLaunchResponse) -> bool:
@@ -383,8 +392,17 @@ def claude(
     machine_name = get_machine_name_label()
     claude_launch_env = _collect_claude_launch_env()
     native_claude_channels_available, native_claude_channels_detail = _detect_native_claude_channels_available()
+    force_native_claude_channels = _force_native_claude_channels_enabled()
     force_flag_capable_path = _launch_env_requires_flag_capable_claude_path(claude_launch_env)
-    if force_flag_capable_path:
+    if force_native_claude_channels:
+        native_claude_channels_available = True
+        native_claude_channels_detail = f"forced by {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}"
+        force_flag_capable_path = False
+        typer.secho(
+            f"Forcing native Claude channels via {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}=1. " "This is a private unsupported local experiment.",
+            fg=typer.colors.YELLOW,
+        )
+    elif force_flag_capable_path:
         native_claude_channels_available = False
         native_claude_channels_detail = "disabled by Claude launch env"
     typer.echo(f"Longhouse: {resolved_url}")
