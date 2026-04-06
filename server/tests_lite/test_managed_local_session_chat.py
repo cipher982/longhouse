@@ -205,7 +205,7 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
             })
-            return SimpleNamespace(ok=True, exit_code=0, error=None)
+            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
         def fake_schedule_lock_release(**kwargs):
             lock_release_calls.append(kwargs)
@@ -268,7 +268,7 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
             verify_turn_started=False,
             verification_timeout_secs=None,
         ):
-            return SimpleNamespace(ok=True, exit_code=0, error=None)
+            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
@@ -307,7 +307,7 @@ def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
             verify_turn_started=False,
             verification_timeout_secs=None,
         ):
-            return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed")
+            return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed", verified_turn_started=False)
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
 
@@ -356,7 +356,7 @@ def test_managed_local_dispatch_send_failure_releases_lock_for_retry(monkeypatch
         ):
             nonlocal send_calls
             send_calls += 1
-            return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed")
+            return SimpleNamespace(ok=False, exit_code=None, error="Runner send failed", verified_turn_started=False)
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
 
@@ -386,6 +386,43 @@ def test_managed_local_dispatch_send_failure_releases_lock_for_retry(monkeypatch
             api_app_ref.dependency_overrides = {}
 
 
+def test_managed_local_dispatch_requires_verified_turn_start(monkeypatch, tmp_path):
+    """Fast send-live must fail closed if the transport cannot prove Claude/Codex accepted the turn."""
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            commis_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+        ):
+            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=False)
+
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/send-live",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 502
+            data = response.json()
+            assert data["accepted"] is False
+            assert data["error"] == "Managed local session did not acknowledge the prompt after send"
+        finally:
+            api_app_ref.dependency_overrides = {}
+
+
 def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, tmp_path):
     """Managed-local chat must not create cloud branch sessions."""
     session_local = _make_db(tmp_path)
@@ -406,7 +443,7 @@ def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, 
             verify_turn_started=False,
             verification_timeout_secs=None,
         ):
-            return SimpleNamespace(ok=True, exit_code=0, error=None)
+            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
         def fail_cloud_target(*_args, **_kwargs):
             raise AssertionError("managed_local should not create cloud branches")
@@ -452,7 +489,7 @@ def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path)
             verify_turn_started=False,
             verification_timeout_secs=None,
         ):
-            return SimpleNamespace(ok=True, exit_code=0, error=None)
+            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
@@ -495,7 +532,7 @@ def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(monkeypatch
             verify_turn_started=False,
             verification_timeout_secs=None,
         ):
-            return SimpleNamespace(ok=True, exit_code=0, error=None)
+            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
         monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)

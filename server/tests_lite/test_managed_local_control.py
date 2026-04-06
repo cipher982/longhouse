@@ -841,14 +841,28 @@ def test_await_managed_local_turn_terminal_accepts_runtime_terminal_without_acti
         assert result.control_status == "completed"
 
 
-def test_send_text_skips_phase_verification_for_claude_channel_bridge(monkeypatch, tmp_path):
-    """CLAUDE_CHANNEL_BRIDGE never fires UserPromptSubmit so verify_turn_started
-    must be ignored — the send should succeed without waiting for a phase signal."""
+def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_persisted_prompt(monkeypatch, tmp_path):
+    """Native Claude channel sends verify against the persisted user prompt, not hook phases."""
     from zerg.session_execution_home import ManagedSessionTransport
 
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+    persisted_user_event = AgentEvent(
+        id=123,
+        session_id=uuid4(),
+        role="user",
+        content_text="<channel source=\"longhouse\">hello channel</channel>",
+        timestamp=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.await_managed_local_persisted_user_prompt",
+        lambda **_kwargs: asyncio.sleep(0, result=persisted_user_event),
+    )
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.await_managed_local_hook_phase_update",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("hook phase verification should not run for native Claude")),
+    )
 
     with SessionLocal() as db:
         user, runner, session = _seed_user_runner_and_session(db, provider="claude")
@@ -858,7 +872,6 @@ def test_send_text_skips_phase_verification_for_claude_channel_bridge(monkeypatc
         session.cwd = "/tmp/demo"
         db.commit()
 
-        # verify_turn_started=True — would time out for tmux; must be a no-op here
         result = asyncio.run(
             send_text_to_managed_local_session(
                 db=db,
@@ -872,5 +885,40 @@ def test_send_text_skips_phase_verification_for_claude_channel_bridge(monkeypatc
         )
 
     assert result.ok is True, result.error
-    assert result.verified_turn_started is False
+    assert result.verified_turn_started is True
     assert len(dispatcher.calls) == 1
+
+
+def test_send_text_to_managed_local_session_reports_claude_channel_verification_failure(monkeypatch, tmp_path):
+    from zerg.session_execution_home import ManagedSessionTransport
+
+    SessionLocal = _make_db(tmp_path)
+    dispatcher = _FakeDispatcher()
+    monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
+    monkeypatch.setattr(
+        "zerg.services.managed_local_control.await_managed_local_persisted_user_prompt",
+        lambda **_kwargs: asyncio.sleep(0, result=None),
+    )
+
+    with SessionLocal() as db:
+        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        session.managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+        session.provider_session_id = "provider-abc"
+        session.cwd = "/tmp/demo"
+        db.commit()
+
+        result = asyncio.run(
+            send_text_to_managed_local_session(
+                db=db,
+                owner_id=user.id,
+                session=session,
+                text="hello channel",
+                commis_id="channel-test",
+                verify_turn_started=True,
+                verification_timeout_secs=0.1,
+            )
+        )
+
+    assert result.ok is False
+    assert result.verified_turn_started is False
+    assert result.error == "Managed local session did not acknowledge the prompt after send"

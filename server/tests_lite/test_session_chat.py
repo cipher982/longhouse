@@ -716,7 +716,7 @@ def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypat
                 "verification_timeout_secs": verification_timeout_secs,
             }
         )
-        return SimpleNamespace(ok=True, exit_code=0, error=None)
+        return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
     monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
     monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
