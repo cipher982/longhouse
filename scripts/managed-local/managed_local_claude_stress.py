@@ -6,12 +6,12 @@ This harness is intentionally narrow:
 - prefers local-dev (`AUTH_DISABLED=1`) but can also hit the machine route with
   an explicit device token
 - simple one-line prompts only
-- repeated serial sends through the real `/api/sessions/{id}/chat` route
+- repeated serial sends through the real `/api/sessions/{id}/send-live` route
 - DB-side verification that each prompt appears exactly once as a user event
 
 It is meant to answer two tightly-related questions:
-- can the current tmux-backed managed-local Claude path accept and execute
-  repeated plain-text turns under stress?
+- can the current tmux-backed managed-local Claude path accept repeated
+  plain-text turns through the real fast-ack live-send surface?
 - and, when needed, do those prompts also land durably in the transcript DB?
 """
 
@@ -26,7 +26,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-from typing import Iterator
 from uuid import UUID
 
 import httpx
@@ -60,9 +59,13 @@ _CLAUDE_LAUNCH_ENV_KEYS = (
 
 
 @dataclass(frozen=True)
-class SSEEvent:
-    event: str
-    data: str
+class SendLiveAck:
+    ok: bool
+    status_code: int
+    payload: dict[str, object] | None = None
+    request_id: str | None = None
+    dispatch_ms: float | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,9 +92,7 @@ class TurnRunResult:
     index: int
     prompt: str
     ok: bool
-    http_status: int
-    sse_error: str | None
-    done_payload: dict[str, object] | None
+    ack: SendLiveAck
     sync_status: str | None
     control: ControlFlowCheck
     delivery: PromptDeliveryCheck
@@ -107,29 +108,42 @@ def build_stress_prompts(*, count: int, prefix: str, nonce: str | None = None) -
     return prompts
 
 
-def parse_sse_lines(lines: Iterable[str]) -> Iterator[SSEEvent]:
-    event_name = "message"
-    data_lines: list[str] = []
-
-    for raw_line in lines:
-        line = raw_line.rstrip("\n")
-        if not line:
-            if data_lines:
-                yield SSEEvent(event=event_name, data="\n".join(data_lines))
-            event_name = "message"
-            data_lines = []
-            continue
-        if line.startswith(":"):
-            continue
-        if line.startswith("event:"):
-            event_name = line.split(":", 1)[1].strip() or "message"
-            continue
-        if line.startswith("data:"):
-            data_lines.append(line.split(":", 1)[1].lstrip())
-            continue
-
-    if data_lines:
-        yield SSEEvent(event=event_name, data="\n".join(data_lines))
+def assess_send_live_ack(*, status_code: int, payload: object) -> SendLiveAck:
+    parsed = payload if isinstance(payload, dict) else None
+    if status_code != 200:
+        if parsed is not None:
+            error = str(parsed.get("error") or parsed)[:400]
+        else:
+            error = str(payload)[:400]
+        return SendLiveAck(ok=False, status_code=status_code, payload=parsed, error=error)
+    if parsed is None:
+        return SendLiveAck(
+            ok=False,
+            status_code=status_code,
+            error=f"Expected JSON ack object, got {type(payload).__name__}",
+        )
+    if not bool(parsed.get("accepted")):
+        return SendLiveAck(
+            ok=False,
+            status_code=status_code,
+            payload=parsed,
+            error=str(parsed.get("error") or parsed)[:400],
+        )
+    dispatch_ms_raw = parsed.get("dispatch_ms")
+    dispatch_ms: float | None = None
+    try:
+        if dispatch_ms_raw is not None:
+            dispatch_ms = float(dispatch_ms_raw)
+    except (TypeError, ValueError):
+        dispatch_ms = None
+    request_id = str(parsed.get("request_id") or "").strip() or None
+    return SendLiveAck(
+        ok=True,
+        status_code=status_code,
+        payload=parsed,
+        request_id=request_id,
+        dispatch_ms=dispatch_ms,
+    )
 
 
 def assess_prompt_delivery(
@@ -263,7 +277,7 @@ def _parse_args() -> argparse.Namespace:
         "--durability-timeout-secs",
         type=float,
         default=20.0,
-        help="Follow-up wait for prompt durability when the done payload reports sync_status=pending.",
+        help="Follow-up wait for prompt durability after a successful fast live-send ack.",
     )
     args = parser.parse_args()
 
@@ -419,86 +433,22 @@ def _run_stress_turn(
         before_runtime_event_id = _latest_runtime_event_id(db, session.id)
         before_count = _count_exact_user_events(db, session.id, prompt)
 
-    sse_error: str | None = None
-    done_payload: dict[str, object] | None = None
-    status_code = 0
+    ack = SendLiveAck(ok=False, status_code=0, error="send-live response was not evaluated")
     sync_status: str | None = None
 
-    with client.stream(
-        "POST",
-        f"{base_url.rstrip('/')}/api/sessions/{session_id}/chat",
+    response = client.post(
+        f"{base_url.rstrip('/')}/api/sessions/{session_id}/send-live",
         json={"message": prompt},
-    ) as response:
-        status_code = response.status_code
-        content_type = str(response.headers.get("content-type") or "").lower()
-        if response.status_code != 200:
-            response.read()
-            return TurnRunResult(
-                index=index,
-                prompt=prompt,
-                ok=False,
-                http_status=response.status_code,
-                sse_error=response.text[:400],
-                done_payload=None,
-                sync_status=None,
-                control=ControlFlowCheck(
-                    ok=False,
-                    active_phase=None,
-                    terminal_phase=None,
-                    observed_phases=(),
-                    error="Chat route did not return 200",
-                ),
-                delivery=PromptDeliveryCheck(
-                    ok=False,
-                    exact_user_events_before=before_count,
-                    exact_user_events_after=before_count,
-                    exact_user_events_in_new_batch=0,
-                    assistant_messages=(),
-                    error="Chat route did not return 200",
-                ),
-            )
-
-        if "application/json" in content_type:
-            response.read()
-            try:
-                parsed_json = response.json()
-            except json.JSONDecodeError:
-                parsed_json = {"raw": response.text[:400]}
-
-            done_payload = parsed_json if isinstance(parsed_json, dict) else {"raw": str(parsed_json)}
-            if not bool(done_payload.get("accepted")):
-                sse_error = str(done_payload.get("error") or done_payload)[:400]
-            else:
-                # Managed-local chat returns a fast JSON acceptance ack and then
-                # persistence catches up asynchronously through the normal shipper
-                # path. Treat that as a pending durability state and poll the DB.
-                sync_status = "pending"
-        else:
-            for event in parse_sse_lines(response.iter_lines()):
-                if event.event == "error":
-                    try:
-                        parsed = json.loads(event.data)
-                        sse_error = str(parsed.get("error") or event.data)
-                    except json.JSONDecodeError:
-                        sse_error = event.data
-                elif event.event == "done":
-                    try:
-                        parsed_done = json.loads(event.data)
-                        if isinstance(parsed_done, dict):
-                            done_payload = parsed_done
-                            raw_sync_status = str(parsed_done.get("sync_status") or "").strip().lower()
-                            if raw_sync_status:
-                                sync_status = raw_sync_status
-                    except json.JSONDecodeError:
-                        done_payload = {"raw": event.data}
-
-    if sync_status is None and isinstance(done_payload, dict):
-        persisted_events = done_payload.get("persisted_events")
-        try:
-            if int(persisted_events or 0) > 0:
-                sync_status = "complete"
-        except (TypeError, ValueError):
-            sync_status = None
+    )
+    try:
+        parsed_json = response.json()
+    except json.JSONDecodeError:
+        parsed_json = {"raw": response.text[:400]}
+    ack = assess_send_live_ack(status_code=response.status_code, payload=parsed_json)
+    if ack.ok:
+        # send-live returns a fast acceptance ack and timeline durability catches
+        # up asynchronously through the normal shipper path.
+        sync_status = "pending"
 
     control = ControlFlowCheck(
         ok=False,
@@ -556,14 +506,12 @@ def _run_stress_turn(
             break
         time.sleep(1.0)
 
-    ok = status_code == 200 and sse_error is None and control.ok and (delivery.ok or not require_delivery)
+    ok = ack.ok and control.ok and (delivery.ok or not require_delivery)
     return TurnRunResult(
         index=index,
         prompt=prompt,
         ok=ok,
-        http_status=status_code,
-        sse_error=sse_error,
-        done_payload=done_payload,
+        ack=ack,
         sync_status=sync_status,
         control=control,
         delivery=delivery,
@@ -615,26 +563,23 @@ def main() -> int:
                 if result.delivery.assistant_messages
                 else ""
             )
-            persisted_events = (
-                int(result.done_payload.get("persisted_events", 0))
-                if isinstance(result.done_payload, dict)
-                else 0
-            )
             status_label = "ok" if result.ok else "fail"
             print(
                 f"[{idx}/{len(prompts)}] {status_label} "
                 f"mode={args.verification_mode} "
-                f"status={result.http_status} prompt={prompt!r} "
+                f"status={result.ack.status_code} prompt={prompt!r} "
                 f"control={result.control.active_phase or 'missing'}->{result.control.terminal_phase or 'missing'} "
                 f"new_exact={result.delivery.exact_user_events_in_new_batch} "
                 f"total_exact={result.delivery.exact_user_events_after} "
-                f"persisted={persisted_events} "
+                f"dispatch_ms={result.ack.dispatch_ms if result.ack.dispatch_ms is not None else 'missing'} "
                 f"sync_status={result.sync_status or 'missing'}"
             )
             if assistant_summary:
                 print(f"  assistant: {assistant_summary}")
-            if result.sse_error:
-                print(f"  sse_error: {result.sse_error}")
+            if result.ack.request_id:
+                print(f"  request_id: {result.ack.request_id}")
+            if result.ack.error:
+                print(f"  ack_error: {result.ack.error}")
             if result.control.error:
                 print(f"  control_error: {result.control.error}")
                 if result.control.observed_phases:

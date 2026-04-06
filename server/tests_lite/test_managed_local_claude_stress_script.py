@@ -32,27 +32,36 @@ def test_build_stress_prompts_are_unique_and_single_line():
     assert all("\n" not in prompt for prompt in prompts)
 
 
-def test_parse_sse_lines_handles_multi_line_events():
+def test_assess_send_live_ack_accepts_fast_json_response():
     module = _load_script_module()
 
-    events = list(
-        module.parse_sse_lines(
-            [
-                "event: system",
-                'data: {"type":"session_started"}',
-                "",
-                "event: message",
-                "data: line one",
-                "data: line two",
-                "",
-            ]
-        )
+    ack = module.assess_send_live_ack(
+        status_code=200,
+        payload={
+            "accepted": True,
+            "request_id": "req-123",
+            "dispatch_ms": 42.5,
+        },
     )
 
-    assert [(event.event, event.data) for event in events] == [
-        ("system", '{"type":"session_started"}'),
-        ("message", "line one\nline two"),
-    ]
+    assert ack.ok is True
+    assert ack.status_code == 200
+    assert ack.request_id == "req-123"
+    assert ack.dispatch_ms == 42.5
+    assert ack.error is None
+
+
+def test_assess_send_live_ack_rejects_non_accepted_payload():
+    module = _load_script_module()
+
+    ack = module.assess_send_live_ack(
+        status_code=502,
+        payload={"accepted": False, "error": "Runner send failed"},
+    )
+
+    assert ack.ok is False
+    assert ack.status_code == 502
+    assert ack.error == "Runner send failed"
 
 
 def test_assess_prompt_delivery_rejects_missing_or_duplicate_user_events():
