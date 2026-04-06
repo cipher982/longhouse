@@ -1,0 +1,58 @@
+name: Wait for CI gate
+description: Poll contract-first-ci.yml until it passes for the target SHA (20 min timeout)
+
+inputs:
+  head_sha:
+    description: Commit SHA to wait for
+    required: true
+  head_branch:
+    description: Branch the commit lives on
+    required: true
+  github_token:
+    description: Token for GitHub API calls
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/github-script@v8
+      env:
+        HEAD_SHA: ${{ inputs.head_sha }}
+        HEAD_BRANCH: ${{ inputs.head_branch }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          const sha = process.env.HEAD_SHA;
+          const branch = process.env.HEAD_BRANCH;
+          const maxAttempts = 120;
+          const delayMs = 10000;
+
+          for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'contract-first-ci.yml',
+              event: 'push',
+              branch,
+              head_sha: sha,
+              per_page: 10,
+            });
+
+            const run = data.workflow_runs.find((c) => c.head_sha === sha);
+            if (run) {
+              core.info(`push-pr-ci run ${run.id}: status=${run.status} conclusion=${run.conclusion}`);
+              if (run.status === 'completed') {
+                if (run.conclusion === 'success') {
+                  return;
+                }
+                core.setFailed(`push-pr-ci concluded ${run.conclusion} for ${sha}`);
+                return;
+              }
+            } else {
+              core.info(`No push-pr-ci run found yet for ${sha} on ${branch} (attempt ${attempt}/${maxAttempts})`);
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+
+          core.setFailed(`Timed out waiting for push-pr-ci to pass for ${sha}`);
