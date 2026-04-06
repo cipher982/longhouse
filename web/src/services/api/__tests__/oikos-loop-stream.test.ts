@@ -72,7 +72,6 @@ describe("Loop inbox stream", () => {
           project: "hiring",
           machine: "cinder",
           provider: "claude",
-          execution_home: "managed_local",
           home_label: "On this Mac",
           loop_mode: "assist",
           decision: "ask_user",
@@ -97,7 +96,6 @@ describe("Loop inbox stream", () => {
         expect.objectContaining({
           cardId: 42,
           sessionId: "sess-1",
-          executionHome: "managed_local",
           homeLabel: "On this Mac",
         }),
       ],

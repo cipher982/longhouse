@@ -1,5 +1,5 @@
 import { request } from "./base";
-import type { SessionExecutionHome, SessionLoopMode } from "./agents";
+import type { SessionLoopMode } from "./agents";
 
 export type SessionTurnDecision =
   | "continue"
@@ -121,7 +121,6 @@ interface LoopInboxItemSummaryRaw {
   project: string | null;
   machine: string | null;
   provider: string | null;
-  execution_home: string | null;
   home_label: string | null;
   loop_mode: string;
   decision: string;
@@ -164,7 +163,6 @@ export interface LoopInboxItem {
   project: string | null;
   machine: string | null;
   provider: string | null;
-  executionHome: SessionExecutionHome | null;
   homeLabel: string | null;
   loopMode: SessionLoopMode;
   decision: SessionTurnDecision;
@@ -281,7 +279,6 @@ function parseLoopInboxItem(row: LoopInboxItemSummaryRaw): LoopInboxItem {
     project: asString(row.project),
     machine: asString(row.machine),
     provider: asString(row.provider),
-    executionHome: asString(row.execution_home) as SessionExecutionHome | null,
     homeLabel: asString(row.home_label),
     loopMode: (asString(row.loop_mode) ?? "manual") as SessionLoopMode,
     decision: (asString(row.decision) ?? "done") as SessionTurnDecision,
