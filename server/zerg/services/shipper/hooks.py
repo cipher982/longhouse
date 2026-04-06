@@ -186,7 +186,7 @@ if [[ $? -ne 0 ]] || [[ -z "$RESPONSE" ]]; then exit 0; fi
 BRIEFING=$(echo "$RESPONSE" | jq -r '.briefing // empty')
 if [[ -z "$BRIEFING" ]]; then exit 0; fi
 
-jq -nc --arg msg "$BRIEFING" '{"systemMessage": $msg}'
+jq -nc --arg msg "$BRIEFING" '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}}'
 exit 0
 """
 
