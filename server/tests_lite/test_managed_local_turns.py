@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from datetime import datetime
 from datetime import timezone
 from uuid import uuid4
@@ -24,6 +25,8 @@ from zerg.services.managed_local_turns import attach_review_to_managed_local_tur
 from zerg.services.managed_local_turns import create_managed_local_turn
 from zerg.services.managed_local_turns import get_managed_local_turn
 from zerg.services.managed_local_turns import get_managed_local_turn_snapshot
+from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT
+from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
 from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
 from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
 from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
@@ -199,7 +202,7 @@ def test_managed_local_turn_durability_clears_timeout_once_events_arrive(tmp_pat
             expected_user_text="continue",
         )
         mark_managed_local_turn_send_accepted(db, session_id=session.id, request_id="req-timeout-heal")
-        turn.error_code = "turn_timeout"
+        turn.error_code = MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT
         db.add_all(
             [
                 AgentEvent(
@@ -222,6 +225,48 @@ def test_managed_local_turn_durability_clears_timeout_once_events_arrive(tmp_pat
         assert durable_turn is not None
         assert durable_turn.durable_at is not None
         assert durable_turn.error_code is None
+
+
+def test_managed_local_turn_durability_clears_verification_timeout_once_events_arrive(tmp_path, caplog):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_user_runner_and_session(db)
+        turn = create_managed_local_turn(
+            db,
+            session_id=session.id,
+            request_id="req-verify-timeout-heal",
+            baseline_event_id=0,
+            baseline_runtime_event_id=0,
+            expected_user_text="continue",
+        )
+        mark_managed_local_turn_send_accepted(db, session_id=session.id, request_id="req-verify-timeout-heal")
+        turn.error_code = MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="late but valid reply",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        with caplog.at_level(logging.INFO):
+            durable_turn = maybe_mark_managed_local_turn_durable(db, session_id=session.id)
+
+        assert durable_turn is not None
+        assert durable_turn.durable_at is not None
+        assert durable_turn.error_code is None
+        assert "became durable after verification_timeout" in caplog.text
 
 
 def test_managed_local_turn_durability_tracks_last_assistant_reply_after_tool_use(tmp_path):

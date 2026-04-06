@@ -320,6 +320,7 @@ def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
             data = response.json()
             assert data["accepted"] is False
             assert "Runner send failed" in data["error"]
+            assert data["error_code"] == "send_failed"
 
             # Verify turn was marked as failed in the ledger
             turn_rows = (
@@ -419,6 +420,15 @@ def test_managed_local_dispatch_requires_verified_turn_start(monkeypatch, tmp_pa
             data = response.json()
             assert data["accepted"] is False
             assert data["error"] == "Managed local session did not acknowledge the prompt after send"
+
+            turn_rows = (
+                db.query(ManagedLocalTurn)
+                .filter(ManagedLocalTurn.session_id == source_session.id)
+                .all()
+            )
+            assert len(turn_rows) == 1
+            assert turn_rows[0].error_code == "verification_timeout"
+            assert data["error_code"] == "verification_timeout"
         finally:
             api_app_ref.dependency_overrides = {}
 

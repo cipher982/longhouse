@@ -63,6 +63,9 @@ from zerg.services.managed_local_control import get_managed_local_presence_updat
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
+from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
+from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT
+from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
 from zerg.services.managed_local_turns import create_managed_local_turn
 from zerg.services.managed_local_turns import get_managed_local_turn_snapshot
 from zerg.services.managed_local_turns import mark_managed_local_turn_failed
@@ -691,6 +694,16 @@ def _schedule_managed_local_lock_release(
     task.add_done_callback(_log_task_failure)
 
 
+def _managed_local_send_failure_code(send_result) -> str:
+    if bool(getattr(send_result, "verified_turn_started", False)):
+        return MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
+    if bool(getattr(send_result, "ok", False)):
+        return MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
+    if int(getattr(send_result, "exit_code", 1) or 1) == 0:
+        return MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
+    return MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
+
+
 async def _dispatch_managed_local_text(
     *,
     source_session,
@@ -741,6 +754,7 @@ async def _dispatch_managed_local_text(
     t_sent = time.monotonic()
 
     if not send_result.ok or not bool(getattr(send_result, "verified_turn_started", False)):
+        error_code = _managed_local_send_failure_code(send_result)
         run_best_effort_managed_local_turn_write(
             db_bind=db.get_bind(),
             label="send_failed",
@@ -748,10 +762,19 @@ async def _dispatch_managed_local_text(
                 turn_db,
                 session_id=source_session.id,
                 request_id=request_id,
-                error_code="send_failed",
+                error_code=error_code,
             ),
         )
         error_message = str(send_result.error or "Managed local session did not acknowledge the prompt after send")
+        logger.warning(
+            "[%s] Managed-local send-live failed for %s: error_code=%s verified=%s exit_code=%s error=%s",
+            request_id,
+            source_session.id,
+            error_code,
+            bool(getattr(send_result, "verified_turn_started", False)),
+            getattr(send_result, "exit_code", None),
+            error_message,
+        )
         await session_lock_manager.release(lock_scope_id, request_id)
         logger.info(f"[{request_id}] Managed local chat dispatch failed, lock released")
         return JSONResponse(
@@ -759,6 +782,7 @@ async def _dispatch_managed_local_text(
             content={
                 "accepted": False,
                 "error": error_message,
+                "error_code": error_code,
                 "session_id": str(source_session.id),
                 "request_id": request_id,
             },
@@ -1185,6 +1209,7 @@ async def _stream_managed_local_output(
     )
 
     if not send_result.ok:
+        error_code = _managed_local_send_failure_code(send_result)
         run_best_effort_managed_local_turn_write(
             db_bind=db.get_bind(),
             label="send_failed",
@@ -1192,10 +1217,19 @@ async def _stream_managed_local_output(
                 turn_db,
                 session_id=source_session.id,
                 request_id=request_id,
-                error_code="send_failed",
+                error_code=error_code,
             ),
         )
         error_message = str(send_result.error or "Failed to send text to managed local session")
+        logger.warning(
+            "[%s] Managed-local stream send failed for %s: error_code=%s verified=%s exit_code=%s error=%s",
+            request_id,
+            source_session.id,
+            error_code,
+            bool(getattr(send_result, "verified_turn_started", False)),
+            getattr(send_result, "exit_code", None),
+            error_message,
+        )
         yield SSEEvent(
             event="error",
             data=json.dumps({"error": error_message}),
@@ -1346,7 +1380,7 @@ async def _stream_managed_local_output(
                 turn_db,
                 session_id=source_session.id,
                 request_id=request_id,
-                error_code="turn_timeout",
+                error_code=MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT,
             ),
         )
         persistence_error = _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE
