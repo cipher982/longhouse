@@ -884,20 +884,20 @@ test.describe("Session Detail Page", () => {
       "entries",
     );
     await expect(page.getByTestId("session-continuation-panel")).toContainText(
-      "Your next message below starts a cloud continuation from this session in Longhouse.",
+      "Your next message below starts a new cloud branch from this session in Longhouse.",
     );
     await expect(page.getByTestId("session-chat-divider")).toHaveCount(1);
     await expect(
-      page.getByRole("button", { name: "Start in Cloud" }),
+      page.getByRole("button", { name: "Start Cloud Branch" }),
     ).toBeVisible();
     await expect(
-      page.locator('.session-chat-composer textarea[placeholder="Continue this thread in the cloud..."]'),
+      page.locator('.session-chat-composer textarea[placeholder="Start a cloud branch from this session..."]'),
     ).toBeVisible();
     await expect(page.locator(".session-chat-composer textarea")).toBeVisible();
     await expect(page.getByTestId("session-timeline-list")).toBeVisible();
   });
 
-  test("Claude continuation send creates a cloud branch instead of crashing", async ({
+  test("Claude cloud branch send creates a cloud branch instead of crashing", async ({
     page,
     request,
   }) => {
@@ -923,7 +923,7 @@ test.describe("Session Detail Page", () => {
 
     const composer = page.locator(".session-chat-composer textarea");
     await composer.fill("anything else?");
-    await page.getByRole("button", { name: "Start in Cloud" }).click();
+    await page.getByRole("button", { name: "Start Cloud Branch" }).click();
 
     await expect(page.locator(".session-chat-error")).toHaveCount(0);
 
@@ -935,14 +935,14 @@ test.describe("Session Detail Page", () => {
     await expect(page.getByTestId("session-timeline-seam")).toHaveCount(1);
     await expect(page.getByTestId("session-timeline-list")).toContainText("anything else?");
     await expect(page.getByTestId("session-timeline-list")).toContainText(
-      "Test continuation reply to: anything else?",
+      "Test cloud-branch reply to: anything else?",
     );
     await expect(page.getByTestId("session-chat-divider")).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Start in Cloud" }),
+      page.getByRole("button", { name: "Start Cloud Branch" }),
     ).toHaveCount(0);
     await expect(
-      page.getByTestId("session-continuation-panel").getByRole("button", { name: "Reply", exact: true }),
+      page.getByTestId("session-continuation-panel").getByRole("button", { name: "Reply in Cloud", exact: true }),
     ).toBeVisible();
 
     const threadCard = await expect
@@ -1039,7 +1039,7 @@ test.describe("Session Detail Page", () => {
     await expect(page.getByTestId("session-chat-divider")).toHaveCount(0);
   });
 
-  test("Older branches show a stale banner and branch-from-here continuation copy", async ({
+  test("Older branches show a stale banner and branch-from-here cloud branch copy", async ({
     page,
     request,
   }) => {
@@ -1090,7 +1090,7 @@ test.describe("Session Detail Page", () => {
     await expect(page.getByTestId("session-continuation-panel")).toBeVisible();
     await expect(page.getByTestId("session-chat-divider")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Branch in Cloud" }),
+      page.getByRole("button", { name: "Branch from Here" }),
     ).toBeVisible();
     await expect(page.locator(".session-chat-composer textarea")).toHaveAttribute(
       "placeholder",
@@ -1163,7 +1163,7 @@ test.describe("Session Detail Page", () => {
     await expect(page.getByTestId("session-branch-banner")).toBeVisible();
   });
 
-  test("Non-Claude sessions explain the cloud continuation gap explicitly", async ({
+  test("Non-Claude sessions explain the cloud branch gap explicitly", async ({
     page,
     request,
   }) => {
@@ -1177,7 +1177,7 @@ test.describe("Session Detail Page", () => {
 
     await expect(page.getByTestId("session-continuation-panel")).toBeVisible();
     await expect(page.getByTestId("session-continuation-unavailable")).toBeVisible();
-    await expect(page.getByRole("button", { name: "Continue here" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Reply" })).toBeDisabled();
     await expect(page.locator(".session-chat-composer textarea")).toBeVisible();
     await expect(page.locator(".session-chat-composer textarea")).toBeDisabled();
     await expect(page.getByTestId("session-chat-disabled-reason")).toBeVisible();
@@ -1217,7 +1217,7 @@ test.describe("Session Detail Page", () => {
         };
         const managedCapabilities = {
           live_control_available: true,
-          cloud_continuation_available: false,
+          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         };
@@ -1288,12 +1288,10 @@ test.describe("Session Detail Page", () => {
       await expect(page.getByTestId("session-continuation-panel")).toContainText(
         "Longhouse can send your next prompt into this live Codex session",
       );
+      await expect(page.getByRole("button", { name: "Open live dock" })).toBeVisible();
 
       const composer = page.locator(".session-chat-composer textarea");
-      const continueHere = page.getByRole("button", { name: "Continue here" });
-      await expect(continueHere).toBeEnabled();
-      await continueHere.click();
-      await expect(composer).toBeFocused();
+      await expect(composer).toBeEnabled();
       await composer.fill("Continue locally");
       await page.getByRole("button", { name: "Send" }).click();
 
@@ -1358,7 +1356,7 @@ test.describe("Session Detail Page", () => {
 
     await expect(page.getByTestId("session-continuation-panel")).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Start in Cloud" }),
+      page.getByRole("button", { name: "Start Cloud Branch" }),
     ).toBeVisible();
   });
 

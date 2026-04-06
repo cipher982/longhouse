@@ -127,11 +127,7 @@ def test_fake_cloud_continuation_persists_turn_for_follow_up_requests(monkeypatc
     async def fake_resolve(*, original_cwd, git_repo, git_branch, session_id):
         return SimpleNamespace(path=Path("/tmp"), is_temp=False, error=None)
 
-    async def fake_prepare(*, session_id, workspace_path, db):
-        return provider_session_id
-
     monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
-    monkeypatch.setattr(session_chat, "prepare_claude_session_for_resume", fake_prepare)
 
     try:
         response = client.post(
@@ -287,11 +283,7 @@ def test_managed_local_claude_cloud_chat_can_continue_when_live_control_is_gone(
     async def fake_resolve(*, original_cwd, git_repo, git_branch, session_id):
         return SimpleNamespace(path=Path("/tmp"), is_temp=False, error=None)
 
-    async def fake_prepare(*, session_id, workspace_path, db):
-        return provider_session_id
-
     monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
-    monkeypatch.setattr(session_chat, "prepare_claude_session_for_resume", fake_prepare)
 
     try:
         response = client.post(
@@ -534,11 +526,7 @@ def test_agents_continue_route_supports_fake_cloud_continuation(monkeypatch, tmp
     async def fake_resolve(*, original_cwd, git_repo, git_branch, session_id):
         return SimpleNamespace(path=Path("/tmp"), is_temp=False, error=None)
 
-    async def fake_prepare(*, session_id, workspace_path, db):
-        return provider_session_id
-
     monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
-    monkeypatch.setattr(session_chat, "prepare_claude_session_for_resume", fake_prepare)
 
     try:
         response = client.post(
@@ -758,7 +746,7 @@ def test_agents_continue_route_rejects_other_device(monkeypatch, tmp_path):
             json={"message": "should be rejected"},
         )
         assert response.status_code == 403
-        assert response.json()["detail"] == "Authenticated device cannot continue a session from another device"
+        assert response.json()["detail"] == "Authenticated device cannot start a cloud branch from a session on another device"
     finally:
         api_app_ref.dependency_overrides = {}
 
@@ -810,11 +798,7 @@ def test_agents_continue_route_allows_auth_disabled_without_device_token(monkeyp
     async def fake_resolve(*, original_cwd, git_repo, git_branch, session_id):
         return SimpleNamespace(path=Path("/tmp"), is_temp=False, error=None)
 
-    async def fake_prepare(*, session_id, workspace_path, db):
-        return provider_session_id
-
     monkeypatch.setattr(session_chat.workspace_resolver, "resolve", fake_resolve)
-    monkeypatch.setattr(session_chat, "prepare_claude_session_for_resume", fake_prepare)
 
     try:
         response = client.post(
