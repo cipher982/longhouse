@@ -43,6 +43,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     execution_home: "legacy",
     branched_from_event_id: null,
     is_writable_head: true,
+    control: null,
     capabilities: makeCapabilities(),
     loop_mode: "assist",
     ...overrides,
@@ -141,7 +142,11 @@ describe("SessionContextPane", () => {
         confidence: "live",
         runtime_source: "managed_local_transport",
         execution_home: "managed_local",
-        managed_transport: "codex_app_server",
+        control: {
+          managed_transport: "codex_app_server",
+          source_runner_id: null,
+          source_runner_name: null,
+        },
         capabilities: makeCapabilities({
           cloud_branch_available: false,
           host_reattach_available: true,
@@ -165,9 +170,11 @@ describe("SessionContextPane", () => {
       session: makeSession({
         provider: "codex",
         execution_home: "managed_local",
-        managed_transport: "codex_app_server",
-        source_runner_id: 7,
-        source_runner_name: "cinder",
+        control: {
+          managed_transport: "codex_app_server",
+          source_runner_id: 7,
+          source_runner_name: "cinder",
+        },
         capabilities: makeCapabilities({
           live_control_available: true,
           cloud_branch_available: false,
@@ -213,10 +220,12 @@ describe("SessionContextPane", () => {
       session: makeSession({
         provider: "claude",
         execution_home: "managed_local",
-        managed_transport: "tmux",
-        source_runner_id: null,
-        source_runner_name: "cinder",
-        attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-claude'",
+        control: {
+          managed_transport: "tmux",
+          source_runner_id: null,
+          source_runner_name: "cinder",
+          attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-claude'",
+        },
         capabilities: makeCapabilities({
           cloud_branch_available: true,
           host_reattach_available: true,
@@ -240,32 +249,35 @@ describe("SessionContextPane", () => {
     renderPane({
       session: makeSession({
         execution_home: "managed_local",
-        managed_transport: "tmux",
-        source_runner_name: "cinder",
-        attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+        control: {
+          managed_transport: "tmux",
+          source_runner_id: null,
+          source_runner_name: "cinder",
+          attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+          managed_launch_profile: {
+            required_commands: ["claude"],
+            exported_env_keys: [
+              "LONGHOUSE_MANAGED_SESSION_ID",
+              "LONGHOUSE_HOOK_URL",
+              "LONGHOUSE_HOOK_TOKEN",
+              "AWS_PROFILE",
+            ],
+            argv: [
+              "claude",
+              "--dangerously-skip-permissions",
+              "--session-id",
+              "<provider-session-id>",
+              "-n",
+              "Managed Local Proof",
+            ],
+          },
+        },
         capabilities: makeCapabilities({
           live_control_available: true,
           cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         }),
-        managed_launch_profile: {
-          required_commands: ["claude"],
-          exported_env_keys: [
-            "LONGHOUSE_MANAGED_SESSION_ID",
-            "LONGHOUSE_HOOK_URL",
-            "LONGHOUSE_HOOK_TOKEN",
-            "AWS_PROFILE",
-          ],
-          argv: [
-            "claude",
-            "--dangerously-skip-permissions",
-            "--session-id",
-            "<provider-session-id>",
-            "-n",
-            "Managed Local Proof",
-          ],
-        },
       }),
     });
 
@@ -288,16 +300,20 @@ describe("SessionContextPane", () => {
     renderPane({
       session: makeSession({
         execution_home: "legacy",
-        source_runner_name: "cinder",
-        attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+        control: {
+          managed_transport: "tmux",
+          source_runner_id: null,
+          source_runner_name: "cinder",
+          attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+          managed_launch_profile: {
+            required_commands: ["claude"],
+            exported_env_keys: ["LONGHOUSE_MANAGED_SESSION_ID"],
+            argv: ["claude", "--session-id", "<provider-session-id>"],
+          },
+        },
         capabilities: makeCapabilities({
           host_reattach_available: true,
         }),
-        managed_launch_profile: {
-          required_commands: ["claude"],
-          exported_env_keys: ["LONGHOUSE_MANAGED_SESSION_ID"],
-          argv: ["claude", "--session-id", "<provider-session-id>"],
-        },
       }),
     });
 
@@ -313,10 +329,12 @@ describe("SessionContextPane", () => {
       session: makeSession({
         provider: "codex",
         execution_home: "managed_local",
-        managed_transport: "codex_app_server",
-        source_runner_id: 7,
-        source_runner_name: "cinder",
-        attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+        control: {
+          managed_transport: "codex_app_server",
+          source_runner_id: 7,
+          source_runner_name: "cinder",
+          attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+        },
         capabilities: makeCapabilities({
           live_control_available: true,
           cloud_branch_available: false,

@@ -40,10 +40,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     execution_home: "legacy",
     branched_from_event_id: null,
     is_writable_head: true,
-    managed_transport: null,
-    source_runner_id: null,
-    source_runner_name: null,
-    attach_command: null,
+    control: null,
     capabilities: makeCapabilities(),
     loop_mode: "manual",
     ...overrides,
@@ -96,9 +93,11 @@ describe("getSessionInteractionCapabilities", () => {
       session: makeSession({
         provider: "codex",
         execution_home: "managed_local",
-        managed_transport: "codex_app_server",
-        source_runner_id: 7,
-        source_runner_name: "cinder",
+        control: {
+          managed_transport: "codex_app_server",
+          source_runner_id: 7,
+          source_runner_name: "cinder",
+        },
         capabilities: makeCapabilities({
           live_control_available: true,
           cloud_branch_available: false,
@@ -121,7 +120,11 @@ describe("getSessionInteractionCapabilities", () => {
       session: makeSession({
         provider: "codex",
         execution_home: "managed_local",
-        managed_transport: "codex_app_server",
+        control: {
+          managed_transport: "codex_app_server",
+          source_runner_id: null,
+          source_runner_name: null,
+        },
         capabilities: makeCapabilities({
           cloud_branch_available: false,
           host_reattach_available: true,
@@ -142,9 +145,11 @@ describe("getSessionInteractionCapabilities", () => {
       session: makeSession({
         provider: "claude",
         execution_home: "managed_local",
-        managed_transport: "tmux",
-        source_runner_id: null,
-        source_runner_name: null,
+        control: {
+          managed_transport: "tmux",
+          source_runner_id: null,
+          source_runner_name: null,
+        },
         capabilities: makeCapabilities({
           cloud_branch_available: true,
           host_reattach_available: true,

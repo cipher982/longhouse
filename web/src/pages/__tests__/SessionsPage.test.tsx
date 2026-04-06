@@ -99,6 +99,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     execution_home: "legacy",
     branched_from_event_id: null,
     is_writable_head: true,
+    control: null,
     capabilities: makeCapabilities(),
     loop_mode: "manual",
     ...overrides,
@@ -935,7 +936,6 @@ describe("SessionsPage", () => {
           makeTimelineCard({
             ended_at: null,
             execution_home: "managed_local",
-            managed_transport: "tmux",
             runtime_source: "managed_local_transport",
             status: "active",
             confidence: "live",
@@ -978,7 +978,6 @@ describe("SessionsPage", () => {
           makeTimelineCard({
             ended_at: null,
             execution_home: "managed_local",
-            managed_transport: "tmux",
             runtime_source: "managed_local_transport",
             status: "active",
             confidence: "live",

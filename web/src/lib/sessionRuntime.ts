@@ -1,7 +1,6 @@
 import type {
   AgentSession,
   AgentSessionStatus,
-  ManagedSessionTransport,
   SessionExecutionHome,
 } from "../services/api/agents";
 
@@ -20,12 +19,11 @@ type TimelineRuntimeOverlay = {
   active_tool?: string | null;
   confidence?: string | null;
   execution_home?: SessionExecutionHome | null;
-  managed_transport?: ManagedSessionTransport | null;
 };
 
 export type TimelineRuntimeSession = Pick<
   AgentSession,
-  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "execution_home" | "managed_transport"
+  "ended_at" | "last_activity_at" | "timeline_anchor_at" | "execution_home"
 > &
   Partial<TimelineRuntimeOverlay>;
 

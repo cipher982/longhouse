@@ -78,9 +78,10 @@ export function SessionContextPane({
     : runtime.needsAttention
       ? "warning"
       : "neutral";
-  const attachCommand = interaction.hostReattachAvailable ? session.attach_command?.trim() || null : null;
-  const managedLaunchProfile = interaction.hostReattachAvailable ? session.managed_launch_profile ?? null : null;
-  const attachRunnerLabel = session.source_runner_name?.trim() || "this machine";
+  const sessionControl = session.control ?? null;
+  const attachCommand = interaction.hostReattachAvailable ? sessionControl?.attach_command?.trim() || null : null;
+  const managedLaunchProfile = interaction.hostReattachAvailable ? sessionControl?.managed_launch_profile ?? null : null;
+  const attachRunnerLabel = sessionControl?.source_runner_name?.trim() || "this machine";
   const loopModeCaption =
     session.execution_home !== "managed_local"
       ? "Stored session preference for what Oikos may do after each completed assistant turn."

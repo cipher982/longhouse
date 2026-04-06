@@ -5616,18 +5616,8 @@ export interface components {
              * @default legacy
              */
             execution_home: components["schemas"]["SessionExecutionHome"];
-            /** @description Managed transport when Longhouse owns the session runtime */
-            managed_transport?: components["schemas"]["ManagedSessionTransport"] | null;
-            /**
-             * Source Runner Id
-             * @description Runner id for managed local sessions
-             */
-            source_runner_id?: number | null;
-            /**
-             * Source Runner Name
-             * @description Runner name for managed local sessions
-             */
-            source_runner_name?: string | null;
+            /** @description Host-control and managed-launch debugging detail */
+            control?: components["schemas"]["SessionControlResponse"] | null;
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /**
@@ -9511,6 +9501,28 @@ export interface components {
              */
             reply_to_live_session_available: boolean;
         };
+        /** SessionControlResponse */
+        SessionControlResponse: {
+            /** @description Managed transport when Longhouse owns the session runtime */
+            managed_transport?: components["schemas"]["ManagedSessionTransport"] | null;
+            /**
+             * Source Runner Id
+             * @description Runner id for managed local sessions
+             */
+            source_runner_id?: number | null;
+            /**
+             * Source Runner Name
+             * @description Runner name for managed local sessions
+             */
+            source_runner_name?: string | null;
+            /**
+             * Attach Command
+             * @description Local reattach command for managed-local sessions
+             */
+            attach_command?: string | null;
+            /** @description Structured managed-launch metadata for debugging tmux-backed sessions */
+            managed_launch_profile?: components["schemas"]["ManagedLaunchProfileResponse"] | null;
+        };
         /**
          * SessionExecutionHome
          * @description Where a coding session currently lives.
@@ -9958,25 +9970,8 @@ export interface components {
              * @default false
              */
             is_sidechain: boolean;
-            /** @description Managed transport when Longhouse owns the session runtime */
-            managed_transport?: components["schemas"]["ManagedSessionTransport"] | null;
-            /**
-             * Source Runner Id
-             * @description Runner id for managed local sessions
-             */
-            source_runner_id?: number | null;
-            /**
-             * Source Runner Name
-             * @description Runner name for managed local sessions
-             */
-            source_runner_name?: string | null;
-            /**
-             * Attach Command
-             * @description Local reattach command for managed-local sessions
-             */
-            attach_command?: string | null;
-            /** @description Structured managed-launch metadata for debugging tmux-backed sessions */
-            managed_launch_profile?: components["schemas"]["ManagedLaunchProfileResponse"] | null;
+            /** @description Host-control and managed-launch debugging detail */
+            control?: components["schemas"]["SessionControlResponse"] | null;
             /** @description Canonical session capability flags */
             capabilities: components["schemas"]["SessionCapabilitiesResponse"];
             /**

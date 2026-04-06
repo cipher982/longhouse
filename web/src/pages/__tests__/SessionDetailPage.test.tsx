@@ -99,14 +99,16 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     execution_home: "managed_local",
     branched_from_event_id: null,
     is_writable_head: true,
-    managed_transport: "codex_app_server",
-    source_runner_id: 7,
-    source_runner_name: "cinder",
-    attach_command: "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
-    managed_launch_profile: {
-      required_commands: ["codex"],
-      exported_env_keys: ["LONGHOUSE_MANAGED_SESSION_ID", "LONGHOUSE_HOOK_URL", "LONGHOUSE_HOOK_TOKEN"],
-      argv: ["codex", "chat", "--session", "<provider-session-id>"],
+    control: {
+      managed_transport: "codex_app_server",
+      source_runner_id: 7,
+      source_runner_name: "cinder",
+      attach_command: "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
+      managed_launch_profile: {
+        required_commands: ["codex"],
+        exported_env_keys: ["LONGHOUSE_MANAGED_SESSION_ID", "LONGHOUSE_HOOK_URL", "LONGHOUSE_HOOK_TOKEN"],
+        argv: ["codex", "chat", "--session", "<provider-session-id>"],
+      },
     },
     capabilities: makeCapabilities(),
     loop_mode: "manual",
@@ -246,11 +248,8 @@ describe("SessionDetailPage", () => {
   it("keeps the dock visible for searchable-only sessions and explains why cloud branching is disabled", () => {
     const session = makeSession({
       provider: "gemini",
-      execution_home: "local",
-      managed_transport: null,
-      source_runner_id: null,
-      source_runner_name: null,
-      attach_command: null,
+      execution_home: "legacy",
+      control: null,
       continuation_kind: "local",
       id: "session-gemini",
       capabilities: makeCapabilities({

@@ -191,13 +191,19 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
         assert response.status_code == 200
         payload = response.json()
         assert payload["execution_home"] == "managed_local"
-        assert payload["source_runner_name"] == "cinder"
-        assert payload["attach_command"] == build_managed_local_attach_command(session=session)
-        assert payload["managed_launch_profile"] == {
-            "required_commands": ["codex"],
-            "exported_env_keys": ["LONGHOUSE_MANAGED_SESSION_ID"],
-            "argv": ["codex", "--enable", "codex_hooks", "--no-alt-screen"],
+        assert payload["control"] == {
+            "managed_transport": "tmux",
+            "source_runner_id": 9,
+            "source_runner_name": "cinder",
+            "attach_command": build_managed_local_attach_command(session=session),
+            "managed_launch_profile": {
+                "required_commands": ["codex"],
+                "argv": ["codex", "--enable", "codex_hooks", "--no-alt-screen"],
+                "exported_env_keys": ["LONGHOUSE_MANAGED_SESSION_ID"],
+            },
         }
+        assert "attach_command" not in payload
+        assert "source_runner_name" not in payload
         assert "load_session;dur=" in response.headers["server-timing"]
         assert "build_response;dur=" in response.headers["server-timing"]
     finally:
@@ -243,8 +249,13 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
         assert response.status_code == 200
         payload = response.json()
         assert payload["execution_home"] == "managed_local"
-        assert payload["source_runner_name"] == "work-laptop"
-        assert payload["attach_command"] == build_managed_local_attach_command(session=session)
+        assert payload["control"] == {
+            "managed_transport": "claude_channel_bridge",
+            "source_runner_id": 9,
+            "source_runner_name": "work-laptop",
+            "attach_command": build_managed_local_attach_command(session=session),
+            "managed_launch_profile": None,
+        }
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
@@ -288,8 +299,13 @@ def test_timeline_session_detail_ignores_malformed_managed_launch_profile(tmp_pa
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["managed_launch_profile"] is None
-        assert payload["attach_command"] == build_managed_local_attach_command(session=session)
+        assert payload["control"] == {
+            "managed_transport": "tmux",
+            "source_runner_id": 9,
+            "source_runner_name": "cinder",
+            "attach_command": build_managed_local_attach_command(session=session),
+            "managed_launch_profile": None,
+        }
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
@@ -361,8 +377,13 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
         assert response.status_code == 200
         payload = response.json()
         assert payload["execution_home"] == "managed_local"
-        assert payload["managed_transport"] == "codex_app_server"
-        assert payload["attach_command"] == build_managed_local_attach_command(session=session)
+        assert payload["control"] == {
+            "managed_transport": "codex_app_server",
+            "source_runner_id": 9,
+            "source_runner_name": "cinder",
+            "attach_command": build_managed_local_attach_command(session=session),
+            "managed_launch_profile": None,
+        }
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
