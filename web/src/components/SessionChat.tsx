@@ -614,7 +614,10 @@ export function SessionChat({
             <div className="session-chat-empty">
               <p>{emptyStateTitle || "Start a conversation with this session."}</p>
               <p className="session-chat-hint">
-                {hintText || "Context from previous turns will be preserved via --resume."}
+                {hintText
+                  || (isManagedLocal
+                    ? `Longhouse will send your next prompt into the live ${session.provider} session.`
+                    : "Earlier synced turns stay visible here. Your first message starts a new cloud branch from that context.")}
               </p>
             </div>
           ) : (

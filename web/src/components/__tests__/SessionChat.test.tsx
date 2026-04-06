@@ -179,6 +179,18 @@ describe("SessionChat", () => {
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
 
+  it("uses explicit cloud-branch empty-state copy instead of resume wording", () => {
+    renderSessionChat({
+      layout: "panel",
+    });
+
+    expect(screen.getByText("Start a conversation with this session.")).toBeInTheDocument();
+    expect(
+      screen.getByText("Earlier synced turns stay visible here. Your first message starts a new cloud branch from that context."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/--resume/i)).not.toBeInTheDocument();
+  });
+
   it("navigates only after persisted continuation events land", async () => {
     const user = userEvent.setup();
     const onSessionChanged = vi.fn();
