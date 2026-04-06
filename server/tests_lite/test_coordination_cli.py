@@ -900,3 +900,56 @@ def test_sessions_continue_command_streams_cloud_output(monkeypatch):
             "json": {"message": "stream the answer"},
         }
     ]
+
+
+def test_sessions_continue_command_does_not_guess_live_send_from_raw_fields(monkeypatch):
+    runner = CliRunner()
+    fake_client = _FakeClient(
+        get_response=_FakeResponse(
+            status_code=200,
+            json_data={
+                "id": "22222222-2222-2222-2222-222222222222",
+                "execution_home": "managed_local",
+                "source_runner_id": 77,
+            },
+        ),
+        stream_response=_FakeResponse(
+            status_code=200,
+            headers={"content-type": "text/event-stream"},
+            stream_lines=[
+                "event: done",
+                'data: {"exit_code":0,"persisted_events":1}',
+                "",
+            ],
+        ),
+    )
+
+    monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
+    monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
+    monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
+    monkeypatch.delenv("LONGHOUSE_MANAGED_SESSION_ID", raising=False)
+
+    result = runner.invoke(
+        app,
+        [
+            "continue",
+            "22222222-2222-2222-2222-222222222222",
+            "follow up without explicit capabilities",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert fake_client.calls == [
+        {
+            "method": "GET",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "params": None,
+        },
+        {
+            "method": "POST",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/branch-cloud",
+            "headers": {"X-Agents-Token": "zdt_test_token"},
+            "json": {"message": "follow up without explicit capabilities"},
+        },
+    ]
