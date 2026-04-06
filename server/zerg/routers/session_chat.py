@@ -580,6 +580,12 @@ def _authorize_agents_session_continue(
             detail="Authenticated session context does not match request header",
         )
 
+    # Header explicitly identifies this session — caller has proven targeting intent.
+    # Device token already validates the user. Skip device cross-check; runner dispatch
+    # enforces physical delivery to the correct machine.
+    if header_session_id is not None:
+        return
+
     token_device_id = str(getattr(device_token, "device_id", "") or "").strip()
     session_device_id = str(getattr(source_session, "device_id", "") or "").strip()
     if token_device_id and session_device_id and token_device_id != session_device_id:
