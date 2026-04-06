@@ -532,7 +532,24 @@ def _parse_current_session_header(request: Request) -> UUID | None:
         ) from exc
 
 
-def _authorize_agents_session_continue(
+def _authorize_live_send(
+    *,
+    request: Request,
+    device_token: DeviceToken | None,
+    auth_disabled: bool,
+) -> None:
+    # Accept an optional current-session hint for consistency with other machine
+    # surfaces, but live send authorization itself only needs a valid device token.
+    _parse_current_session_header(request)
+
+    if device_token is None and not auth_disabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Machine live send requires a device token",
+        )
+
+
+def _authorize_cloud_branch(
     *,
     request: Request,
     device_token: DeviceToken | None,
@@ -553,38 +570,11 @@ def _authorize_agents_session_continue(
             detail="Machine cloud branching requires a device token",
         )
 
-    token_session_id: UUID | None = None
-    token_session_raw = str(getattr(device_token, "session_id", "") or "").strip()
-    if token_session_raw:
-        try:
-            token_session_id = UUID(token_session_raw)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Authenticated session context is invalid",
-            ) from exc
-
-    if token_session_id is not None and token_session_id != source_session.id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authenticated session context does not match the target session",
-        )
     if header_session_id is not None and header_session_id != source_session.id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Current session header does not match the target session",
         )
-    if token_session_id is not None and header_session_id is not None and token_session_id != header_session_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authenticated session context does not match request header",
-        )
-
-    # Header explicitly identifies this session — caller has proven targeting intent.
-    # Device token already validates the user. Skip device cross-check; runner dispatch
-    # enforces physical delivery to the correct machine.
-    if header_session_id is not None:
-        return
 
     token_device_id = str(getattr(device_token, "device_id", "") or "").strip()
     session_device_id = str(getattr(source_session, "device_id", "") or "").strip()
@@ -594,7 +584,7 @@ def _authorize_agents_session_continue(
             detail="Authenticated device cannot start a cloud branch from a session on another device",
         )
 
-    if token_session_id is None and header_session_id is None and (not token_device_id or token_device_id != session_device_id):
+    if header_session_id is None and (not token_device_id or token_device_id != session_device_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Machine cloud branching requires current session context or a matching device token",
@@ -2008,7 +1998,7 @@ async def branch_session_in_cloud_agents(
 
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
-    _authorize_agents_session_continue(
+    _authorize_cloud_branch(
         request=request,
         device_token=resolved_device_token,
         source_session=source_session,
@@ -2052,10 +2042,9 @@ async def send_to_live_session_agents(
 
     request_id = str(uuid.uuid4())[:8]
     source_session = _load_session_for_continuation(db, session_id)
-    _authorize_agents_session_continue(
+    _authorize_live_send(
         request=request,
         device_token=resolved_device_token,
-        source_session=source_session,
         auth_disabled=settings.auth_disabled,
     )
     _assert_live_session_send_available(source_session)
