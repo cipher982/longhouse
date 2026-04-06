@@ -34,7 +34,7 @@ Usage:
   scripts/hosted-managed-local-codex-stress.sh [options]
 
 Launch a real hosted managed-local Codex session on this device, then send
-repeated simple one-line prompts through the real `/api/sessions/{id}/chat`
+repeated simple one-line prompts through the real `/api/sessions/{id}/send-live`
 route and verify each turn against the live tmux pane ground truth.
 
 Requirements:
@@ -51,7 +51,7 @@ Options:
   --project <name>          Project label for launch
   --display-name <name>     Display name for launch
   --loop-mode <mode>        manual|assist|autopilot (default: assist)
-  --chat-timeout-secs <n>   Max wait for `/chat` SSE before failing (default: 30)
+  --chat-timeout-secs <n>   Max wait for `/send-live` HTTP response (default: 30)
   --verify-timeout-secs <n> Poll timeout for tmux-pane verification (default: 30)
   --durability-timeout-secs <n>
                             Max follow-up wait for transcript durability when sync_status=pending (default: 20)
@@ -195,7 +195,6 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
-from typing import Iterator
 
 import httpx
 from zerg.services.managed_local_tmux import MANAGED_LOCAL_TMUX_SERVER_LABEL
@@ -205,27 +204,13 @@ from zerg.services.managed_local_tmux import build_tmux_has_session_command
 
 
 @dataclass(frozen=True)
-class SSEEvent:
-    event: str
-    data: str
-
-
-@dataclass(frozen=True)
 class ChatRouteResult:
     status_code: int
-    saw_assistant_delta: bool = False
-    saw_done: bool = False
-    stream_timed_out: bool = False
-    done_payload: dict[str, object] | None = None
-    error: str | None = None
-
-
-@dataclass(frozen=True)
-class DonePayloadCheck:
-    ok: bool
+    accepted: bool = False
     sync_status: str | None = None
-    control_status: str | None = None
-    persisted_events: int = 0
+    ack_payload: dict[str, object] | None = None
+    request_id: str | None = None
+    dispatch_ms: float | None = None
     error: str | None = None
 
 
@@ -237,28 +222,6 @@ class DurabilityCheck:
     prompt_seen: bool = False
     token_seen: bool = False
     error: str | None = None
-
-
-def parse_sse_lines(lines: Iterable[str]) -> Iterator[SSEEvent]:
-    event_name = "message"
-    data_lines: list[str] = []
-    for raw_line in lines:
-        line = raw_line.rstrip("\n")
-        if not line:
-            if data_lines:
-                yield SSEEvent(event=event_name, data="\n".join(data_lines))
-            event_name = "message"
-            data_lines = []
-            continue
-        if line.startswith(":"):
-            continue
-        if line.startswith("event:"):
-            event_name = line.split(":", 1)[1].strip() or "message"
-            continue
-        if line.startswith("data:"):
-            data_lines.append(line.split(":", 1)[1].lstrip())
-    if data_lines:
-        yield SSEEvent(event=event_name, data="\n".join(data_lines))
 
 
 def build_prompts(*, count: int, prefix: str) -> list[tuple[str, str]]:
@@ -388,66 +351,40 @@ def _wait_for_turn_in_tmux(
     )
 
 
-def _coerce_int(value: object, *, default: int = 0) -> int:
+def _assess_send_live_ack(*, status_code: int, payload: object) -> ChatRouteResult:
+    parsed = payload if isinstance(payload, dict) else None
+    if status_code != 200:
+        if parsed is not None:
+            error = str(parsed.get("error") or parsed)[:400]
+        else:
+            error = str(payload)[:400]
+        return ChatRouteResult(status_code=status_code, ack_payload=parsed, error=error)
+    if parsed is None:
+        return ChatRouteResult(
+            status_code=status_code,
+            error=f"Expected JSON ack object, got {type(payload).__name__}",
+        )
+    if not bool(parsed.get("accepted")):
+        return ChatRouteResult(
+            status_code=status_code,
+            ack_payload=parsed,
+            error=str(parsed.get("error") or parsed)[:400],
+        )
+    dispatch_ms_raw = parsed.get("dispatch_ms")
+    dispatch_ms: float | None = None
     try:
-        return int(value)
+        if dispatch_ms_raw is not None:
+            dispatch_ms = float(dispatch_ms_raw)
     except (TypeError, ValueError):
-        return default
-
-
-def _validate_done_payload(*, session_id: str, done_payload: dict[str, object] | None) -> DonePayloadCheck:
-    if done_payload is None:
-        return DonePayloadCheck(ok=False, error="missing done payload")
-    if done_payload.get("created_continuation") is not False:
-        return DonePayloadCheck(
-            ok=False,
-            error=f"expected created_continuation=false, got {done_payload.get('created_continuation')!r}",
-        )
-    if str(done_payload.get("shipped_session_id") or "") != session_id:
-        return DonePayloadCheck(
-            ok=False,
-            error=f"expected shipped_session_id={session_id}, got {done_payload.get('shipped_session_id')!r}",
-        )
-
-    exit_code_raw = done_payload.get("exit_code")
-    try:
-        exit_code = int(exit_code_raw)
-    except (TypeError, ValueError):
-        return DonePayloadCheck(ok=False, error=f"expected exit_code=0, got {exit_code_raw!r}")
-    if exit_code != 0:
-        return DonePayloadCheck(ok=False, error=f"expected exit_code=0, got {exit_code_raw!r}")
-
-    persistence_error = done_payload.get("persistence_error")
-    if persistence_error is not None:
-        return DonePayloadCheck(ok=False, error=f"unexpected persistence_error={persistence_error!r}")
-
-    control_status_raw = str(done_payload.get("control_status") or "").strip().lower()
-    control_status = control_status_raw or None
-    if control_status in {"failed", "error"}:
-        return DonePayloadCheck(ok=False, error=f"unexpected control_status={control_status!r}")
-
-    sync_status_raw = str(done_payload.get("sync_status") or "").strip().lower()
-    persisted_events = _coerce_int(done_payload.get("persisted_events"), default=0)
-    if sync_status_raw:
-        if sync_status_raw not in {"pending", "complete"}:
-            return DonePayloadCheck(ok=False, error=f"unexpected sync_status={sync_status_raw!r}")
-        return DonePayloadCheck(
-            ok=True,
-            sync_status=sync_status_raw,
-            control_status=control_status,
-            persisted_events=persisted_events,
-        )
-
-    if persisted_events <= 0:
-        return DonePayloadCheck(
-            ok=False,
-            error="expected sync_status in {'pending','complete'} or legacy persisted_events>0 success",
-        )
-    return DonePayloadCheck(
-        ok=True,
-        sync_status="complete",
-        control_status=control_status,
-        persisted_events=persisted_events,
+        dispatch_ms = None
+    request_id = str(parsed.get("request_id") or "").strip() or None
+    return ChatRouteResult(
+        status_code=status_code,
+        accepted=True,
+        sync_status="pending",
+        ack_payload=parsed,
+        request_id=request_id,
+        dispatch_ms=dispatch_ms,
     )
 
 
@@ -547,7 +484,7 @@ def _wait_for_transcript_durability(
         time.sleep(poll_interval_secs)
 
 
-def _send_chat_via_api(
+def _send_live_via_api(
     *,
     api_url: str,
     access_token: str,
@@ -556,11 +493,8 @@ def _send_chat_via_api(
     timeout_secs: float,
 ) -> ChatRouteResult:
     if shutil.which("curl") is None:
-        return ChatRouteResult(status_code=0, error="curl is required for hosted managed-local SSE verification")
+        return ChatRouteResult(status_code=0, error="curl is required for hosted managed-local send-live verification")
     status_code = 0
-    saw_assistant_delta = False
-    saw_done = False
-    done_payload: dict[str, object] | None = None
     prompt_body = json.dumps({"message": prompt})
     curl_timeout = max(5.0, timeout_secs)
     curl_deadline = int(curl_timeout + 5)
@@ -578,14 +512,12 @@ def _send_chat_via_api(
                     "-X",
                     "POST",
                     "-H",
-                    "Accept: text/event-stream",
-                    "-H",
                     "Content-Type: application/json",
                     "-o",
                     body_file.name,
                     "-w",
                     "\\n%{http_code}\\n",
-                    f"{api_url.rstrip('/')}/api/sessions/{session_id}/chat?token={access_token}",
+                    f"{api_url.rstrip('/')}/api/sessions/{session_id}/send-live?token={access_token}",
                     "--data-binary",
                     prompt_body,
                 ],
@@ -601,69 +533,22 @@ def _send_chat_via_api(
                     status_code = int(candidate)
             body_text = Path(body_file.name).read_text(encoding="utf-8", errors="replace")
 
-        for event in parse_sse_lines(body_text.replace("\r\n", "\n").splitlines(keepends=True)):
-            if event.event == "assistant_delta":
-                saw_assistant_delta = True
-            if event.event == "error":
-                try:
-                    parsed = json.loads(event.data)
-                    error = str(parsed.get("error") or event.data)
-                except json.JSONDecodeError:
-                    error = event.data
-                return ChatRouteResult(
-                    status_code=status_code,
-                    saw_assistant_delta=saw_assistant_delta,
-                    saw_done=saw_done,
-                    stream_timed_out=curl.returncode == 28,
-                    error=error,
-                )
-            if event.event == "done":
-                saw_done = True
-                try:
-                    done_payload = json.loads(event.data)
-                except json.JSONDecodeError:
-                    return ChatRouteResult(
-                        status_code=status_code,
-                        saw_assistant_delta=saw_assistant_delta,
-                        saw_done=True,
-                        error=f"Malformed done payload: {event.data[:200]}",
-                    )
-                break
-
         if status_code != 200:
-            preview = body_text[:400]
-            return ChatRouteResult(
-                status_code=status_code,
-                saw_assistant_delta=saw_assistant_delta,
-                saw_done=saw_done,
-                stream_timed_out=curl.returncode == 28,
-                error=f"chat status={status_code} body={preview}",
-            )
+            try:
+                parsed = json.loads(body_text)
+            except json.JSONDecodeError:
+                parsed = {"raw": body_text[:400]}
+            return _assess_send_live_ack(status_code=status_code, payload=parsed)
         if curl.returncode not in (0, 28):
             detail = (curl.stderr or "").strip() or f"curl exit code {curl.returncode}"
-            return ChatRouteResult(
-                status_code=status_code,
-                saw_assistant_delta=saw_assistant_delta,
-                saw_done=saw_done,
-                error=detail,
-            )
-        if not saw_done:
-            return ChatRouteResult(
-                status_code=status_code,
-                saw_assistant_delta=saw_assistant_delta,
-                saw_done=False,
-                stream_timed_out=curl.returncode == 28,
-                error="Managed-local chat stream never produced a done event",
-            )
+            return ChatRouteResult(status_code=status_code, error=detail)
+        try:
+            parsed = json.loads(body_text)
+        except json.JSONDecodeError:
+            parsed = {"raw": body_text[:400]}
+        return _assess_send_live_ack(status_code=status_code, payload=parsed)
     except Exception as exc:
         return ChatRouteResult(status_code=status_code, error=f"{type(exc).__name__}: {exc}")
-
-    return ChatRouteResult(
-        status_code=status_code,
-        saw_assistant_delta=saw_assistant_delta,
-        saw_done=saw_done,
-        done_payload=done_payload,
-    )
 
 
 def main() -> int:
@@ -741,7 +626,7 @@ def main() -> int:
         prompts = build_prompts(count=turn_count, prefix=prompt_prefix)
 
         for idx, (prompt, token) in enumerate(prompts, start=1):
-            chat_result = _send_chat_via_api(
+            send_result = _send_live_via_api(
                 api_url=api_url,
                 access_token=access_token,
                 session_id=session_id,
@@ -752,9 +637,8 @@ def main() -> int:
             prompt_seen = False
             token_seen = False
             pane_tail = ""
-            done_check = DonePayloadCheck(ok=False, error="done payload not evaluated")
             durability_check: DurabilityCheck | None = None
-            if chat_result.status_code == 200:
+            if send_result.status_code == 200 and send_result.accepted:
                 try:
                     pane, prompt_seen, token_seen = _wait_for_turn_in_tmux(
                         session_name=session_name,
@@ -768,15 +652,10 @@ def main() -> int:
                     tmux_error = f"{type(exc).__name__}: {exc}"
                     pane_tail = _capture_tmux_pane(session_name=session_name, tmux_tmpdir=tmux_tmpdir)[-1200:]
 
-            done_check = _validate_done_payload(
-                session_id=session_id,
-                done_payload=chat_result.done_payload,
-            )
             if (
-                done_check.ok
-                and done_check.sync_status == "pending"
-                and chat_result.status_code == 200
-                and chat_result.error is None
+                send_result.accepted
+                and send_result.sync_status == "pending"
+                and send_result.error is None
                 and tmux_error is None
                 and prompt_seen
                 and token_seen
@@ -792,9 +671,9 @@ def main() -> int:
                 )
 
             ok = (
-                chat_result.status_code == 200
-                and chat_result.error is None
-                and done_check.ok
+                send_result.status_code == 200
+                and send_result.accepted
+                and send_result.error is None
                 and tmux_error is None
                 and prompt_seen
                 and token_seen
@@ -802,19 +681,18 @@ def main() -> int:
             )
             label = "ok" if ok else "fail"
             print(
-                f"[{idx}/{len(prompts)}] {label} status={chat_result.status_code} prompt={prompt!r} "
+                f"[{idx}/{len(prompts)}] {label} status={send_result.status_code} prompt={prompt!r} "
                 f"token={token} tmux_prompt_seen={int(prompt_seen)} tmux_token_seen={int(token_seen)} "
-                f"api_done={int(chat_result.saw_done)} api_delta={int(chat_result.saw_assistant_delta)} "
-                f"api_timed_out={int(chat_result.stream_timed_out)} "
-                f"sync_status={done_check.sync_status or 'missing'} "
-                f"control_status={done_check.control_status or 'missing'}"
+                f"api_accepted={int(send_result.accepted)} "
+                f"dispatch_ms={send_result.dispatch_ms if send_result.dispatch_ms is not None else 'missing'} "
+                f"sync_status={send_result.sync_status or 'missing'}"
             )
-            if chat_result.error:
-                print(f"  api_error: {chat_result.error}")
-            if chat_result.done_payload is not None:
-                print(f"  done_payload: {json.dumps(chat_result.done_payload, sort_keys=True)}")
-            if done_check.error:
-                print(f"  done_payload_error: {done_check.error}")
+            if send_result.request_id:
+                print(f"  request_id: {send_result.request_id}")
+            if send_result.error:
+                print(f"  api_error: {send_result.error}")
+            if send_result.ack_payload is not None:
+                print(f"  ack_payload: {json.dumps(send_result.ack_payload, sort_keys=True)}")
             if durability_check is not None:
                 print(
                     "  durability_check: "
