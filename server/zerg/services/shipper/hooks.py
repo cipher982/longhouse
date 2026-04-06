@@ -180,50 +180,13 @@ PROJECT_ENC=$(
 
 RESPONSE=$(curl -sf --max-time 5 \\
   -H "X-Agents-Token: $TOKEN" \\
-  "${URL}/api/agents/sessions?project=${PROJECT_ENC}&limit=15&days_back=14&hide_autonomous=true" 2>/dev/null)
+  "${URL}/api/agents/briefing?project=${PROJECT_ENC}&limit=5" 2>/dev/null)
 if [[ $? -ne 0 ]] || [[ -z "$RESPONSE" ]]; then exit 0; fi
 
-TOTAL=$(echo "$RESPONSE" | jq -r '.total // 0')
-if [[ "$TOTAL" -eq 0 ]]; then exit 0; fi
+BRIEFING=$(echo "$RESPONSE" | jq -r '.briefing // empty')
+if [[ -z "$BRIEFING" ]]; then exit 0; fi
 
-# Build lines: metadata + summary for the 5 most recent sessions with summaries.
-# Each session renders as:
-#   [DATE] PROVIDER Nt — TITLE
-#     SUMMARY (truncated to 120 chars)
-LINES=$(echo "$RESPONSE" | python3 -c "
-import json, sys, textwrap
-
-# strict=False handles embedded control characters that can appear in session summaries
-data = json.loads(sys.stdin.read(), strict=False)
-out = []
-shown = 0
-for s in data.get('sessions', []):
-    summary = (s.get('summary') or '').strip()
-    if not summary:
-        continue
-    date = (s.get('started_at') or '')[:10]
-    provider = s.get('provider') or '?'
-    tools = s.get('tool_calls') or 0
-    title = (s.get('summary_title') or '').strip()
-    summary_short = summary[:120] + ('...' if len(summary) > 120 else '')
-    header = f'[{date}] {provider} {tools}t'
-    if title:
-        header += f' — {title}'
-    wrapped = textwrap.fill(summary_short, width=100, initial_indent='  ', subsequent_indent='  ')
-    out.append(header)
-    out.append(wrapped)
-    shown += 1
-    if shown >= 5:
-        break
-
-print('\n'.join(out))
-" 2>/dev/null)
-
-if [[ -z "$LINES" ]]; then exit 0; fi
-
-MSG="Longhouse: recent sessions in ${PROJECT}:\\n\\n${LINES}"
-
-jq -nc --arg msg "$MSG" '{"systemMessage": $msg}'
+jq -nc --arg msg "$BRIEFING" '{"systemMessage": $msg}'
 exit 0
 """
 
