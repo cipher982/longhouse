@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import ManagedLocalTurn
+from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 
 logger = logging.getLogger(__name__)
 
@@ -303,7 +304,8 @@ def _match_durable_turn(
         content_text = str(getattr(event, "content_text", "") or "")
 
         if matched_user is None:
-            if role == "user" and hash_managed_local_turn_text(content_text) == expected_hash:
+            normalized_user_text = strip_claude_channel_wrapper(content_text)
+            if role == "user" and hash_managed_local_turn_text(normalized_user_text) == expected_hash:
                 matched_user = event
             continue
 

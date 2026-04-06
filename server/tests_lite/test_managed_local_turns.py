@@ -334,3 +334,45 @@ def test_managed_local_turn_snapshot_reads_committed_shadow_state(tmp_path):
     assert snapshot.send_accepted_at is not None
     assert snapshot.terminal_phase == "needs_user"
     assert snapshot.terminal_runtime_event_id == 55
+
+
+def test_managed_local_turn_durability_matches_native_claude_channel_wrapper(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_user_runner_and_session(db)
+        create_managed_local_turn(
+            db,
+            session_id=session.id,
+            request_id="req-channel-turn",
+            baseline_event_id=0,
+            baseline_runtime_event_id=0,
+            expected_user_text="continue",
+        )
+        mark_managed_local_turn_send_accepted(db, session_id=session.id, request_id="req-channel-turn")
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text=(
+                        "<channel source=\"longhouse-channel\" injected_by=\"longhouse\">\n"
+                        "continue\n"
+                        "</channel>"
+                    ),
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="done",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        durable_turn = maybe_mark_managed_local_turn_durable(db, session_id=session.id)
+        assert durable_turn is not None
+        assert durable_turn.durable_user_event_id is not None
+        assert durable_turn.durable_assistant_event_id is not None

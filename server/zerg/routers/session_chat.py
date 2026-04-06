@@ -50,6 +50,7 @@ from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.request_urls import get_request_public_base_url
 from zerg.services.agents_store import AgentsStore
+from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAILED
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_COMPLETE
@@ -1021,7 +1022,7 @@ def _managed_local_events_include_expected_turn(*, events: list[AgentEvent], exp
         role = str(getattr(event, "role", "") or "").strip().lower()
         content_text = str(getattr(event, "content_text", "") or "")
         tool_name = str(getattr(event, "tool_name", "") or "").strip()
-        if role == "user" and content_text == expected_user_message:
+        if role == "user" and strip_claude_channel_wrapper(content_text) == expected_user_message:
             saw_expected_user_prompt = True
             continue
         if not saw_expected_user_prompt:
