@@ -8,7 +8,6 @@ function makeSession(overrides: Partial<TimelineRuntimeSession> = {}): TimelineR
     last_activity_at: "2026-03-21T12:00:00Z",
     timeline_anchor_at: "2026-03-21T12:00:00Z",
     execution_home: "legacy",
-    managed_transport: null,
     ...overrides,
   };
 }

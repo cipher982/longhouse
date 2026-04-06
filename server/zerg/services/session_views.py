@@ -86,6 +86,34 @@ def build_session_capabilities_response(
     )
 
 
+def build_session_control_response(
+    session: AgentSession | None,
+    *,
+    capability_flags=None,
+) -> SessionControlResponse | None:
+    if session is None:
+        return None
+    capability_flags = capability_flags or build_session_capabilities(session)
+    source_runner_name = str(getattr(session, "source_runner_name", "") or "").strip() or None
+    attach_command = build_attach_command(session) if capability_flags.host_reattach_available else None
+    managed_launch_profile = _coerce_managed_launch_profile(getattr(session, "managed_launch_profile", None))
+    if (
+        capability_flags.managed_transport is None
+        and getattr(session, "source_runner_id", None) is None
+        and source_runner_name is None
+        and attach_command is None
+        and managed_launch_profile is None
+    ):
+        return None
+    return SessionControlResponse(
+        managed_transport=capability_flags.managed_transport,
+        source_runner_id=getattr(session, "source_runner_id", None),
+        source_runner_name=source_runner_name,
+        attach_command=attach_command,
+        managed_launch_profile=managed_launch_profile,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
@@ -95,6 +123,20 @@ class ManagedLaunchProfileResponse(BaseModel):
     required_commands: List[str] = Field(..., description="Commands that must exist before managed launch")
     argv: List[str] = Field(..., description="Structured argv Longhouse resolved for the managed launch")
     exported_env_keys: List[str] = Field(..., description="Env var names Longhouse exported for the launch")
+
+
+class SessionControlResponse(BaseModel):
+    managed_transport: Optional[ManagedSessionTransport] = Field(
+        None,
+        description="Managed transport when Longhouse owns the session runtime",
+    )
+    source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
+    source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
+    attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
+    managed_launch_profile: Optional[ManagedLaunchProfileResponse] = Field(
+        None,
+        description="Structured managed-launch metadata for debugging tmux-backed sessions",
+    )
 
 
 class SessionCapabilitiesResponse(BaseModel):
@@ -162,17 +204,7 @@ class SessionResponse(UTCBaseModel):
     branched_from_event_id: Optional[int] = Field(None, description="Event id where this continuation branched")
     is_writable_head: bool = Field(False, description="True when this session is the current writable head")
     is_sidechain: bool = Field(False, description="True when session is a Task sub-agent (not human-initiated)")
-    managed_transport: Optional[ManagedSessionTransport] = Field(
-        None,
-        description="Managed transport when Longhouse owns the session runtime",
-    )
-    source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
-    source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
-    attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
-    managed_launch_profile: Optional[ManagedLaunchProfileResponse] = Field(
-        None,
-        description="Structured managed-launch metadata for debugging tmux-backed sessions",
-    )
+    control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
     user_state: str = Field("active", description="User classification: active|parked|snoozed|archived")
@@ -273,12 +305,7 @@ class ActiveSessionResponse(UTCBaseModel):
         SessionExecutionHome.LEGACY,
         description="Execution home: legacy|managed_local|managed_hosted|cloud_takeover",
     )
-    managed_transport: Optional[ManagedSessionTransport] = Field(
-        None,
-        description="Managed transport when Longhouse owns the session runtime",
-    )
-    source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
-    source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
+    control: Optional[SessionControlResponse] = Field(None, description="Host-control and managed-launch debugging detail")
     capabilities: SessionCapabilitiesResponse = Field(..., description="Canonical session capability flags")
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="Session loop mode: manual|assist|autopilot")
 
@@ -715,11 +742,7 @@ def build_session_response(
         branched_from_event_id=session.branched_from_event_id,
         is_writable_head=bool(session.is_writable_head),
         is_sidechain=bool(session.is_sidechain or False),
-        managed_transport=capability_flags.managed_transport,
-        source_runner_id=getattr(session, "source_runner_id", None),
-        source_runner_name=getattr(session, "source_runner_name", None),
-        attach_command=(build_attach_command(session) if capability_flags.host_reattach_available else None),
-        managed_launch_profile=_coerce_managed_launch_profile(getattr(session, "managed_launch_profile", None)),
+        control=build_session_control_response(session, capability_flags=capability_flags),
         capabilities=build_session_capabilities_response(capability_flags=capability_flags),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
         user_state=session.user_state or "active",
@@ -777,9 +800,7 @@ def build_active_session_response(
         confidence=runtime_overlay.confidence,
         user_state=session.user_state or "active",
         execution_home=capability_flags.execution_home,
-        managed_transport=capability_flags.managed_transport,
-        source_runner_id=getattr(session, "source_runner_id", None),
-        source_runner_name=getattr(session, "source_runner_name", None),
+        control=build_session_control_response(session, capability_flags=capability_flags),
         capabilities=build_session_capabilities_response(capability_flags=capability_flags),
         loop_mode=_coerce_session_loop_mode(getattr(session, "loop_mode", None)),
     )

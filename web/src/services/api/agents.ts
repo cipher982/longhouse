@@ -60,11 +60,7 @@ export interface AgentSession {
   execution_home: SessionExecutionHome;
   branched_from_event_id: number | null;
   is_writable_head: boolean;
-  managed_transport: ManagedSessionTransport | null;
-  source_runner_id: number | null;
-  source_runner_name: string | null;
-  attach_command?: string | null;
-  managed_launch_profile?: ManagedLaunchProfile | null;
+  control?: SessionControl | null;
   capabilities?: SessionCapabilities | null;
   loop_mode: SessionLoopMode;
   user_state?: string;
@@ -74,6 +70,14 @@ export interface ManagedLaunchProfile {
   required_commands: string[];
   argv: string[];
   exported_env_keys: string[];
+}
+
+export interface SessionControl {
+  managed_transport: ManagedSessionTransport | null;
+  source_runner_id: number | null;
+  source_runner_name: string | null;
+  attach_command?: string | null;
+  managed_launch_profile?: ManagedLaunchProfile | null;
 }
 
 export interface SessionCapabilities {
