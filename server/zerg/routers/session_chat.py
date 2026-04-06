@@ -343,12 +343,17 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
 def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
     session = result.session
     managed_launch_profile = getattr(session, "managed_launch_profile", None)
+    capabilities = build_session_capabilities(session)
+    if capabilities.execution_home != SessionExecutionHome.MANAGED_LOCAL:
+        raise RuntimeError("Managed local launch response requires a managed_local session")
+    if capabilities.managed_transport is None:
+        raise RuntimeError("Managed local launch response is missing managed transport metadata")
     return ManagedLocalSessionLaunchResponse(
         session_id=str(session.id),
         provider=session.provider or "claude",
         provider_session_id=session.provider_session_id or str(session.id),
-        execution_home=SessionExecutionHome(session.execution_home or SessionExecutionHome.LEGACY.value),
-        managed_transport=ManagedSessionTransport(session.managed_transport or ManagedSessionTransport.TMUX.value),
+        execution_home=capabilities.execution_home,
+        managed_transport=capabilities.managed_transport,
         loop_mode=SessionLoopMode(session.loop_mode or SessionLoopMode.MANUAL.value),
         source_runner_id=getattr(session, "source_runner_id", None),
         source_runner_name=session.source_runner_name or "",
@@ -1130,7 +1135,8 @@ async def _stream_managed_local_output(
 ) -> AsyncIterator[str]:
     if db is None:
         raise RuntimeError("Managed local chat requires a database session")
-    if not build_session_capabilities(source_session).live_control_available:
+    capabilities = build_session_capabilities(source_session)
+    if not capabilities.live_control_available:
         raise RuntimeError("Managed local session is missing live runner metadata")
 
     yield SSEEvent(
@@ -1146,7 +1152,7 @@ async def _stream_managed_local_output(
                 ),
                 "created_branch": False,
                 "provider_session_id": source_session.provider_session_id,
-                "execution_home": source_session.execution_home,
+                "execution_home": capabilities.execution_home.value,
                 "origin_label": source_session.origin_label,
                 "runner_name": source_session.source_runner_name,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
