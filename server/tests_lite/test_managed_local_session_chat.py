@@ -150,6 +150,26 @@ def test_managed_local_events_include_expected_turn_requires_current_prompt_and_
     )
 
 
+def test_managed_local_events_include_expected_turn_accepts_native_claude_channel_wrapper():
+    prompt = "continue"
+
+    assert session_chat._managed_local_events_include_expected_turn(
+        events=[
+            SimpleNamespace(
+                role="user",
+                content_text=(
+                    "<channel source=\"longhouse-channel\" injected_by=\"longhouse\">\n"
+                    "continue\n"
+                    "</channel>"
+                ),
+                tool_name=None,
+            ),
+            SimpleNamespace(role="assistant", content_text="done", tool_name=None),
+        ],
+        expected_user_message=prompt,
+    )
+
+
 # ---------------------------------------------------------------------------
 # JSON dispatch tests (managed-local chat returns fast ack, not SSE stream)
 # ---------------------------------------------------------------------------
