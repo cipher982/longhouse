@@ -234,7 +234,7 @@ def _create_session(
     return session
 
 
-def test_build_loop_inbox_item_uses_resolved_execution_home_for_labels():
+def test_build_loop_inbox_item_uses_resolved_home_label():
     created_at = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
     review = SimpleNamespace(
         id=1,
@@ -264,7 +264,6 @@ def test_build_loop_inbox_item_uses_resolved_execution_home_for_labels():
 
     item = oikos_runs_router._build_loop_inbox_item(review, session)
 
-    assert item.execution_home == "cloud_takeover"
     assert item.home_label == "Moved to cloud"
 
 

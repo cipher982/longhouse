@@ -7591,8 +7591,6 @@ export interface components {
             machine?: string | null;
             /** Provider */
             provider?: string | null;
-            /** Execution Home */
-            execution_home?: string | null;
             /** Home Label */
             home_label?: string | null;
             /** Loop Mode */
@@ -7692,8 +7690,6 @@ export interface components {
             machine?: string | null;
             /** Provider */
             provider?: string | null;
-            /** Execution Home */
-            execution_home?: string | null;
             /** Home Label */
             home_label?: string | null;
             /** Loop Mode */

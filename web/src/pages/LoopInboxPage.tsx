@@ -15,7 +15,7 @@ import {
 import { useLoopInstallPrompt } from "../hooks/useLoopInstallPrompt";
 import { useLoopInboxStream } from "../hooks/useLoopInboxStream";
 import { useLoopPushNotifications } from "../hooks/useLoopPushNotifications";
-import { getExecutionHomeLabel, normalizeExecutionVenueLabel } from "../lib/sessionExecutionHome";
+import { normalizeExecutionVenueLabel } from "../lib/sessionExecutionHome";
 import "../styles/loop-inbox.css";
 
 type DecisionBadgeVariant = "neutral" | "success" | "warning" | "error";
@@ -125,15 +125,8 @@ function formatFollowUpCount(count: number): string {
   return `${count} open follow-up${count === 1 ? "" : "s"}`;
 }
 
-function formatVenueLabel(item: Pick<LoopInboxItem, "executionHome" | "homeLabel">): string | null {
-  const normalizedHomeLabel = normalizeExecutionVenueLabel(item.homeLabel);
-  if (normalizedHomeLabel) {
-    return normalizedHomeLabel;
-  }
-  if (item.executionHome === "cloud_takeover") {
-    return "Moved to cloud";
-  }
-  return getExecutionHomeLabel(item.executionHome);
+function formatVenueLabel(item: Pick<LoopInboxItem, "homeLabel">): string | null {
+  return normalizeExecutionVenueLabel(item.homeLabel);
 }
 
 function useIsPhoneLayout(): boolean {
@@ -199,11 +192,7 @@ function LoopActionButtons({
               type="text"
               value={replyText}
               onChange={(event) => setReplyText(event.target.value)}
-              placeholder={
-                card.executionHome === "managed_local"
-                  ? "Send a quick reply to the live session"
-                  : "Send a quick reply to this session"
-              }
+              placeholder="Send a quick reply to the live session"
               disabled={pending}
               data-testid="loop-reply-input"
             />

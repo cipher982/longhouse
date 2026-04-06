@@ -75,7 +75,6 @@ function makeInboxItem(overrides: Partial<LoopInboxItem> = {}): LoopInboxItem {
     project: "zerg",
     machine: "cinder",
     provider: "claude",
-    executionHome: "managed_local",
     homeLabel: "On this Mac",
     loopMode: "assist",
     decision: "continue",

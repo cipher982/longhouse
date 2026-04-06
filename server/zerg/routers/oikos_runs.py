@@ -144,7 +144,6 @@ class LoopInboxItem(UTCBaseModel):
     project: Optional[str] = None
     machine: Optional[str] = None
     provider: Optional[str] = None
-    execution_home: Optional[str] = None
     home_label: Optional[str] = None
     loop_mode: str
     decision: str
@@ -676,7 +675,6 @@ def _build_loop_inbox_item(
         project=getattr(session, "project", None),
         machine=getattr(session, "device_id", None),
         provider=getattr(session, "provider", None),
-        execution_home=(session_capabilities.execution_home.value if session is not None else None),
         home_label=session_capabilities.home_label if session is not None else None,
         loop_mode=review.loop_mode,
         decision=review.decision,
