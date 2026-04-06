@@ -561,42 +561,7 @@ test("briefings page loads with project selector", async ({ context }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 9: Session continuation backend is configured and ready
-// ---------------------------------------------------------------------------
-
-test("session continuation backend is ready", async ({
-  playwright,
-  apiBaseUrl,
-  authToken,
-}) => {
-  test.setTimeout(10_000);
-
-  const requestContext = await playwright.request.newContext({
-    baseURL: apiBaseUrl,
-    timeout: 10_000,
-  });
-
-  try {
-    const res = await requestContext.get(
-      `/api/sessions/continuation-readiness?token=${encodeURIComponent(authToken)}`,
-    );
-    expect(
-      res.ok(),
-      `GET /api/sessions/continuation-readiness returned ${res.status()}`,
-    ).toBe(true);
-
-    const body = await res.json();
-    expect(
-      body.ready,
-      `Continuation not ready: backend=${body.backend}, issues=${JSON.stringify(body.issues)}`,
-    ).toBe(true);
-  } finally {
-    await requestContext.dispose();
-  }
-});
-
-// ---------------------------------------------------------------------------
-// Test 10: Auth refresh endpoint works (token rotation)
+// Test 9: Auth refresh endpoint works (token rotation)
 // ---------------------------------------------------------------------------
 
 test("auth refresh endpoint rotates tokens", async ({ playwright, apiBaseUrl }) => {

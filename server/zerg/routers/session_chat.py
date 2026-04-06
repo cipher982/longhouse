@@ -1,12 +1,13 @@
 """Session control router for explicit live-send and cloud-branch flows.
 
 Enables interactive chat with synced CLI sessions.
-Cloud branching currently shells out to Claude Code (`claude --resume`) while
+Cloud branching now builds Longhouse-owned branch context from the synced
+thread, then starts a fresh Claude CLI turn in the target workspace while
 managed-local live send injects into the active local session.
 
 Security:
 - Workspace path derived server-side from session metadata (not client)
-- Per-session locks prevent concurrent resumes
+- Per-session locks prevent concurrent branch/send collisions
 - Process cancellation on client disconnect
 """
 
@@ -70,7 +71,6 @@ from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_dura
 from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_continuity import ShipSessionResult
-from zerg.services.session_continuity import prepare_claude_session_for_resume
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_continuity import ship_session_to_zerg
 from zerg.services.session_continuity import workspace_resolver
@@ -95,7 +95,7 @@ SESSION_CHAT_BACKEND_BEDROCK = "bedrock"
 SESSION_CHAT_BACKEND_ANTHROPIC = "anthropic"
 DEFAULT_SESSION_CHAT_ZAI_BASE_URL = "https://api.z.ai/api/anthropic"
 # Anthropic-ecosystem model defaults for cloud branching (not in models.json —
-# these are Claude Code resume models, not OpenAI-compatible chat models).
+# these are Claude Code CLI models, not OpenAI-compatible chat models).
 # Override at runtime via SESSION_CHAT_MODEL env var.
 DEFAULT_SESSION_CHAT_ZAI_MODEL = "glm-5"
 DEFAULT_SESSION_CHAT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
@@ -136,6 +136,9 @@ _CLOUD_BRANCH_EMPTY_EVENTS_ERROR = "".join(
     ]
 )
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
+_CLOUD_BRANCH_CONTEXT_EVENT_LIMIT = 200
+_CLOUD_BRANCH_PROMPT_CHAR_BUDGET = 32_000
+_CLOUD_BRANCH_EVENT_CHAR_LIMIT = 2_000
 
 
 def _truthy_env(name: str) -> bool:
@@ -153,7 +156,7 @@ def _get_session_chat_backend() -> str:
 
 
 @dataclass(frozen=True)
-class ContinuationRuntime:
+class CloudBranchRuntime:
     backend: str
     cmd: list[str]
     env_updates: dict[str, str]
@@ -167,13 +170,11 @@ def _check_claude_binary() -> bool:
     return shutil.which("claude") is not None
 
 
-def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> ContinuationRuntime:
+def _build_claude_branch_runtime(*, prompt: str) -> CloudBranchRuntime:
     cmd = [
         "claude",
-        "--resume",
-        provider_session_id,
         "-p",
-        message,
+        prompt,
         "--output-format",
         "stream-json",
         "--verbose",
@@ -187,7 +188,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
         )
 
     if backend == SESSION_CHAT_BACKEND_AMBIENT:
-        return ContinuationRuntime(backend=backend, cmd=cmd, env_updates={})
+        return CloudBranchRuntime(backend=backend, cmd=cmd, env_updates={})
 
     model = os.getenv(SESSION_CHAT_MODEL_ENV, "").strip()
     if backend == SESSION_CHAT_BACKEND_ZAI:
@@ -200,7 +201,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
             "ANTHROPIC_AUTH_TOKEN": api_key,
             "ANTHROPIC_MODEL": model or DEFAULT_SESSION_CHAT_ZAI_MODEL,
         }
-        return ContinuationRuntime(
+        return CloudBranchRuntime(
             backend=backend,
             cmd=cmd,
             env_updates=env_updates,
@@ -216,7 +217,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
             env_updates["ANTHROPIC_MODEL"] = model
         else:
             env_updates["ANTHROPIC_MODEL"] = DEFAULT_SESSION_CHAT_ANTHROPIC_MODEL
-        return ContinuationRuntime(
+        return CloudBranchRuntime(
             backend=backend,
             cmd=cmd,
             env_updates=env_updates,
@@ -232,7 +233,7 @@ def _build_claude_resume_runtime(*, provider_session_id: str, message: str) -> C
         env_updates["AWS_REGION"] = aws_region
     if model:
         env_updates["ANTHROPIC_MODEL"] = model
-    return ContinuationRuntime(
+    return CloudBranchRuntime(
         backend=backend,
         cmd=cmd,
         env_updates=env_updates,
@@ -389,6 +390,87 @@ def _load_session_for_continuation(db: Session, session_id: str):
     return source_session
 
 
+def _trim_cloud_branch_prompt_text(value: object, *, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _format_event_for_cloud_branch_prompt(event: AgentEvent) -> str | None:
+    role = str(event.role or "").strip().lower()
+    if role == "user":
+        text = _trim_cloud_branch_prompt_text(event.content_text, limit=_CLOUD_BRANCH_EVENT_CHAR_LIMIT)
+        return f"User: {text}" if text else None
+    if role == "assistant":
+        text = _trim_cloud_branch_prompt_text(event.content_text, limit=_CLOUD_BRANCH_EVENT_CHAR_LIMIT)
+        return f"Assistant: {text}" if text else None
+
+    lines: list[str] = []
+    tool_label = str(event.tool_name or "").strip() or "tool"
+    if event.tool_input_json is not None:
+        lines.append(
+            f"{tool_label} input: "
+            f"{_trim_cloud_branch_prompt_text(json.dumps(event.tool_input_json, ensure_ascii=True, sort_keys=True), limit=1000)}"
+        )
+    if event.tool_output_text:
+        lines.append(f"{tool_label} output: {_trim_cloud_branch_prompt_text(event.tool_output_text, limit=1500)}")
+    if event.content_text:
+        label = role.title() or "Event"
+        lines.append(f"{label}: {_trim_cloud_branch_prompt_text(event.content_text, limit=1000)}")
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
+def build_cloud_branch_prompt(*, db: Session, source_session, message: str) -> str:
+    store = AgentsStore(db)
+    events = store.get_session_events(
+        source_session.id,
+        branch_mode="head",
+        limit=_CLOUD_BRANCH_CONTEXT_EVENT_LIMIT,
+    )
+    rendered_events = [line for event in events if (line := _format_event_for_cloud_branch_prompt(event))]
+    selected_events: list[str] = []
+    remaining_chars = _CLOUD_BRANCH_PROMPT_CHAR_BUDGET
+    for line in reversed(rendered_events):
+        line_cost = len(line) + 1
+        if selected_events and line_cost > remaining_chars:
+            break
+        if not selected_events and line_cost > remaining_chars:
+            selected_events.append(_trim_cloud_branch_prompt_text(line, limit=remaining_chars))
+            remaining_chars = 0
+            break
+        selected_events.append(line)
+        remaining_chars -= line_cost
+    selected_events.reverse()
+    transcript = "\n".join(selected_events) if selected_events else "(No prior transcript events were available.)"
+    transcript_note = (
+        "Transcript excerpt below includes the latest synced events that fit Longhouse's branch prompt budget.\n"
+        if len(selected_events) < len(rendered_events)
+        else ""
+    )
+    project_label = source_session.project or "unknown"
+    provider_label = source_session.provider or "unknown"
+    workspace_label = source_session.cwd or "unknown"
+    branch_label = source_session.git_branch or "unknown"
+    return (
+        "You are starting a new Longhouse cloud branch from a synced CLI session.\n"
+        "Treat the transcript below as the durable prior context.\n"
+        "Do not assume hidden provider-local memory beyond what is written here.\n"
+        "Continue the work from this context; if something important is missing, say so briefly and proceed from the saved thread.\n\n"
+        f"Project: {project_label}\n"
+        f"Provider: {provider_label}\n"
+        f"Workspace: {workspace_label}\n"
+        f"Git branch: {branch_label}\n\n"
+        f"{transcript_note}"
+        "Transcript:\n"
+        f"{transcript}\n\n"
+        "New user message:\n"
+        f"{message}"
+    )
+
+
 def _assert_cloud_branch_available(source_session) -> None:
     capabilities = build_session_capabilities(source_session)
     provider = str(source_session.provider or "").strip().lower()
@@ -404,7 +486,7 @@ def _assert_cloud_branch_available(source_session) -> None:
     if capabilities.host_reattach_available:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="This live session needs host attach before Longhouse can continue it.",
+            detail="This live session needs host attach before Longhouse can start a cloud branch from it.",
         )
     if provider == "codex":
         raise HTTPException(
@@ -498,7 +580,7 @@ def _authorize_agents_session_continue(
     if token_device_id and session_device_id and token_device_id != session_device_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authenticated device cannot continue a session from another device",
+            detail="Authenticated device cannot start a cloud branch from a session on another device",
         )
 
     if token_session_id is None and header_session_id is None and (not token_device_id or token_device_id != session_device_id):
@@ -729,6 +811,11 @@ async def _build_cloud_branch_response(
 ) -> StreamingResponse:
     store = AgentsStore(db)
     target_session, created_branch = store.ensure_cloud_continuation_target(source_session.id)
+    inherited_provider_session_id = str(target_session.provider_session_id or "").strip()
+    source_provider_session_id = str(source_session.provider_session_id or "").strip()
+    if inherited_provider_session_id and inherited_provider_session_id == source_provider_session_id:
+        target_session.provider_session_id = None
+    branch_prompt = build_cloud_branch_prompt(db=db, source_session=source_session, message=message)
     db.commit()
 
     resolved_workspace = await workspace_resolver.resolve(
@@ -746,21 +833,10 @@ async def _build_cloud_branch_response(
             detail=f"Cannot resolve workspace: {resolved_workspace.error}",
         )
 
-    try:
-        provider_session_id = await prepare_claude_session_for_resume(
-            session_id=str(source_session.id),
-            workspace_path=resolved_workspace.path,
-            db=db,
-        )
-    except Exception:
-        if resolved_workspace.is_temp:
-            resolved_workspace.cleanup()
-        raise
-
     logger.info(
-        f"[{request_id}] Prepared source session {source_session.id} -> {provider_session_id[:20]}... "
+        f"[{request_id}] Prepared cloud branch context from source session {source_session.id} "
         f"target={target_session.id} workspace={resolved_workspace.path} is_temp={resolved_workspace.is_temp} "
-        f"provider=claude"
+        f"provider=claude prompt_chars={len(branch_prompt)}"
     )
 
     async def generate():
@@ -773,9 +849,9 @@ async def _build_cloud_branch_response(
                 continued_from_session_id=continued_from_session_id,
                 created_branch=created_branch,
                 branched_from_event_id=target_session.branched_from_event_id,
-                provider_session_id=provider_session_id,
                 workspace_path=resolved_workspace.path,
                 message=message,
+                prompt=branch_prompt,
                 request_id=request_id,
                 db=db,
             ):
@@ -1391,7 +1467,6 @@ async def _stream_fake_session_cloud_branch_output(
     continued_from_session_id: str | None,
     created_branch: bool,
     branched_from_event_id: int | None,
-    provider_session_id: str,
     workspace_path: Path,
     message: str,
     db: Session | None = None,
@@ -1409,7 +1484,6 @@ async def _stream_fake_session_cloud_branch_output(
                 "thread_root_session_id": thread_root_session_id,
                 "continued_from_session_id": continued_from_session_id,
                 "created_branch": created_branch,
-                "provider_session_id": provider_session_id,
                 "workspace": str(workspace_path),
                 "timestamp": timestamp,
             }
@@ -1423,14 +1497,13 @@ async def _stream_fake_session_cloud_branch_output(
     ship_result: ShipSessionResult | None
     persistence_error: str | None = None
     try:
-        ship_result = _persist_fake_continuation_turn(
+        ship_result = _persist_cloud_branch_turn(
             db=db,
             source_session_id=source_session_id,
             target_session_id=target_session_id,
             thread_root_session_id=thread_root_session_id,
             continued_from_session_id=continued_from_session_id,
             branched_from_event_id=branched_from_event_id,
-            provider_session_id=provider_session_id,
             workspace_path=workspace_path,
             message=message,
             assistant_text=assistant_text,
@@ -1466,7 +1539,7 @@ async def _stream_fake_session_cloud_branch_output(
     ).encode()
 
 
-def _persist_fake_continuation_turn(
+def _persist_cloud_branch_turn(
     *,
     db: Session | None,
     source_session_id: str,
@@ -1474,7 +1547,6 @@ def _persist_fake_continuation_turn(
     thread_root_session_id: str,
     continued_from_session_id: str | None,
     branched_from_event_id: int | None,
-    provider_session_id: str,
     workspace_path: Path,
     message: str,
     assistant_text: str,
@@ -1500,7 +1572,7 @@ def _persist_fake_continuation_turn(
 
     user_timestamp = datetime.now(timezone.utc)
     assistant_timestamp = user_timestamp + timedelta(milliseconds=1)
-    source_path = f"/tmp/fake-continuation-{target_session_id}-{int(user_timestamp.timestamp() * 1000)}.jsonl"
+    source_path = f"/tmp/cloud-branch-{target_session_id}-{int(user_timestamp.timestamp() * 1000)}.jsonl"
     user_raw = json.dumps(
         {
             "type": "user",
@@ -1521,6 +1593,12 @@ def _persist_fake_continuation_turn(
     else:
         resolved_git_branch = source_session.git_branch if source_session else None
         resolved_thread_root_session_id = UUID(thread_root_session_id)
+    resolved_provider_session_id = target_session_id
+    if target_session and str(target_session.provider_session_id or "").strip():
+        existing_provider_session_id = str(target_session.provider_session_id).strip()
+        source_provider_session_id = str(source_session.provider_session_id or "").strip() if source_session else ""
+        if existing_provider_session_id != source_provider_session_id:
+            resolved_provider_session_id = existing_provider_session_id
 
     payload = SessionIngest(
         id=target_uuid,
@@ -1541,7 +1619,7 @@ def _persist_fake_continuation_turn(
         git_branch=resolved_git_branch,
         started_at=target_session.started_at if target_session else user_timestamp,
         ended_at=assistant_timestamp,
-        provider_session_id=provider_session_id,
+        provider_session_id=resolved_provider_session_id,
         thread_root_session_id=resolved_thread_root_session_id,
         continued_from_session_id=(
             target_session.continued_from_session_id
@@ -1604,9 +1682,9 @@ async def stream_session_cloud_branch_output(
     continued_from_session_id: str | None,
     created_branch: bool,
     branched_from_event_id: int | None,
-    provider_session_id: str,
     workspace_path: Path,
     message: str,
+    prompt: str,
     request_id: str,
     db: Session | None = None,
 ) -> AsyncIterator[str]:
@@ -1629,7 +1707,6 @@ async def stream_session_cloud_branch_output(
                 continued_from_session_id=continued_from_session_id,
                 created_branch=created_branch,
                 branched_from_event_id=branched_from_event_id,
-                provider_session_id=provider_session_id,
                 workspace_path=workspace_path,
                 message=message,
                 db=db,
@@ -1637,7 +1714,7 @@ async def stream_session_cloud_branch_output(
                 yield event
             return
 
-        runtime = _build_claude_resume_runtime(provider_session_id=provider_session_id, message=message)
+        runtime = _build_claude_branch_runtime(prompt=prompt)
 
         yield SSEEvent(
             event="system",
@@ -1649,7 +1726,6 @@ async def stream_session_cloud_branch_output(
                     "thread_root_session_id": thread_root_session_id,
                     "continued_from_session_id": continued_from_session_id,
                     "created_branch": created_branch,
-                    "provider_session_id": provider_session_id,
                     "workspace": str(workspace_path),
                     "execution_backend": runtime.backend,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1663,7 +1739,7 @@ async def stream_session_cloud_branch_output(
             proc_env.pop(env_name, None)
 
         logger.info(
-            "[%s] Starting %s continuation: backend=%s cwd=%s",
+            "[%s] Starting %s cloud branch: backend=%s cwd=%s",
             request_id,
             "claude",
             runtime.backend,
@@ -2127,39 +2203,4 @@ async def force_release_lock(
         "released": released,
         "session_id": session_id,
         "lock_session_id": lock_scope_id,
-    }
-
-
-@router.get("/branch-cloud-readiness")
-async def cloud_branch_readiness(
-    _current_user=Depends(get_current_oikos_user),
-) -> dict:
-    """Pre-flight check: can this instance run cloud branches from session context?
-
-    Returns backend config and whether the required Claude binary/keys are present.
-    Used by QA and the frontend to show actionable errors.
-    """
-    backend = _get_session_chat_backend()
-    issues: list[str] = []
-
-    claude_available = _check_claude_binary()
-
-    if not claude_available:
-        issues.append("'claude' CLI not found on PATH (required for Claude-backed cloud branching)")
-
-    if backend == SESSION_CHAT_BACKEND_ZAI:
-        if not os.getenv("ZAI_API_KEY", "").strip():
-            issues.append("ZAI_API_KEY not set")
-    elif backend == SESSION_CHAT_BACKEND_ANTHROPIC:
-        if not os.getenv("ANTHROPIC_API_KEY", "").strip():
-            issues.append("ANTHROPIC_API_KEY not set")
-    elif backend == SESSION_CHAT_BACKEND_BEDROCK:
-        pass  # Uses IAM roles, hard to pre-check
-
-    return {
-        "ready": len(issues) == 0,
-        "backend": backend,
-        "claude_available": claude_available,
-        "issues": issues,
-        "warnings": [],
     }

@@ -141,12 +141,28 @@ def test_workspace_resolver_creates_managed_scratch_workspace_for_missing_non_re
     assert resolved.path.is_dir()
 
 
-def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, monkeypatch):
+def test_build_cloud_branch_prompt_uses_saved_thread_context(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session_id = _seed_session(db)
+        prompt = session_chat.build_cloud_branch_prompt(
+            db=db,
+            source_session=AgentsStore(db).get_session(session_id),
+            message="pick up the next step",
+        )
+
+    assert "Longhouse cloud branch" in prompt
+    assert "hello from cinder" in prompt
+    assert "pick up the next step" in prompt
+    assert "Do not assume hidden provider-local memory" in prompt
+
+
+def test_chat_with_session_builds_cloud_branch_context_without_http_self_fetch(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    claude_config = tmp_path / ".claude"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_config))
+    captured: dict[str, object] = {}
 
     async def fail_get(*_args, **_kwargs):
         raise AssertionError("session chat should not self-fetch exported sessions over HTTP")
@@ -155,6 +171,7 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
         return ResolvedWorkspace(path=workspace, is_temp=False)
 
     async def fake_stream_session_cloud_branch_output(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
         yield session_chat.SSEEvent(
             event="system",
             data=json.dumps(
@@ -213,6 +230,8 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
             body = response.text
             assert '"created_branch": true' in body
             assert "event: done" in body
+            assert "hello from cinder" in str(captured["prompt"])
+            assert "anything else?" in str(captured["prompt"])
 
             sessions = db.query(AgentSession).filter(AgentSession.thread_root_session_id == source_session_id).all()
             assert len(sessions) == 2
@@ -229,9 +248,7 @@ def test_chat_with_session_prepares_resume_without_http_self_fetch(tmp_path, mon
 def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_missing(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     managed_base = tmp_path / "managed-workspaces"
-    claude_config = tmp_path / ".claude"
     missing_workspace = "/Users/davidrose/git/nonexistent/session-workspace"
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_config))
 
     captured: dict[str, object] = {}
 
@@ -319,11 +336,6 @@ def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_miss
             expected_workspace = managed_base / f"session-{target_session_id}"
             assert captured["workspace_path"] == expected_workspace
             assert expected_workspace.exists()
-
-            encoded_cwd = encode_cwd_for_claude(str(expected_workspace.absolute()))
-            session_file = claude_config / "projects" / encoded_cwd / "resume-root.jsonl"
-            assert session_file.exists()
-            assert "hello from cinder" in session_file.read_text()
         finally:
             api_app.dependency_overrides.clear()
 
@@ -410,24 +422,19 @@ def test_find_latest_codex_session_file(tmp_path, monkeypatch):
     assert result.name == new_file.name
 
 
-def test_build_claude_resume_runtime_uses_zai_env(monkeypatch):
+def test_build_claude_branch_runtime_uses_zai_env(monkeypatch):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.setenv("ZAI_API_KEY", "zai-test-key")
     monkeypatch.setenv(session_chat.SESSION_CHAT_MODEL_ENV, "glm-4.7")
 
-    runtime = session_chat._build_claude_resume_runtime(
-        provider_session_id="resume-root",
-        message="anything else?",
-    )
+    runtime = session_chat._build_claude_branch_runtime(prompt="branch prompt")
 
     assert runtime.backend == session_chat.SESSION_CHAT_BACKEND_ZAI
     assert runtime.cmd == [
         "claude",
-        "--resume",
-        "resume-root",
         "-p",
-        "anything else?",
+        "branch prompt",
         "--output-format",
         "stream-json",
         "--verbose",
@@ -441,16 +448,13 @@ def test_build_claude_resume_runtime_uses_zai_env(monkeypatch):
     assert runtime.env_unset == ("CLAUDE_CODE_USE_BEDROCK", "ANTHROPIC_API_KEY")
 
 
-def test_build_claude_resume_runtime_requires_zai_key(monkeypatch):
+def test_build_claude_branch_runtime_requires_zai_key(monkeypatch):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ZAI)
     monkeypatch.delenv("ZAI_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="requires ZAI_API_KEY"):
-        session_chat._build_claude_resume_runtime(
-            provider_session_id="resume-root",
-            message="anything else?",
-        )
+        session_chat._build_claude_branch_runtime(prompt="branch prompt")
 
 
 def test_stream_session_cloud_branch_output_uses_zai_env(monkeypatch, tmp_path):
@@ -527,9 +531,9 @@ def test_stream_session_cloud_branch_output_uses_zai_env(monkeypatch, tmp_path):
                 continued_from_session_id=str(uuid4()),
                 created_branch=True,
                 branched_from_event_id=7,
-                provider_session_id="resume-root",
                 workspace_path=tmp_path,
                 message="anything else?",
+                prompt="branch prompt from Longhouse",
                 request_id="req-zai",
             )
         ]
@@ -538,10 +542,8 @@ def test_stream_session_cloud_branch_output_uses_zai_env(monkeypatch, tmp_path):
 
     assert captured["cmd"] == [
         "claude",
-        "--resume",
-        "resume-root",
         "-p",
-        "anything else?",
+        "branch prompt from Longhouse",
         "--output-format",
         "stream-json",
         "--verbose",
@@ -623,9 +625,9 @@ def test_stream_session_cloud_branch_output_reports_persistence_failure(monkeypa
                 continued_from_session_id=str(uuid4()),
                 created_branch=True,
                 branched_from_event_id=7,
-                provider_session_id="resume-root",
                 workspace_path=tmp_path,
                 message="anything else?",
+                prompt="branch prompt from Longhouse",
                 request_id="req-persist-fail",
             )
         ]
@@ -659,9 +661,9 @@ def test_stream_session_cloud_branch_output_fake_mode_persists_turn_for_e2e(monk
                     continued_from_session_id=str(target_session.continued_from_session_id),
                     created_branch=True,
                     branched_from_event_id=target_session.branched_from_event_id,
-                    provider_session_id="resume-root",
                     workspace_path=tmp_path / "workspace",
                     message="anything else?",
+                    prompt="branch prompt from Longhouse",
                     request_id="req-fake-e2e",
                     db=db,
                 )
@@ -681,16 +683,13 @@ def test_stream_session_cloud_branch_output_fake_mode_persists_turn_for_e2e(monk
         ]
 
 
-def test_build_claude_resume_runtime_uses_anthropic_env(monkeypatch):
+def test_build_claude_branch_runtime_uses_anthropic_env(monkeypatch):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ANTHROPIC)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-test-key")
     monkeypatch.delenv(session_chat.SESSION_CHAT_MODEL_ENV, raising=False)
 
-    runtime = session_chat._build_claude_resume_runtime(
-        provider_session_id="resume-root",
-        message="anything else?",
-    )
+    runtime = session_chat._build_claude_branch_runtime(prompt="branch prompt")
 
     assert runtime.backend == session_chat.SESSION_CHAT_BACKEND_ANTHROPIC
     assert runtime.env_updates == {
@@ -704,13 +703,10 @@ def test_build_claude_resume_runtime_uses_anthropic_env(monkeypatch):
     )
 
 
-def test_build_claude_resume_runtime_requires_anthropic_key(monkeypatch):
+def test_build_claude_branch_runtime_requires_anthropic_key(monkeypatch):
     monkeypatch.setattr(session_chat, "_check_claude_binary", lambda: True)
     monkeypatch.setenv(session_chat.SESSION_CHAT_BACKEND_ENV, session_chat.SESSION_CHAT_BACKEND_ANTHROPIC)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     with pytest.raises(RuntimeError, match="requires ANTHROPIC_API_KEY"):
-        session_chat._build_claude_resume_runtime(
-            provider_session_id="resume-root",
-            message="anything else?",
-        )
+        session_chat._build_claude_branch_runtime(prompt="branch prompt")

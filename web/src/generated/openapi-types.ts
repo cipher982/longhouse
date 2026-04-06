@@ -4105,29 +4105,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/branch-cloud-readiness": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Cloud Branch Readiness
-         * @description Pre-flight check: can this instance run cloud branches from session context?
-         *
-         *     Returns backend config and whether the required Claude binary/keys are present.
-         *     Used by QA and the frontend to show actionable errors.
-         */
-        get: operations["cloud_branch_readiness_sessions_branch_cloud_readiness_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/agents/sessions/{session_id}/branch-cloud": {
         parameters: {
             query?: never;
@@ -18547,41 +18524,6 @@ export interface operations {
             path: {
                 session_id: string;
             };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cloud_branch_readiness_sessions_branch_cloud_readiness_get: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
             cookie?: never;
         };
         requestBody?: never;
