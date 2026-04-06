@@ -43,25 +43,16 @@ from zerg.services.raw_json_compression import compress_raw_json
 from zerg.services.raw_json_compression import decode_raw_json
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_execution_home import coerce_execution_home
-from zerg.session_execution_home import continuation_kind_for_execution_home
 from zerg.session_execution_home import execution_home_for_continuation_kind
+from zerg.session_execution_home import infer_continuation_kind
 from zerg.session_execution_home import infer_execution_home
-from zerg.session_execution_home import origin_label_for_execution_home
+from zerg.session_execution_home import infer_origin_label
+from zerg.session_execution_home import is_generic_environment_label
+from zerg.session_execution_home import normalize_session_label
 
 logger = logging.getLogger(__name__)
 
-_GENERIC_ENVIRONMENT_LABELS = {"production", "development", "dev", "test", "e2e"}
-_CONTINUATION_KIND_LOCAL = "local"
 _CONTINUATION_KIND_CLOUD = "cloud"
-
-
-def _is_generic_environment_label(value: str | None) -> bool:
-    """Return True when the label is a broad environment class, not a machine name."""
-    if not value:
-        return True
-
-    normalized = value.strip().lower()
-    return normalized in _GENERIC_ENVIRONMENT_LABELS or normalized.startswith("test:")
 
 
 def _normalize_utc_naive(value: datetime | None) -> datetime | None:
@@ -71,13 +62,6 @@ def _normalize_utc_naive(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value
     return value.astimezone(timezone.utc).replace(tzinfo=None)
-
-
-def _normalize_label(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip()
-    return normalized or None
 
 
 def _infer_execution_home_from_ingest(data: "SessionIngest") -> SessionExecutionHome:
@@ -112,58 +96,41 @@ def _should_replace_managed_local_codex_provider_session_id(session: AgentSessio
 
 
 def _infer_continuation_kind_from_ingest(data: "SessionIngest") -> str:
-    if data.continuation_kind:
-        return data.continuation_kind
-    explicit_home = _infer_execution_home_from_ingest(data)
-    from_home = continuation_kind_for_execution_home(explicit_home)
-    if from_home:
-        return from_home
-    return _CONTINUATION_KIND_LOCAL
+    return infer_continuation_kind(
+        continuation_kind=getattr(data, "continuation_kind", None),
+        execution_home=getattr(data, "execution_home", None),
+        origin_label=getattr(data, "origin_label", None),
+        environment=getattr(data, "environment", None),
+    )
 
 
 def _infer_origin_label_from_ingest(data: "SessionIngest") -> str:
-    explicit = _normalize_label(data.origin_label)
-    if explicit:
-        return explicit
-    from_home = origin_label_for_execution_home(_infer_execution_home_from_ingest(data))
-    if from_home:
-        return from_home
-    env = _normalize_label(data.environment)
-    if env and not _is_generic_environment_label(env):
-        return env
-    device_id = _normalize_label(data.device_id)
-    if device_id:
-        return device_id.replace("shipper-", "")
-    if env:
-        return env
-    return "Local"
+    return infer_origin_label(
+        origin_label=getattr(data, "origin_label", None),
+        environment=getattr(data, "environment", None),
+        device_id=getattr(data, "device_id", None),
+        execution_home=getattr(data, "execution_home", None),
+        continuation_kind=getattr(data, "continuation_kind", None),
+    )
 
 
 def _infer_continuation_kind_from_session(session: AgentSession) -> str:
-    if session.continuation_kind:
-        return session.continuation_kind
-    from_home = continuation_kind_for_execution_home(_infer_execution_home_from_session(session))
-    if from_home:
-        return from_home
-    return _CONTINUATION_KIND_LOCAL
+    return infer_continuation_kind(
+        continuation_kind=getattr(session, "continuation_kind", None),
+        execution_home=getattr(session, "execution_home", None),
+        origin_label=getattr(session, "origin_label", None),
+        environment=getattr(session, "environment", None),
+    )
 
 
 def _infer_origin_label_from_session(session: AgentSession) -> str:
-    explicit = _normalize_label(session.origin_label)
-    if explicit:
-        return explicit
-    from_home = origin_label_for_execution_home(_infer_execution_home_from_session(session))
-    if from_home:
-        return from_home
-    env = _normalize_label(session.environment)
-    if env and not _is_generic_environment_label(env):
-        return env
-    device_id = _normalize_label(session.device_id)
-    if device_id:
-        return device_id.replace("shipper-", "")
-    if env:
-        return env
-    return "Local"
+    return infer_origin_label(
+        origin_label=getattr(session, "origin_label", None),
+        environment=getattr(session, "environment", None),
+        device_id=getattr(session, "device_id", None),
+        execution_home=getattr(session, "execution_home", None),
+        continuation_kind=getattr(session, "continuation_kind", None),
+    )
 
 
 @dataclass(frozen=True)
@@ -300,7 +267,7 @@ class AgentsStore:
             session.thread_root_session_id = session.id
         if session.continuation_kind is None:
             session.continuation_kind = _infer_continuation_kind_from_session(session)
-        if not _normalize_label(session.origin_label):
+        if not normalize_session_label(session.origin_label):
             session.origin_label = _infer_origin_label_from_session(session)
         if _infer_execution_home_from_session(session) != SessionExecutionHome.LEGACY and (
             coerce_execution_home(getattr(session, "execution_home", None)) in {None, SessionExecutionHome.LEGACY}
@@ -701,7 +668,7 @@ class AgentsStore:
         existing_environment = (session.environment or "").strip()
         if incoming_environment and (
             not existing_environment
-            or (_is_generic_environment_label(existing_environment) and not _is_generic_environment_label(incoming_environment))
+            or (is_generic_environment_label(existing_environment) and not is_generic_environment_label(incoming_environment))
         ):
             session.environment = incoming_environment
 
@@ -709,7 +676,7 @@ class AgentsStore:
             session.thread_root_session_id = session.id
         if session.continuation_kind is None:
             session.continuation_kind = _infer_continuation_kind_from_ingest(data)
-        if not _normalize_label(session.origin_label):
+        if not normalize_session_label(session.origin_label):
             session.origin_label = _infer_origin_label_from_ingest(data)
 
     def rebuild_fts(self) -> None:
