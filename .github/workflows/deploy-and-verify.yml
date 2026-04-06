@@ -34,6 +34,11 @@ jobs:
       runtime_image_ref: ${{ steps.meta.outputs.runtime_image_ref }}
       stale: ${{ steps.freshness.outputs.stale }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+
       - name: Resolve target commit
         id: meta
         run: |
@@ -58,69 +63,18 @@ jobs:
 
       - name: Wait for full CI gate
         if: ${{ github.event_name != 'workflow_dispatch' }}
-        uses: actions/github-script@v8
-        env:
-          HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
-          HEAD_BRANCH: ${{ steps.meta.outputs.head_branch }}
+        uses: ./.github/actions/wait-for-ci
         with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const sha = process.env.HEAD_SHA;
-            const branch = process.env.HEAD_BRANCH;
-            const maxAttempts = 120;
-            const delayMs = 10000;
-
-            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-              const { data } = await github.rest.actions.listWorkflowRuns({
-                owner,
-                repo,
-                workflow_id: 'contract-first-ci.yml',
-                event: 'push',
-                branch,
-                head_sha: sha,
-                per_page: 10,
-              });
-
-              const run = data.workflow_runs.find((candidate) => candidate.head_sha === sha);
-              if (run) {
-                core.info(`push-pr-ci run ${run.id}: status=${run.status} conclusion=${run.conclusion}`);
-                if (run.status === 'completed') {
-                  if (run.conclusion === 'success') {
-                    return;
-                  }
-                  core.setFailed(`push-pr-ci concluded ${run.conclusion} for ${sha}`);
-                  return;
-                }
-              } else {
-                core.info(`No push-pr-ci run found yet for ${sha} on ${branch} (attempt ${attempt}/${maxAttempts})`);
-              }
-
-              await new Promise((resolve) => setTimeout(resolve, delayMs));
-            }
-
-            core.setFailed(`Timed out waiting for push-pr-ci to pass for ${sha}`);
+          head_sha: ${{ steps.meta.outputs.head_sha }}
+          head_branch: ${{ steps.meta.outputs.head_branch }}
+          github_token: ${{ github.token }}
 
       - name: Check if commit is superseded
         id: freshness
-        uses: actions/github-script@v8
-        env:
-          HEAD_SHA: ${{ steps.meta.outputs.head_sha }}
+        uses: ./.github/actions/check-freshness
         with:
-          script: |
-            if (context.eventName === 'workflow_dispatch') {
-              core.setOutput('stale', 'false');
-              return;
-            }
-
-            const { data } = await github.rest.git.getRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: 'heads/main',
-            });
-            const stale = data.object.sha !== process.env.HEAD_SHA;
-            core.info(`Latest main SHA=${data.object.sha}; target SHA=${process.env.HEAD_SHA}; stale=${stale}`);
-            core.setOutput('stale', stale ? 'true' : 'false');
+          head_sha: ${{ steps.meta.outputs.head_sha }}
+          github_token: ${{ github.token }}
 
       - name: Summary
         if: ${{ steps.freshness.outputs.stale == 'true' }}

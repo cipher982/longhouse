@@ -1,0 +1,48 @@
+name: Check commit freshness
+description: Detect whether a commit has been superseded on main (skips check for manual dispatches)
+
+inputs:
+  head_sha:
+    description: Commit SHA to check (defaults to context SHA for push events)
+    required: false
+  github_token:
+    description: Token for GitHub API calls
+    required: true
+
+outputs:
+  stale:
+    description: "'true' if a newer commit exists on main, 'false' otherwise"
+    value: ${{ steps.check.outputs.stale }}
+
+runs:
+  using: composite
+  steps:
+    - id: check
+      uses: actions/github-script@v8
+      env:
+        HEAD_SHA: ${{ inputs.head_sha }}
+      with:
+        github-token: ${{ inputs.github_token }}
+        script: |
+          // Manual dispatches (direct or propagated through workflow_run) are never stale
+          if (
+            context.eventName === 'workflow_dispatch' ||
+            context.payload.workflow_run?.event === 'workflow_dispatch'
+          ) {
+            core.setOutput('stale', 'false');
+            return;
+          }
+
+          // Resolve the SHA to check — explicit input, workflow_run payload, or context
+          const targetSha = process.env.HEAD_SHA
+            || context.payload.workflow_run?.head_sha
+            || context.sha;
+
+          const { data } = await github.rest.git.getRef({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            ref: 'heads/main',
+          });
+          const stale = data.object.sha !== targetSha;
+          core.info(`Latest main SHA=${data.object.sha}; target SHA=${targetSha}; stale=${stale}`);
+          core.setOutput('stale', stale ? 'true' : 'false');

@@ -35,29 +35,9 @@ jobs:
 
       - name: Check if commit is superseded
         id: freshness
-        uses: actions/github-script@v8
+        uses: ./.github/actions/check-freshness
         with:
-          script: |
-            if (
-              context.eventName === 'workflow_dispatch' ||
-              context.payload.workflow_run?.event === 'workflow_dispatch'
-            ) {
-              core.setOutput('stale', 'false');
-              return;
-            }
-
-            const targetSha = context.eventName === 'workflow_run'
-              ? context.payload.workflow_run?.head_sha
-              : context.sha;
-            const { data } = await github.rest.git.getRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: 'heads/main',
-            });
-            const stale = data.object.sha !== targetSha;
-            core.info(`Latest main SHA=${data.object.sha}; target SHA=${targetSha}; stale=${stale}`);
-            core.setOutput('stale', stale ? 'true' : 'false');
-          result-encoding: string
+          github_token: ${{ github.token }}
 
       - name: Restore Bun download cache
         if: ${{ steps.freshness.outputs.stale != 'true' }}
