@@ -501,7 +501,7 @@ describe("SessionsPage", () => {
 
     expect(screen.getByTestId("launch-session-modal")).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Start session" })).toBeInTheDocument();
-    expect(screen.getByText(/keep the same session available from the timeline later/i)).toBeInTheDocument();
+    expect(screen.getByText(/keep the session reachable from the timeline later/i)).toBeInTheDocument();
   });
 
   it("sends users to runners when they need to choose a launch target", async () => {

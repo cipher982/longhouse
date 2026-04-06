@@ -18,7 +18,7 @@ const cards: SurfaceCard[] = [
   {
     title: "Coordinate work",
     description: "Send a directed session message and read the durable inbox.",
-    code: "longhouse message TARGET_ID \"Inspect the failing test\"\nlonghouse check-messages --json",
+    code: "longhouse message TARGET_ID \"Inspect the failing test\"\nlonghouse messages --json",
   },
   {
     title: "Continue from the API",
@@ -40,8 +40,8 @@ export function MachineSurfaceSection() {
         <p className="landing-section-label">CLI + API</p>
         <h2 className="landing-section-title">Use it from terminal, not just the browser.</h2>
         <p className="landing-section-subtitle">
-          The same session works from browser, CLI, and <code>/api/agents/*</code>. You do not need an MCP
-          host or a web UI just to steer live work.
+          Browser, CLI, and <code>/api/agents/*</code> share the same session surface. You do not need an
+          MCP host or a web UI just to steer live work.
         </p>
 
         <div className="landing-surface-grid">
@@ -63,7 +63,7 @@ export function MachineSurfaceSection() {
         <div className="landing-surface-note">
           <p>
             One timeline, one session model. When a session starts through Longhouse, browser, CLI, and API
-            all share the same control path.
+            all speak to the same session surface.
           </p>
           <p>
             The timeline still matters, but it is one surface on top of the same session model.

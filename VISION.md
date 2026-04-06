@@ -154,7 +154,7 @@ The launch cut should be narrower than the full vision. Ship the session kernel 
 3. Open the raw session detail and recover the exact context that matters.
 4. Use the kernel primitives to inspect the wall, tail a session, or send a directed session message.
 5. Continue the current session from Longhouse and keep going from the recovered context.
-6. Optional final beat: show the same session reachable from another device or hosted canary to prove the endgame without making hosted signup the first gate.
+6. Optional final beat: show that session reachable from another device or hosted canary, or show an explicit cloud branch from synced context, to prove the endgame without making hosted signup the first gate.
 
 ---
 

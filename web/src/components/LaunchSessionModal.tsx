@@ -185,8 +185,8 @@ export default function LaunchSessionModal({
                   marginBottom: "var(--space-4)",
                 }}
               >
-                Start a session on <strong>{runner.name}</strong>. Longhouse will launch the CLI inside tmux
-                and keep the same session available from the timeline later.
+                Start a session on <strong>{runner.name}</strong>. Longhouse will launch the CLI with a
+                control path and keep the session reachable from the timeline later.
               </p>
               {provider === "codex" ? (
                 <p

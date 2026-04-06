@@ -48,7 +48,7 @@ Important model:
 1. **Every session lands in one timeline**
    Search, inspect, and recover context from work the user already did.
 2. **Longhouse keeps live control attached**
-   Start through Longhouse and steer that same session after launch from UI, CLI, or API.
+   Start through Longhouse and steer the live session later from UI, CLI, or API. If live control is gone, the product should say that plainly and offer the honest next move.
 3. **Session kernel is the technical identity**
    Longhouse is not just a dashboard. It makes sessions addressable and reusable.
 4. **Machine surface is real**
@@ -76,7 +76,7 @@ See `docs/specs/launch-runtime-simplification.md` for the current launch framing
 4. Open session detail and show the raw transcript / tool history.
 5. Show one kernel primitive like `longhouse wall --json` or a directed session message.
 6. Continue a real Claude session from Longhouse.
-7. Optional final beat: show the same session reachable from another device.
+7. Optional final beat: show the session reachable from another device, or show an explicit cloud branch from synced context.
 
 ## Section Order
 
@@ -136,7 +136,7 @@ See `docs/specs/launch-runtime-simplification.md` for the current launch framing
 - Avoid hand-wavy "AI productivity" copy.
 - Use `session kernel` as the technical identity, not the headline users must decode first.
 - Use `Works on your laptop. Shines on a machine that stays on.` somewhere in the page flow.
-- Prefer language like `same session, more control` over any wording that implies separate session types.
+- Prefer language like `one session model, explicit capabilities` over any wording that implies separate session types or hidden mode switches.
 
 ## Must Show
 
