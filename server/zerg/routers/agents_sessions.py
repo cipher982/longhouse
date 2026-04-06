@@ -25,7 +25,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_runtime import reconcile_managed_local_tmux_sessions
-from zerg.services.session_capabilities import resolve_execution_home
+from zerg.services.session_capabilities import should_reconcile_managed_local_tmux_runtime
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
@@ -53,10 +53,8 @@ from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import WallResponse
-from zerg.services.session_views import _coerce_managed_transport
-from zerg.services.session_views import _coerce_session_loop_mode
+from zerg.services.session_views import build_active_session_response
 from zerg.services.session_views import build_event_response
-from zerg.services.session_views import build_session_capabilities_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import normalize_utc_datetime
@@ -70,6 +68,30 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 VALID_USER_STATES = {"active", "parked", "snoozed", "archived"}
 _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
+
+
+async def _load_surface_runtime_state_map(
+    *,
+    db: Session,
+    sessions: list[AgentSession],
+    owner_id: int | None,
+    occurred_at: datetime,
+) -> dict[str, object]:
+    session_ids = [session.id for session in sessions]
+    runtime_state_map = load_runtime_state_map(db, session_ids)
+    managed_local_candidates = [session for session in sessions if should_reconcile_managed_local_tmux_runtime(session)]
+    if not managed_local_candidates:
+        return runtime_state_map
+
+    reconciled_ids = await reconcile_managed_local_tmux_sessions(
+        db,
+        sessions=managed_local_candidates,
+        owner_id=owner_id,
+        occurred_at=occurred_at,
+    )
+    if reconciled_ids:
+        return load_runtime_state_map(db, session_ids)
+    return runtime_state_map
 
 
 def _parse_message_session_header(request: Request) -> UUID | None:
@@ -328,24 +350,13 @@ async def list_sessions(
             session_ids = [s.id for s in fused]
             activity_map = store.get_last_activity_map(session_ids)
             presence_map = load_presence_map(db, session_ids)
-            runtime_state_map = load_runtime_state_map(db, session_ids)
-            managed_local_candidates = [
-                session
-                for session in fused
-                if session.ended_at is None
-                and str(getattr(session, "managed_transport", "") or "").strip() == "tmux"
-                and str(getattr(session, "execution_home", "") or "").strip() == "managed_local"
-            ]
-            if managed_local_candidates:
-                reconciled_ids = await reconcile_managed_local_tmux_sessions(
-                    db,
-                    sessions=managed_local_candidates,
-                    owner_id=getattr(_auth, "owner_id", None),
-                    occurred_at=datetime.now(timezone.utc),
-                )
-                if reconciled_ids:
-                    runtime_state_map = load_runtime_state_map(db, session_ids)
             now = datetime.now(timezone.utc)
+            runtime_state_map = await _load_surface_runtime_state_map(
+                db=db,
+                sessions=fused,
+                owner_id=getattr(_auth, "owner_id", None),
+                occurred_at=now,
+            )
             first_user_map = store.get_first_message_map([s.id for s in fused], role="user", max_len=80)
             sem_score_map = {s.id: score for s, score in sem_hits}
             thread_cache: dict[str, tuple[str, int]] = {}
@@ -423,26 +434,15 @@ async def list_sessions(
         match_map = store.get_session_matches(session_ids, query, context_mode=context_mode) if query else {}
         activity_map = store.get_last_activity_map(session_ids)
         presence_map = load_presence_map(db, session_ids)
-        runtime_state_map = load_runtime_state_map(db, session_ids)
-        managed_local_candidates = [
-            session
-            for session in sessions
-            if session.ended_at is None
-            and str(getattr(session, "managed_transport", "") or "").strip() == "tmux"
-            and str(getattr(session, "execution_home", "") or "").strip() == "managed_local"
-        ]
-        if managed_local_candidates:
-            reconciled_ids = await reconcile_managed_local_tmux_sessions(
-                db,
-                sessions=managed_local_candidates,
-                owner_id=getattr(_auth, "owner_id", None),
-                occurred_at=datetime.now(timezone.utc),
-            )
-            if reconciled_ids:
-                runtime_state_map = load_runtime_state_map(db, session_ids)
         first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
         thread_cache: dict[str, tuple[str, int]] = {}
         now = datetime.now(timezone.utc)
+        runtime_state_map = await _load_surface_runtime_state_map(
+            db=db,
+            sessions=sessions,
+            owner_id=getattr(_auth, "owner_id", None),
+            occurred_at=now,
+        )
 
         response_sessions = [
             build_session_response(
@@ -657,25 +657,13 @@ async def list_active_sessions(
         last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
         presence_map = load_presence_map(db, session_ids)
-        runtime_state_map = load_runtime_state_map(db, session_ids)
-        managed_local_candidates = [
-            session
-            for session in sessions
-            if session.ended_at is None
-            and str(getattr(session, "managed_transport", "") or "").strip() == "tmux"
-            and str(getattr(session, "execution_home", "") or "").strip() == "managed_local"
-        ]
-        if managed_local_candidates:
-            reconciled_ids = await reconcile_managed_local_tmux_sessions(
-                db,
-                sessions=managed_local_candidates,
-                owner_id=getattr(_auth, "owner_id", None),
-                occurred_at=datetime.now(timezone.utc),
-            )
-            if reconciled_ids:
-                runtime_state_map = load_runtime_state_map(db, session_ids)
-
         now = datetime.now(timezone.utc)
+        runtime_state_map = await _load_surface_runtime_state_map(
+            db=db,
+            sessions=sessions,
+            owner_id=getattr(_auth, "owner_id", None),
+            occurred_at=now,
+        )
         items: List[ActiveSessionResponse] = []
         for s in sessions:
             last_activity_at = normalize_utc_datetime(last_activity.get(s.id) or s.ended_at or s.started_at) or now
@@ -694,50 +682,15 @@ async def list_active_sessions(
             if attention and attention_level != attention:
                 continue
 
-            _started = s.started_at.replace(tzinfo=timezone.utc) if s.started_at and s.started_at.tzinfo is None else s.started_at
-            _ended = s.ended_at.replace(tzinfo=timezone.utc) if s.ended_at and s.ended_at.tzinfo is None else s.ended_at
-            end_time = _ended or now
-            duration_minutes = int((end_time - _started).total_seconds() / 60) if _started else 0
-            message_count = (s.user_messages or 0) + (s.assistant_messages or 0)
-
             items.append(
-                ActiveSessionResponse(
-                    id=str(s.id),
-                    project=s.project,
-                    provider=s.provider,
-                    cwd=s.cwd,
-                    git_branch=s.git_branch,
-                    started_at=s.started_at,
-                    ended_at=s.ended_at,
+                build_active_session_response(
+                    s,
                     last_activity_at=last_activity_at,
-                    timeline_anchor_at=runtime_overlay.timeline_anchor_at,
-                    runtime_phase=runtime_overlay.runtime_phase,
-                    phase_started_at=runtime_overlay.phase_started_at,
-                    last_progress_at=runtime_overlay.last_progress_at,
-                    runtime_source=runtime_overlay.runtime_source,
-                    terminal_state=runtime_overlay.terminal_state,
-                    runtime_version=runtime_overlay.runtime_version,
-                    status=runtime_overlay.status,
+                    runtime_overlay=runtime_overlay,
                     attention=attention_level,
-                    duration_minutes=duration_minutes,
                     last_user_message=last_user.get(s.id),
                     last_assistant_message=last_ai.get(s.id),
-                    message_count=message_count,
-                    tool_calls=s.tool_calls or 0,
-                    presence_state=runtime_overlay.presence_state,
-                    presence_tool=runtime_overlay.presence_tool,
-                    presence_updated_at=runtime_overlay.presence_updated_at,
-                    last_live_at=runtime_overlay.last_live_at,
-                    display_phase=runtime_overlay.display_phase,
-                    active_tool=runtime_overlay.active_tool,
-                    confidence=runtime_overlay.confidence,
-                    user_state=s.user_state or "active",
-                    execution_home=resolve_execution_home(s),
-                    managed_transport=_coerce_managed_transport(getattr(s, "managed_transport", None)),
-                    source_runner_id=getattr(s, "source_runner_id", None),
-                    source_runner_name=getattr(s, "source_runner_name", None),
-                    capabilities=build_session_capabilities_response(s),
-                    loop_mode=_coerce_session_loop_mode(getattr(s, "loop_mode", None)),
+                    now=now,
                 )
             )
 
@@ -890,11 +843,16 @@ async def get_session(
         activity_map = store.get_last_activity_map([session.id])
     with timing.span("load_presence"):
         presence_map = load_presence_map(db, [session.id])
-    with timing.span("load_runtime"):
-        runtime_state_map = load_runtime_state_map(db, [session.id])
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
     now = datetime.now(timezone.utc)
+    with timing.span("load_runtime"):
+        runtime_state_map = await _load_surface_runtime_state_map(
+            db=db,
+            sessions=[session],
+            owner_id=getattr(_auth, "owner_id", None),
+            occurred_at=now,
+        )
     with timing.span("build_response"):
         result = build_session_response(
             store,
@@ -942,12 +900,17 @@ async def get_session_thread(
         activity_map = store.get_last_activity_map(thread_session_ids)
     with timing.span("load_presence"):
         presence_map = load_presence_map(db, thread_session_ids)
-    with timing.span("load_runtime"):
-        runtime_state_map = load_runtime_state_map(db, thread_session_ids)
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = {}
     now = datetime.now(timezone.utc)
+    with timing.span("load_runtime"):
+        runtime_state_map = await _load_surface_runtime_state_map(
+            db=db,
+            sessions=thread_sessions,
+            owner_id=getattr(_auth, "owner_id", None),
+            occurred_at=now,
+        )
 
     with timing.span("build_response"):
         result = SessionThreadResponse(
@@ -1215,8 +1178,6 @@ async def get_session_workspace(
         activity_map = store.get_last_activity_map(thread_session_ids)
     with timing.span("load_presence"):
         presence_map = load_presence_map(db, thread_session_ids)
-    with timing.span("load_runtime"):
-        runtime_state_map = load_runtime_state_map(db, thread_session_ids)
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
     with timing.span("load_projection"):
@@ -1229,6 +1190,13 @@ async def get_session_workspace(
 
     thread_cache: dict[str, tuple[str, int]] = {}
     now = datetime.now(timezone.utc)
+    with timing.span("load_runtime"):
+        runtime_state_map = await _load_surface_runtime_state_map(
+            db=db,
+            sessions=thread_sessions,
+            owner_id=getattr(_auth, "owner_id", None),
+            occurred_at=now,
+        )
     with timing.span("build_thread_responses"):
         thread_response_map = {
             str(item.id): build_session_response(
