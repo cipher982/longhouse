@@ -57,7 +57,7 @@ export interface AgentSession {
   continued_from_session_id: string | null;
   continuation_kind: string | null;
   origin_label: string | null;
-  execution_home: SessionExecutionHome;
+  home_label: string | null;
   branched_from_event_id: number | null;
   is_writable_head: boolean;
   control?: SessionControl | null;

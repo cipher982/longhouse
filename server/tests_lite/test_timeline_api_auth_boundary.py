@@ -190,7 +190,7 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["execution_home"] == "managed_local"
+        assert payload["home_label"] == "On this Mac"
         assert payload["control"] == {
             "managed_transport": "tmux",
             "source_runner_id": 9,
@@ -248,7 +248,7 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["execution_home"] == "managed_local"
+        assert payload["home_label"] == "On this Mac"
         assert payload["control"] == {
             "managed_transport": "claude_channel_bridge",
             "source_runner_id": 9,
@@ -376,7 +376,7 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["execution_home"] == "managed_local"
+        assert payload["home_label"] == "On this Mac"
         assert payload["control"] == {
             "managed_transport": "codex_app_server",
             "source_runner_id": 9,

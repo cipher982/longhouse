@@ -37,7 +37,7 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
     continued_from_session_id: null,
     continuation_kind: "local",
     origin_label: "On this Mac",
-    execution_home: "legacy",
+    home_label: null,
     branched_from_event_id: null,
     is_writable_head: true,
     control: null,
@@ -92,7 +92,7 @@ describe("getSessionInteractionCapabilities", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "codex",
-        execution_home: "managed_local",
+        home_label: "On this Mac",
         control: {
           managed_transport: "codex_app_server",
           source_runner_id: 7,
@@ -119,7 +119,7 @@ describe("getSessionInteractionCapabilities", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "codex",
-        execution_home: "managed_local",
+        home_label: "On this Mac",
         control: {
           managed_transport: "codex_app_server",
           source_runner_id: null,
@@ -144,7 +144,7 @@ describe("getSessionInteractionCapabilities", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "claude",
-        execution_home: "managed_local",
+        home_label: "On this Mac",
         control: {
           managed_transport: "tmux",
           source_runner_id: null,
