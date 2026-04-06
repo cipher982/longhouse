@@ -1631,6 +1631,7 @@ def _persist_cloud_branch_turn(
         ),
         continuation_kind="cloud",
         origin_label="Cloud",
+        execution_home=SessionExecutionHome.CLOUD_TAKEOVER.value,
         branched_from_event_id=(
             target_session.branched_from_event_id
             if target_session and target_session.branched_from_event_id is not None

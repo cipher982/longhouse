@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import make_engine
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
+from zerg.session_execution_home import SessionExecutionHome
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
@@ -112,6 +113,7 @@ def test_create_continuation_session_marks_new_head(tmp_path):
         assert child.thread_root_session_id == root_id
         assert child.continued_from_session_id == root_id
         assert child.is_writable_head == 1
+        assert child.execution_home == SessionExecutionHome.CLOUD_TAKEOVER.value
         assert store.get_thread_head(root_id).id == child.id
 
 
@@ -139,6 +141,7 @@ def test_ensure_cloud_continuation_target_branches_from_local_session(tmp_path):
         assert target.continued_from_session_id == root_id
         assert target.continuation_kind == "cloud"
         assert target.origin_label == "Cloud"
+        assert target.execution_home == SessionExecutionHome.CLOUD_TAKEOVER.value
         assert store.get_thread_head(root_id).id == target.id
 
 
@@ -299,4 +302,45 @@ def test_explicit_child_ingest_becomes_new_head(tmp_path):
         assert child is not None and root is not None
         assert child.is_writable_head == 1
         assert root.is_writable_head == 0
+        assert child.execution_home == SessionExecutionHome.CLOUD_TAKEOVER.value
         assert store.get_thread_head(root_id).id == child_id
+
+
+def test_ingest_uses_explicit_execution_home_without_special_device_prefix(tmp_path):
+    Session = _make_db(tmp_path)
+    root_id = uuid4()
+    started_at = datetime(2026, 3, 8, 20, 0, tzinfo=timezone.utc)
+
+    with Session() as db:
+        store = AgentsStore(db)
+        result = store.ingest_session(
+            SessionIngest(
+                id=root_id,
+                provider="claude",
+                environment="development",
+                project="zerg",
+                device_id="ordinary-worker",
+                cwd="/tmp/zerg",
+                git_repo="git@github.com:cipher982/longhouse.git",
+                git_branch="main",
+                started_at=started_at,
+                provider_session_id="prov-cloud",
+                execution_home=SessionExecutionHome.CLOUD_TAKEOVER.value,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="cloud continue",
+                        timestamp=started_at,
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    )
+                ],
+            )
+        )
+
+        assert result.session_id == root_id
+        session = store.get_session(root_id)
+        assert session is not None
+        assert session.execution_home == SessionExecutionHome.CLOUD_TAKEOVER.value
+        assert session.continuation_kind == "cloud"
+        assert session.origin_label == "Cloud"
