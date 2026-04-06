@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Real-call smoke for the AI ops watchman Grok 4.1 path.
 
-Calls direct xAI ``grok-4-1-fast-reasoning`` with a tiny watchman-style prompt,
-requires JSON output, and prints token/cost metadata so we can validate the
-provider path before wiring the full feature into the app.
+Calls OpenRouter-routed ``x-ai/grok-4.1-fast`` with a tiny watchman-style
+prompt, requires JSON output, and prints token/cost metadata so we can validate
+the provider path before wiring the full feature into the app.
 
 Usage:
-    XAI_API_KEY=... python scripts/qa/ops_watchman_grok_smoke.py
+    OPENROUTER_API_KEY=... python scripts/qa/ops_watchman_grok_smoke.py
     python scripts/qa/ops_watchman_grok_smoke.py --json
 """
 
@@ -28,8 +28,8 @@ sys.path.insert(0, str(REPO_ROOT / "server"))
 
 from zerg.pricing import get_usd_prices_per_1k  # noqa: E402
 
-MODEL_ID = "grok-4-1-fast-reasoning"
-BASE_URL = "https://api.x.ai/v1"
+MODEL_ID = "x-ai/grok-4.1-fast"
+BASE_URL = "https://openrouter.ai/api/v1"
 ALLOWED_STATUSES = {"normal", "watch", "critical"}
 SYSTEM_PROMPT = """You are Longhouse AI Ops Watchman.
 
@@ -167,11 +167,11 @@ def _validate_result(payload: dict[str, Any]) -> None:
 
 
 async def _run(model_id: str, observations: list[dict[str, Any]]) -> dict[str, Any]:
-    api_key = os.getenv("XAI_API_KEY", "").strip()
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         raise RuntimeError(
-            "XAI_API_KEY is required. Example: "
-            'XAI_API_KEY="$(python3 ~/git/me/scripts/infisical-get.py XAI_API_KEY --project personal-shell --env dev)"'
+            "OPENROUTER_API_KEY is required. Example: "
+            'OPENROUTER_API_KEY="$(python3 ~/git/me/scripts/infisical-get.py OPENROUTER_API_KEY --project personal-shell --env dev)"'
         )
 
     client = AsyncOpenAI(api_key=api_key, base_url=BASE_URL, timeout=30.0)
@@ -215,7 +215,7 @@ async def _run(model_id: str, observations: list[dict[str, Any]]) -> dict[str, A
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Smoke-test the AI ops watchman prompt against direct xAI Grok 4.1.")
+    parser = argparse.ArgumentParser(description="Smoke-test the AI ops watchman prompt against OpenRouter-routed Grok 4.1.")
     parser.add_argument("--json", action="store_true", help="Print raw JSON result")
     parser.add_argument("--model", default=MODEL_ID, help=f"Model id (default: {MODEL_ID})")
     parser.add_argument("--observations", help="Optional JSON file with observation array")
