@@ -23,6 +23,10 @@ from pathlib import Path
 
 import typer
 
+from zerg.cli.update_manager import check_for_updates
+from zerg.cli.update_manager import current_installed_version
+from zerg.cli.update_manager import load_install_metadata
+
 # ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
@@ -149,6 +153,59 @@ def _check_environment() -> list[CheckResult]:
         results.append(CheckResult(PASS, f"SQLite {sqlite_ver} (FTS5 supported)"))
     except Exception:
         results.append(CheckResult(WARN, f"SQLite {sqlite_ver} (FTS5 not available)", "Search will fall back to LIKE queries"))
+
+    return results
+
+
+def _check_install(*, check_updates: bool = False) -> list[CheckResult]:
+    """Install checks: installed version, install metadata, optional update status."""
+    results: list[CheckResult] = []
+
+    try:
+        installed_version = current_installed_version()
+        results.append(CheckResult(PASS, f"Longhouse CLI v{installed_version}", "CLI package is installed"))
+    except Exception as exc:
+        results.append(CheckResult(FAIL, "Longhouse version unavailable", str(exc)))
+        return results
+
+    install_metadata = load_install_metadata()
+    if install_metadata is None:
+        results.append(
+            CheckResult(
+                WARN,
+                "Install metadata missing",
+                "Re-run the installer or `longhouse record-install` to record install method and source.",
+            )
+        )
+    else:
+        results.append(
+            CheckResult(
+                PASS,
+                "Install metadata present",
+                f"method={install_metadata.install_method}, source={install_metadata.install_source}, "
+                f"channel={install_metadata.channel}, version={install_metadata.installed_version}",
+            )
+        )
+
+    if not check_updates:
+        return results
+
+    try:
+        update_result = check_for_updates()
+    except Exception as exc:
+        results.append(CheckResult(WARN, "Update check failed", str(exc)))
+        return results
+
+    if update_result.update_available:
+        results.append(
+            CheckResult(
+                WARN,
+                f"Update available (latest v{update_result.latest_version})",
+                f"Installed v{update_result.installed_version}. Run: {update_result.upgrade_command}",
+            )
+        )
+    else:
+        results.append(CheckResult(PASS, "CLI is up to date", f"Latest stable is v{update_result.latest_version}"))
 
     return results
 
@@ -453,6 +510,11 @@ def doctor(
         "-v",
         help="Show details for all checks (not just failures)",
     ),
+    check_updates: bool = typer.Option(
+        False,
+        "--check-updates",
+        help="Check PyPI for the latest stable CLI version.",
+    ),
 ) -> None:
     """Run self-diagnosis checks on your Longhouse installation.
 
@@ -466,6 +528,7 @@ def doctor(
     """
     sections: list[tuple[str, list[CheckResult]]] = [
         ("Environment", _check_environment()),
+        ("Install", _check_install(check_updates=check_updates)),
         ("Server", _check_server()),
         ("Shipper", _check_shipper()),
         ("Config", _check_config()),

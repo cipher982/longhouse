@@ -231,6 +231,7 @@ longhouse status              # Show effective configuration
 longhouse version --check     # Check whether a CLI update is available
 longhouse upgrade             # Upgrade the installed CLI
 longhouse doctor              # Self-diagnosis
+longhouse doctor --check-updates  # Include latest stable CLI check
 longhouse onboard             # Re-run setup wizard
 ```
 
@@ -298,6 +299,13 @@ longhouse doctor   # verify
 # or use the underlying package-manager path directly
 uv tool upgrade longhouse
 longhouse doctor   # verify
+```
+
+For a full disposable install -> upgrade rehearsal without touching your real
+machine state:
+
+```bash
+make test-install-upgrade
 ```
 
 ## Documentation
