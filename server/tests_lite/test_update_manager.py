@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
@@ -182,3 +183,33 @@ def test_record_install_command_writes_metadata(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert '"install_source": "pypi"' in result.output
     assert (runner_home / ".longhouse" / "install.json").exists()
+
+
+def test_check_for_updates_falls_back_without_packaging(monkeypatch):
+    monkeypatch.setattr(update_manager, "detect_install_metadata", lambda: update_manager.InstallMetadata(
+        install_method="uv",
+        install_source="pypi",
+        package_name="longhouse",
+        channel="stable",
+        installed_version="0.1.5",
+        installed_at="2026-04-07T00:00:00+00:00",
+        last_upgrade_at="2026-04-07T00:00:00+00:00",
+    ))
+    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.5")
+    monkeypatch.setattr(update_manager, "fetch_latest_pypi_version", lambda package_name="longhouse": "0.1.6")
+
+    real_import = __import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "packaging.version":
+            raise ModuleNotFoundError("No module named 'packaging'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(update_manager, "__import__", fake_import, raising=False)
+    monkeypatch.setattr(sys.modules["builtins"], "__import__", fake_import)
+    try:
+        result = update_manager.check_for_updates()
+    finally:
+        monkeypatch.setattr(sys.modules["builtins"], "__import__", real_import)
+
+    assert result.update_available is True

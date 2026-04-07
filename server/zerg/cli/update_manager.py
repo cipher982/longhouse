@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from dataclasses import asdict
 from dataclasses import dataclass
@@ -13,8 +14,6 @@ from pathlib import Path
 
 import httpx
 import typer
-from packaging.version import InvalidVersion
-from packaging.version import Version
 
 from zerg.cli.serve import _get_longhouse_home
 
@@ -148,14 +147,35 @@ def fetch_latest_pypi_version(*, package_name: str = PACKAGE_NAME, timeout_secs:
     return latest_version
 
 
+def _numeric_version_key(raw_version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for segment in raw_version.split("."):
+        match = re.match(r"^(\d+)", segment.strip())
+        if match is None:
+            raise ValueError(f"Version segment {segment!r} is not numeric")
+        parts.append(int(match.group(1)))
+    return tuple(parts)
+
+
+def _is_newer_version(latest_version: str, installed_version: str) -> bool:
+    try:
+        from packaging.version import Version
+
+        return Version(latest_version) > Version(installed_version)
+    except ModuleNotFoundError:
+        latest_key = _numeric_version_key(latest_version)
+        installed_key = _numeric_version_key(installed_version)
+        width = max(len(latest_key), len(installed_key))
+        return latest_key + (0,) * (width - len(latest_key)) > installed_key + (0,) * (width - len(installed_key))
+    except Exception as exc:
+        raise RuntimeError(f"Could not compare installed version {installed_version!r} with latest version {latest_version!r}") from exc
+
+
 def check_for_updates(*, package_name: str = PACKAGE_NAME) -> UpdateCheckResult:
     install_metadata = detect_install_metadata()
     installed_version = current_installed_version(package_name)
     latest_version = fetch_latest_pypi_version(package_name=package_name)
-    try:
-        update_available = Version(latest_version) > Version(installed_version)
-    except InvalidVersion as exc:
-        raise RuntimeError(f"Could not compare installed version {installed_version!r} with latest version {latest_version!r}") from exc
+    update_available = _is_newer_version(latest_version, installed_version)
     return UpdateCheckResult(
         installed_version=installed_version,
         latest_version=latest_version,
