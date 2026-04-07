@@ -6,6 +6,8 @@ INSTALLER_MODE="local"
 INSTALLER_URL="https://get.longhouse.ai/install.sh"
 INSTALLER_SCRIPT=""
 PACKAGE_SOURCE=""
+UPGRADE_PACKAGE_SOURCE=""
+EXPECTED_UPGRADE_VERSION=""
 KEEP_HOME=0
 PORT=""
 DEMO_PORT=""
@@ -25,6 +27,9 @@ Options:
   --installer <local|remote>  Installer source (default: local)
   --installer-url <url>       Remote installer URL (default: https://get.longhouse.ai/install.sh)
   --pkg-source <path>         Package source for installer (default: server for local mode)
+  --upgrade-pkg-source <path> Package source to use with `longhouse upgrade`
+  --expected-upgrade-version <version>
+                              Expected installed version after upgrade
   --shell <path>              Shell to simulate for PATH/profile checks (default: $SHELL)
   --port <port>               Fixed port for onboarding/demo server
   --demo-port <port>          Fixed port for demo server (default: random free port)
@@ -115,6 +120,46 @@ if not isinstance(payload.get("summary"), dict):
 PY
 }
 
+extract_version_from_wheel_path() {
+  local source_path="$1"
+  python3 - "$source_path" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+name = Path(sys.argv[1]).name
+match = re.match(r"longhouse-([0-9][^-]*)-", name)
+if match:
+    print(match.group(1))
+PY
+}
+
+validate_install_metadata() {
+  local path="$1"
+  local expected_source="${2:-}"
+  local expected_version="${3:-}"
+  python3 - "$path" "$expected_source" "$expected_version" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected_source = sys.argv[2]
+expected_version = sys.argv[3]
+
+if payload.get("install_method") != "uv":
+    raise SystemExit("install metadata missing uv install_method")
+if not payload.get("installed_version"):
+    raise SystemExit("install metadata missing installed_version")
+if expected_source and payload.get("install_source") != expected_source:
+    raise SystemExit(f"install source mismatch: expected {expected_source}, got {payload.get('install_source')}")
+if expected_version and payload.get("installed_version") != expected_version:
+    raise SystemExit(
+        f"installed version mismatch: expected {expected_version}, got {payload.get('installed_version')}"
+    )
+PY
+}
+
 assert_fresh_shell_path() {
   local profile_path="$1"
   local shell_bin="$2"
@@ -196,6 +241,14 @@ while [[ $# -gt 0 ]]; do
       PACKAGE_SOURCE="${2:-}"
       shift 2
       ;;
+    --upgrade-pkg-source)
+      UPGRADE_PACKAGE_SOURCE="${2:-}"
+      shift 2
+      ;;
+    --expected-upgrade-version)
+      EXPECTED_UPGRADE_VERSION="${2:-}"
+      shift 2
+      ;;
     --shell)
       TEST_SHELL="${2:-}"
       shift 2
@@ -271,6 +324,10 @@ if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" ]]; then
   )
 fi
 
+if [[ -n "$UPGRADE_PACKAGE_SOURCE" && -z "$EXPECTED_UPGRADE_VERSION" ]]; then
+  EXPECTED_UPGRADE_VERSION="$(extract_version_from_wheel_path "$UPGRADE_PACKAGE_SOURCE" || true)"
+fi
+
 case "$INSTALLER_MODE" in
   local)
     INSTALLER_SCRIPT="$ROOT_DIR/scripts/install.sh"
@@ -310,6 +367,12 @@ if ! command -v longhouse >/dev/null 2>&1; then
   fail "longhouse not found after installer"
 fi
 
+INSTALL_METADATA_PATH="$HOME/.longhouse/install.json"
+if [[ ! -f "$INSTALL_METADATA_PATH" ]]; then
+  fail "Installer did not create install metadata: $INSTALL_METADATA_PATH"
+fi
+validate_install_metadata "$INSTALL_METADATA_PATH" "$([[ -n "$PACKAGE_SOURCE" && "$PACKAGE_SOURCE" != "longhouse" ]] && echo custom || echo pypi)"
+
 PROFILE_PATH="$(profile_path_for_shell "$TEST_SHELL")"
 if [[ ! -f "$PROFILE_PATH" ]]; then
   fail "Installer did not create shell profile: $PROFILE_PATH"
@@ -319,6 +382,15 @@ if ! grep -q ".local/bin" "$PROFILE_PATH"; then
 fi
 
 assert_fresh_shell_path "$PROFILE_PATH" "$TEST_SHELL"
+
+log "🏷️  Verifying version command..."
+longhouse version >/dev/null
+
+if [[ -n "$UPGRADE_PACKAGE_SOURCE" ]]; then
+  log "⬆️  Running CLI upgrade from override package source..."
+  longhouse upgrade --package-source "$UPGRADE_PACKAGE_SOURCE"
+  validate_install_metadata "$INSTALL_METADATA_PATH" "custom" "$EXPECTED_UPGRADE_VERSION"
+fi
 
 log "🩺 Running doctor..."
 DOCTOR_JSON="$(mktemp -t longhouse-doctor.XXXXXX.json)"

@@ -103,6 +103,12 @@ longhouse serve
 
 The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
 
+Stable installs use `uv` with the published `longhouse` package, so normal CLI upgrades stay on the same path:
+
+```bash
+longhouse upgrade
+```
+
 Import existing sessions right away:
 
 ```bash
@@ -222,6 +228,8 @@ longhouse continue ...        # Continue a session from the machine surface
 longhouse messages            # Read the durable inbox
 longhouse messages ack ...    # Acknowledge a delivered message
 longhouse status              # Show effective configuration
+longhouse version --check     # Check whether a CLI update is available
+longhouse upgrade             # Upgrade the installed CLI
 longhouse doctor              # Self-diagnosis
 longhouse onboard             # Re-run setup wizard
 ```
@@ -284,6 +292,10 @@ longhouse ship --verbose
 ### Reinstalling or upgrading
 
 ```bash
+longhouse upgrade
+longhouse doctor   # verify
+
+# or use the underlying package-manager path directly
 uv tool upgrade longhouse
 longhouse doctor   # verify
 ```
