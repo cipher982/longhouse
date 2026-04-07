@@ -663,7 +663,7 @@
   }
 
   .landing-thesis-card {
-    padding: var(--space-7);
+    padding: var(--space-6);
     background:
       linear-gradient(180deg, rgba(32, 24, 20, 0.96), rgba(20, 16, 13, 0.98));
     border: 1px solid rgba(201, 166, 107, 0.12);
