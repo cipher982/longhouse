@@ -1,8 +1,7 @@
 """ReAct engine for oikos runtimes.
 
 Pure async ReAct loop: messages in, messages + usage out.
-spawn_workspace_commis uses two-phase commit in parallel execution
-(returns ToolMessages + interrupt_value); single-tool calls raise RunnerInterrupted.
+Tools that need to pause Oikos (e.g. spawn_commis) raise RunnerInterrupted.
 """
 
 from __future__ import annotations
@@ -12,14 +11,12 @@ import contextvars
 import json
 import logging
 import os
-import time
 from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from datetime import timezone
 from typing import TYPE_CHECKING
 
-from zerg.context import get_commis_context
 from zerg.managers.runtime_runner import RunnerInterrupted
 from zerg.services.dispatch_contract import _apply_dispatch_contract
 from zerg.services.dispatch_contract import _classify_dispatch_lane
@@ -387,47 +384,7 @@ async def _execute_tool(
         logger.error(result_content)
     else:
         try:
-            # Spawn-type tools: interrupt handling for two-phase commit
-            if tool_name == "spawn_workspace_commis":
-                job_result = await _call_spawn_tool(tool_to_call, tool_args, tool_call_id)
-                if isinstance(job_result, dict):
-                    job_id = job_result.get("job_id")
-                    if job_result.get("status") == "queued" and job_id is not None:
-                        duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
-                        if emitter:
-                            await emitter.emit_tool_completed(
-                                tool_name=tool_name,
-                                tool_call_id=tool_call_id,
-                                duration_ms=duration_ms,
-                                result_preview=f"Commis job {job_id} spawned",
-                                result=str(job_result),
-                            )
-                        raise RunnerInterrupted(
-                            {
-                                "type": "commis_pending",
-                                "job_id": job_id,
-                                "task": tool_args.get("task", "")[:100],
-                                "model": tool_args.get("model"),
-                                "tool_call_id": tool_call_id,
-                            }
-                        )
-                    result_content = json.dumps(job_result)
-                else:
-                    result_content = str(job_result)
-
-            elif tool_name == "wait_for_commis":
-                from zerg.tools.builtin.oikos_commis_artifact_tools import wait_for_commis_async
-
-                observation = await wait_for_commis_async(
-                    job_id=tool_args.get("job_id", ""),
-                    _tool_call_id=tool_call_id,
-                )
-                if isinstance(observation, dict):
-                    result_content = json.dumps(observation, default=_json_default)
-                else:
-                    result_content = str(observation)
-
-            elif getattr(tool_to_call, "coroutine", None):
+            if getattr(tool_to_call, "coroutine", None):
                 observation = await tool_to_call.ainvoke(tool_args)
                 if isinstance(observation, dict):
                     result_content = json.dumps(observation, default=_json_default)
@@ -453,11 +410,8 @@ async def _execute_tool(
     raw_result = str(result_content)
     is_error, error_msg = check_tool_error(raw_result)
 
-    # Critical error detection (marks commis context + emitter for fail-fast)
+    # Critical error detection (fail-fast via emitter)
     if is_error and is_critical_tool_error(raw_result, error_msg, tool_name=tool_name):
-        ctx = get_commis_context()
-        if ctx:
-            ctx.mark_critical_error(error_msg or raw_result)
         if emitter:
             emitter.mark_critical_error(error_msg or raw_result)
         logger.warning(f"Critical tool error in {tool_name}: {error_msg or raw_result}")
@@ -484,16 +438,6 @@ async def _execute_tool(
             )
 
     return ToolMessage(content=result_content, tool_call_id=tool_call_id, name=tool_name)
-
-
-async def _call_spawn_tool(tool: BaseTool, tool_args: dict, tool_call_id: str):
-    """Invoke a spawn_workspace_commis variant and return structured result."""
-    args = dict(tool_args)
-    args["_tool_call_id"] = tool_call_id
-    args["_return_structured"] = True
-    if getattr(tool, "coroutine", None):
-        return await tool.ainvoke(args)
-    return await asyncio.to_thread(tool.invoke, args)
 
 
 def _maybe_truncate_result(
@@ -561,299 +505,39 @@ async def _execute_tools_parallel(
     owner_id: int | None,
     tool_getter: callable | None = None,
 ) -> tuple[list[ToolMessage], dict | None]:
-    """Execute tools in parallel with two-phase commit for spawn_workspace_commis.
+    """Execute tools in parallel. Returns (tool_results, interrupt_value).
 
-    Non-spawn tools run concurrently via asyncio.gather().
-    Spawn_commis calls create jobs with status='created' (not 'queued').
-    Returns (tool_results, interrupt_value) where interrupt_value triggers barrier creation.
+    If any tool raises RunnerInterrupted, it propagates immediately.
     """
-    spawn_calls = [tc for tc in tool_calls if tc.get("name") == "spawn_workspace_commis"]
-    other_calls = [tc for tc in tool_calls if tc.get("name") != "spawn_workspace_commis"]
     tool_results: list[ToolMessage] = []
 
-    # Phase 1: Execute non-spawn tools concurrently
-    if other_calls:
+    async def _exec(tc: dict) -> ToolMessage:
+        try:
+            return await _execute_tool(tc, tools_by_name, run_id=run_id, owner_id=owner_id, tool_getter=tool_getter)
+        except RunnerInterrupted:
+            raise
+        except Exception as exc:
+            logger.exception("Parallel tool error: %s", tc.get("name"))
+            return ToolMessage(
+                content=f"<tool-error>{exc}</tool-error>",
+                tool_call_id=tc.get("id", ""),
+                name=tc.get("name", "unknown"),
+            )
 
-        async def _exec(tc: dict) -> ToolMessage:
-            try:
-                return await _execute_tool(tc, tools_by_name, run_id=run_id, owner_id=owner_id, tool_getter=tool_getter)
-            except RunnerInterrupted:
-                raise
-            except Exception as exc:
-                logger.exception(f"Parallel tool error: {tc.get('name')}")
-                return ToolMessage(
-                    content=f"<tool-error>{exc}</tool-error>",
+    results = await asyncio.gather(*[_exec(tc) for tc in tool_calls], return_exceptions=True)
+    for tc, result in zip(tool_calls, results):
+        if isinstance(result, RunnerInterrupted):
+            raise result
+        elif isinstance(result, Exception):
+            tool_results.append(
+                ToolMessage(
+                    content=f"<tool-error>{result}</tool-error>",
                     tool_call_id=tc.get("id", ""),
                     name=tc.get("name", "unknown"),
                 )
-
-        results = await asyncio.gather(*[_exec(tc) for tc in other_calls], return_exceptions=True)
-        for tc, result in zip(other_calls, results):
-            if isinstance(result, RunnerInterrupted):
-                raise result
-            elif isinstance(result, Exception):
-                tool_results.append(
-                    ToolMessage(
-                        content=f"<tool-error>{result}</tool-error>",
-                        tool_call_id=tc.get("id", ""),
-                        name=tc.get("name", "unknown"),
-                    )
-                )
-            else:
-                tool_results.append(result)
-
-    # Phase 2: Two-phase commit for spawn_workspace_commis
-    if spawn_calls:
-        results, interrupt = await _handle_spawn_calls(spawn_calls, run_id, owner_id)
-        tool_results.extend(results)
-        if interrupt:
-            return tool_results, interrupt
-
-    return tool_results, None
-
-
-async def _handle_spawn_calls(
-    spawn_calls: list[dict],
-    run_id: int | None,
-    owner_id: int | None,
-) -> tuple[list[ToolMessage], dict | None]:
-    """Handle spawn_workspace_commis calls with two-phase commit pattern.
-
-    Jobs created as 'created' (not 'queued'). Caller (oikos_service) creates
-    CommisBarrier and flips to 'queued' to prevent the fast-commis race.
-    """
-    import uuid as uuid_module
-
-    from zerg.connectors.context import get_credential_resolver
-    from zerg.events.oikos_emitter import OikosEmitter
-    from zerg.models.models import CommisJob
-    from zerg.services.oikos_context import get_oikos_context
-    from zerg.tools.builtin.oikos_commis_job_tools import operator_resume_permission_error
-
-    resolver = get_credential_resolver()
-    ctx = get_oikos_context()
-    tool_results: list[ToolMessage] = []
-
-    emitter = None
-    if ctx:
-        emitter = OikosEmitter(
-            run_id=ctx.run_id,
-            owner_id=ctx.owner_id,
-            message_id=ctx.message_id,
-            trace_id=ctx.trace_id,
-        )
-
-    if not resolver:
-        for tc in spawn_calls:
-            tool_results.append(
-                ToolMessage(
-                    content="<tool-error>Cannot spawn commis - no credential context</tool-error>",
-                    tool_call_id=tc.get("id", ""),
-                    name="spawn_workspace_commis",
-                )
             )
-        return tool_results, None
-
-    db = resolver.db
-    oikos_run_id = ctx.run_id if ctx else None
-    trace_id = ctx.trace_id if ctx else None
-    commis_reasoning_effort = (ctx.reasoning_effort if ctx else None) or "none"
-
-    created_jobs: list[dict] = []
-
-    for tc in spawn_calls:
-        tool_args = tc.get("args", {})
-        task = tool_args.get("task", "")
-        model_override = tool_args.get("model")
-        backend_override = tool_args.get("backend")
-        git_repo = tool_args.get("git_repo")
-        resume_session_id = tool_args.get("resume_session_id")
-        tool_call_id = tc.get("id", "")
-        start = time.time()
-
-        policy_error = operator_resume_permission_error(
-            db=db,
-            owner_id=resolver.owner_id,
-            ctx=ctx,
-            resume_session_id=resume_session_id,
-            git_repo=git_repo,
-        )
-        if policy_error:
-            logger.info("Blocked operator continuation for run %s: %s", oikos_run_id, policy_error)
-            if emitter:
-                await emitter.emit_tool_failed(
-                    tool_name="spawn_workspace_commis",
-                    tool_call_id=tool_call_id,
-                    duration_ms=int((time.time() - start) * 1000),
-                    error=policy_error,
-                )
-            tool_results.append(
-                ToolMessage(
-                    content=f"<tool-error>{policy_error}</tool-error>",
-                    tool_call_id=tool_call_id,
-                    name="spawn_workspace_commis",
-                )
-            )
-            continue
-
-        # Build workspace config
-        job_config: dict = {"execution_mode": "workspace"}
-        if git_repo:
-            job_config["git_repo"] = git_repo
-        if resume_session_id:
-            job_config["resume_session_id"] = resume_session_id
-        if backend_override:
-            job_config["backend"] = backend_override
-
-        if emitter:
-            await emitter.emit_tool_started(
-                tool_name="spawn_workspace_commis",
-                tool_call_id=tool_call_id,
-                tool_args_preview=task[:100],
-                tool_args={
-                    "task": task,
-                    "model": model_override,
-                    "backend": backend_override,
-                    "git_repo": git_repo,
-                    "resume_session_id": resume_session_id,
-                },
-            )
-
-        try:
-            # Idempotency: check for existing job
-            existing_job = None
-            if tool_call_id and oikos_run_id:
-                existing_job = (
-                    db.query(CommisJob)
-                    .filter(
-                        CommisJob.oikos_run_id == oikos_run_id,
-                        CommisJob.tool_call_id == tool_call_id,
-                    )
-                    .first()
-                )
-
-            if existing_job and existing_job.status == "success":
-                from zerg.services.commis_artifact_store import CommisArtifactStore
-
-                artifact_store = CommisArtifactStore()
-                try:
-                    metadata = artifact_store.get_commis_metadata(existing_job.commis_id)
-                    result = metadata.get("summary") or artifact_store.get_commis_result(existing_job.commis_id)
-                    tool_results.append(
-                        ToolMessage(
-                            content=f"Commis job {existing_job.id} completed:\n\n{result}",
-                            tool_call_id=tool_call_id,
-                            name="spawn_workspace_commis",
-                        )
-                    )
-                    if emitter:
-                        await emitter.emit_tool_completed(
-                            tool_name="spawn_workspace_commis",
-                            tool_call_id=tool_call_id,
-                            duration_ms=int((time.time() - start) * 1000),
-                            result_preview=f"Cached result for job {existing_job.id}",
-                            result={
-                                "job_id": existing_job.id,
-                                "status": "success",
-                                "cached": True,
-                                "resume_session_id": resume_session_id,
-                            },
-                        )
-                    continue
-                except FileNotFoundError:
-                    pass
-
-            if existing_job and existing_job.status in ("queued", "running", "created"):
-                created_jobs.append({"job": existing_job, "tool_call_id": tool_call_id, "task": task[:100]})
-                if emitter:
-                    await emitter.emit_tool_completed(
-                        tool_name="spawn_workspace_commis",
-                        tool_call_id=tool_call_id,
-                        duration_ms=int((time.time() - start) * 1000),
-                        result_preview=f"Reusing existing job {existing_job.id}",
-                        result={
-                            "job_id": existing_job.id,
-                            "status": existing_job.status,
-                            "task": task[:100],
-                            "resume_session_id": resume_session_id,
-                        },
-                    )
-                continue
-
-            # Create new job with status='created' (TWO-PHASE COMMIT)
-            commis_job = CommisJob(
-                owner_id=resolver.owner_id,
-                oikos_run_id=oikos_run_id,
-                tool_call_id=tool_call_id,
-                trace_id=uuid_module.UUID(trace_id) if trace_id else None,
-                task=task,
-                model=model_override,
-                reasoning_effort=commis_reasoning_effort,
-                status="created",
-                config=job_config,
-            )
-            db.add(commis_job)
-            db.commit()
-            db.refresh(commis_job)
-
-            config_suffix = f", config={job_config}" if job_config else ""
-            logger.info(f"[PARALLEL-SPAWN] Created commis job {commis_job.id} " f"status='created'{config_suffix}")
-
-            created_jobs.append({"job": commis_job, "tool_call_id": tool_call_id, "task": task[:100]})
-
-            if emitter:
-                await emitter.emit_tool_completed(
-                    tool_name="spawn_workspace_commis",
-                    tool_call_id=tool_call_id,
-                    duration_ms=int((time.time() - start) * 1000),
-                    result_preview=f"Created job {commis_job.id}",
-                    result={
-                        "job_id": commis_job.id,
-                        "status": "created",
-                        "task": task[:100],
-                        "resume_session_id": resume_session_id,
-                    },
-                )
-
-        except Exception as exc:
-            logger.exception(f"Error creating spawn_workspace_commis job: {task[:50]}")
-            db.rollback()
-            if emitter:
-                await emitter.emit_tool_failed(
-                    tool_name="spawn_workspace_commis",
-                    tool_call_id=tool_call_id,
-                    duration_ms=int((time.time() - start) * 1000),
-                    error=str(exc),
-                )
-            tool_results.append(
-                ToolMessage(
-                    content=f"<tool-error>Failed to spawn commis: {exc}</tool-error>",
-                    tool_call_id=tool_call_id,
-                    name="spawn_workspace_commis",
-                )
-            )
-
-    if created_jobs:
-        for job_info in created_jobs:
-            job = job_info["job"]
-            tool_results.append(
-                ToolMessage(
-                    content=(
-                        f"Commis job {job.id} spawned successfully. "
-                        f"Working on: {job_info.get('task', '')}\n\n"
-                        "Waiting for commis to complete..."
-                    ),
-                    tool_call_id=job_info["tool_call_id"],
-                    name="spawn_workspace_commis",
-                )
-            )
-        interrupt_value = {
-            "type": "commiss_pending",
-            "job_ids": [j["job"].id for j in created_jobs],
-            "created_jobs": created_jobs,
-        }
-        logger.info(f"[PARALLEL-SPAWN] Interrupt with {len(created_jobs)} jobs for barrier creation")
-        return tool_results, interrupt_value
+        else:
+            tool_results.append(result)
 
     return tool_results, None
 
