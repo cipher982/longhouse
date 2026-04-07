@@ -485,7 +485,7 @@ def get_or_create_tool_message(
         tool_msg = ToolMessage(
             content=existing.content,
             tool_call_id=tool_call_id,
-            name=existing.name or "spawn_workspace_commis",
+            name=existing.name or "spawn_commis",
         )
         return tool_msg, False
 
@@ -497,7 +497,7 @@ def get_or_create_tool_message(
     tool_msg = ToolMessage(
         content=content,
         tool_call_id=tool_call_id,
-        name="spawn_workspace_commis",
+        name="spawn_commis",
     )
 
     ThreadService.save_new_messages(

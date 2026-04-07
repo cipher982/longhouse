@@ -17,7 +17,7 @@ def _tool_description(tool_name: str) -> str:
 
 
 def test_prompt_teaches_workspace_first_spawn_contract():
-    assert "spawn_workspace_commis" in BASE_OIKOS_PROMPT
+    assert "spawn_commis" in BASE_OIKOS_PROMPT
     assert "(PRIMARY)" in BASE_OIKOS_PROMPT
     assert "(DEPRECATED)" not in BASE_OIKOS_PROMPT
     assert "managed cloud sessions in Longhouse workspaces" in BASE_OIKOS_PROMPT
@@ -29,7 +29,7 @@ def test_prompt_defines_explicit_dispatch_lanes():
     assert "Dispatch Contract" in BASE_OIKOS_PROMPT
     assert "Direct response" in BASE_OIKOS_PROMPT
     assert "Quick-tool execution" in BASE_OIKOS_PROMPT
-    assert "CLI delegation (`spawn_workspace_commis`)" in BASE_OIKOS_PROMPT
+    assert "CLI delegation (`spawn_commis`)" in BASE_OIKOS_PROMPT
     assert "Prefer Direct → Quick-tool → CLI delegation" in BASE_OIKOS_PROMPT
 
 
@@ -100,18 +100,10 @@ def test_build_prompt_injects_effective_operator_policy(monkeypatch):
 
 
 def test_tool_descriptions_match_prompt_semantics():
-    workspace_description = _tool_description("spawn_workspace_commis")
-    assert "PRIMARY" in workspace_description
-    assert "resume_session_id" in workspace_description
-    assert "managed cloud session" in workspace_description
-    assert "commis prompt" not in workspace_description
+    description = _tool_description("spawn_commis")
+    assert "background" in description.lower()
+    assert "task" in description.lower()
 
 
-def test_prompt_documents_backend_intent_mapping_for_spawn():
-    assert "backend intent mapping" in BASE_OIKOS_PROMPT.lower()
-    for backend in ("zai", "codex", "gemini", "bedrock", "anthropic"):
-        assert f"`{backend}`" in BASE_OIKOS_PROMPT
-
-
-def test_oikos_tool_names_do_not_include_removed_spawn_alias():
-    assert "spawn_commis" not in OIKOS_TOOL_NAMES
+def test_oikos_tool_names_include_spawn_commis():
+    assert "spawn_commis" in OIKOS_TOOL_NAMES

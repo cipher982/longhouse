@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Natural-language backend hints for spawn_workspace_commis dispatch normalization.
+# Natural-language backend hints for spawn_commis dispatch normalization.
 _BACKEND_HINT_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("codex", (r"\bcodex\b", r"\bopenai\b", r"\bgpt[-\s]?5\b", r"\bgpt[-\s]?4o\b")),
     ("gemini", (r"\bgemini\b",)),
@@ -57,7 +57,7 @@ def _classify_dispatch_lane(tool_calls: list[dict] | None) -> str:
     """Classify current turn as direct, quick-tool, or cli delegation."""
     if not tool_calls:
         return "direct"
-    if any(tc.get("name") == "spawn_workspace_commis" for tc in tool_calls):
+    if any(tc.get("name") == "spawn_commis" for tc in tool_calls):
         return "cli_delegation"
     return "quick_tool"
 
@@ -66,7 +66,7 @@ def _apply_dispatch_contract(tool_calls: list[dict] | None, messages: list[BaseM
     """Apply dispatch normalization rules before tool execution.
 
     Current rules:
-    - If the user explicitly requested a backend and a spawn_workspace_commis call
+    - If the user explicitly requested a backend and a spawn_commis call
       omits backend, inject the inferred backend to keep behavior deterministic.
     - Never override an explicit backend already provided by the model.
     """
@@ -81,7 +81,7 @@ def _apply_dispatch_contract(tool_calls: list[dict] | None, messages: list[BaseM
     injected = 0
 
     for tool_call in tool_calls:
-        if tool_call.get("name") != "spawn_workspace_commis":
+        if tool_call.get("name") != "spawn_commis":
             normalized_calls.append(tool_call)
             continue
 
@@ -104,7 +104,7 @@ def _apply_dispatch_contract(tool_calls: list[dict] | None, messages: list[BaseM
 
     if injected > 0:
         logger.info(
-            "[DispatchContract] injected backend=%s into %s spawn_workspace_commis call(s)",
+            "[DispatchContract] injected backend=%s into %s spawn_commis call(s)",
             requested_backend,
             injected,
         )

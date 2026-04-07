@@ -40,7 +40,7 @@ class CommisToolInfo(BaseModel):
 
 
 class CommisInfo(BaseModel):
-    """Commis spawned by spawn_workspace_commis tool."""
+    """Commis spawned by spawn_commis tool."""
 
     job_id: int
     task: str
@@ -85,7 +85,7 @@ class OikosHistoryResponse(BaseModel):
 
 
 def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str]) -> dict[str, dict]:
-    """Fetch commis activity for spawn_workspace_commis tool calls.
+    """Fetch commis activity for spawn_commis tool calls.
 
     Queries RunEvent to build a complete picture of commis execution
     (spawned → started → tool calls → complete → summary).
@@ -178,7 +178,7 @@ def _fetch_commis_activity(db: Session, fiche_id: int, tool_call_ids: list[str])
         pending: deque[str] = deque()
         for e in run_events:
             payload = e.payload or {}
-            if e.event_type == "oikos_tool_started" and payload.get("tool_name") == "spawn_workspace_commis":
+            if e.event_type == "oikos_tool_started" and payload.get("tool_name") == "spawn_commis":
                 tc_id = payload.get("tool_call_id")
                 if tc_id in tool_call_ids and tc_id not in result:
                     pending.append(tc_id)
@@ -256,12 +256,12 @@ def oikos_history(
     total = len(filtered)
     page = filtered[offset : offset + limit]
 
-    # Batch-fetch commis activity for spawn_workspace_commis tool calls
+    # Batch-fetch commis activity for spawn_commis tool calls
     spawn_tc_ids = []
     for msg in page:
         if msg.role == "assistant" and msg.tool_calls:
             for tc in msg.tool_calls:
-                if tc.get("name") == "spawn_workspace_commis" and tc.get("id"):
+                if tc.get("name") == "spawn_commis" and tc.get("id"):
                     spawn_tc_ids.append(tc["id"])
 
     commis_map: dict[str, dict] = {}
@@ -295,7 +295,7 @@ def oikos_history(
                 tc_name = tc.get("name", "unknown")
 
                 commis_info = None
-                if tc_name == "spawn_workspace_commis" and tc_id in commis_map:
+                if tc_name == "spawn_commis" and tc_id in commis_map:
                     wa = commis_map[tc_id]
                     commis_info = CommisInfo(
                         job_id=wa["job_id"],

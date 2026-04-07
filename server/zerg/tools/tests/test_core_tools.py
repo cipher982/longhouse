@@ -150,7 +150,7 @@ def test_commis_tools_no_coordinator_tools():
     """
     coordinator_tools = {
         "spawn_commis",
-        "spawn_workspace_commis",
+        "spawn_commis",
         "list_commiss",
         "read_commis_result",
         "get_commis_evidence",

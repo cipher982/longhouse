@@ -311,7 +311,7 @@ class RuntimeRunner:  # noqa: D401
             tool_msg = ToolMessage(
                 content=f"Commis completed:\n\n{tool_result}",
                 tool_call_id=tool_call_id,
-                name="spawn_workspace_commis",
+                name="spawn_commis",
             )
             parent_id = self._find_parent_assistant(db, thread.id, tool_call_id)
             self.thread_service.save_new_messages(
@@ -397,7 +397,7 @@ class RuntimeRunner:  # noqa: D401
                 if error or status == "failed"
                 else f"Commis completed:\n\n{result_text}"
             )
-            tool_msg = ToolMessage(content=content, tool_call_id=tcid, name="spawn_workspace_commis")
+            tool_msg = ToolMessage(content=content, tool_call_id=tcid, name="spawn_commis")
             self.thread_service.save_new_messages(
                 db,
                 thread_id=thread.id,

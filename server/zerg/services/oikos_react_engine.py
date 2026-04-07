@@ -353,7 +353,7 @@ async def _execute_tool(
 ) -> ToolMessage:
     """Execute a single tool call with event emission.
 
-    For spawn_workspace_commis variants, raises RunnerInterrupted for queued jobs.
+    For spawn_commis variants, raises RunnerInterrupted for queued jobs.
     """
     from zerg.events import get_emitter
     from zerg.tools.result_utils import check_tool_error

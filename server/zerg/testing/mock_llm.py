@@ -9,7 +9,6 @@ import asyncio
 from typing import Any
 from typing import List
 
-
 # Use native types for return values
 from zerg.types.messages import AIMessage
 
@@ -69,14 +68,13 @@ class MockChatLLM:
         content = str(last_msg.content) if last_msg else ""
 
         if "TRIGGER_COMMIS" in content:
-            # Emit spawn_workspace_commis tool call
+            # Emit spawn_commis tool call
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": "spawn_workspace_commis",
+                "name": "spawn_commis",
                 "args": {"task": "Test commis task", "model": "gpt-mock"},
             }
             return AIMessage(content="Spawning commis...", tool_calls=[tool_call])
 
         # Simple mock response
         return AIMessage(content="Hello! I'm a mock assistant. I received your message and I'm responding appropriately.")
-

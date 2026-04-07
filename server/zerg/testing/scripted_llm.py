@@ -45,11 +45,11 @@ def _is_tool_message(msg: Any) -> bool:
 
 def detect_role_from_messages(messages: List[Any]) -> str:
     """Best-effort role detector used by scripted scenarios."""
-    # If we see a spawn_workspace_commis call, assume oikos.
+    # If we see a spawn_commis call, assume oikos.
     for msg in messages:
         if _is_ai_message(msg) and getattr(msg, "tool_calls", None):
             for call in msg.tool_calls:
-                if call.get("name") == "spawn_workspace_commis":
+                if call.get("name") == "spawn_commis":
                     return "oikos"
 
     # Otherwise, infer from system prompt length (tests use this heuristic).
@@ -474,7 +474,7 @@ class ScriptedChatLLM:
         if static_reply:
             return AIMessage(content=static_reply, tool_calls=[])
 
-        # Workspace commis scenario: spawns spawn_workspace_commis with git repo and optional resume
+        # Workspace commis scenario: spawns spawn_commis with git repo and optional resume
         if role == "oikos" and scenario and scenario.get("name") == "workspace_commis_oikos":
             # Use a public test repo that's small and fast to clone
             args = {
@@ -487,7 +487,7 @@ class ScriptedChatLLM:
 
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": "spawn_workspace_commis",
+                "name": "spawn_commis",
                 "args": args,
             }
             return AIMessage(content="", tool_calls=[tool_call])
@@ -501,7 +501,7 @@ class ScriptedChatLLM:
 
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": "spawn_workspace_commis",
+                "name": "spawn_commis",
                 "args": args,
             }
             return AIMessage(content="", tool_calls=[tool_call])
@@ -515,7 +515,7 @@ class ScriptedChatLLM:
             tool_calls = [
                 {
                     "id": f"call_{uuid.uuid4().hex[:8]}",
-                    "name": "spawn_workspace_commis",
+                    "name": "spawn_commis",
                     "args": {"task": task},
                 }
                 for task in tasks
@@ -525,7 +525,7 @@ class ScriptedChatLLM:
         if role == "oikos" and scenario and scenario.get("name") == "disk_space_oikos":
             tool_call = {
                 "id": f"call_{uuid.uuid4().hex[:8]}",
-                "name": "spawn_workspace_commis",
+                "name": "spawn_commis",
                 "args": {"task": "Check disk space on cube and identify what is using space"},
             }
             return AIMessage(content="", tool_calls=[tool_call])
