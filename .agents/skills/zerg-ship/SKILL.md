@@ -13,6 +13,26 @@ description: Zerg/Longhouse full ship cycle — test, deploy, QA, verify. Use wh
 
 `longhouse.ai` is a demo-mode Longhouse runtime, not a static landing page.
 
+## Ship Types
+
+Do not blur these lanes:
+
+- **Hosted deploy** — updates Longhouse surfaces running on `zerg`:
+  public demo runtime, control plane, hosted tenant runtimes.
+- **CLI/package release** — updates the user-installed `longhouse` CLI from
+  the GitHub release wheel used by `scripts/install.sh`. Existing users do not
+  get this from a hosted deploy. They need a new install or upgrade:
+  `uv tool upgrade longhouse` or rerun the installer.
+- **Runner release** — updates the separately installed runner binary/service.
+  This is its own release/update path and is not covered by the normal runtime
+  or control-plane deploy lanes.
+
+If a change touches `longhouse claude`, local hook install, local launcher
+behavior, `connect --install`, or other code that runs on the user's machine,
+do not say "deployed" as if hosted users now have it. That kind of change
+needs a CLI/package release, and sometimes users must rerun
+`longhouse connect --install` after upgrading.
+
 ## Background Wait Rule
 
 If a tool or workflow already gives you a completion event or a blocking wait primitive, use it once and move on. Do not burn tool calls on `pgrep`, repeated curls, or ad hoc status polling loops while a background task is running.
@@ -92,6 +112,10 @@ Manual fallback:
 
 If a commit touches both runtime and control-plane lanes, expect both workflows to matter. Do not assume the runtime workflow deploys the control plane for you.
 
+If a commit also changes local CLI/install behavior, that is a third concern:
+hosted deploys may still be needed, but they do not replace publishing a new
+CLI/package release.
+
 ## QA Harness
 
 ```bash
@@ -128,6 +152,7 @@ coolify app logs longhouse-control-plane
 - [ ] `make test-ci` passed before push
 - [ ] `make test-e2e` passed before push when UI/runtime changed
 - [ ] Correct deploy lane(s) used
+- [ ] If local CLI/install behavior changed, a release/upgrade path was handled separately
 - [ ] Public demo runtime healthy if runtime lane changed
 - [ ] Control plane healthy if control-plane lane changed
 - [ ] Hosted canary healthy if runtime lane changed
