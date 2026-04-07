@@ -235,6 +235,9 @@ longhouse doctor --check-updates  # Include latest stable CLI check
 longhouse onboard             # Re-run setup wizard
 ```
 
+Interactive CLI commands refresh update state in the background and show a
+cached upgrade hint when the installed CLI is behind the latest stable release.
+
 For the canonical machine-facing API and copyable coordination recipes, see `docs/specs/agents-machine-surface.md`.
 
 ## Troubleshooting

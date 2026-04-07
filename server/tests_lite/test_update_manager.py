@@ -213,3 +213,59 @@ def test_check_for_updates_falls_back_without_packaging(monkeypatch):
         monkeypatch.setattr(sys.modules["builtins"], "__import__", real_import)
 
     assert result.update_available is True
+
+
+def test_maybe_notify_update_emits_cached_notice_without_spawning(monkeypatch):
+    notices: list[str] = []
+    spawns: list[bool] = []
+
+    monkeypatch.setattr(update_manager.sys.stderr, "isatty", lambda: True)
+    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.5")
+    monkeypatch.setattr(
+        update_manager,
+        "load_update_cache",
+        lambda: update_manager.CachedUpdateCheck(
+            checked_at=update_manager._utc_now_iso(),
+            installed_version="0.1.5",
+            latest_version="0.1.6",
+            update_available=True,
+            upgrade_command="uv tool upgrade longhouse",
+            install_method="uv",
+            install_source="pypi",
+            package_name="longhouse",
+        ),
+    )
+    monkeypatch.setattr(update_manager, "spawn_background_update_check", lambda: spawns.append(True))
+    monkeypatch.setattr(update_manager.typer, "secho", lambda message, **kwargs: notices.append(message))
+
+    update_manager.maybe_notify_update(["serve"])
+
+    assert notices == ["Update available: Longhouse 0.1.6 (you have 0.1.5). Run: uv tool upgrade longhouse"]
+    assert spawns == []
+
+
+def test_maybe_notify_update_spawns_background_refresh_for_stale_cache(monkeypatch):
+    spawns: list[bool] = []
+
+    monkeypatch.setattr(update_manager.sys.stderr, "isatty", lambda: True)
+    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.5")
+    monkeypatch.setattr(update_manager, "load_update_cache", lambda: None)
+    monkeypatch.setattr(update_manager, "spawn_background_update_check", lambda: spawns.append(True) or True)
+    monkeypatch.setattr(update_manager.typer, "secho", lambda message, **kwargs: None)
+
+    update_manager.maybe_notify_update(["serve"])
+
+    assert spawns == [True]
+
+
+def test_maybe_notify_update_skips_json_and_update_commands(monkeypatch):
+    spawns: list[str] = []
+
+    monkeypatch.setattr(update_manager.sys.stderr, "isatty", lambda: True)
+    monkeypatch.setattr(update_manager, "spawn_background_update_check", lambda: spawns.append("spawned") or True)
+
+    update_manager.maybe_notify_update(["wall", "--json"])
+    update_manager.maybe_notify_update(["doctor"])
+    update_manager.maybe_notify_update(["version", "--check"])
+
+    assert spawns == []
