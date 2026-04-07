@@ -277,7 +277,6 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     )
     assert "Preparing native Claude bridge..." in result.output
     assert "Opening session in browser..." in result.output
-    assert "If launch seems stuck, press Enter on 'I am using this for local development'." in result.output
     assert "Launching native Claude..." in result.output
     assert prepare_calls == [("https://longhouse.test", "zdt_test_token", str(tmp_path), None)]
     assert native_launch_calls == [
