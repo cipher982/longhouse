@@ -1,0 +1,302 @@
+"""CLI install metadata and upgrade helpers."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from dataclasses import asdict
+from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
+from importlib import metadata
+from pathlib import Path
+
+import httpx
+import typer
+from packaging.version import InvalidVersion
+from packaging.version import Version
+
+from zerg.cli.serve import _get_longhouse_home
+
+PACKAGE_NAME = "longhouse"
+DEFAULT_CHANNEL = "stable"
+DEFAULT_INSTALL_METHOD = "uv"
+DEFAULT_INSTALL_SOURCE = "pypi"
+PYPI_JSON_URL = "https://pypi.org/pypi/{package}/json"
+
+
+@dataclass(frozen=True)
+class InstallMetadata:
+    install_method: str
+    install_source: str
+    package_name: str
+    channel: str
+    installed_version: str
+    installed_at: str
+    last_upgrade_at: str
+    package_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class UpdateCheckResult:
+    installed_version: str
+    latest_version: str
+    update_available: bool
+    install_method: str
+    install_source: str
+    upgrade_command: str
+    package_name: str
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _install_metadata_path() -> Path:
+    return _get_longhouse_home() / "install.json"
+
+
+def current_installed_version(package_name: str = PACKAGE_NAME) -> str:
+    return metadata.version(package_name)
+
+
+def load_install_metadata() -> InstallMetadata | None:
+    path = _install_metadata_path()
+    if not path.exists():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return InstallMetadata(
+        install_method=str(payload.get("install_method") or DEFAULT_INSTALL_METHOD),
+        install_source=str(payload.get("install_source") or "unknown"),
+        package_name=str(payload.get("package_name") or PACKAGE_NAME),
+        channel=str(payload.get("channel") or DEFAULT_CHANNEL),
+        installed_version=str(payload.get("installed_version") or current_installed_version()),
+        installed_at=str(payload.get("installed_at") or _utc_now_iso()),
+        last_upgrade_at=str(payload.get("last_upgrade_at") or payload.get("installed_at") or _utc_now_iso()),
+        package_ref=str(payload.get("package_ref")).strip() if payload.get("package_ref") else None,
+    )
+
+
+def write_install_metadata(
+    *,
+    install_method: str,
+    install_source: str,
+    package_name: str = PACKAGE_NAME,
+    channel: str = DEFAULT_CHANNEL,
+    package_ref: str | None = None,
+) -> InstallMetadata:
+    path = _install_metadata_path()
+    existing = load_install_metadata()
+    now = _utc_now_iso()
+    installed_at = existing.installed_at if existing else now
+    payload = InstallMetadata(
+        install_method=install_method.strip() or DEFAULT_INSTALL_METHOD,
+        install_source=install_source.strip() or "unknown",
+        package_name=package_name.strip() or PACKAGE_NAME,
+        channel=channel.strip() or DEFAULT_CHANNEL,
+        installed_version=current_installed_version(package_name.strip() or PACKAGE_NAME),
+        installed_at=installed_at,
+        last_upgrade_at=now,
+        package_ref=(package_ref.strip() if package_ref and package_ref.strip() else None),
+    )
+    path.write_text(json.dumps(asdict(payload), indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
+def detect_install_metadata() -> InstallMetadata:
+    existing = load_install_metadata()
+    if existing is not None:
+        return existing
+    return InstallMetadata(
+        install_method=DEFAULT_INSTALL_METHOD,
+        install_source="unknown",
+        package_name=PACKAGE_NAME,
+        channel=DEFAULT_CHANNEL,
+        installed_version=current_installed_version(),
+        installed_at=_utc_now_iso(),
+        last_upgrade_at=_utc_now_iso(),
+        package_ref=None,
+    )
+
+
+def recommended_upgrade_command(metadata_or_none: InstallMetadata | None) -> str:
+    metadata = metadata_or_none or detect_install_metadata()
+    install_method = metadata.install_method.strip().lower()
+    package_name = metadata.package_name.strip() or PACKAGE_NAME
+    if install_method == "uv":
+        return f"uv tool upgrade {package_name}"
+    if install_method == "brew":
+        return f"brew upgrade {package_name}"
+    if install_method == "npm":
+        return f"npm update -g {package_name}"
+    return "curl -fsSL https://get.longhouse.ai/install.sh | bash"
+
+
+def fetch_latest_pypi_version(*, package_name: str = PACKAGE_NAME, timeout_secs: float = 2.0) -> str:
+    url = PYPI_JSON_URL.format(package=package_name)
+    response = httpx.get(
+        url,
+        timeout=timeout_secs,
+        headers={"User-Agent": f"longhouse/{current_installed_version(package_name)}"},
+    )
+    response.raise_for_status()
+    payload = response.json()
+    info = payload.get("info") if isinstance(payload, dict) else None
+    latest_version = str((info or {}).get("version") or "").strip()
+    if not latest_version:
+        raise RuntimeError(f"PyPI response for {package_name} missing info.version")
+    return latest_version
+
+
+def check_for_updates(*, package_name: str = PACKAGE_NAME) -> UpdateCheckResult:
+    install_metadata = detect_install_metadata()
+    installed_version = current_installed_version(package_name)
+    latest_version = fetch_latest_pypi_version(package_name=package_name)
+    try:
+        update_available = Version(latest_version) > Version(installed_version)
+    except InvalidVersion as exc:
+        raise RuntimeError(f"Could not compare installed version {installed_version!r} with latest version {latest_version!r}") from exc
+    return UpdateCheckResult(
+        installed_version=installed_version,
+        latest_version=latest_version,
+        update_available=update_available,
+        install_method=install_metadata.install_method,
+        install_source=install_metadata.install_source,
+        upgrade_command=recommended_upgrade_command(install_metadata),
+        package_name=package_name,
+    )
+
+
+def version_command(
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="Check PyPI for the latest stable Longhouse version.",
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON.",
+    ),
+) -> None:
+    """Show the installed Longhouse version."""
+
+    installed_version = current_installed_version()
+    if not check:
+        payload = {"installed_version": installed_version}
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2))
+            return
+        typer.echo(f"longhouse {installed_version}")
+        return
+
+    try:
+        result = check_for_updates()
+    except Exception as exc:
+        payload = {
+            "installed_version": installed_version,
+            "error": str(exc),
+        }
+        if json_output:
+            typer.echo(json.dumps(payload, indent=2))
+        else:
+            typer.secho(f"Update check failed: {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    payload = {
+        "installed_version": result.installed_version,
+        "latest_version": result.latest_version,
+        "update_available": result.update_available,
+        "install_method": result.install_method,
+        "install_source": result.install_source,
+        "upgrade_command": result.upgrade_command,
+    }
+    if json_output:
+        typer.echo(json.dumps(payload, indent=2))
+        return
+
+    typer.echo(f"Installed: {result.installed_version}")
+    typer.echo(f"Latest:    {result.latest_version}")
+    if result.update_available:
+        typer.secho("Update available.", fg=typer.colors.YELLOW)
+        typer.echo(f"Run: {result.upgrade_command}")
+    else:
+        typer.secho("Longhouse is up to date.", fg=typer.colors.GREEN)
+
+
+def upgrade_command(
+    package_source: str | None = typer.Option(
+        None,
+        "--package-source",
+        hidden=True,
+        help="Override package source for testing or local release validation.",
+    ),
+) -> None:
+    """Upgrade the Longhouse CLI using the recorded install method."""
+
+    install_metadata = detect_install_metadata()
+    package_name = install_metadata.package_name or PACKAGE_NAME
+    if install_metadata.install_method != "uv":
+        typer.secho(
+            f"Unsupported automatic upgrade path for install method '{install_metadata.install_method}'.",
+            fg=typer.colors.RED,
+        )
+        typer.echo(f"Recommended command: {recommended_upgrade_command(install_metadata)}")
+        raise typer.Exit(code=1)
+
+    if package_source and package_source.strip():
+        normalized_source = package_source.strip()
+        typer.echo(f"Upgrading Longhouse from override source: {normalized_source}")
+        try:
+            subprocess.run(["uv", "tool", "uninstall", package_name], check=False)
+            completed = subprocess.run(
+                ["uv", "tool", "install", "--force", "--no-cache", normalized_source],
+                check=False,
+            )
+        except FileNotFoundError:
+            typer.secho("uv is not installed or not on PATH.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        install_source = "custom"
+        package_ref = normalized_source
+    else:
+        typer.echo(f"Upgrading Longhouse via uv: {package_name}")
+        try:
+            completed = subprocess.run(["uv", "tool", "upgrade", package_name], check=False)
+        except FileNotFoundError:
+            typer.secho("uv is not installed or not on PATH.", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
+        install_source = install_metadata.install_source if install_metadata.install_source != "unknown" else DEFAULT_INSTALL_SOURCE
+        package_ref = install_metadata.package_ref
+
+    if completed.returncode != 0:
+        raise typer.Exit(code=completed.returncode)
+
+    updated_metadata = write_install_metadata(
+        install_method="uv",
+        install_source=install_source,
+        package_name=package_name,
+        channel=install_metadata.channel or DEFAULT_CHANNEL,
+        package_ref=package_ref,
+    )
+    typer.secho(f"Longhouse {updated_metadata.installed_version} is installed.", fg=typer.colors.GREEN)
+    typer.echo("If launcher, hook, or engine behavior changed, run: longhouse connect --install")
+    typer.echo("Verify with: longhouse doctor")
+
+
+def record_install_command(
+    install_method: str = typer.Option(..., "--install-method"),
+    install_source: str = typer.Option(..., "--install-source"),
+    package_name: str = typer.Option(PACKAGE_NAME, "--package-name"),
+    channel: str = typer.Option(DEFAULT_CHANNEL, "--channel"),
+    package_ref: str | None = typer.Option(None, "--package-ref"),
+) -> None:
+    """Write local install metadata for installer-managed Longhouse setups."""
+
+    metadata_payload = write_install_metadata(
+        install_method=install_method,
+        install_source=install_source,
+        package_name=package_name,
+        channel=channel,
+        package_ref=package_ref,
+    )
+    typer.echo(json.dumps(asdict(metadata_payload), indent=2))

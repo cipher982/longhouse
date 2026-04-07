@@ -31,46 +31,6 @@ warn() { echo -e "${YELLOW}[WARN]${NC} $*"; }
 error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
 step() { echo -e "\n${BOLD}${CYAN}==> $*${NC}"; }
 
-resolve_release_wheel_url() {
-    python3 - <<'PY'
-import json
-import os
-import urllib.error
-import urllib.request
-
-headers = {
-    "Accept": "application/vnd.github+json",
-    "User-Agent": "longhouse-installer",
-    "X-GitHub-Api-Version": "2022-11-28",
-}
-token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-if token:
-    headers["Authorization"] = f"Bearer {token}"
-
-request = urllib.request.Request(
-    "https://api.github.com/repos/cipher982/longhouse/releases/latest",
-    headers=headers,
-)
-try:
-    with urllib.request.urlopen(request, timeout=15) as response:
-        payload = json.load(response)
-except urllib.error.HTTPError as exc:
-    if exc.code == 403:
-        raise SystemExit(
-            "GitHub API rate limit exceeded while resolving the latest Longhouse release. "
-            "Set GITHUB_TOKEN or LONGHOUSE_PKG_SOURCE and retry."
-        ) from exc
-    raise
-
-tag = payload.get("tag_name")
-if not tag:
-    raise SystemExit("latest release response missing tag_name")
-
-version = tag[1:] if tag.startswith("v") else tag
-print(f"https://github.com/cipher982/longhouse/releases/download/{tag}/longhouse-{version}-py3-none-any.whl")
-PY
-}
-
 # Detect platform
 detect_platform() {
     local os arch
@@ -147,21 +107,15 @@ install_python() {
 install_longhouse() {
     step "Installing Longhouse CLI"
 
-    # Package source - defaults to the latest released wheel asset, can be
-    # overridden for local/dev installs.
-    local pkg_source="${LONGHOUSE_PKG_SOURCE:-}"
+    # Package source defaults to the stable PyPI package and can be overridden
+    # for local/dev installs and isolated release validation.
+    local pkg_source="${LONGHOUSE_PKG_SOURCE:-longhouse}"
     local custom_source=0
-
-    if [[ -z "$pkg_source" ]]; then
-        info "Resolving latest Longhouse release..."
-        pkg_source="$(resolve_release_wheel_url)" || {
-            error "Failed to resolve latest Longhouse release"
-            exit 1
-        }
-    fi
+    local install_source="pypi"
 
     if [[ "$pkg_source" != "longhouse" ]]; then
         custom_source=1
+        install_source="custom"
     fi
 
     # Install the longhouse package as a tool
@@ -188,7 +142,21 @@ install_longhouse() {
     export PATH="$HOME/.local/bin:$PATH"
 
     if has_command longhouse; then
+        local -a record_install_args
+        record_install_args=(
+            record-install
+            --install-method uv
+            --install-source "$install_source"
+            --package-name longhouse
+            --channel stable
+        )
+        if [[ "$custom_source" -eq 1 ]]; then
+            record_install_args+=(--package-ref "$pkg_source")
+        fi
         success "longhouse installed: $(longhouse --version 2>/dev/null || echo 'installed')"
+        if ! longhouse "${record_install_args[@]}" >/dev/null 2>&1; then
+            warn "Could not write Longhouse install metadata"
+        fi
     else
         error "longhouse installation failed"
         error "Try adding ~/.local/bin to your PATH:"
@@ -500,6 +468,8 @@ print_success() {
     echo "Machine surface:"
     echo "  longhouse wall --json       Read active and recent sessions"
     echo "  longhouse status            Show configuration"
+    echo "  longhouse version --check   Check whether a CLI update is available"
+    echo "  longhouse upgrade           Upgrade the installed CLI"
     echo ""
     echo "For help: longhouse --help"
     echo "Docs: https://longhouse.ai/docs"

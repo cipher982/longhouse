@@ -25,6 +25,9 @@ from zerg.cli.serve import serve
 from zerg.cli.serve import status
 from zerg.cli.sessions import app as sessions_app
 from zerg.cli.sessions import continue_session
+from zerg.cli.update_manager import record_install_command
+from zerg.cli.update_manager import upgrade_command
+from zerg.cli.update_manager import version_command
 
 app = typer.Typer(
     name="longhouse",
@@ -96,6 +99,9 @@ for command in (serve, status, claude, codex, wall, peers, message, tail, auth, 
 
 app.command(name="continue")(continue_session)
 app.command(name="connect")(connect_command)
+app.command(name="version")(version_command)
+app.command(name="upgrade")(upgrade_command)
+app.command(hidden=True, name="record-install")(record_install_command)
 
 
 @app.command()
