@@ -313,7 +313,7 @@ if [[ -z "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" ]]; then
   PACKAGE_SOURCE="$ROOT_DIR/server"
 fi
 
-if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" ]]; then
+if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" && -d "$PACKAGE_SOURCE" ]]; then
   require_cmd bun
   log "🏗️  Building frontend dist for local package install..."
   (
