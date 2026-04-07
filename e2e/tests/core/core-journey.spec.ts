@@ -290,10 +290,9 @@ test.describe('Core User Journey - Scripted LLM', () => {
     await expect(commisCard).toBeVisible({ timeout: 15000 });
 
     // Click on the nested tool row to expand details
-    // Wait for element to be stable before clicking (avoids DOM detachment during React re-render)
     const nestedToolRow = commisCard.locator('.nested-tool-row', { hasText: 'ls -la /tmp' }).first();
     await expect(nestedToolRow).toBeVisible({ timeout: 15000 });
-    await nestedToolRow.click({ timeout: 5000, force: true });
+    await nestedToolRow.click();
 
     // Verify details drawer is visible
     const detailsDrawer = commisCard.locator('[data-testid="nested-tool-details"]');
