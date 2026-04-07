@@ -169,7 +169,7 @@ def build_managed_local_attach_command(*, session: AgentSession) -> str | None:
             provider_session_id=provider_session_id,
             longhouse_session_id=session_id,
             cwd=cwd,
-            resume=True,
+            resume=False,
         )
     session_name = str(getattr(session, "managed_session_name", "") or "").strip()
     if not session_name:

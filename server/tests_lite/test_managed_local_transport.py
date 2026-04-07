@@ -60,7 +60,7 @@ def test_build_managed_local_attach_command_uses_engine_bridge_for_codex_app_ser
     assert 'exec "$engine" codex-bridge attach --session-id session-123' in inner
 
 
-def test_build_managed_local_attach_command_uses_native_claude_resume_for_channel_bridge():
+def test_build_managed_local_attach_command_uses_native_claude_session_id_for_channel_bridge():
     session = SimpleNamespace(
         id="session-123",
         provider_session_id="provider-123",
@@ -75,7 +75,7 @@ def test_build_managed_local_attach_command_uses_native_claude_resume_for_channe
     assert "export LONGHOUSE_CHANNEL_SESSION_ID=session-123" in inner
     assert "export LONGHOUSE_PROVIDER_SESSION_ID=provider-123" in inner
     assert (
-        "exec claude --dangerously-skip-permissions --resume provider-123 "
+        "exec claude --dangerously-skip-permissions --session-id provider-123 "
         "--dangerously-load-development-channels server:longhouse-channel" in inner
     )
 
