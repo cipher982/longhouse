@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -322,6 +323,29 @@ def test_collect_claude_launch_env_filters_empty_values(monkeypatch):
     }
 
 
+def test_assert_private_forced_native_claude_ready_allows_patched_binary(monkeypatch):
+    monkeypatch.setattr(
+        claude_cli,
+        "_inspect_private_native_claude_patch",
+        lambda: ("patched", None, "known private patch present (2 matches)"),
+    )
+
+    claude_cli._assert_private_forced_native_claude_ready()
+
+
+def test_assert_private_forced_native_claude_ready_rejects_unpatched_binary(monkeypatch):
+    monkeypatch.setattr(
+        claude_cli,
+        "_inspect_private_native_claude_patch",
+        lambda: ("unknown", None, "known private patch bytes not found in active binary"),
+    )
+
+    with pytest.raises(ClickExit) as exc_info:
+        claude_cli._assert_private_forced_native_claude_ready()
+
+    assert exc_info.value.exit_code == claude_cli.EXIT_SETUP_FAILED
+
+
 def test_launch_env_requires_flag_capable_claude_path_when_explicit_launch_env_requests_it():
     assert claude_cli._launch_env_requires_flag_capable_claude_path({}) is False
     assert claude_cli._launch_env_requires_flag_capable_claude_path({"AWS_PROFILE": "zh-qa-engineer"}) is False
@@ -529,6 +553,11 @@ def test_claude_command_force_native_channels_bypasses_bedrock_tmux_gate(monkeyp
             "AWS_PROFILE": "zh-qa-engineer",
         },
     )
+    monkeypatch.setattr(
+        claude_cli,
+        "_inspect_private_native_claude_patch",
+        lambda: ("patched", None, "known private patch present (2 matches)"),
+    )
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(
         claude_cli,
@@ -578,6 +607,11 @@ def test_claude_command_force_native_channels_allows_bedrock_native_transport(mo
             "AWS_PROFILE": "zh-qa-engineer",
         },
     )
+    monkeypatch.setattr(
+        claude_cli,
+        "_inspect_private_native_claude_patch",
+        lambda: ("patched", None, "known private patch present (2 matches)"),
+    )
     monkeypatch.setattr(claude_cli, "get_machine_name_label", lambda: "work-laptop")
     monkeypatch.setattr(
         claude_cli,
@@ -601,3 +635,38 @@ def test_claude_command_force_native_channels_allows_bedrock_native_transport(mo
     assert result.exit_code == 0, result.output
     assert native_finalize_calls
     assert "requires the permissive Claude path" not in result.output
+
+
+def test_claude_command_force_native_channels_rejects_unpatched_private_bedrock_path(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    monkeypatch.setenv(claude_cli._FORCE_NATIVE_CLAUDE_CHANNELS_ENV, "1")
+    monkeypatch.setattr(
+        claude_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_detect_native_claude_channels_available",
+        lambda: (False, "authMethod=third_party, apiProvider=bedrock"),
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_collect_claude_launch_env",
+        lambda: {
+            "CLAUDE_CODE_USE_BEDROCK": "1",
+            "AWS_PROFILE": "zh-qa-engineer",
+        },
+    )
+    monkeypatch.setattr(
+        claude_cli,
+        "_inspect_private_native_claude_patch",
+        lambda: ("unknown", Path("/Users/davidrose/.local/share/claude/versions/2.1.94"), "known private patch bytes not found in active binary"),
+    )
+
+    result = runner.invoke(app, ["claude", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert "does not contain the known private" in result.output
+    assert "repointed ~/.local/bin/claude to a fresh unpatched version" in result.output
