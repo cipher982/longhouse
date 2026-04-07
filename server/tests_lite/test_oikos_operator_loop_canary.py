@@ -54,7 +54,6 @@ def _patch_oikos_side_effects(monkeypatch) -> None:
     monkeypatch.setattr("zerg.services.event_store.emit_run_event", _noop_async)
     monkeypatch.setattr("zerg.services.event_store.append_run_event", _noop_async)
     monkeypatch.setattr("zerg.services.oikos_service.emit_oikos_complete_success", _noop_async)
-    monkeypatch.setattr("zerg.services.oikos_service.emit_stream_control_for_pending_commiss", _noop_async)
     monkeypatch.setattr("zerg.services.oikos_service.emit_success_run_updated", _noop_async)
     monkeypatch.setattr("zerg.services.oikos_service.emit_oikos_waiting_and_run_updated", _noop_async)
     monkeypatch.setattr("zerg.services.oikos_service.emit_error_event_and_close_stream", _noop_async)

@@ -1,9 +1,8 @@
 """Oikos internal endpoints for run resume.
 
-Called internally when a commis completes while an oikos run is WAITING:
-1. spawn_workspace_commis() raises RunnerInterrupted -> run becomes WAITING
-2. Commis completes -> calls POST /internal/runs/{id}/resume
-3. RuntimeRunner.run_continuation() continues execution
+Called internally when a commis completes while an oikos run is WAITING.
+The new commis.py handles resume automatically, but this endpoint exists
+for backward compatibility with external commis hooks.
 """
 
 import logging
@@ -34,7 +33,7 @@ class CommisCompletionPayload(BaseModel):
     """Payload for commis completion webhook."""
 
     job_id: int = Field(..., description="Commis job ID")
-    commis_id: str = Field(..., description="Commis artifact ID")
+    commis_id: str = Field("", description="Commis artifact ID (legacy, unused)")
     status: str = Field(..., description="Commis status: success or failed")
     result_summary: str | None = Field(None, description="Brief summary of commis result")
     error: str | None = Field(None, description="Error message if failed")
@@ -47,6 +46,8 @@ async def resume_run(
     db: Session = Depends(get_db),
 ):
     """Resume a WAITING run when its commis completes."""
+    from zerg.services.commis import _resume_oikos
+
     run = db.query(Run).filter(Run.id == run_id).first()
 
     if not run:
@@ -56,7 +57,6 @@ async def resume_run(
         )
 
     if run.status != RunStatus.WAITING:
-        # If run already completed or failed, this is a no-op (idempotent)
         logger.info(f"Run {run_id} status is {run.status.value}, skipping resume")
         return {
             "status": "skipped",
@@ -64,39 +64,18 @@ async def resume_run(
             "run_id": run_id,
         }
 
-    logger.info(f"Resuming run {run_id} after commis {payload.commis_id} completed with status {payload.status}")
+    logger.info(f"Resuming run {run_id} after commis job {payload.job_id} completed with status {payload.status}")
 
     try:
-        # Prepare result text for resume
         result_text = payload.result_summary or f"Commis job {payload.job_id} completed"
         if payload.status == "failed":
             result_text = f"Commis failed: {payload.error or 'Unknown error'}"
 
-        # Use resume_oikos_with_commis_result which:
-        # 1. Locates the tool_call_id for the commis job
-        # 2. Injects the tool result via RuntimeRunner.run_continuation()
-        # 3. Emits completion events
-        from zerg.services.commis_runner import default_runner_factory
-        from zerg.services.commis_single_resume import resume_oikos_with_commis_result
-
-        result = await resume_oikos_with_commis_result(
-            db=db,
-            run_id=run_id,
-            commis_result=result_text,
-            job_id=payload.job_id,
-            runner_factory=default_runner_factory,
-        )
-
-        result_status = result.get("status") if result else "unknown"
-        # Preserve "resumed" status on success, but surface skips/errors/waiting explicitly.
-        resume_status = "resumed"
-        if result_status in ("skipped", "error", "waiting"):
-            resume_status = result_status
+        await _resume_oikos(run_id, None, result_text)
 
         return {
-            "status": resume_status,
+            "status": "resumed",
             "run_id": run_id,
-            "result_status": result_status,
         }
 
     except Exception as e:

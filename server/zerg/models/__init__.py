@@ -5,8 +5,6 @@ from .agents import AgentEvent
 from .agents import AgentsBase
 from .agents import AgentSession
 from .agents import SessionTurnReview
-from .commis_barrier import CommisBarrier
-from .commis_barrier import CommisBarrierJob
 from .connector import Connector
 from .conversation import Conversation
 from .conversation import ConversationBinding

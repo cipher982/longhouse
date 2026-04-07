@@ -11,8 +11,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from zerg.models.models import CommisJob
-
 
 async def emit_oikos_waiting_and_run_updated(
     db: Session,
@@ -228,36 +226,3 @@ async def emit_error_event_and_close_stream(
     )
 
     await emit_stream_control(db, run, "close", "error", owner_id)
-
-
-async def emit_stream_control_for_pending_commiss(
-    db: Session,
-    run: Any,
-    owner_id: int,
-    *,
-    ttl_ms: int = 120_000,
-) -> int:
-    """Emit stream lifecycle control based on pending commis jobs.
-
-    - If there are queued/running commiss for this run, keep the stream open.
-    - Otherwise, close the stream as all delegated work is complete.
-
-    Returns:
-        Number of pending commis jobs at the time of check.
-    """
-    from zerg.services.oikos_service import emit_stream_control
-
-    pending_commiss_count = (
-        db.query(CommisJob)
-        .filter(
-            CommisJob.oikos_run_id == run.id,
-            CommisJob.status.in_(["queued", "running"]),
-        )
-        .count()
-    )
-    if pending_commiss_count > 0:
-        await emit_stream_control(db, run, "keep_open", "commiss_pending", owner_id, ttl_ms=ttl_ms)
-    else:
-        await emit_stream_control(db, run, "close", "all_complete", owner_id)
-
-    return pending_commiss_count
