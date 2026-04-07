@@ -59,7 +59,7 @@ CATEGORY_PREFIXES = {
     "knowledge_": "knowledge",
     "web_": "web",
     "http_": "web",
-    "spawn_workspace_commis": "oikos",
+    "spawn_commis": "oikos",
     "list_commiss": "oikos",
     "read_commis": "oikos",
     "get_commis_evidence": "oikos",

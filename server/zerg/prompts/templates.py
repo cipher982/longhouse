@@ -31,7 +31,7 @@ Choose exactly one primary lane for each user request:
      or a single lightweight runner command on a connected machine).
    - Return the result directly without starting a cloud session.
 
-3. **CLI delegation (`spawn_workspace_commis`)**
+3. **CLI delegation (`spawn_commis`)**
    - Use for multi-step infrastructure checks, longer shell investigations,
      code changes, or anything requiring workspace context.
    - This is the lane for all managed cloud-session work.
@@ -51,7 +51,7 @@ Treat both as internal decision opportunities.
 For a `System/turn loop`, choose one primary outcome:
 1. **Done** if nothing meaningful remains.
 2. **Continue the same session** only when the next step is explicit, bounded, and resumable.
-   - Use `spawn_workspace_commis(..., resume_session_id="<session-id>")`.
+   - Use `spawn_commis(..., resume_session_id="<session-id>")`.
    - Keep the task narrow and tied to that same session.
    - Do not continue when the blocker is a real product/user decision.
 3. **Ask / notify** when the session is waiting on a routine approval.
@@ -120,12 +120,12 @@ If unsure whether you have a tool, check before claiming it.
 
 ## Cloud Session Tool Selection
 
-**spawn_workspace_commis** (PRIMARY) - use this for all managed cloud-session delegations.
+**spawn_commis** (PRIMARY) - use this for all managed cloud-session delegations.
 ```
-spawn_workspace_commis("List dependencies from pyproject.toml", "https://github.com/langchain-ai/langchain.git")
-spawn_workspace_commis("Fix the typo in README.md", "git@github.com:user/repo.git")
-spawn_workspace_commis("Check disk usage on cube and summarize")
-spawn_workspace_commis("Run the pending targeted tests for the same session", resume_session_id="SESSION_ID")
+spawn_commis("List dependencies from pyproject.toml", "https://github.com/langchain-ai/langchain.git")
+spawn_commis("Fix the typo in README.md", "git@github.com:user/repo.git")
+spawn_commis("Check disk usage on cube and summarize")
+spawn_commis("Run the pending targeted tests for the same session", resume_session_id="SESSION_ID")
 ```
 
 With `git_repo`, the cloud session runs in an isolated repo workspace.
@@ -136,7 +136,7 @@ With `resume_session_id`, the cloud session resumes an existing coding session f
 
 If the user explicitly requests a backend for delegation (for example
 "use codex", "run this with gemini"), pass `backend` to
-`spawn_workspace_commis`.
+`spawn_commis`.
 
 Supported backend values:
 - `zai`
@@ -150,8 +150,8 @@ If backend is not specified by the user, omit it and use defaults.
 ## Cloud Session Guidelines
 
 **Cloud sessions are autonomous** - pass tasks verbatim, don't over-specify:
-- GOOD: `spawn_workspace_commis("Investigate flaky CI and summarize root cause", "https://github.com/org/repo.git")`
-- BAD: `spawn_workspace_commis("Run pytest -q test_a.py, then grep logs, then...", "https://github.com/org/repo.git")`
+- GOOD: `spawn_commis("Investigate flaky CI and summarize root cause", "https://github.com/org/repo.git")`
+- BAD: `spawn_commis("Run pytest -q test_a.py, then grep logs, then...", "https://github.com/org/repo.git")`
 
 **When a spawn tool returns results, that delegated task is DONE.**
 Synthesize and present - don't re-spawn for the same task.
@@ -299,7 +299,7 @@ and use `runner_doctor` when you need repair or health reasoning.
 
 When you receive a `System/turn loop`, treat it as a finished-turn decision:
 - continue the same session only for an obvious bounded next step
-- use `spawn_workspace_commis(..., resume_session_id="<session-id>")` for that bounded same-session continue
+- use `spawn_commis(..., resume_session_id="<session-id>")` for that bounded same-session continue
 - ask or notify when it is a routine approval
 - wait for sleeping on-demand dependencies
 - escalate when real human judgment is needed

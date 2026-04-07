@@ -71,7 +71,7 @@ class ToolName(str, Enum):
     SEND_SMS = "send_sms"
     CANCEL_COMMIS = "cancel_commis"
     CHECK_COMMIS_STATUS = "check_commis_status"
-    SPAWN_WORKSPACE_COMMIS = "spawn_workspace_commis"
+    SPAWN_COMMIS = "spawn_commis"
     WAIT_FOR_COMMIS = "wait_for_commis"
     TASK_CREATE = "task_create"
     TASK_DELETE = "task_delete"
@@ -178,7 +178,7 @@ TOOL_SERVER_MAPPING: Dict[ToolName, ServerName] = {
     ToolName.SEND_SMS: ServerName.SMS,
     ToolName.CANCEL_COMMIS: ServerName.OIKOS,
     ToolName.CHECK_COMMIS_STATUS: ServerName.OIKOS,
-    ToolName.SPAWN_WORKSPACE_COMMIS: ServerName.OIKOS,
+    ToolName.SPAWN_COMMIS: ServerName.OIKOS,
     ToolName.WAIT_FOR_COMMIS: ServerName.OIKOS,
     ToolName.TASK_CREATE: ServerName.TASK,
     ToolName.TASK_DELETE: ServerName.TASK,

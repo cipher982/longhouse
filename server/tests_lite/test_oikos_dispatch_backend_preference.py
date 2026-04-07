@@ -25,7 +25,7 @@ def test_apply_dispatch_contract_injects_backend_into_spawn_calls():
     tool_calls = [
         {
             "id": "call_1",
-            "name": "spawn_workspace_commis",
+            "name": "spawn_commis",
             "args": {"task": "Check disk usage"},
         }
     ]
@@ -40,7 +40,7 @@ def test_apply_dispatch_contract_does_not_override_explicit_backend():
     tool_calls = [
         {
             "id": "call_1",
-            "name": "spawn_workspace_commis",
+            "name": "spawn_commis",
             "args": {"task": "Check disk usage", "backend": "codex"},
         }
     ]
