@@ -3,7 +3,6 @@
 This service handles:
 - Finding or creating the user's long-lived oikos thread
 - Running the oikos runtime profile with streaming events
-- Coordinating commis execution and result synthesis
 
 The key invariant is ONE oikos thread per user that persists across sessions.
 """
@@ -11,14 +10,12 @@ The key invariant is ONE oikos thread per user that persists across sessions.
 from __future__ import annotations
 
 import asyncio
-import contextvars
 import logging
 import threading
 import uuid
 import weakref
 from dataclasses import dataclass
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from typing import TYPE_CHECKING
 from typing import Any
@@ -39,21 +36,13 @@ from zerg.models.models import Fiche as FicheModel
 from zerg.models.models import Run
 from zerg.models.models import Thread as ThreadModel
 from zerg.prompts import build_oikos_prompt
-from zerg.services.commis_artifact_store import CommisArtifactStore
 from zerg.services.conversation_service import ConversationService
-from zerg.services.oikos_commis_context import RECENT_COMMIS_CONTEXT_MARKER
-from zerg.services.oikos_commis_context import RECENT_COMMIS_HISTORY_LIMIT
-from zerg.services.oikos_commis_context import RECENT_COMMIS_HISTORY_MINUTES
-from zerg.services.oikos_commis_context import acknowledge_commis_jobs
-from zerg.services.oikos_commis_context import build_recent_commis_context
-from zerg.services.oikos_commis_context import cleanup_stale_commis_context
 from zerg.services.oikos_context import reset_seq
 from zerg.services.oikos_run_lifecycle import emit_cancelled_run_updated
 from zerg.services.oikos_run_lifecycle import emit_error_event_and_close_stream
 from zerg.services.oikos_run_lifecycle import emit_failed_run_updated
 from zerg.services.oikos_run_lifecycle import emit_oikos_complete_success
 from zerg.services.oikos_run_lifecycle import emit_oikos_waiting_and_run_updated
-from zerg.services.oikos_run_lifecycle import emit_stream_control_for_pending_commiss
 from zerg.services.oikos_run_lifecycle import emit_success_run_updated
 from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
 from zerg.services.oikos_wakeup_ledger import classify_wakeup_outcome_for_run
@@ -601,18 +590,6 @@ class OikosService:
         )
         return int(cleared_thread_messages or 0), int(cleared_conversation_messages or 0)
 
-    def _build_recent_commis_context(self, owner_id: int) -> tuple[str | None, list[int]]:
-        """Build inbox context with active commis and unread recent results."""
-        return build_recent_commis_context(self.db, owner_id)
-
-    def _acknowledge_commis_jobs(self, job_ids: list[int]) -> None:
-        """Mark commis jobs as acknowledged after context message persistence."""
-        acknowledge_commis_jobs(self.db, job_ids)
-
-    def _cleanup_stale_commis_context(self, thread_id: int, min_age_seconds: float = 5.0) -> int:
-        """Delete stale injected commis-context messages from the thread."""
-        return cleanup_stale_commis_context(self.db, thread_id, min_age_seconds=min_age_seconds)
-
     async def run_oikos(
         self,
         owner_id: int,
@@ -825,25 +802,6 @@ class OikosService:
         )
 
         try:
-            # v2.0: Inject recent commis history context before user message
-            # This prevents redundant commis spawns by showing the oikos
-            # what work has been done recently
-            #
-            # IMPORTANT: Clean up any stale context messages first to prevent
-            # accumulation of outdated "X minutes ago" timestamps
-            self._cleanup_stale_commis_context(thread.id)
-
-            recent_commis_context, jobs_to_acknowledge = self._build_recent_commis_context(owner_id)
-            if recent_commis_context:
-                logger.debug(f"Injecting recent commis context for user {owner_id}")
-                create_thread_message(
-                    db=self.db,
-                    thread_id=thread.id,
-                    role="system",
-                    content=recent_commis_context,
-                    processed=True,  # Mark as processed so fiche doesn't re-process
-                )
-
             # Add task as user message
             # Continuation tasks are internal orchestration messages - they should be
             # stored for LLM context but NOT shown to users in chat history
@@ -866,11 +824,6 @@ class OikosService:
                     sender_kind="human",
                     sender_display=None,
                 )
-
-            # Acknowledge commis jobs AFTER messages are persisted (atomic semantics)
-            # This ensures jobs aren't marked "seen" unless oikos actually sees them
-            if jobs_to_acknowledge:
-                self._acknowledge_commis_jobs(jobs_to_acknowledge)
 
             # Emit thinking event
             await emit_run_event(
@@ -1017,151 +970,20 @@ class OikosService:
                 end_time = datetime.now(timezone.utc)
                 duration_ms = int((end_time - start_time).total_seconds() * 1000)
 
-                # Update run status to WAITING (NOT committed yet - atomic with barrier creation)
+                # Update run status to WAITING and commit
                 run.status = RunStatus.WAITING
                 run.duration_ms = duration_ms
-                # Persist partial token usage before WAITING (will be added to on resume)
                 if runner.usage_total_tokens is not None:
                     run.total_tokens = runner.usage_total_tokens
-                # NOTE: DO NOT commit here - we need WAITING + barrier to be atomic
 
-                # Extract interrupt payload
                 interrupt_value = interrupt.interrupt_value
-
-                # TWO-PHASE COMMIT: Handle parallel commiss (barrier pattern)
-                # CRITICAL: Barrier creation and WAITING status must be in SAME transaction
-                # to prevent race where commis completes before barrier exists
-                if isinstance(interrupt_value, dict) and interrupt_value.get("type") == "commiss_pending":
-                    from zerg.models.commis_barrier import CommisBarrier
-                    from zerg.models.commis_barrier import CommisBarrierJob
-
-                    job_ids = interrupt_value.get("job_ids", [])
-                    created_jobs = interrupt_value.get("created_jobs", [])
-
-                    logger.info(f"TWO-PHASE COMMIT: Creating barrier for {len(job_ids)} commiss")
-
-                    # PHASE 2: Create barrier FIRST (jobs are already created with status='created')
-                    barrier = CommisBarrier(
-                        run_id=run.id,
-                        expected_count=len(job_ids),
-                        status="waiting",
-                        # Set deadline 10 minutes from now (configurable)
-                        deadline_at=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(minutes=10),
-                    )
-                    self.db.add(barrier)
-                    self.db.flush()  # Get barrier.id
-
-                    # Create CommisBarrierJob records with tool_call_id mapping
-                    for job_info in created_jobs:
-                        job = job_info["job"]
-                        tool_call_id = job_info["tool_call_id"]
-                        self.db.add(
-                            CommisBarrierJob(
-                                barrier_id=barrier.id,
-                                job_id=job.id,
-                                tool_call_id=tool_call_id,
-                                status="queued",  # Ready for pickup
-                            )
-                        )
-
-                    # PHASE 3: Flip jobs from 'created' to 'queued' (commiss can now pick them up)
-                    for job_id in job_ids:
-                        self.db.query(CommisJob).filter(
-                            CommisJob.id == job_id,
-                            CommisJob.status == "created",
-                        ).update({"status": "queued"})
-
-                    self.db.commit()
-                    logger.info(f"TWO-PHASE COMMIT complete: barrier={barrier.id}, {len(job_ids)} jobs queued")
-
-                    # Emit commis_spawned events for UI (job_id → tool_call_id mapping)
-                    # Must emit AFTER jobs are queued (UI expects valid jobs)
-                    from zerg.services.event_store import append_run_event
-
-                    for job_info in created_jobs:
-                        job = job_info["job"]
-                        tool_call_id = job_info["tool_call_id"]
-                        task = job_info.get("task", job.task[:100] if job.task else "")
-                        await append_run_event(
-                            run_id=run.id,
-                            event_type="commis_spawned",
-                            payload={
-                                "job_id": job.id,
-                                "tool_call_id": tool_call_id,
-                                "task": task,
-                                "model": job.model,
-                                "owner_id": owner_id,
-                                "trace_id": effective_trace_id,
-                            },
-                        )
-                    logger.info(f"Emitted {len(created_jobs)} commis_spawned events")
-                    from zerg.services.commis_job_processor import commis_job_processor
-
-                    commis_job_processor.notify_job_available()
-
-                    # Use first job_id for payload/UI convenience
-                    job_id = job_ids[0] if job_ids else None
-                    interrupt_message = f"Working on {len(job_ids)} tasks in the background..."
-
-                    # Check if any commiss already completed (race safety)
-                    already_completed = 0
-                    for jid in job_ids:
-                        commis_job = self.db.query(CommisJob).filter(CommisJob.id == jid).first()
-                        if commis_job and commis_job.status in ("success", "failed"):
-                            already_completed += 1
-                            # Trigger immediate barrier check for this job
-                            asyncio.create_task(
-                                self._trigger_immediate_barrier_check(
-                                    run_id=run.id,
-                                    job_id=jid,
-                                    commis_job=commis_job,
-                                ),
-                                context=contextvars.Context(),
-                            )
-
-                    if already_completed:
-                        completed_message = f"{already_completed}/{len(job_ids)} commiss already completed - scheduled barrier checks"
-                        logger.info(completed_message)
-
-                else:
-                    # SINGLE-COMMIS PATH (wait_for_commis or single-commis interrupt)
-                    job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None
-                    interrupt_message = (
-                        interrupt_value.get("message", "Working on this in the background...")
-                        if isinstance(interrupt_value, dict)
-                        else str(interrupt_value)
-                    )
-
-                    # For wait_for_commis: store tool_call_id so resume uses it (not spawn_commis's)
-                    interrupt_type = interrupt_value.get("type") if isinstance(interrupt_value, dict) else None
-                    if interrupt_type == "wait_for_commis":
-                        wait_tool_call_id = interrupt_value.get("tool_call_id")
-                        if wait_tool_call_id:
-                            run.pending_tool_call_id = wait_tool_call_id
-                            logger.debug(f"Stored pending_tool_call_id={wait_tool_call_id} for wait_for_commis")
-
-                    # Commit WAITING status now (no barrier needed for single commis)
-                    self.db.commit()
-
-                    # RACE SAFETY: Check if commis already completed while we were setting up.
-                    # This handles the case where commis finished before WAITING was committed,
-                    # and its retry loop gave up. We immediately trigger resume if so.
-                    if job_id:
-                        commis_job = self.db.query(CommisJob).filter(CommisJob.id == job_id).first()
-                        if commis_job and commis_job.status in ("success", "failed"):
-                            logger.info(
-                                f"Commis job {job_id} already completed ({commis_job.status}) "
-                                f"while oikos was setting up - scheduling immediate resume"
-                            )
-                            # Schedule resume in background (don't block)
-                            # Use empty context to avoid leaking oikos context vars
-                            asyncio.create_task(
-                                self._trigger_immediate_resume(
-                                    run_id=run.id,
-                                    commis_job=commis_job,
-                                ),
-                                context=contextvars.Context(),
-                            )
+                job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None
+                interrupt_message = (
+                    interrupt_value.get("message", "Working on this in the background...")
+                    if isinstance(interrupt_value, dict)
+                    else str(interrupt_value)
+                )
+                self.db.commit()
 
                 if classify_wakeup_outcome_for_run(self.db, run_id=run.id):
                     self.db.commit()
@@ -1250,9 +1072,6 @@ class OikosService:
                     "reasoning_tokens": runner.usage_reasoning_tokens,
                 },
             )
-
-            # Emit stream_control based on pending commiss
-            await emit_stream_control_for_pending_commiss(self.db, run, owner_id, ttl_ms=120_000)
 
             # v2.2: Also emit RUN_UPDATED for dashboard visibility
             await emit_success_run_updated(
@@ -1367,13 +1186,6 @@ class OikosService:
             run.duration_ms = duration_ms
             run.error = str(e)
 
-            # Mark barrier as failed if it exists (prevents stuck state)
-            from zerg.models.commis_barrier import CommisBarrier
-
-            barrier = self.db.query(CommisBarrier).filter(CommisBarrier.run_id == run.id).first()
-            if barrier and barrier.status not in ("completed", "failed"):
-                barrier.status = "failed"
-
             self.db.commit()
 
             if finalize_wakeups_for_run(
@@ -1437,178 +1249,6 @@ class OikosService:
                 duration_ms=duration_ms,
                 debug_url=f"/oikos/{run.id}",
             )
-
-    async def _trigger_immediate_resume(self, run_id: int, commis_job: CommisJob) -> None:
-        """Trigger immediate resume when commis completed before oikos entered WAITING.
-
-        This handles the race condition where:
-        1. Commis finishes fast (before oikos commits WAITING)
-        2. Commis's retry loop gives up after 2 seconds
-        3. Oikos commits WAITING
-        4. → We detect completed commis and trigger resume immediately
-
-        Parameters
-        ----------
-        run_id
-            Oikos run ID
-        commis_job
-            The completed CommisJob record
-        """
-        from zerg.database import get_session_factory
-        from zerg.services.commis_single_resume import resume_oikos_with_commis_result
-
-        try:
-
-            def _extract_summary_from_result(result: str, max_chars: int = 400) -> str | None:
-                text = (result or "").strip()
-                if not text:
-                    return None
-                first_para = text.split("\n\n", 1)[0].strip()
-                summary = first_para or text
-                if len(summary) > max_chars:
-                    return summary[:max_chars].rstrip() + "…"
-                return summary
-
-            def _truncate_result(result: str, max_chars: int = 2000) -> str:
-                text = result or ""
-                if len(text) <= max_chars:
-                    return text
-                return text[:max_chars].rstrip() + "\n\n… (truncated)"
-
-            # Prefer the same "summary-first" resume payload used by the normal path.
-            artifact_store = CommisArtifactStore()
-            result_text: str
-
-            if commis_job.status == "failed":
-                result_text = f"Commis failed: {commis_job.error or 'Unknown error'}"
-            elif not commis_job.commis_id:
-                result_text = f"Commis job {commis_job.id} completed ({commis_job.status})"
-            else:
-                summary = None
-                try:
-                    metadata = artifact_store.get_commis_metadata(commis_job.commis_id, owner_id=commis_job.owner_id)
-                    summary = metadata.get("summary")
-                except Exception:
-                    summary = None
-
-                if summary:
-                    result_text = str(summary)
-                else:
-                    try:
-                        full_result = artifact_store.get_commis_result(commis_job.commis_id)
-                    except FileNotFoundError:
-                        result_text = f"Commis completed but result not found (commis_id: {commis_job.commis_id})"
-                    else:
-                        extracted = _extract_summary_from_result(full_result)
-                        result_text = extracted or _truncate_result(full_result)
-
-            # Resume with fresh DB session
-            session_factory = get_session_factory()
-            fresh_db = session_factory()
-            try:
-                from zerg.services.commis_runner import default_runner_factory
-
-                await resume_oikos_with_commis_result(
-                    db=fresh_db,
-                    run_id=run_id,
-                    commis_result=result_text,
-                    job_id=commis_job.id,
-                    runner_factory=default_runner_factory,
-                )
-                logger.info(f"Immediate resume completed for run {run_id}")
-            finally:
-                fresh_db.close()
-
-        except Exception as e:
-            logger.exception(f"Failed to trigger immediate resume for run {run_id}: {e}")
-
-    async def _trigger_immediate_barrier_check(self, run_id: int, job_id: int, commis_job: CommisJob) -> None:
-        """Trigger immediate barrier check when commis completed before barrier was set up.
-
-        This handles the race condition for parallel commiss where:
-        1. Commis finishes fast (before barrier commits)
-        2. Commis's retry loop gives up
-        3. Barrier is created
-        4. → We detect completed commis and trigger barrier check immediately
-
-        Parameters
-        ----------
-        run_id
-            Oikos run ID
-        job_id
-            CommisJob ID
-        commis_job
-            The completed CommisJob record
-        """
-        from zerg.database import get_session_factory
-        from zerg.services.commis_barrier import check_and_resume_if_all_complete
-        from zerg.services.commis_batch_resume import resume_oikos_batch
-
-        try:
-            # Extract result summary
-            artifact_store = CommisArtifactStore()
-            result_text: str
-
-            if commis_job.status == "failed":
-                result_text = f"Commis failed: {commis_job.error or 'Unknown error'}"
-            elif not commis_job.commis_id:
-                result_text = f"Commis job {commis_job.id} completed ({commis_job.status})"
-            else:
-                summary = None
-                try:
-                    metadata = artifact_store.get_commis_metadata(commis_job.commis_id, owner_id=commis_job.owner_id)
-                    summary = metadata.get("summary")
-                except Exception:
-                    summary = None
-
-                if summary:
-                    result_text = str(summary)
-                else:
-                    try:
-                        full_result = artifact_store.get_commis_result(commis_job.commis_id)
-                        # Truncate for barrier storage
-                        result_text = full_result[:2000] if len(full_result) > 2000 else full_result
-                    except FileNotFoundError:
-                        result_text = f"Commis completed but result not found (commis_id: {commis_job.commis_id})"
-
-            # Trigger barrier check with fresh DB session
-            session_factory = get_session_factory()
-            fresh_db = session_factory()
-            try:
-                barrier_result = await check_and_resume_if_all_complete(
-                    db=fresh_db,
-                    run_id=run_id,
-                    job_id=job_id,
-                    result=result_text,
-                    error=commis_job.error if commis_job.status == "failed" else None,
-                )
-
-                # CRITICAL: Commit barrier state changes (nested transaction needs outer commit)
-                fresh_db.commit()
-
-                if barrier_result["status"] == "resume":
-                    logger.info(
-                        f"Immediate barrier check for run {run_id} triggered batch resume "
-                        f"with {len(barrier_result['commis_results'])} results"
-                    )
-                    await resume_oikos_batch(
-                        db=fresh_db,
-                        run_id=run_id,
-                        commis_results=barrier_result["commis_results"],
-                    )
-                elif barrier_result["status"] == "waiting":
-                    waiting_status = (
-                        f"Immediate barrier check for run {run_id}: " f"{barrier_result['completed']}/{barrier_result['expected']} complete"
-                    )
-                    logger.info(waiting_status)
-                else:
-                    logger.debug(f"Immediate barrier check skipped for run {run_id}: {barrier_result.get('reason')}")
-
-            finally:
-                fresh_db.close()
-
-        except Exception as e:
-            logger.exception(f"Failed to trigger immediate barrier check for run {run_id}: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -1813,7 +1453,4 @@ __all__ = [
     "create_oikos_run",
     "invoke_oikos",
     "OIKOS_THREAD_TYPE",
-    "RECENT_COMMIS_HISTORY_LIMIT",
-    "RECENT_COMMIS_HISTORY_MINUTES",
-    "RECENT_COMMIS_CONTEXT_MARKER",
 ]
