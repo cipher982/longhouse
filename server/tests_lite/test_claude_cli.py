@@ -226,7 +226,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
             session_id="session-123",
             provider_session_id="provider-123",
             attach_command=(
-                "zsh -lc 'exec claude --resume provider-123 "
+                "zsh -lc 'exec claude --dangerously-skip-permissions --resume provider-123 "
                 "--dangerously-load-development-channels server:longhouse-channel'"
             ),
             source_runner_name="work-laptop",
@@ -272,7 +272,7 @@ def test_claude_command_starts_native_channel_bridge_when_api_returns_native_tra
     assert result.exit_code == 0, result.output
     assert "Longhouse Claude session launched on this machine." in result.output
     assert (
-        "Attach: zsh -lc 'exec claude --resume provider-123 "
+        "Attach: zsh -lc 'exec claude --dangerously-skip-permissions --resume provider-123 "
         "--dangerously-load-development-channels server:longhouse-channel'" in result.output
     )
     assert "Preparing native Claude bridge..." in result.output
