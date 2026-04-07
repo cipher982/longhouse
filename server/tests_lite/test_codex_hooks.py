@@ -41,8 +41,12 @@ def test_codex_hook_script_has_managed_session_id_support():
 def test_codex_hook_script_supports_direct_hook_target_overrides():
     assert 'TARGET_URL="${LONGHOUSE_HOOK_URL:-}"' in CODEX_HOOK_SCRIPT
     assert 'TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"' in CODEX_HOOK_SCRIPT
+    assert 'PRESENCE_MODE="${LONGHOUSE_HOOK_PRESENCE_MODE:-auto}"' in CODEX_HOOK_SCRIPT
     assert 'X-Agents-Token: $TARGET_TOKEN' in CODEX_HOOK_SCRIPT
     assert '${TARGET_URL%/}/api/agents/presence' in CODEX_HOOK_SCRIPT
+    assert "engine_status_is_fresh()" in CODEX_HOOK_SCRIPT
+    assert "write_presence_outbox()" in CODEX_HOOK_SCRIPT
+    assert 'MODE=$(presence_delivery_mode)' in CODEX_HOOK_SCRIPT
 
 
 def test_codex_hook_script_maps_all_events():

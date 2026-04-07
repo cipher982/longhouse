@@ -62,6 +62,7 @@ class ScenarioSpec:
     description: str
     hook_env: dict[str, str]
     server_delay_ms: int | None = None
+    fresh_engine_status: bool = False
 
 
 @dataclass(frozen=True)
@@ -153,6 +154,17 @@ SCENARIOS: tuple[ScenarioSpec, ...] = (
             "LONGHOUSE_HOOK_TOKEN": "zdt_profile_token",
         },
         server_delay_ms=0,
+    ),
+    ScenarioSpec(
+        name="managed_bind_auto_with_daemon",
+        description="managed-session env present, but a fresh local engine status file forces outbox mode",
+        hook_env={
+            "LONGHOUSE_MANAGED_SESSION_ID": "managed-session-123",
+            "LONGHOUSE_HOOK_URL": "__SERVER_URL__",
+            "LONGHOUSE_HOOK_TOKEN": "zdt_profile_token",
+        },
+        server_delay_ms=0,
+        fresh_engine_status=True,
     ),
 )
 
@@ -312,6 +324,21 @@ def _count_engine_binds(engine_log_path: Path) -> int:
     return len([line for line in engine_log_path.read_text(encoding="utf-8").splitlines() if line.strip()])
 
 
+def _write_fresh_engine_status(sandbox_home: Path) -> None:
+    status_path = sandbox_home / ".claude" / "engine-status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "version": "profile",
+                "daemon_pid": 12345,
+                "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def _build_env(
     *,
     base_env: dict[str, str],
@@ -366,6 +393,8 @@ def profile_provider_scenario(
         (sandbox_home / ".claude" / "outbox").mkdir(parents=True, exist_ok=True)
         (sandbox_home / ".claude" / "hindsight").mkdir(parents=True, exist_ok=True)
         (sandbox_home / ".codex").mkdir(parents=True, exist_ok=True)
+        if scenario.fresh_engine_status:
+            _write_fresh_engine_status(sandbox_home)
 
         materialized_hook = materialize_hook_script(
             source_path=hook_source_path,

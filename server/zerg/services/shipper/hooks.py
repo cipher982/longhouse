@@ -57,7 +57,9 @@ HOOK_SCRIPT = """\
 # Installed by: longhouse connect --install
 # Registered on: Stop, UserPromptSubmit, PreToolUse, PostToolUse,
 #                PermissionRequest, Notification
-# Presence: no network — writes to local outbox, daemon handles upload.
+# Presence delivery:
+#   - Prefer local outbox when a fresh local engine heartbeat/status file exists.
+#   - Fall back to direct POST only when no local daemon appears to be running.
 # Session binding: seeds managed session ID so daemon ships correctly.
 INPUT=$(cat)
 
@@ -83,6 +85,7 @@ MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-}"
 
 TARGET_URL="${LONGHOUSE_HOOK_URL:-}"
 TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
+PRESENCE_MODE="${LONGHOUSE_HOOK_PRESENCE_MODE:-auto}"
 FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"
 HINDSIGHT_ROOT="$HOME/.claude/hindsight"
 if [[ "$FORCE_SIDECHAIN" != "1" ]] && [[ -n "$CWD" ]]; then
@@ -101,6 +104,55 @@ emit_presence() {
       "${TARGET_URL%/}/api/agents/presence" >/dev/null 2>&1 && return 0
   fi
   return 1
+}
+
+engine_status_is_fresh() {
+  STATUS_FILE="$HOME/.claude/engine-status.json"
+  [ -f "$STATUS_FILE" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$STATUS_FILE" <<'PY' >/dev/null 2>&1
+import os
+import sys
+import time
+
+path = sys.argv[1]
+max_age_seconds = 15 * 60
+try:
+    age = time.time() - os.path.getmtime(path)
+except OSError:
+    raise SystemExit(1)
+raise SystemExit(0 if age <= max_age_seconds else 1)
+PY
+}
+
+write_presence_outbox() {
+  payload="$1"
+  OUTBOX="$HOME/.claude/outbox"
+  [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX" || return 1
+  TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX") || return 1
+  printf '%s\n' "$payload" > "$TMPFILE" || return 1
+  mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+}
+
+presence_delivery_mode() {
+  case "$PRESENCE_MODE" in
+    direct) printf '%s' "direct" ;;
+    outbox) printf '%s' "outbox" ;;
+    auto|"")
+      if engine_status_is_fresh; then
+        printf '%s' "outbox"
+      else
+        printf '%s' "direct"
+      fi
+      ;;
+    *)
+      if engine_status_is_fresh; then
+        printf '%s' "outbox"
+      else
+        printf '%s' "direct"
+      fi
+      ;;
+  esac
 }
 
 # Map event → presence state
@@ -132,15 +184,18 @@ if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
   "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" >/dev/null 2>&1 || true
 fi
 
-if ! emit_presence "$PAYLOAD"; then
-  # Write presence to outbox (atomic: write to .tmp.* then rename to prs.*.json)
-  # Temp file starts with '.' so the daemon skips it during the write.
-  # Final file starts with 'prs.' — daemon picks it up, POSTs, deletes.
-  OUTBOX="$HOME/.claude/outbox"
-  [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
-  TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
-  printf '%s\n' "$PAYLOAD" > "$TMPFILE"
-  mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+MODE=$(presence_delivery_mode)
+DELIVERED=1
+if [[ "$MODE" == "direct" ]]; then
+  emit_presence "$PAYLOAD" && DELIVERED=0
+  if [[ "$DELIVERED" -ne 0 ]]; then
+    write_presence_outbox "$PAYLOAD" && DELIVERED=0
+  fi
+else
+  write_presence_outbox "$PAYLOAD" && DELIVERED=0
+  if [[ "$DELIVERED" -ne 0 ]]; then
+    emit_presence "$PAYLOAD" && DELIVERED=0
+  fi
 fi
 
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
@@ -199,7 +254,9 @@ CODEX_HOOK_SCRIPT = """\
 # Longhouse Codex hook — presence outbox write + session binding
 # Installed by: longhouse connect --install
 # Registered on: SessionStart, UserPromptSubmit, Stop (via ~/.codex/hooks.json)
-# Presence: no network — writes to local outbox, daemon handles upload.
+# Presence delivery:
+#   - Prefer local outbox when a fresh local engine heartbeat/status file exists.
+#   - Fall back to direct POST only when no local daemon appears to be running.
 # Session binding: seeds managed session ID so daemon ships correctly.
 INPUT=$(cat)
 
@@ -224,6 +281,7 @@ fi
 
 TARGET_URL="${LONGHOUSE_HOOK_URL:-}"
 TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
+PRESENCE_MODE="${LONGHOUSE_HOOK_PRESENCE_MODE:-auto}"
 
 emit_presence() {
   payload="$1"
@@ -235,6 +293,55 @@ emit_presence() {
       "${TARGET_URL%/}/api/agents/presence" >/dev/null 2>&1 && return 0
   fi
   return 1
+}
+
+engine_status_is_fresh() {
+  STATUS_FILE="$HOME/.claude/engine-status.json"
+  [ -f "$STATUS_FILE" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$STATUS_FILE" <<'PY' >/dev/null 2>&1
+import os
+import sys
+import time
+
+path = sys.argv[1]
+max_age_seconds = 15 * 60
+try:
+    age = time.time() - os.path.getmtime(path)
+except OSError:
+    raise SystemExit(1)
+raise SystemExit(0 if age <= max_age_seconds else 1)
+PY
+}
+
+write_presence_outbox() {
+  payload="$1"
+  OUTBOX="$HOME/.claude/outbox"
+  [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX" || return 1
+  TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX") || return 1
+  printf '%s\n' "$payload" > "$TMPFILE" || return 1
+  mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+}
+
+presence_delivery_mode() {
+  case "$PRESENCE_MODE" in
+    direct) printf '%s' "direct" ;;
+    outbox) printf '%s' "outbox" ;;
+    auto|"")
+      if engine_status_is_fresh; then
+        printf '%s' "outbox"
+      else
+        printf '%s' "direct"
+      fi
+      ;;
+    *)
+      if engine_status_is_fresh; then
+        printf '%s' "outbox"
+      else
+        printf '%s' "direct"
+      fi
+      ;;
+  esac
 }
 
 # Map event -> presence state
@@ -249,14 +356,18 @@ PAYLOAD=$(jq -n --arg sid "$SID" --arg st "$STATE" \\
       --arg tool "" --arg cwd "$CWD" --arg provider "codex" \\
   '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider}')
 
-if ! emit_presence "$PAYLOAD"; then
-  # Write presence to outbox (same outbox the engine daemon drains for Claude).
-  # Atomic: write to .tmp.* then rename to prs.*.json
-  OUTBOX="$HOME/.claude/outbox"
-  [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX"
-  TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX")
-  printf '%s\n' "$PAYLOAD" > "$TMPFILE"
-  mv "$TMPFILE" "${TMPFILE/\\.tmp\\./prs.}.json"
+MODE=$(presence_delivery_mode)
+DELIVERED=1
+if [[ "$MODE" == "direct" ]]; then
+  emit_presence "$PAYLOAD" && DELIVERED=0
+  if [[ "$DELIVERED" -ne 0 ]]; then
+    write_presence_outbox "$PAYLOAD" && DELIVERED=0
+  fi
+else
+  write_presence_outbox "$PAYLOAD" && DELIVERED=0
+  if [[ "$DELIVERED" -ne 0 ]]; then
+    emit_presence "$PAYLOAD" && DELIVERED=0
+  fi
 fi
 
 # Seed session binding so the daemon ships with the correct managed session ID.
@@ -279,22 +390,22 @@ def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict, dict]:
     """Build hook entry dicts with resolved script paths.
 
     Returns (stop_entry, lifecycle_entry, session_start_entry):
-    - stop_entry: unified script for Stop (sync, collapsible note — not a banner)
+    - stop_entry: unified script for Stop (sync, local write/bind — not a banner)
     - lifecycle_entry: unified script for UserPromptSubmit/PreToolUse/PostToolUse
-      (sync — outbox write is <2ms, silent)
+      (sync — prefers local outbox when daemon is healthy, direct POST fallback)
     - session_start_entry: session-start script (sync network call, once per session)
     """
     hook_path = str(hooks_dir / "longhouse-hook.sh")
     session_start_path = str(hooks_dir / "longhouse-session-start.sh")
 
-    # Stop: sync — hook only writes presence outbox + session binding (<5ms).
-    # The daemon handles all transcript shipping via its file watcher.
+    # Stop: sync — hook does local session binding and presence delivery setup.
+    # The daemon handles transcript shipping via its file watcher.
     stop_entry = {
         "hooks": [
             {"type": "command", "command": hook_path, "async": False, "timeout": 5},
         ],
     }
-    # Lifecycle events: outbox write is <2ms, sync is safe and silent.
+    # Lifecycle events remain sync but prefer local outbox when the daemon is healthy.
     lifecycle_entry = {
         "hooks": [
             {"type": "command", "command": hook_path, "async": False, "timeout": 5},
