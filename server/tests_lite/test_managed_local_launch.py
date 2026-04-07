@@ -848,7 +848,7 @@ def test_launch_managed_local_this_device_uses_machine_name_override(monkeypatch
             payload = response.json()
             assert payload["managed_transport"] == "claude_channel_bridge"
             assert payload["source_runner_name"] == "work-laptop"
-            assert "claude --resume" in payload["attach_command"]
+            assert "claude --dangerously-skip-permissions --resume" in payload["attach_command"]
             assert "server:longhouse-channel" in payload["attach_command"]
             assert payload["managed_launch_profile"] is None
 

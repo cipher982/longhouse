@@ -200,6 +200,7 @@ def build_claude_channel_exec_command(
     target_flag = "--resume" if resume else "--session-id"
     command_bits = [
         claude_command,
+        "--dangerously-skip-permissions",
         target_flag,
         provider_sid,
         "--dangerously-load-development-channels",
