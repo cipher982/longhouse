@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -40,6 +41,87 @@ _CLAUDE_LAUNCH_ENV_KEYS = (
 )
 _FORCE_NATIVE_CLAUDE_CHANNELS_ENV = "LONGHOUSE_FORCE_NATIVE_CLAUDE_CHANNELS"
 EXIT_SETUP_FAILED = 78
+_KNOWN_PRIVATE_NATIVE_CLAUDE_PATCH_BYTES = b"return!0                    "
+_KNOWN_PRIVATE_NATIVE_CLAUDE_ANCHOR_BYTES = b'return b_("tengu_harbor",!1)'
+
+
+def _resolve_claude_binary_path() -> Path | None:
+    raw = shutil.which("claude")
+    if not raw:
+        return None
+    try:
+        return Path(raw).expanduser().resolve()
+    except OSError:
+        return Path(raw).expanduser()
+
+
+def _inspect_private_native_claude_patch() -> tuple[str, Path | None, str]:
+    binary_path = _resolve_claude_binary_path()
+    if binary_path is None:
+        return "missing", None, "claude binary not found on PATH"
+    try:
+        data = binary_path.read_bytes()
+    except OSError as exc:
+        return "unreadable", binary_path, str(exc)
+
+    patched_count = data.count(_KNOWN_PRIVATE_NATIVE_CLAUDE_PATCH_BYTES)
+    anchor_count = data.count(_KNOWN_PRIVATE_NATIVE_CLAUDE_ANCHOR_BYTES)
+    if patched_count > 0:
+        return "patched", binary_path, f"known private patch present ({patched_count} match{'es' if patched_count != 1 else ''})"
+    if anchor_count > 0:
+        return "unpatched", binary_path, f"known gate bytes still present ({anchor_count} match{'es' if anchor_count != 1 else ''})"
+    return "unknown", binary_path, "known private patch bytes not found in active binary"
+
+
+def _print_native_claude_launch_panel(
+    *,
+    session_id: str,
+    provider_session_id: str,
+    workspace_path: Path,
+    force_native_claude_channels: bool,
+) -> None:
+    typer.secho("[longhouse::native-claude]", fg=typer.colors.CYAN, bold=True)
+    typer.echo(f"  session      {session_id}")
+    typer.echo(f"  provider     {provider_session_id}")
+    typer.echo(f"  workspace    {workspace_path}")
+    typer.echo("  transport    claude_channel_bridge")
+
+    binary_path = _resolve_claude_binary_path()
+    binary_label = str(binary_path) if binary_path is not None else "claude (not found on PATH)"
+    typer.echo(f"  claude-bin   {binary_label}")
+    typer.echo("  phases       [ok] session allocated  [ok] hooks installed  [run] launching Claude")
+
+    if not force_native_claude_channels:
+        return
+
+    patch_status, patch_path, patch_detail = _inspect_private_native_claude_patch()
+    path_label = str(patch_path) if patch_path is not None else "unknown"
+    if patch_status == "patched":
+        typer.secho(f"  private      [ok] forced native path armed on {path_label}", fg=typer.colors.GREEN)
+        return
+    if patch_status == "unpatched":
+        typer.secho(f"  private      [warn] forced native path is unpatched on {path_label}", fg=typer.colors.YELLOW)
+        typer.echo(f"               {patch_detail}")
+        return
+    typer.secho(f"  private      [warn] forced native patch status unknown on {path_label}", fg=typer.colors.YELLOW)
+    typer.echo(f"               {patch_detail}")
+
+
+def _assert_private_forced_native_claude_ready() -> None:
+    patch_status, patch_path, patch_detail = _inspect_private_native_claude_patch()
+    if patch_status == "patched":
+        return
+    location = str(patch_path) if patch_path is not None else "unknown binary"
+    typer.secho(
+        "Forced native Claude channels requested, but the active Claude binary does not contain the known private "
+        "Bedrock native-channel patch.",
+        fg=typer.colors.RED,
+    )
+    typer.echo(f"Claude binary: {location}")
+    typer.echo(f"Detail: {patch_detail}")
+    typer.echo("Likely cause: a Claude update repointed ~/.local/bin/claude to a fresh unpatched version.")
+    typer.echo("Next step: reapply the private local patch or stop forcing native channels and use tmux fallback.")
+    raise typer.Exit(code=EXIT_SETUP_FAILED)
 
 
 def _run_claude_auth_status() -> subprocess.CompletedProcess[str]:
@@ -299,6 +381,7 @@ def _finalize_native_claude_launch(
     attach: bool,
 ) -> None:
     session_url = _build_session_url(base_url, result.session_id)
+    force_native_claude_channels = _force_native_claude_channels_enabled()
     typer.secho("Longhouse Claude session launched on this machine.", fg=typer.colors.GREEN)
     typer.echo(f"Session ID: {result.session_id}")
     typer.echo(f"Provider session ID: {result.provider_session_id}")
@@ -327,6 +410,12 @@ def _finalize_native_claude_launch(
         typer.secho("Skipping native launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
         return
 
+    _print_native_claude_launch_panel(
+        session_id=result.session_id,
+        provider_session_id=result.provider_session_id,
+        workspace_path=cwd,
+        force_native_claude_channels=force_native_claude_channels,
+    )
     _print_native_claude_development_channels_warning()
     typer.echo("Launching native Claude...")
     exit_code = _run_native_claude_tui(
@@ -404,6 +493,8 @@ def claude(
     force_native_claude_channels = _force_native_claude_channels_enabled()
     force_flag_capable_path = _launch_env_requires_flag_capable_claude_path(claude_launch_env)
     if force_native_claude_channels:
+        if force_flag_capable_path:
+            _assert_private_forced_native_claude_ready()
         native_claude_channels_available = True
         native_claude_channels_detail = f"forced by {_FORCE_NATIVE_CLAUDE_CHANNELS_ENV}"
         force_flag_capable_path = False
