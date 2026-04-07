@@ -120,7 +120,10 @@ async def run_commis_job(job_id: int) -> None:
         if not job:
             return
         if job.status == "cancelled":
-            return  # Respect cancellation
+            # Still need to resume Oikos so it doesn't hang
+            if oikos_run_id:
+                await _resume_oikos(oikos_run_id, tool_call_id, "Commis job was cancelled by user.")
+            return
 
         job.finished_at = datetime.now(timezone.utc)
         if result and result.status == "success":
@@ -241,9 +244,11 @@ def _ingest_workspace_session(
     event_ingests = [
         EventIngest(
             role=e.role,
-            content=e.content,
+            content_text=e.content_text,
             tool_name=e.tool_name,
-            tool_input=e.tool_input,
+            tool_input_json=e.tool_input_json,
+            tool_output_text=e.tool_output_text,
+            tool_call_id=e.tool_call_id,
             timestamp=e.timestamp,
         )
         for e in events
@@ -251,12 +256,12 @@ def _ingest_workspace_session(
 
     session_ingest = SessionIngest(
         provider="claude",
-        provider_session_id=metadata.get("sessionId", f"commis-{job_id}"),
-        started_at=metadata.get("started_at"),
-        ended_at=metadata.get("ended_at"),
+        provider_session_id=metadata.session_id or f"commis-{job_id}",
+        started_at=metadata.started_at or job_started_at,
+        ended_at=metadata.ended_at,
         cwd=str(workspace_path),
-        git_repo=metadata.get("git_repo"),
-        git_branch=metadata.get("git_branch"),
+        git_repo=metadata.git_branch,  # ParsedSession doesn't have git_repo; use what we have
+        git_branch=metadata.git_branch,
         device_id=f"commis-{job_id}",
         environment="cloud",
         events=event_ingests,
@@ -286,7 +291,14 @@ def _build_result_text(result: CloudExecutionResult | None) -> str:
 
 
 async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str) -> None:
-    """Resume an Oikos run that was waiting for this commis."""
+    """Resume an Oikos run that was waiting for this commis.
+
+    Handles serial chaining: if the continuation spawns another commis
+    (RunnerInterrupted), we go back to WAITING instead of failing.
+    """
+    from zerg.managers.runtime_runner import RunnerInterrupted
+    from zerg.managers.runtime_runner import RuntimeRunner
+
     try:
         with db_session() as db:
             run = db.query(Run).filter(Run.id == run_id).first()
@@ -330,20 +342,29 @@ async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str)
             if not run:
                 return
 
-            from zerg.managers.runtime_runner import RuntimeRunner
-
             runner = RuntimeRunner(
                 run.fiche,
                 model_override=run.model,
                 reasoning_effort=run.reasoning_effort,
             )
-            await runner.run_continuation(
-                db=db,
-                thread=run.thread,
-                tool_call_id=effective_tool_call_id,
-                tool_result=result_text,
-                run_id=run_id,
-            )
+            try:
+                await runner.run_continuation(
+                    db=db,
+                    thread=run.thread,
+                    tool_call_id=effective_tool_call_id,
+                    tool_result=result_text,
+                    run_id=run_id,
+                )
+            except RunnerInterrupted:
+                # Serial chaining: continuation spawned another commis.
+                # The spawn tool already created the job and fired the task.
+                # Go back to WAITING.
+                run.status = RunStatus.WAITING
+                if runner.usage_total_tokens is not None:
+                    run.total_tokens = (run.total_tokens or 0) + runner.usage_total_tokens
+                db.commit()
+                logger.info("Oikos run %s re-interrupted during continuation (serial chain)", run_id)
+                return
 
             run.status = RunStatus.SUCCESS
             run.finished_at = datetime.now(timezone.utc)

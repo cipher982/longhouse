@@ -318,7 +318,7 @@ describe('ToolCard', () => {
         { name: 'search_notes', icon: '📝' },
         { name: 'web_search', icon: '🌐' },
         { name: 'web_fetch', icon: '🔗' },
-        { name: 'spawn_workspace_commis', icon: '🤖' },
+        { name: 'spawn_commis', icon: '🤖' },
       ];
 
       tools.forEach(({ name, icon }) => {
@@ -339,11 +339,11 @@ describe('ToolCard', () => {
 
     it('shows friendly cloud-session labels for commis tools', () => {
       const { container } = render(
-        <ToolCard tool={{ ...baseToolCall, toolName: 'spawn_workspace_commis' }} />
+        <ToolCard tool={{ ...baseToolCall, toolName: 'spawn_commis' }} />
       );
 
       expect(container).toHaveTextContent('Start cloud session');
-      expect(container).not.toHaveTextContent('spawn_workspace_commis');
+      expect(container).not.toHaveTextContent('spawn_commis');
     });
   });
 
