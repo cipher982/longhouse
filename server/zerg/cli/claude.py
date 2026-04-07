@@ -280,6 +280,14 @@ def _run_native_claude_tui(
     return int(completed.returncode)
 
 
+def _print_native_claude_development_channels_warning() -> None:
+    typer.secho(
+        "Claude may pause on a development-channel confirmation screen before the prompt appears. "
+        "If launch seems stuck, press Enter on 'I am using this for local development'.",
+        fg=typer.colors.YELLOW,
+    )
+
+
 def _finalize_native_claude_launch(
     *,
     base_url: str,
@@ -319,6 +327,7 @@ def _finalize_native_claude_launch(
         typer.secho("Skipping native launch because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
         return
 
+    _print_native_claude_development_channels_warning()
     typer.echo("Launching native Claude...")
     exit_code = _run_native_claude_tui(
         session_id=result.session_id,
