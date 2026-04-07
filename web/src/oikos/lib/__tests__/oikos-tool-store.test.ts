@@ -140,7 +140,7 @@ describe('OikosToolStore', () => {
       expect(tool?.logs[1].data).toEqual({ count: 3 });
     });
 
-    it('appends live commis output chunks', () => {
+    it('tracks spawn_commis as a regular tool', () => {
       const now = Date.now();
 
       eventBus.emit('oikos:tool_started', {
@@ -152,31 +152,18 @@ describe('OikosToolStore', () => {
         timestamp: now,
       });
 
-      eventBus.emit('oikos:commis_spawned', {
-        jobId: 42,
-        task: 'check logs',
+      eventBus.emit('oikos:tool_completed', {
+        runId: 1,
         toolCallId: 'call-live',
-        timestamp: now + 5,
-      });
-
-      eventBus.emit('oikos:commis_started', {
-        jobId: 42,
-        commisId: 'commis-xyz',
-        timestamp: now + 10,
-      });
-
-      eventBus.emit('commis:output_chunk', {
-        commisId: 'commis-xyz',
-        stream: 'stdout',
-        data: 'hello world\n',
-        timestamp: now + 20,
+        toolName: 'spawn_commis',
+        durationMs: 500,
+        timestamp: now + 500,
       });
 
       const state = oikosToolStore.getState();
       const tool = state.tools.get('call-live');
-      const result = tool?.result as { liveOutput?: string };
-
-      expect(result?.liveOutput).toContain('hello world');
+      expect(tool?.toolName).toBe('spawn_commis');
+      expect(tool?.status).toBe('completed');
     });
   });
 
@@ -405,8 +392,8 @@ describe('OikosToolStore', () => {
       const listener = vi.fn();
       oikosToolStore.subscribe(listener);
 
-      // Advance time to trigger ticker
-      vi.advanceTimersByTime(500);
+      // Advance time to trigger ticker (1000ms interval)
+      vi.advanceTimersByTime(1000);
 
       // Should have notified listener
       expect(listener).toHaveBeenCalled();
@@ -472,7 +459,7 @@ describe('OikosToolStore', () => {
       listener.mockClear();
 
       // Ticker should still run because one tool is still running
-      vi.advanceTimersByTime(500);
+      vi.advanceTimersByTime(1000);
       expect(listener).toHaveBeenCalled();
     });
 

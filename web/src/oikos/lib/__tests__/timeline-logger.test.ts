@@ -149,7 +149,7 @@ describe('TimelineLogger', () => {
     expect(logOutput).toContain('T+300ms')
   })
 
-  it('should capture commis and tool events', () => {
+  it('should capture events and reset on complete', () => {
     const messageId = 'test-123'
     logger.setMessageId(messageId)
 
@@ -157,39 +157,16 @@ describe('TimelineLogger', () => {
 
     // Emit events (but not complete yet)
     eventBus.emit('text_channel:sent', { text: 'test', timestamp: now })
-    eventBus.emit('oikos:commis_spawned', { jobId: 1, task: 'commis task', timestamp: now + 50 })
-    eventBus.emit('oikos:commis_started', { jobId: 1, commisId: 'commis-1', timestamp: now + 100 })
-    eventBus.emit('commis:tool_started', {
-      commisId: 'commis-1',
-      toolName: 'ssh_exec',
-      toolCallId: 'tool-1',
-      timestamp: now + 150,
-    })
-    eventBus.emit('commis:tool_completed', {
-      commisId: 'commis-1',
-      toolName: 'ssh_exec',
-      toolCallId: 'tool-1',
-      durationMs: 200,
-      timestamp: now + 350,
-    })
-    eventBus.emit('oikos:commis_complete', {
-      jobId: 1,
-      commisId: 'commis-1',
-      status: 'success',
-      durationMs: 400,
-      timestamp: now + 500,
-    })
+    eventBus.emit('oikos:started', { runId: 1, task: 'test task', timestamp: now + 50 })
+    eventBus.emit('oikos:thinking', { message: 'thinking...', timestamp: now + 100 })
 
     // Check events captured before complete
     let events = (logger as any).events as Array<any>
-    expect(events.length).toBe(6)
+    expect(events.length).toBe(3)
     expect(events.map((e: any) => e.phase)).toEqual([
       'send',
-      'commis_spawned',
-      'commis_started',
-      'tool_started',
-      'tool_completed',
-      'commis_complete',
+      'oikos_started',
+      'oikos_thinking',
     ])
 
     // Emit complete (triggers output and reset)

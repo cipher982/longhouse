@@ -9,11 +9,10 @@
  *   T+0ms      send              Message dispatched
  *   T+45ms     backend_received  run_id=1
  *   T+120ms    oikos_started
- *   T+850ms    commis_spawned    job_id=1
- *   T+1200ms   commis_started    commis_id=xyz
+ *   T+850ms    tool_started      tool=search
  *   T+1500ms   tool_started      ssh_exec
  *   T+2100ms   tool_completed    ssh_exec (600ms)
- *   T+2800ms   commis_complete   (1600ms total)
+ *   T+2800ms   tool_completed    (1600ms total)
  *   T+3200ms   oikos_complete (3155ms total)
  */
 
@@ -88,63 +87,7 @@ export class TimelineLogger {
       })
     );
 
-    // Commis lifecycle events
-    this.unsubscribers.push(
-      eventBus.on('oikos:commis_spawned', (data) => {
-        this.recordEvent('commis_spawned', data.timestamp, { jobId: data.jobId, task: data.task });
-      })
-    );
 
-    this.unsubscribers.push(
-      eventBus.on('oikos:commis_started', (data) => {
-        this.recordEvent('commis_started', data.timestamp, { jobId: data.jobId, commisId: data.commisId });
-      })
-    );
-
-    this.unsubscribers.push(
-      eventBus.on('oikos:commis_complete', (data) => {
-        this.recordEvent('commis_complete', data.timestamp, {
-          jobId: data.jobId,
-          commisId: data.commisId,
-          status: data.status,
-          durationMs: data.durationMs,
-        });
-      })
-    );
-
-    // Commis tool events
-    this.unsubscribers.push(
-      eventBus.on('commis:tool_started', (data) => {
-        this.recordEvent('tool_started', data.timestamp, {
-          commisId: data.commisId,
-          toolName: data.toolName,
-          toolCallId: data.toolCallId,
-        });
-      })
-    );
-
-    this.unsubscribers.push(
-      eventBus.on('commis:tool_completed', (data) => {
-        this.recordEvent('tool_completed', data.timestamp, {
-          commisId: data.commisId,
-          toolName: data.toolName,
-          toolCallId: data.toolCallId,
-          durationMs: data.durationMs,
-        });
-      })
-    );
-
-    this.unsubscribers.push(
-      eventBus.on('commis:tool_failed', (data) => {
-        this.recordEvent('tool_failed', data.timestamp, {
-          commisId: data.commisId,
-          toolName: data.toolName,
-          toolCallId: data.toolCallId,
-          durationMs: data.durationMs,
-          error: data.error,
-        });
-      })
-    );
 
     // Deferred event
     this.unsubscribers.push(

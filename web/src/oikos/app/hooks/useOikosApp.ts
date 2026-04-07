@@ -27,7 +27,6 @@ import { feedbackSystem } from '../../lib/feedback-system'
 import { OikosChatController, type AssistantMessageUpdate } from '../../lib/oikos-chat-controller'
 import type { BootstrapResult } from '../../lib/session-bootstrap'
 import { contextLoader } from '../../contexts/context-loader'
-import { commisProgressStore } from '../../lib/commis-progress-store'
 import { oikosToolStore, type OikosToolCall } from '../../lib/oikos-tool-store'
 import type { VoiceAgentConfig } from '../../contexts/types'
 import { getZergApiUrl, CONFIG, toAbsoluteUrl } from '../../lib/config'
@@ -229,23 +228,7 @@ export function useOikosApp() {
                 logs: [],
               }
 
-              // For spawn_commis, include commis metadata
-              if (tc.tool_name === 'spawn_commis' && tc.commis) {
-                const nestedTools = tc.commis.tools.map(wt => ({
-                  toolCallId: `${tc.tool_call_id}-${wt.tool_name}`,
-                  toolName: wt.tool_name,
-                  status: wt.status as 'running' | 'completed' | 'failed',
-                  durationMs: wt.duration_ms,
-                  resultPreview: wt.result_preview,
-                  error: wt.error,
-                }))
 
-                tool.result = {
-                  commisStatus: tc.commis.status,
-                  commisSummary: tc.commis.summary,
-                  nestedTools,
-                }
-              }
 
               historicalTools.push(tool)
             }
@@ -407,8 +390,6 @@ export function useOikosApp() {
       const activeRunId = await checkForActiveRun()
       if (activeRunId) {
         logger.info(`[useOikosApp] Found active run ${activeRunId}, reconnecting...`)
-        // Show UI immediately before SSE connects
-        commisProgressStore.setReconnecting(activeRunId)
         await reconnectToRun(activeRunId)
       } else {
         // No active run → load history for the chat UI.

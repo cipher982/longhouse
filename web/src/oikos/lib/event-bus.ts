@@ -47,10 +47,6 @@ export interface EventMap {
   // Oikos Progress Events
   'oikos:started': { runId: number; task: string; timestamp: number; traceId?: string };
   'oikos:thinking': { message: string; timestamp: number };
-  'oikos:commis_spawned': { jobId: number; task: string; timestamp: number; toolCallId?: string; runId?: number };
-  'oikos:commis_started': { jobId: number; commisId?: string; timestamp: number; runId?: number };
-  'oikos:commis_complete': { jobId: number; commisId?: string; status: string; durationMs?: number; timestamp: number; runId?: number };
-  'oikos:commis_summary': { jobId: number; commisId?: string; summary: string; timestamp: number; runId?: number };
   'oikos:complete': {
     runId: number;
     result: string;
@@ -71,43 +67,7 @@ export interface EventMap {
   'oikos:resumed': { runId: number; timestamp: number };
   'oikos:cleared': { timestamp: number };
 
-  // Commis Tool Events (Phase 2: Activity Ticker)
-  'commis:tool_started': {
-    commisId: string;
-    toolName: string;
-    toolCallId: string;
-    argsPreview?: string;
-    runId?: number;
-    timestamp: number;
-  };
-  'commis:tool_completed': {
-    commisId: string;
-    toolName: string;
-    toolCallId: string;
-    durationMs: number;
-    resultPreview?: string;
-    runId?: number;
-    timestamp: number;
-  };
-  'commis:tool_failed': {
-    commisId: string;
-    toolName: string;
-    toolCallId: string;
-    durationMs: number;
-    error: string;
-    runId?: number;
-    timestamp: number;
-  };
-  'commis:output_chunk': {
-    commisId: string;
-    jobId?: number;
-    runnerJobId?: string;
-    stream: 'stdout' | 'stderr';
-    data: string;
-    timestamp: number;
-  };
-
-  // Oikos Tool Events (uniform treatment with commis tools)
+  // Oikos Tool Events
   'oikos:tool_started': {
     runId: number;
     toolName: string;

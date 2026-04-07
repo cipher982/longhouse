@@ -5,7 +5,7 @@
  * User message → Tool cards → Assistant message
  *
  * This catches the visual "jumping" bug where assistant responses
- * appeared above commis cards during streaming, then moved below.
+ * appeared above tool cards during streaming, then moved below.
  */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
@@ -66,7 +66,7 @@ describe('ChatContainer timeline ordering', () => {
     const transcript = screen.getByTestId('messages-container');
 
     // Query all timeline items (message groups and commis tool cards)
-    const timelineItems = transcript.querySelectorAll('.message-group, [data-testid="commis-tool-card"]');
+    const timelineItems = transcript.querySelectorAll('.message-group, [data-testid="tool-card"]');
 
     // Find indices by type
     let userIdx = -1;
@@ -80,7 +80,7 @@ describe('ChatContainer timeline ordering', () => {
         } else if (item.querySelector('.message.assistant')) {
           assistantIdx = idx;
         }
-      } else if (item.matches('[data-testid="commis-tool-card"]')) {
+      } else if (item.matches('[data-testid="tool-card"]')) {
         toolIdx = idx;
       }
     });
@@ -131,7 +131,7 @@ describe('ChatContainer timeline ordering', () => {
 
     render(<ChatContainer messages={messages} />);
     const transcript = screen.getByTestId('messages-container');
-    const timelineItems = transcript.querySelectorAll('.message-group, [data-testid="commis-tool-card"]');
+    const timelineItems = transcript.querySelectorAll('.message-group, [data-testid="tool-card"]');
 
     let userIdx = -1;
     let toolIdx = -1;
@@ -144,7 +144,7 @@ describe('ChatContainer timeline ordering', () => {
         } else if (item.querySelector('.message.assistant')) {
           assistantIdx = idx;
         }
-      } else if (item.matches('[data-testid="commis-tool-card"]')) {
+      } else if (item.matches('[data-testid="tool-card"]')) {
         toolIdx = idx;
       }
     });
@@ -201,7 +201,7 @@ describe('ChatContainer timeline ordering', () => {
     const transcript = screen.getByTestId('messages-container');
 
     // Get all tool cards
-    const toolCards = transcript.querySelectorAll('[data-testid="tool-card"], [data-testid="commis-tool-card"]');
+    const toolCards = transcript.querySelectorAll('[data-testid="tool-card"]');
     const toolCallIds = Array.from(toolCards).map(el => el.getAttribute('data-tool-call-id'));
 
     // call-a should come before call-b (chronological)
@@ -273,7 +273,7 @@ describe('ChatContainer timeline ordering', () => {
 
     render(<ChatContainer messages={messages} />);
     const transcript = screen.getByTestId('messages-container');
-    const timelineItems = transcript.querySelectorAll('.message-group, [data-testid="tool-card"], [data-testid="commis-tool-card"]');
+    const timelineItems = transcript.querySelectorAll('.message-group, [data-testid="tool-card"]');
 
     // Extract ordered list of (type, runId)
     const items: Array<{ type: string; runId?: number }> = [];
