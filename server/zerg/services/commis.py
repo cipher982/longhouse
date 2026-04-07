@@ -29,14 +29,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def run_commis_job(job_id: int) -> None:
+async def run_commis_job(job_id: int, *, session_factory=None) -> None:
     """Execute a commis job end-to-end: workspace → hatch → ingest → resume Oikos.
 
     Fire-and-forget background task. Opens its own DB sessions to avoid holding
     connections during long-running subprocess execution.
+
+    session_factory: optional override for testing (defaults to global factory).
     """
     # 1. Load job, mark running
-    with db_session() as db:
+    with db_session(session_factory) as db:
         job = db.query(CommisJob).filter(CommisJob.id == job_id).first()
         if not job or job.status != "queued":
             return
@@ -84,7 +86,7 @@ async def run_commis_job(job_id: int) -> None:
         # 4. Prepare session resume if needed
         prepared_resume_id = None
         if resume_session_id:
-            prepared_resume_id = await _prepare_resume(resume_session_id, workspace_path)
+            prepared_resume_id = await _prepare_resume(resume_session_id, workspace_path, session_factory=session_factory)
 
         # 5. Run hatch
         result = await executor.run_commis(
@@ -98,7 +100,7 @@ async def run_commis_job(job_id: int) -> None:
         # 6. Ingest session JSONL into timeline (best-effort)
         if result and result.status == "success":
             try:
-                _ingest_workspace_session(workspace_path, job_id, job_started_at)
+                _ingest_workspace_session(workspace_path, job_id, job_started_at, session_factory=session_factory)
             except Exception as e:
                 logger.warning("Failed to ingest workspace session for job %s: %s", job_id, e)
 
@@ -115,14 +117,14 @@ async def run_commis_job(job_id: int) -> None:
             shutil.rmtree(scratch_dir, ignore_errors=True)
 
     # 7. Update job status
-    with db_session() as db:
+    with db_session(session_factory) as db:
         job = db.query(CommisJob).filter(CommisJob.id == job_id).first()
         if not job:
             return
         if job.status == "cancelled":
             # Still need to resume Oikos so it doesn't hang
             if oikos_run_id:
-                await _resume_oikos(oikos_run_id, tool_call_id, "Commis job was cancelled by user.")
+                await _resume_oikos(oikos_run_id, tool_call_id, "Commis job was cancelled by user.", session_factory=session_factory)
             return
 
         job.finished_at = datetime.now(timezone.utc)
@@ -137,7 +139,7 @@ async def run_commis_job(job_id: int) -> None:
     # 8. Resume Oikos if it was waiting
     if oikos_run_id:
         result_text = _build_result_text(result)
-        await _resume_oikos(oikos_run_id, tool_call_id, result_text)
+        await _resume_oikos(oikos_run_id, tool_call_id, result_text, session_factory=session_factory)
 
 
 # ---------------------------------------------------------------------------
@@ -165,12 +167,12 @@ def _inject_workspace_config(workspace_path: Path, config: dict) -> None:
         logger.warning("Failed to inject workspace config: %s", e)
 
 
-async def _prepare_resume(session_id: str, workspace_path: Path) -> str | None:
+async def _prepare_resume(session_id: str, workspace_path: Path, *, session_factory=None) -> str | None:
     """Prepare a Claude session file for --resume."""
     try:
         from zerg.services.session_continuity import prepare_claude_session_for_resume
 
-        with db_session() as db:
+        with db_session(session_factory) as db:
             return await prepare_claude_session_for_resume(
                 session_id=session_id,
                 workspace_path=workspace_path,
@@ -190,6 +192,8 @@ def _ingest_workspace_session(
     workspace_path: Path,
     job_id: int,
     job_started_at: datetime,
+    *,
+    session_factory=None,
 ) -> str | None:
     """Ingest Claude Code session JSONL from workspace into the agent timeline.
 
@@ -260,7 +264,7 @@ def _ingest_workspace_session(
         started_at=metadata.started_at or job_started_at,
         ended_at=metadata.ended_at,
         cwd=str(workspace_path),
-        git_repo=metadata.git_branch,  # ParsedSession doesn't have git_repo; use what we have
+        git_repo=None,  # ParsedSession doesn't track git_repo URL
         git_branch=metadata.git_branch,
         device_id=f"commis-{job_id}",
         environment="cloud",
@@ -268,7 +272,7 @@ def _ingest_workspace_session(
         source_lines=source_lines,
     )
 
-    with db_session() as db:
+    with db_session(session_factory) as db:
         store = AgentsStore(db)
         result = store.ingest_session(session_ingest)
         db.commit()
@@ -290,7 +294,7 @@ def _build_result_text(result: CloudExecutionResult | None) -> str:
     return f"Commis failed: {result.error or 'unknown error'}"
 
 
-async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str) -> None:
+async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str, *, session_factory=None) -> None:
     """Resume an Oikos run that was waiting for this commis.
 
     Handles serial chaining: if the continuation spawns another commis
@@ -300,7 +304,7 @@ async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str)
     from zerg.managers.runtime_runner import RuntimeRunner
 
     try:
-        with db_session() as db:
+        with db_session(session_factory) as db:
             run = db.query(Run).filter(Run.id == run_id).first()
             if not run or run.status != RunStatus.WAITING:
                 return
@@ -375,7 +379,7 @@ async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str)
     except Exception:
         logger.exception("Failed to resume oikos run %s", run_id)
         try:
-            with db_session() as db:
+            with db_session(session_factory) as db:
                 run = db.query(Run).filter(Run.id == run_id).first()
                 if run and run.status == RunStatus.RUNNING:
                     run.status = RunStatus.FAILED
