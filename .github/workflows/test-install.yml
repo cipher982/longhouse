@@ -9,6 +9,7 @@ on:
       - 'bun.lock'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/qa/test-cli-upgrade.sh'
       - '.github/workflows/test-install.yml'
   pull_request:
     paths:
@@ -18,6 +19,7 @@ on:
       - 'bun.lock'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/qa/test-cli-upgrade.sh'
       - '.github/workflows/test-install.yml'
   schedule:
     - cron: '11 9 * * *'
@@ -99,3 +101,43 @@ jobs:
         run: |
           chmod +x scripts/ci/installer-first-run.sh
           ./scripts/ci/installer-first-run.sh --installer remote --shell "${{ matrix.shell_path }}"
+
+  installer-upgrade-local:
+    if: ${{ github.event_name != 'schedule' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell_path: /bin/bash
+          - os: macos-latest
+            shell_path: /bin/zsh
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    name: "installer-upgrade--${{ matrix.os }}"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Rehearse install -> upgrade in disposable HOME
+        run: |
+          chmod +x scripts/qa/test-cli-upgrade.sh
+          ./scripts/qa/test-cli-upgrade.sh --shell "${{ matrix.shell_path }}"
