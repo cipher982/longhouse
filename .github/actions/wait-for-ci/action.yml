@@ -26,6 +26,11 @@ runs:
           const branch = process.env.HEAD_BRANCH;
           const maxAttempts = 120;
           const delayMs = 10000;
+          // When CI concludes with a non-success, wait one interval and re-check
+          // before failing. A rerun transitions the same run back to in_progress,
+          // so a single extra poll is enough to detect it without burning the
+          // full timeout on genuine failures.
+          let sawFailure = false;
 
           for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
             const { data } = await github.rest.actions.listWorkflowRuns({
@@ -45,8 +50,17 @@ runs:
                 if (run.conclusion === 'success') {
                   return;
                 }
-                core.setFailed(`push-pr-ci concluded ${run.conclusion} for ${sha}`);
-                return;
+                if (sawFailure) {
+                  // Still failed after one rerun grace period — give up
+                  core.setFailed(`push-pr-ci concluded ${run.conclusion} for ${sha}`);
+                  return;
+                }
+                core.warning(`push-pr-ci concluded ${run.conclusion} — waiting one interval to detect rerun`);
+                sawFailure = true;
+              } else if (sawFailure) {
+                // Run transitioned back to in_progress — a rerun was queued; reset and keep waiting
+                core.info(`push-pr-ci run ${run.id} is back in_progress (rerun detected) — continuing to wait`);
+                sawFailure = false;
               }
             } else {
               core.info(`No push-pr-ci run found yet for ${sha} on ${branch} (attempt ${attempt}/${maxAttempts})`);
