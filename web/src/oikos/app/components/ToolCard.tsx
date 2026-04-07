@@ -28,7 +28,7 @@ const TOOL_ICONS: Record<string, string> = {
   web_search: '🌐',
   web_fetch: '🔗',
   http_request: '📡',
-  spawn_workspace_commis: '🤖',
+  spawn_commis: '🤖',
   list_commiss: '📋',
   read_commis_result: '📖',
   get_current_time: '⏰',
@@ -38,7 +38,7 @@ const TOOL_ICONS: Record<string, string> = {
 };
 
 const TOOL_DISPLAY_NAMES: Record<string, string> = {
-  spawn_workspace_commis: 'Start cloud session',
+  spawn_commis: 'Start cloud session',
   list_commiss: 'List cloud sessions',
   read_commis_result: 'Read cloud session result',
   get_commis_metadata: 'Inspect cloud session',

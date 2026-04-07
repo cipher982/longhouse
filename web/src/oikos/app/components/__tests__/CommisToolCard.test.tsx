@@ -7,7 +7,7 @@ describe("CommisToolCard", () => {
   it("uses cloud-session wording in the visible card header", () => {
     const tool: OikosToolCall = {
       toolCallId: "tool-1",
-      toolName: "spawn_workspace_commis",
+      toolName: "spawn_commis",
       status: "completed",
       runId: 7,
       startedAt: Date.now() - 5_000,
