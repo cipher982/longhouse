@@ -55,7 +55,6 @@ from zerg.constants import AUTOMATIONS_PREFIX
 from zerg.constants import MODELS_PREFIX
 from zerg.constants import THREADS_PREFIX
 from zerg.database import initialize_database
-from zerg.middleware.test_commis_context import TestCommisContextMiddleware
 from zerg.openapi_schema import build_api_openapi_schema
 from zerg.openapi_schema import export_openapi_schema
 from zerg.routers.account_connectors import router as account_connectors_router
@@ -72,7 +71,6 @@ from zerg.routers.auth_internal import router as auth_internal_router
 from zerg.routers.automation_connectors import router as automation_connectors_router
 from zerg.routers.capabilities import router as capabilities_router
 from zerg.routers.channels_webhooks import router as channels_webhooks_router
-from zerg.routers.commis_internal import router as commis_internal_router
 from zerg.routers.connectors import router as connectors_router
 from zerg.routers.contacts import router as contacts_router
 from zerg.routers.device_tokens import router as device_tokens_router
@@ -126,8 +124,6 @@ from zerg.routers.websocket import router as websocket_router
 # ``TESTING`` is truthy (set automatically by `backend/tests/conftest.py`).
 from zerg.services.ops_events import ops_events_bridge  # noqa: E402
 from zerg.services.scheduler_service import scheduler_service  # noqa: E402
-
-# Import topic_manager at module level so event subscriptions register in commis process
 from zerg.websocket.manager import topic_manager  # noqa: E402, F401
 
 _log_level_name = _settings.log_level.upper()
@@ -242,7 +238,6 @@ for _noisy_mod in (
     "zerg.services.fiche_state_recovery",  # Silence "No stuck fiches found" on reload
     "zerg.services.auto_seed",  # Silence seeding boilerplate after first run
     "zerg.services.watch_renewal_service",  # Silence background watch renewals
-    "zerg.services.commis_job_processor",  # Silence polling loops
     "zerg.services.scheduler_service",  # Silence scheduling noise
     # Third-party libraries that can dump huge payloads
     "openai",
@@ -559,17 +554,7 @@ async def lifespan(app: FastAPI):
                 failed.append(f"ingest_task_worker ({e})")
                 logger.exception("Failed to start ingest_task_worker")
 
-            # Commis job processor (critical for oikos commis)
-            try:
-                from zerg.services.commis_job_processor import commis_job_processor
-
-                await commis_job_processor.start()
-                started.append("commis_job_processor")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"commis_job_processor ({e})")
-                logger.exception("Failed to start commis_job_processor")
-
-            # Job queue commis (durable job execution)
+            # Job queue (durable job execution)
             if not _settings.testing:
                 try:
                     from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -702,17 +687,6 @@ async def lifespan(app: FastAPI):
                 )
             else:
                 logger.info("Background services started: %s", started)
-
-        # E2E tests: start commis_job_processor even though testing=True
-        # Commis need to process jobs for continuation tests to pass
-        if _settings.testing and _settings.environment == "test:e2e":
-            try:
-                from zerg.services.commis_job_processor import commis_job_processor
-
-                await commis_job_processor.start()
-                logger.info("Commis job processor started (E2E test mode)")
-            except Exception as e:  # noqa: BLE001
-                logger.exception(f"Failed to start commis_job_processor in E2E mode: {e}")
 
         # Log email config status
         if not _settings.testing:
@@ -862,13 +836,6 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to stop watch_renewal_service")
 
             try:
-                from zerg.services.commis_job_processor import commis_job_processor
-
-                await commis_job_processor.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop commis_job_processor")
-
-            try:
                 from zerg.services.presence_cache import get_presence_cache
 
                 get_presence_cache().stop_flush_loop()
@@ -898,15 +865,6 @@ async def lifespan(app: FastAPI):
                 await MCPManager().shutdown_stdio_processes()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to shutdown MCP stdio processes")
-
-        # E2E tests: stop commis_job_processor if it was started
-        if _settings.testing and _settings.environment == "test:e2e":
-            try:
-                from zerg.services.commis_job_processor import commis_job_processor
-
-                await commis_job_processor.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop commis_job_processor in E2E mode")
 
         # Stop shared async runner
         from zerg.utils.async_runner import get_shared_runner
@@ -1000,9 +958,6 @@ if _settings.demo_mode:
 
     app.add_middleware(DemoGuardMiddleware)
 
-# Test-only commis DB routing (E2E isolation).
-app.add_middleware(TestCommisContextMiddleware)
-
 # Mount /static for avatars (and any future assets served by the backend)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
@@ -1057,7 +1012,6 @@ api_app.include_router(users_router)
 api_app.include_router(contacts_router)  # User approved contacts for email/SMS
 api_app.include_router(oikos_router)  # Oikos integration — self-prefixed /oikos
 api_app.include_router(oikos_internal_router)  # Internal endpoints for run continuation
-api_app.include_router(commis_internal_router)  # Internal endpoints for commis hooks
 api_app.include_router(sync_router)  # Conversation sync — self-prefixed /oikos/sync
 api_app.include_router(stream_router)  # Resumable SSE v1 — self-prefixed /stream
 api_app.include_router(system_router)
