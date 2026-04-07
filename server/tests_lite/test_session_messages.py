@@ -131,7 +131,7 @@ def test_create_message_delivers_immediately_for_safe_managed_local(monkeypatch,
         to_session = _seed_session(
             db,
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport="claude_channel_bridge",
             source_runner_id=7,
             source_runner_name="cinder",
             device_id="cinder",
@@ -197,7 +197,7 @@ def test_create_message_queues_when_target_is_running(monkeypatch, tmp_path):
         to_session = _seed_session(
             db,
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport="claude_channel_bridge",
             source_runner_id=7,
             source_runner_name="cinder",
             device_id="cinder",
@@ -242,7 +242,7 @@ def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tm
         to_session = _seed_session(
             db,
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport="claude_channel_bridge",
             source_runner_id=7,
             source_runner_name="cinder",
             device_id="cinder",
@@ -306,7 +306,7 @@ def test_presence_safe_transition_drains_multiple_queued_messages(monkeypatch, t
         to_session = _seed_session(
             db,
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport="claude_channel_bridge",
             source_runner_id=7,
             source_runner_name="cinder",
             device_id="cinder",
@@ -383,7 +383,7 @@ def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(
         to_session = _seed_session(
             db,
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport="claude_channel_bridge",
             source_runner_id=7,
             source_runner_name="cinder",
             device_id="cinder",

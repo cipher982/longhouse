@@ -24,8 +24,6 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
-from zerg.services.managed_local_runtime import reconcile_managed_local_tmux_sessions
-from zerg.services.session_capabilities import should_reconcile_managed_local_tmux_runtime
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
@@ -78,20 +76,7 @@ async def _load_surface_runtime_state_map(
     occurred_at: datetime,
 ) -> dict[str, object]:
     session_ids = [session.id for session in sessions]
-    runtime_state_map = load_runtime_state_map(db, session_ids)
-    managed_local_candidates = [session for session in sessions if should_reconcile_managed_local_tmux_runtime(session)]
-    if not managed_local_candidates:
-        return runtime_state_map
-
-    reconciled_ids = await reconcile_managed_local_tmux_sessions(
-        db,
-        sessions=managed_local_candidates,
-        owner_id=owner_id,
-        occurred_at=occurred_at,
-    )
-    if reconciled_ids:
-        return load_runtime_state_map(db, session_ids)
-    return runtime_state_map
+    return load_runtime_state_map(db, session_ids)
 
 
 def _parse_message_session_header(request: Request) -> UUID | None:

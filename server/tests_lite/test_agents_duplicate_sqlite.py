@@ -290,7 +290,7 @@ def test_duplicate_ingest_replaces_managed_local_codex_placeholder_provider_sess
             continuation_kind="local",
             origin_label="cinder",
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport="codex_app_server",
             user_messages=0,
             assistant_messages=0,
             tool_calls=0,

@@ -37,6 +37,7 @@ from zerg.services.session_turn_reviews import load_completed_assistant_turn_by_
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 from zerg.services.session_turn_reviews import maybe_record_session_turn_review
 from zerg.services.session_turn_reviews import reply_to_pending_turn_review
+from zerg.session_execution_home import ManagedSessionTransport
 
 
 def _make_db(tmp_path, name: str):
@@ -47,6 +48,12 @@ def _make_db(tmp_path, name: str):
 
 def _now():
     return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _managed_transport_for_provider(provider: str) -> str:
+    if provider == "codex":
+        return ManagedSessionTransport.CODEX_APP_SERVER.value
+    return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
 
 
 def _normalize_test_utc(value: datetime | None) -> datetime | None:
@@ -226,7 +233,7 @@ async def test_turn_review_autopilot_routes_claude_managed_local_continue_withou
                 "text": text,
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
-                "transport": "tmux",
+                "transport": session.managed_transport,
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
             }
@@ -256,7 +263,7 @@ async def test_turn_review_autopilot_routes_claude_managed_local_continue_withou
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
-        session.managed_transport = "tmux"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         session.source_runner_id = runner.id
         session.source_runner_name = runner.name
         session.managed_session_name = "lh-autopilot-managed-local"
@@ -278,7 +285,7 @@ async def test_turn_review_autopilot_routes_claude_managed_local_continue_withou
         assert calls[0]["session_id"] == str(session_id)
         assert calls[0]["text"] == "Run the pending targeted tests."
         assert calls[0]["commis_id"] == f"turn-review-{review.id}"
-        assert calls[0]["transport"] == "tmux"
+        assert calls[0]["transport"] == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
         assert calls[0]["timeout_secs"] == 15
         assert calls[0]["verify_turn_started"] is True
         assert calls[0]["verification_timeout_secs"] == 15.0
@@ -332,7 +339,7 @@ async def test_turn_review_autopilot_managed_local_without_live_control_notifies
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
-        session.managed_transport = "tmux"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         session.managed_session_name = "lh-autopilot-managed-local-no-live-control"
         db.commit()
         db.refresh(session)
@@ -352,8 +359,8 @@ async def test_turn_review_autopilot_managed_local_without_live_control_notifies
 
 
 @pytest.mark.asyncio
-async def test_turn_review_autopilot_managed_local_codex_routes_tmux_follow_up(monkeypatch, tmp_path):
-    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_managed_local_codex_tmux.db")
+async def test_turn_review_autopilot_managed_local_codex_routes_native_follow_up(monkeypatch, tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_autopilot_managed_local_codex_native.db")
     calls: list[dict[str, object]] = []
 
     async def _fake_evaluate(**_kwargs):
@@ -387,7 +394,7 @@ async def test_turn_review_autopilot_managed_local_codex_routes_tmux_follow_up(m
                 "text": text,
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
-                "transport": "tmux",
+                "transport": session.managed_transport,
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
             }
@@ -417,7 +424,7 @@ async def test_turn_review_autopilot_managed_local_codex_routes_tmux_follow_up(m
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
-        session.managed_transport = "tmux"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         session.source_runner_id = runner.id
         session.source_runner_name = runner.name
         session.managed_session_name = "lh-autopilot-managed-local-codex"
@@ -440,7 +447,7 @@ async def test_turn_review_autopilot_managed_local_codex_routes_tmux_follow_up(m
         assert calls[0]["session_id"] == str(session_id)
         assert calls[0]["text"] == "Run the pending targeted tests."
         assert calls[0]["commis_id"] == f"turn-review-{review.id}"
-        assert calls[0]["transport"] == "tmux"
+        assert calls[0]["transport"] == ManagedSessionTransport.CODEX_APP_SERVER.value
         assert calls[0]["timeout_secs"] == 15
         assert calls[0]["verify_turn_started"] is True
         assert calls[0]["verification_timeout_secs"] == 15.0
@@ -471,7 +478,7 @@ async def test_reply_to_pending_turn_review_routes_claude_managed_local_reply_wi
                 "text": text,
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
-                "transport": "tmux",
+                "transport": session.managed_transport,
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
             }
@@ -492,7 +499,7 @@ async def test_reply_to_pending_turn_review_routes_claude_managed_local_reply_wi
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
-        session.managed_transport = "tmux"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         session.source_runner_id = runner.id
         session.source_runner_name = runner.name
         session.managed_session_name = "lh-managed-local-reply"
@@ -542,7 +549,7 @@ async def test_reply_to_pending_turn_review_routes_claude_managed_local_reply_wi
         assert calls[0]["session_id"] == str(session_id)
         assert calls[0]["text"] == "keep going with the hiring shortlist"
         assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
-        assert calls[0]["transport"] == "tmux"
+        assert calls[0]["transport"] == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
         assert calls[0]["timeout_secs"] == 15
         assert calls[0]["verify_turn_started"] is True
         assert calls[0]["verification_timeout_secs"] == 15.0
@@ -573,7 +580,7 @@ async def test_reply_to_pending_turn_review_routes_codex_managed_local_reply_wit
                 "text": text,
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
-                "transport": "tmux",
+                "transport": session.managed_transport,
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
             }
@@ -594,7 +601,7 @@ async def test_reply_to_pending_turn_review_routes_codex_managed_local_reply_wit
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
-        session.managed_transport = "tmux"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         session.source_runner_id = runner.id
         session.source_runner_name = runner.name
         session.managed_session_name = "lh-managed-local-reply-codex"
@@ -644,7 +651,7 @@ async def test_reply_to_pending_turn_review_routes_codex_managed_local_reply_wit
         assert calls[0]["session_id"] == str(session_id)
         assert calls[0]["text"] == "keep going with the hiring shortlist"
         assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
-        assert calls[0]["transport"] == "tmux"
+        assert calls[0]["transport"] == ManagedSessionTransport.CODEX_APP_SERVER.value
         assert calls[0]["timeout_secs"] == 15
         assert calls[0]["verify_turn_started"] is True
         assert calls[0]["verification_timeout_secs"] == 15.0
@@ -665,7 +672,7 @@ async def test_reply_to_pending_turn_review_rejects_session_without_live_dispatc
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
-        session.managed_transport = "tmux"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         session.managed_session_name = "lh-managed-local-no-runner"
         db.commit()
         db.refresh(session)
@@ -816,7 +823,7 @@ async def test_turn_review_marks_managed_local_attention_phase(monkeypatch, tmp_
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
-        session.managed_transport = "tmux"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         session.source_runner_id = runner.id
         session.source_runner_name = runner.name
         session.managed_session_name = "lh-managed-local-attention"
@@ -1017,6 +1024,7 @@ async def test_turn_review_attaches_review_to_matching_managed_local_turn(monkey
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         db.add(
             ManagedLocalTurn(
                 session_id=session_id,
@@ -1089,6 +1097,7 @@ async def test_turn_review_uses_oldest_durable_managed_local_ledger_turn_first(m
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         db.add_all(
             [
                 AgentEvent(
@@ -1220,6 +1229,7 @@ async def test_turn_review_skips_unreconstructable_managed_local_ledger_row(monk
         )
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         session.execution_home = "managed_local"
+        session.managed_transport = _managed_transport_for_provider(session.provider)
         db.add_all(
             [
                 AgentEvent(

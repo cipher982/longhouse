@@ -486,8 +486,10 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("Welcome to Longhouse")).not.toBeInTheDocument();
   });
 
-  it("opens the launch modal directly from the timeline when exactly one runner is ready", async () => {
+  it("sends users to the machines page when a runner is available", async () => {
     const user = userEvent.setup();
+    const navigateMock = vi.fn();
+    vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigateMock);
 
     mockUseRunners.mockReturnValue({
       data: [makeRunner()],
@@ -497,11 +499,9 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
-    await user.click(await screen.findByRole("button", { name: "Start Session" }));
+    await user.click(await screen.findByRole("button", { name: "Open Machines" }));
 
-    expect(screen.getByTestId("launch-session-modal")).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "Start session" })).toBeInTheDocument();
-    expect(screen.getByText(/keep the session reachable from the timeline later/i)).toBeInTheDocument();
+    expect(navigateMock).toHaveBeenCalledWith("/runners");
   });
 
   it("sends users to runners when they need to choose a launch target", async () => {
@@ -520,7 +520,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
-    await user.click(await screen.findByRole("button", { name: "Choose Machine" }));
+    await user.click(await screen.findByRole("button", { name: "Open Machines" }));
 
     expect(navigateMock).toHaveBeenCalledWith("/runners");
   });

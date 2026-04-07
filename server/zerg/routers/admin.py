@@ -524,7 +524,7 @@ class ConfigureTestSessionRuntimeRequest(BaseModel):
     """Test-only session runtime override for Playwright coverage."""
 
     execution_home: Literal["legacy", "managed_local", "managed_hosted", "cloud_takeover"] = "managed_local"
-    managed_transport: Optional[Literal["tmux", "claude_channel_bridge", "codex_app_server"]] = None
+    managed_transport: Optional[Literal["claude_channel_bridge", "codex_app_server"]] = None
     source_runner_id: Optional[int] = None
     source_runner_name: Optional[str] = None
     managed_session_name: Optional[str] = None
@@ -662,7 +662,6 @@ async def configure_test_session_runtime(
         session.source_runner_id = request.source_runner_id if request.source_runner_id is not None else 1
         session.source_runner_name = request.source_runner_name or session.source_runner_name or "E2E Runner"
         session.managed_session_name = request.managed_session_name or session.managed_session_name or f"e2e-{session_id[:8]}"
-        session.managed_launch_profile = None
         if request.clear_ended_at:
             session.ended_at = None
     else:
@@ -670,7 +669,6 @@ async def configure_test_session_runtime(
         session.source_runner_id = request.source_runner_id
         session.source_runner_name = request.source_runner_name
         session.managed_session_name = request.managed_session_name
-        session.managed_launch_profile = None
     session.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(session)

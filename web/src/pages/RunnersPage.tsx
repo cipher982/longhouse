@@ -3,9 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useRunners } from "../hooks/useRunners";
 import type { Runner } from "../services/api";
 import AddRunnerModal from "../components/AddRunnerModal";
-import LaunchSessionModal from "../components/LaunchSessionModal";
 import { useReadinessFlag } from "../lib/readiness-contract";
-import { isRunnerSessionLaunchReady } from "../lib/runnerSessions";
 import {
   Button,
   Badge,
@@ -222,7 +220,6 @@ export default function RunnersPage() {
   const navigate = useNavigate();
   const { data: runners, isLoading, error } = useRunners({ refetchInterval: 10_000 });
   const [showAddModal, setShowAddModal] = useState(false);
-  const [launchRunner, setLaunchRunner] = useState<Runner | null>(null);
 
   // Ready signal - indicates page is interactive (even if empty)
   useReadinessFlag({ ready: !isLoading });
@@ -401,21 +398,6 @@ export default function RunnersPage() {
                       </div>
                     )}
 
-                    {isRunnerSessionLaunchReady(runner) && (
-                      <div className="runner-card-actions">
-                        <Button
-                          variant="primary"
-                          size="sm"
-                          data-testid={`runner-launch-button-${runner.id}`}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setLaunchRunner(runner);
-                          }}
-                        >
-                          Start Session
-                        </Button>
-                      </div>
-                    )}
                   </div>
                 </Card.Body>
               </Card>
@@ -428,14 +410,6 @@ export default function RunnersPage() {
         <AddRunnerModal
           isOpen={showAddModal}
           onClose={() => setShowAddModal(false)}
-        />
-      )}
-
-      {launchRunner && (
-        <LaunchSessionModal
-          isOpen
-          onClose={() => setLaunchRunner(null)}
-          runner={launchRunner}
         />
       )}
     </PageShell>

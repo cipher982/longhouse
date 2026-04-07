@@ -111,11 +111,7 @@ describe("RunnersPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("opens the launch modal from a ready machine card without leaving the grid", async () => {
-    const user = userEvent.setup();
-    const navigateMock = vi.fn();
-    vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigateMock);
-
+  it("does not render inline launch actions on runner cards anymore", () => {
     mockUseRunners.mockReturnValue({
       data: [makeRunner()],
       isLoading: false,
@@ -124,14 +120,11 @@ describe("RunnersPage", () => {
 
     renderRunnersPage();
 
-    await user.click(screen.getByRole("button", { name: "Start Session" }));
-
-    expect(screen.getByRole("dialog", { name: "Start session" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start Session" })).not.toBeInTheDocument();
     expect(screen.getByTestId("location-probe")).toHaveTextContent("/runners");
-    expect(navigateMock).not.toHaveBeenCalled();
   });
 
-  it("only shows launch actions for runners that are ready to host sessions", () => {
+  it("removes runner-card launch actions regardless of runner readiness", () => {
     mockUseRunners.mockReturnValue({
       data: [
         makeRunner({ id: 1, name: "cube" }),
@@ -148,7 +141,7 @@ describe("RunnersPage", () => {
 
     renderRunnersPage();
 
-    expect(screen.getAllByRole("button", { name: "Start Session" })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Start Session" })).not.toBeInTheDocument();
     expect(screen.getByText("laptop")).toBeInTheDocument();
   });
 

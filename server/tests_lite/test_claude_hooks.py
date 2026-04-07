@@ -16,19 +16,17 @@ def test_claude_hook_seeds_session_binding_on_stop():
 
 def test_claude_hook_writes_presence_to_outbox():
     assert 'OUTBOX="$HOME/.claude/outbox"' in HOOK_SCRIPT
-    assert 'emit_presence "$PAYLOAD"' in HOOK_SCRIPT
+    assert 'write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true' in HOOK_SCRIPT
 
 
-def test_claude_hook_script_supports_direct_hook_target_overrides():
-    assert 'TARGET_URL="${LONGHOUSE_HOOK_URL:-}"' in HOOK_SCRIPT
-    assert 'TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"' in HOOK_SCRIPT
-    assert 'PRESENCE_MODE="${LONGHOUSE_HOOK_PRESENCE_MODE:-auto}"' in HOOK_SCRIPT
-    assert "X-Agents-Token: $TARGET_TOKEN" in HOOK_SCRIPT
-    assert "${TARGET_URL%/}/api/agents/presence" in HOOK_SCRIPT
+def test_claude_hook_script_is_local_only():
+    assert 'TARGET_URL="${LONGHOUSE_HOOK_URL:-}"' not in HOOK_SCRIPT
+    assert 'TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"' not in HOOK_SCRIPT
+    assert 'PRESENCE_MODE="${LONGHOUSE_HOOK_PRESENCE_MODE:-auto}"' not in HOOK_SCRIPT
+    assert "/api/agents/presence" not in HOOK_SCRIPT
+    assert "emit_presence()" not in HOOK_SCRIPT
     assert "LONGHOUSE_MANAGED_SESSION_ID" in HOOK_SCRIPT
-    assert "engine_status_is_fresh()" in HOOK_SCRIPT
     assert "write_presence_outbox()" in HOOK_SCRIPT
-    assert 'MODE=$(presence_delivery_mode)' in HOOK_SCRIPT
 
 
 def test_claude_stop_hook_forces_sidechain_for_hindsight_workspace():

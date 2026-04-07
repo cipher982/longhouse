@@ -85,14 +85,13 @@ def test_managed_local_launch_response_requires_managed_local_execution_home():
             provider="claude",
             provider_session_id="provider-session",
             execution_home="legacy",
-            managed_transport="tmux",
+            managed_transport="claude_channel_bridge",
             loop_mode="manual",
             source_runner_id=1,
             source_runner_name="cinder",
             managed_session_name="lh-test",
-            managed_launch_profile=None,
         ),
-        attach_command="tmux attach -t lh-test",
+        attach_command="longhouse claude-channel attach --session-id session-123",
     )
 
     with pytest.raises(RuntimeError, match="managed_local session"):
@@ -111,9 +110,8 @@ def test_managed_local_launch_response_requires_managed_transport():
             source_runner_id=1,
             source_runner_name="cinder",
             managed_session_name="lh-test",
-            managed_launch_profile=None,
         ),
-        attach_command="tmux attach -t lh-test",
+        attach_command="longhouse claude-channel attach --session-id session-123",
     )
 
     with pytest.raises(RuntimeError, match="managed transport metadata"):
@@ -247,7 +245,7 @@ def test_managed_local_claude_live_send_requires_live_control(tmp_path):
         source_session = store.get_session(source_session_id)
         assert source_session is not None
         source_session.execution_home = "managed_local"
-        source_session.managed_transport = "tmux"
+        source_session.managed_transport = "claude_channel_bridge"
         source_session.source_runner_id = None
         source_session.source_runner_name = "cinder"
         source_session.managed_session_name = "lh-claude-no-runner"
@@ -310,7 +308,7 @@ def test_managed_local_claude_cloud_chat_can_continue_when_live_control_is_gone(
         source_session = store.get_session(source_session_id)
         assert source_session is not None
         source_session.execution_home = "managed_local"
-        source_session.managed_transport = "tmux"
+        source_session.managed_transport = "claude_channel_bridge"
         source_session.source_runner_id = None
         source_session.source_runner_name = "cinder"
         source_session.managed_session_name = "lh-claude-no-runner"
@@ -380,7 +378,7 @@ def test_managed_local_claude_cloud_chat_requires_live_send_when_live_control_ex
         source_session = store.get_session(source_session_id)
         assert source_session is not None
         source_session.execution_home = "managed_local"
-        source_session.managed_transport = "tmux"
+        source_session.managed_transport = "claude_channel_bridge"
         source_session.source_runner_id = 42
         source_session.source_runner_name = "cinder"
         source_session.managed_session_name = "lh-claude-live"
@@ -686,7 +684,7 @@ def test_agents_send_live_route_ignores_device_mismatch_and_dispatches(monkeypat
         source_session = store.get_session(source_session_id)
         assert source_session is not None
         source_session.execution_home = "managed_local"
-        source_session.managed_transport = "tmux"
+        source_session.managed_transport = "claude_channel_bridge"
         source_session.source_runner_id = 1
         source_session.source_runner_name = "agent-device"
         source_session.managed_session_name = "lh-agent-send-live"

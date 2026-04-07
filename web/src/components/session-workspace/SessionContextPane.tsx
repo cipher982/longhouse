@@ -79,7 +79,6 @@ export function SessionContextPane({
       : "neutral";
   const sessionControl = session.control ?? null;
   const attachCommand = interaction.hostReattachAvailable ? sessionControl?.attach_command?.trim() || null : null;
-  const managedLaunchProfile = interaction.hostReattachAvailable ? sessionControl?.managed_launch_profile ?? null : null;
   const attachRunnerLabel = sessionControl?.source_runner_name?.trim() || "this machine";
   const loopModeCaption =
     !interaction.isManagedLocalSession
@@ -197,29 +196,10 @@ export function SessionContextPane({
                   : `This live Codex session is running on ${attachRunnerLabel}. Use the host-machine command below to reopen the Codex TUI.`
                 : canDriveManagedLocalFromBrowser
                   ? `This session is running on ${attachRunnerLabel}. Reattach on the host machine anytime, or keep sending prompts from Longhouse below.`
-                  : `This session is running on ${attachRunnerLabel}. Use the host-machine command below to reopen the live tmux session.`}
+                  : `This session is running on ${attachRunnerLabel}. Use the host-machine command below to reopen the live terminal session.`}
             </div>
             <pre className="inspector-code-block" data-testid="session-attach-command">
               <code>{attachCommand}</code>
-            </pre>
-          </div>
-        </div>
-      ) : null}
-
-      {managedLaunchProfile ? (
-        <div className="session-pane-section">
-          <div className="session-pane-section-title">Launch profile</div>
-          <div className="session-pane-callout session-pane-callout--muted" data-testid="session-launch-profile">
-            <div className="session-pane-callout-title">Managed-local launcher contract</div>
-            <div className="session-pane-callout-copy">
-              Longhouse stored the redacted launch argv and allowlisted env exports for this live session.
-            </div>
-            <div className="session-context-meta">
-              <MetaRow label="Required commands" value={managedLaunchProfile.required_commands.join(", ") || "None"} />
-              <MetaRow label="Exported env keys" value={managedLaunchProfile.exported_env_keys.join(", ") || "None"} />
-            </div>
-            <pre className="inspector-code-block" data-testid="session-launch-profile-argv">
-              <code>{managedLaunchProfile.argv.join(" ")}</code>
             </pre>
           </div>
         </div>

@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime
 from datetime import timezone
 from unittest.mock import patch
 from uuid import uuid4
 
+from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+os.environ.setdefault("JWT_SECRET", "test-jwt-secret-1234")
+os.environ.setdefault("INTERNAL_API_SECRET", "test-internal-secret-1234")
+os.environ.setdefault("GOOGLE_CLIENT_ID", "test-google-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-google-client-secret")
 
 import zerg.dependencies.agents_auth as agents_auth_deps
 import zerg.dependencies.auth as auth_deps
-from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import SESSION_COOKIE_NAME
 from zerg.auth.session_tokens import _encode_jwt
 from zerg.database import Base
@@ -69,7 +78,7 @@ def _issue_session_cookie(user_id: int = 1) -> str:
             "sub": str(user_id),
             "exp": int(time.time()) + 300,
         },
-        JWT_SECRET,
+        auth_deps.JWT_SECRET,
     )
 
 
@@ -148,7 +157,7 @@ def test_timeline_filters_use_cache_control_and_cache_hit_timing(tmp_path):
         api_app.dependency_overrides.clear()
 
 
-def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(tmp_path):
+def test_timeline_session_detail_includes_attach_command_for_managed_local_codex_app_server(tmp_path):
     session_local = _make_db(tmp_path)
     with session_local() as db:
         _seed_user(db)
@@ -167,15 +176,10 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
             assistant_messages=1,
             tool_calls=0,
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport="codex_app_server",
             source_runner_id=9,
             source_runner_name="cinder",
             managed_session_name="lh-codex-managed-local",
-            managed_launch_profile={
-                "required_commands": ["codex"],
-                "exported_env_keys": ["LONGHOUSE_MANAGED_SESSION_ID"],
-                "argv": ["codex", "--enable", "codex_hooks", "--no-alt-screen"],
-            },
         )
         db.add(session)
         db.commit()
@@ -192,15 +196,10 @@ def test_timeline_session_detail_includes_attach_command_for_managed_local_tmux(
         payload = response.json()
         assert payload["home_label"] == "On this Mac"
         assert payload["control"] == {
-            "managed_transport": "tmux",
+            "managed_transport": "codex_app_server",
             "source_runner_id": 9,
             "source_runner_name": "cinder",
             "attach_command": build_managed_local_attach_command(session=session),
-            "managed_launch_profile": {
-                "required_commands": ["codex"],
-                "argv": ["codex", "--enable", "codex_hooks", "--no-alt-screen"],
-                "exported_env_keys": ["LONGHOUSE_MANAGED_SESSION_ID"],
-            },
         }
         assert "attach_command" not in payload
         assert "source_runner_name" not in payload
@@ -254,62 +253,10 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
             "source_runner_id": 9,
             "source_runner_name": "work-laptop",
             "attach_command": build_managed_local_attach_command(session=session),
-            "managed_launch_profile": None,
         }
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()
-
-
-def test_timeline_session_detail_ignores_malformed_managed_launch_profile(tmp_path):
-    session_local = _make_db(tmp_path)
-    with session_local() as db:
-        _seed_user(db)
-        session = AgentSession(
-            id=uuid4(),
-            provider="codex",
-            environment="development",
-            project="timeline-auth",
-            device_id="cinder",
-            cwd="/tmp/timeline-auth",
-            git_repo=None,
-            git_branch="main",
-            started_at=datetime.now(timezone.utc),
-            ended_at=None,
-            user_messages=1,
-            assistant_messages=1,
-            tool_calls=0,
-            execution_home="managed_local",
-            managed_transport="tmux",
-            source_runner_id=9,
-            source_runner_name="cinder",
-            managed_session_name="lh-codex-managed-local",
-            managed_launch_profile={"argv": "bad-shape", "required_commands": ["codex"]},
-        )
-        db.add(session)
-        db.commit()
-        session_id = str(session.id)
-
-    client = _make_client(session_local)
-
-    try:
-        with _force_browser_jwt_mode():
-            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
-            response = client.get(f"/timeline/sessions/{session_id}")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["control"] == {
-            "managed_transport": "tmux",
-            "source_runner_id": 9,
-            "source_runner_name": "cinder",
-            "attach_command": build_managed_local_attach_command(session=session),
-            "managed_launch_profile": None,
-        }
-    finally:
-        auth_deps._strategy_cache.clear()
-        api_app.dependency_overrides.clear()
-
 
 def test_timeline_session_workspace_bootstraps_session_thread_and_projection(tmp_path):
     session_local = _make_db(tmp_path)
@@ -382,7 +329,6 @@ def test_timeline_session_detail_includes_attach_command_for_native_managed_loca
             "source_runner_id": 9,
             "source_runner_name": "cinder",
             "attach_command": build_managed_local_attach_command(session=session),
-            "managed_launch_profile": None,
         }
     finally:
         auth_deps._strategy_cache.clear()

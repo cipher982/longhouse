@@ -45,6 +45,7 @@ from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.services.session_loop_controller import LoopControllerDecision
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
+from zerg.session_execution_home import ManagedSessionTransport
 
 
 def _make_db(tmp_path):
@@ -54,6 +55,12 @@ def _make_db(tmp_path):
     Base.metadata.create_all(bind=engine)
     AgentsBase.metadata.create_all(bind=engine)
     return make_sessionmaker(engine)
+
+
+def _managed_transport_for_provider(provider: str) -> str:
+    if provider == "codex":
+        return ManagedSessionTransport.CODEX_APP_SERVER.value
+    return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
 
 
 def _make_client(db_session, current_user):
@@ -776,7 +783,7 @@ def test_loop_inbox_approve_action_routes_claude_managed_local_continue_without_
                 "text": text,
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
-                "transport": "tmux",
+                "transport": session.managed_transport,
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
             }
@@ -812,7 +819,7 @@ def test_loop_inbox_approve_action_routes_claude_managed_local_continue_without_
             device_id=runner.name,
             provider="claude",
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport=_managed_transport_for_provider("claude"),
             source_runner_id=runner.id,
             source_runner_name=runner.name,
             managed_session_name="lh-mac-continue",
@@ -860,7 +867,7 @@ def test_loop_inbox_approve_action_routes_claude_managed_local_continue_without_
             assert calls[0]["session_id"] == str(session.id)
             assert calls[0]["text"] == "Run the pending targeted tests."
             assert calls[0]["commis_id"] == f"turn-review-{review.id}"
-            assert calls[0]["transport"] == "tmux"
+            assert calls[0]["transport"] == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
             assert calls[0]["timeout_secs"] == 15
             assert calls[0]["verify_turn_started"] is True
             assert calls[0]["verification_timeout_secs"] == 15.0
@@ -1055,7 +1062,7 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
                 "text": text,
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
-                "transport": "tmux",
+                "transport": session.managed_transport,
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
             }
@@ -1091,7 +1098,7 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
             device_id=runner.name,
             provider="claude",
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport=_managed_transport_for_provider("claude"),
             source_runner_id=runner.id,
             source_runner_name=runner.name,
             managed_session_name="lh-mac-reply",
@@ -1154,7 +1161,7 @@ def test_loop_inbox_reply_action_routes_claude_managed_local_reply_without_cloud
             assert calls[0]["session_id"] == str(session.id)
             assert calls[0]["text"] == "keep going with the shortlist"
             assert calls[0]["commis_id"] == f"turn-review-reply-{review.id}"
-            assert calls[0]["transport"] == "tmux"
+            assert calls[0]["transport"] == ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
             assert calls[0]["timeout_secs"] == 15
             assert calls[0]["verify_turn_started"] is True
             assert calls[0]["verification_timeout_secs"] == 15.0
@@ -1198,7 +1205,7 @@ def test_loop_inbox_hides_live_actions_for_managed_local_claude_without_live_con
             device_id="cinder",
             provider="claude",
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport=_managed_transport_for_provider("claude"),
             managed_session_name="lh-mac-no-runner",
         )
         _, assistant_event = _add_turn(
@@ -1258,7 +1265,7 @@ def test_loop_inbox_codex_managed_local_routes_remote_control_actions(monkeypatc
                 "text": text,
                 "commis_id": commis_id,
                 "timeout_secs": timeout_secs,
-                "transport": "tmux",
+                "transport": session.managed_transport,
                 "verify_turn_started": verify_turn_started,
                 "verification_timeout_secs": verification_timeout_secs,
             }
@@ -1294,7 +1301,7 @@ def test_loop_inbox_codex_managed_local_routes_remote_control_actions(monkeypatc
             device_id=runner.name,
             provider="codex",
             execution_home="managed_local",
-            managed_transport="tmux",
+            managed_transport=_managed_transport_for_provider("codex"),
             source_runner_id=runner.id,
             source_runner_name=runner.name,
             managed_session_name="lh-codex-managed-local",
