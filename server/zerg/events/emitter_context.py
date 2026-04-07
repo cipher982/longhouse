@@ -5,10 +5,10 @@ call stack. Unlike the old pattern where contextvars determined event *type*,
 here the contextvar only *transports* an emitter whose identity is already fixed.
 
 Usage:
-    # At entry point (commis_job_processor.py, oikos_service.py):
-    from zerg.events import CommisEmitter, set_emitter, reset_emitter
+    # At entry point (oikos_service.py):
+    from zerg.events import OikosEmitter, set_emitter, reset_emitter
 
-    emitter = CommisEmitter(commis_id=..., ...)
+    emitter = OikosEmitter(run_id=..., ...)
     token = set_emitter(emitter)
     try:
         await runner.run()
@@ -21,11 +21,6 @@ Usage:
     emitter = get_emitter()
     if emitter:
         await emitter.emit_tool_started(...)
-
-Why This Is Safe:
-    Even if asyncio.create_task() copies the contextvar, the emitter object's
-    identity (commis vs oikos) is fixed at construction. A CommisEmitter
-    will always emit commis_tool_* events.
 """
 
 from __future__ import annotations
@@ -37,11 +32,10 @@ from typing import Optional
 from typing import Union
 
 if TYPE_CHECKING:
-    from zerg.events.commis_emitter import CommisEmitter
     from zerg.events.null_emitter import NullEmitter
     from zerg.events.oikos_emitter import OikosEmitter
 
-    EmitterType = Union[CommisEmitter, OikosEmitter, NullEmitter]
+    EmitterType = Union[OikosEmitter, NullEmitter]
 
 # Single contextvar for emitter transport
 # The emitter's identity is baked in at construction time

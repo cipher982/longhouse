@@ -106,15 +106,11 @@ async def _handle_exec_chunk(
 ) -> None:
     """Process an exec_chunk message from a runner.
 
-    Appends output to the job record, feeds the commis output buffer, and
-    publishes a live SSE chunk for any waiting run subscribers.
+    Appends output to the job record and publishes a live SSE chunk for
+    any waiting run subscribers.
     """
-    import time
-
     from zerg.events import EventType
     from zerg.events.event_bus import event_bus
-    from zerg.models.models import CommisJob
-    from zerg.services.commis_output_buffer import get_commis_output_buffer
 
     job_id = message.get("job_id")
     stream = message.get("stream")
@@ -132,7 +128,6 @@ async def _handle_exec_chunk(
         if not updated_job:
             return None
         return {
-            "commis_id": updated_job.commis_id,
             "run_id": updated_job.run_id,
         }
 
@@ -154,48 +149,6 @@ async def _handle_exec_chunk(
         logger.warning(f"Ignoring exec_chunk for invalid job {job_id} from runner {runner_id}")
         return
 
-    commis_id = updated_job.get("commis_id")
-    if not commis_id:
-        return
-
-    output_buffer = get_commis_output_buffer()
-
-    # Resolve commis job metadata once (cached in buffer)
-    commis_job_id = None
-    trace_id = None
-    meta = output_buffer.get_meta(commis_id)
-    last_resolved_at = 0
-    if meta:
-        commis_job_id = meta.job_id
-        trace_id = meta.trace_id
-        last_resolved_at = meta.last_resolved_at
-
-    # Throttle DB lookup to once per 5 seconds if not yet resolved
-    if commis_job_id is None and (time.time() - last_resolved_at) > 5.0:
-        commis_job = (
-            db.query(CommisJob)
-            .filter(
-                CommisJob.commis_id == commis_id,
-                CommisJob.owner_id == owner_id,
-            )
-            .order_by(CommisJob.id.desc())
-            .first()
-        )
-        if commis_job:
-            commis_job_id = commis_job.id
-            trace_id = str(commis_job.trace_id) if commis_job.trace_id else None
-
-        # Mark as resolved (even if not found, to trigger throttling)
-        output_buffer.append_output(
-            commis_id=commis_id,
-            stream=stream,
-            data="",  # Don't append data here, just updating meta
-            job_id=commis_job_id,
-            trace_id=trace_id,
-            owner_id=owner_id,
-            resolved=True,
-        )
-
     run_id_int = None
     run_id = updated_job.get("run_id")
     if run_id is not None:
@@ -204,28 +157,14 @@ async def _handle_exec_chunk(
         except (TypeError, ValueError):
             run_id_int = None
 
-    output_buffer.append_output(
-        commis_id=commis_id,
-        stream=stream,
-        data=data,
-        runner_job_id=job_id,
-        job_id=commis_job_id,
-        run_id=run_id_int,
-        trace_id=trace_id,
-        owner_id=owner_id,
-    )
-
     # Publish live output chunk (ephemeral SSE only; not persisted)
     if run_id_int:
         MAX_CHUNK_CHARS = 4000
         payload = {
-            "job_id": commis_job_id,
-            "commis_id": commis_id,
             "runner_job_id": job_id,
             "stream": stream,
             "data": data[-MAX_CHUNK_CHARS:] if len(data) > MAX_CHUNK_CHARS else data,
             "run_id": run_id_int,
-            "trace_id": trace_id,
             "owner_id": owner_id,
         }
         await event_bus.publish(EventType.COMMIS_OUTPUT_CHUNK, payload)

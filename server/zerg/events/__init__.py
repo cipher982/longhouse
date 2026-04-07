@@ -3,12 +3,10 @@
 This package provides:
 - EventBus: Central pub/sub for system events
 - EventEmitter: Protocol for tool event emission with baked-in identity
-- CommisEmitter/OikosEmitter: Concrete emitters that always emit correct event types
+- OikosEmitter: Concrete emitter that always emits correct event types
 - get_emitter/set_emitter: Contextvar-based emitter transport
 """
 
-from .commis_emitter import CommisEmitter
-from .commis_emitter import ToolCall
 from .emitter_context import get_emitter
 from .emitter_context import reset_emitter
 from .emitter_context import set_emitter
