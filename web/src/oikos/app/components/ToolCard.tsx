@@ -135,6 +135,8 @@ export function ToolCard({ tool }: ToolCardProps): React.ReactElement {
   return (
     <div
       className={`tool-card tool-card--${tool.status}`}
+      data-testid="tool-card"
+      data-tool-call-id={tool.toolCallId}
       onClick={() => setIsExpanded(!isExpanded)}
     >
       {/* Header - always visible */}

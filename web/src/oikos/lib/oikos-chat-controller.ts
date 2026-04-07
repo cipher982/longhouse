@@ -16,7 +16,6 @@
 import { logger } from '../core';
 import { CONFIG, toAbsoluteUrl } from './config';
 import { eventBus } from './event-bus';
-import { commisProgressStore } from './commis-progress-store';
 import { parseUTC } from '../../lib/dateUtils';
 import { fetchWithRefresh } from '../../lib/auth-refresh';
 import {
@@ -32,14 +31,6 @@ import {
   type OikosWaitingPayload,
   type OikosResumedPayload,
   type ErrorPayload,
-  type CommisSpawnedPayload,
-  type CommisStartedPayload,
-  type CommisCompletePayload,
-  type CommisSummaryReadyPayload,
-  type CommisToolStartedPayload,
-  type CommisToolCompletedPayload,
-  type CommisToolFailedPayload,
-  type CommisOutputChunkPayload,
   type OikosToolStartedPayload,
   type OikosToolProgressPayload,
   type OikosToolCompletedPayload,
@@ -47,28 +38,11 @@ import {
   type ShowSessionPickerPayload,
 } from '../../generated/sse-events';
 
-export interface CommisToolInfo {
-  tool_name: string;
-  status: string;
-  duration_ms?: number;
-  result_preview?: string;
-  error?: string;
-}
-
-export interface CommisInfo {
-  job_id: number;
-  task: string;
-  status: string;
-  summary?: string;
-  tools: CommisToolInfo[];
-}
-
 export interface ToolCallInfo {
   tool_call_id: string;
   tool_name: string;
   args?: Record<string, unknown>;
   result?: string;
-  commis?: CommisInfo;
 }
 
 export interface OikosChatMessage {
@@ -613,9 +587,6 @@ export class OikosChatController {
   private async handleSSEEvent(eventType: SSEEventType, data: unknown): Promise<void> {
     logger.debug('[OikosChat] SSE event:', { eventType, data });
 
-    // Clear reconnecting state on first event (for resumable SSE reconnect flow)
-    commisProgressStore.clearReconnecting();
-
     // Handle connected event separately (direct payload format)
     if (eventType === 'connected') {
       const payload = data as ConnectedPayload;
@@ -873,119 +844,7 @@ export class OikosChatController {
         break;
       }
 
-      // ===== Commis lifecycle events (v2.1) =====
-      case 'commis_spawned': {
-        const payload = wrapper.payload as CommisSpawnedPayload;
-        this.petWatchdog();
-        logger.debug('[OikosChat] Commis spawned:', payload.job_id);
-        eventBus.emit('oikos:commis_spawned', {
-          jobId: payload.job_id,
-          toolCallId: payload.tool_call_id,
-          task: payload.task,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-
-      case 'commis_started': {
-        const payload = wrapper.payload as CommisStartedPayload;
-        this.petWatchdog();
-        logger.debug('[OikosChat] Commis started:', payload.job_id);
-        eventBus.emit('oikos:commis_started', {
-          jobId: payload.job_id,
-          commisId: payload.commis_id,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-
-      case 'commis_complete': {
-        const payload = wrapper.payload as CommisCompletePayload;
-        this.petWatchdog();
-        logger.debug(`[OikosChat] Commis complete: job=${payload.job_id} status=${payload.status}`);
-        eventBus.emit('oikos:commis_complete', {
-          jobId: payload.job_id,
-          commisId: payload.commis_id,
-          status: payload.status,
-          durationMs: payload.duration_ms,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-
-      case 'commis_summary_ready': {
-        const payload = wrapper.payload as CommisSummaryReadyPayload;
-        this.petWatchdog();
-        logger.debug('[OikosChat] Commis summary ready:', payload.job_id);
-        eventBus.emit('oikos:commis_summary', {
-          jobId: payload.job_id,
-          commisId: payload.commis_id,
-          summary: payload.summary,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-
-      // ===== Commis tool events (v2.1 Activity Ticker) =====
-      case 'commis_tool_started': {
-        const payload = wrapper.payload as CommisToolStartedPayload;
-        this.petWatchdog();
-        logger.debug('[OikosChat] Commis tool started:', payload.tool_name);
-        eventBus.emit('commis:tool_started', {
-          commisId: payload.commis_id,
-          toolName: payload.tool_name,
-          toolCallId: payload.tool_call_id,
-          argsPreview: payload.tool_args_preview,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-
-      case 'commis_tool_completed': {
-        const payload = wrapper.payload as CommisToolCompletedPayload;
-        this.petWatchdog();
-        logger.debug('[OikosChat] Commis tool completed:', payload.tool_name);
-        eventBus.emit('commis:tool_completed', {
-          commisId: payload.commis_id,
-          toolName: payload.tool_name,
-          toolCallId: payload.tool_call_id,
-          durationMs: payload.duration_ms,
-          resultPreview: payload.result_preview,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-
-      case 'commis_tool_failed': {
-        const payload = wrapper.payload as CommisToolFailedPayload;
-        this.petWatchdog();
-        logger.warn(`[OikosChat] Commis tool failed: ${payload.tool_name} - ${payload.error}`);
-        eventBus.emit('commis:tool_failed', {
-          commisId: payload.commis_id,
-          toolName: payload.tool_name,
-          toolCallId: payload.tool_call_id,
-          durationMs: payload.duration_ms,
-          error: payload.error,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-
-      case 'commis_output_chunk': {
-        const payload = wrapper.payload as CommisOutputChunkPayload;
-        this.petWatchdog();
-        eventBus.emit('commis:output_chunk', {
-          commisId: payload.commis_id,
-          jobId: payload.job_id,
-          runnerJobId: payload.runner_job_id,
-          stream: payload.stream,
-          data: payload.data,
-          timestamp: Date.now(),
-        });
-        break;
-      }
-
-      // ===== Oikos tool events (uniform treatment with commis tools) =====
+      // ===== Oikos tool events =====
       case 'oikos_tool_started': {
         const payload = wrapper.payload as OikosToolStartedPayload;
         this.petWatchdog();

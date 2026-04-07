@@ -6150,41 +6150,6 @@ export interface components {
             error?: string | null;
         };
         /**
-         * CommisInfo
-         * @description Commis spawned by spawn_commis tool.
-         */
-        CommisInfo: {
-            /** Job Id */
-            job_id: number;
-            /** Task */
-            task: string;
-            /** Status */
-            status: string;
-            /** Summary */
-            summary?: string | null;
-            /**
-             * Tools
-             * @default []
-             */
-            tools: components["schemas"]["CommisToolInfo"][];
-        };
-        /**
-         * CommisToolInfo
-         * @description Tool executed by a commis.
-         */
-        CommisToolInfo: {
-            /** Tool Name */
-            tool_name: string;
-            /** Status */
-            status: string;
-            /** Duration Ms */
-            duration_ms?: number | null;
-            /** Result Preview */
-            result_preview?: string | null;
-            /** Error */
-            error?: string | null;
-        };
-        /**
          * ConfigureTestModelRequest
          * @description Request model for configuring test model.
          */
@@ -10663,7 +10628,6 @@ export interface components {
             } | null;
             /** Result */
             result?: string | null;
-            commis?: components["schemas"]["CommisInfo"] | null;
         };
         /**
          * TopAutomationUsage

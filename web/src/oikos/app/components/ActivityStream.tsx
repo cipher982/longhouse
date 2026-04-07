@@ -13,7 +13,6 @@
 import React, { useSyncExternalStore } from 'react';
 import { oikosToolStore } from '../../lib/oikos-tool-store';
 import { ToolCard } from './ToolCard';
-import { CommisToolCard } from './CommisToolCard';
 import './ActivityStream.css';
 
 interface ActivityStreamProps {
@@ -36,38 +35,13 @@ export function ActivityStream({ runId, className }: ActivityStreamProps): React
     return null;
   }
 
-  const hasActiveWork = tools.some(t => {
-    if (t.status === 'running') return true;
-    if (t.toolName !== 'spawn_commis') return false;
-
-    const commisStatus = (t.result as any)?.commisStatus;
-    const nestedTools = (t.result as any)?.nestedTools || [];
-
-    if (commisStatus === 'spawned' || commisStatus === 'running') return true;
-    if (nestedTools.some((nt: any) => nt.status === 'running')) return true;
-
-    return false;
-  });
-
-  // Check if oikos is deferred (commis continuing in background)
-  const isDeferred = oikosToolStore.isDeferred(runId);
-
-  // Count detached commis before this one for stacking offset
-  let detachedCommisIndex = 0;
+  const hasActiveWork = tools.some(t => t.status === 'running');
 
   return (
     <div className={`activity-stream ${className || ''} ${hasActiveWork ? 'activity-stream--active' : ''}`}>
-      {tools.map(tool => {
-        // Use CommisToolCard for spawn_commis, regular ToolCard for everything else
-        if (tool.toolName === 'spawn_commis') {
-          // Mark commis as detached if it's still running while oikos is deferred
-          const commisStatus = (tool.result as any)?.commisStatus;
-          const isDetached = isDeferred && (commisStatus === 'running' || commisStatus === 'spawned');
-          const detachedIndex = isDetached ? detachedCommisIndex++ : 0;
-          return <CommisToolCard key={tool.toolCallId} tool={tool} isDetached={isDetached} detachedIndex={detachedIndex} />;
-        }
-        return <ToolCard key={tool.toolCallId} tool={tool} />;
-      })}
+      {tools.map(tool => (
+        <ToolCard key={tool.toolCallId} tool={tool} />
+      ))}
     </div>
   );
 }

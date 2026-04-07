@@ -12,7 +12,6 @@ import { renderMarkdown } from '../../lib/markdown-renderer'
 import { oikosToolStore, type OikosToolCall } from '../../lib/oikos-tool-store'
 import { eventBus } from '../../lib/event-bus'
 import { ToolCard } from './ToolCard'
-import { CommisToolCard } from './CommisToolCard'
 import type { ChatMessage } from '../context/types'
 
 // Timeline event types - messages and tools are both events in the conversation
@@ -234,27 +233,15 @@ export function ChatContainer({ messages, userTranscriptPreview, showSurfaceBadg
     })
   }, [messages, toolState.tools])
 
-  // Check if any commis are actively running (for hiding typing dots)
+  // Check if any tools are actively running (for hiding typing dots)
   const hasActiveCommis = useMemo(() => {
-    return Array.from(toolState.tools.values()).some(tool => {
-      if (tool.toolName === 'spawn_commis') {
-        const commisStatus = (tool.result as Record<string, unknown>)?.commisStatus
-        return commisStatus === 'running' || commisStatus === 'spawned'
-      }
-      return tool.status === 'running'
-    })
+    return Array.from(toolState.tools.values()).some(tool => tool.status === 'running')
   }, [toolState.tools])
 
   const hasContent = messages.length > 0 || toolState.tools.size > 0 || userTranscriptPreview
 
   // Render a tool event
   const renderTool = (tool: OikosToolCall) => {
-    if (tool.toolName === 'spawn_commis') {
-      const isDeferred = oikosToolStore.isDeferred(tool.runId)
-      const commisStatus = (tool.result as Record<string, unknown>)?.commisStatus
-      const isDetached = isDeferred && (commisStatus === 'running' || commisStatus === 'spawned')
-      return <CommisToolCard key={tool.toolCallId} tool={tool} isDetached={isDetached} detachedIndex={0} />
-    }
     return <ToolCard key={tool.toolCallId} tool={tool} />
   }
 
