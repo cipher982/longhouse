@@ -30,12 +30,19 @@ from zerg.services.managed_local_control import await_managed_local_turn_termina
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
 from zerg.services.presence_cache import get_presence_cache
+from zerg.session_execution_home import ManagedSessionTransport
 
 
 def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{tmp_path / 'test_managed_local_control.db'}")
     initialize_database(engine)
     return make_sessionmaker(engine)
+
+
+def _managed_transport_for_provider(provider: str) -> str:
+    if provider == "codex":
+        return ManagedSessionTransport.CODEX_APP_SERVER.value
+    return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
 
 
 def _seed_user_runner_and_session(db, *, provider: str = "claude"):
@@ -73,11 +80,10 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude"):
         assistant_messages=0,
         tool_calls=0,
         execution_home="managed_local",
-        managed_transport="tmux",
+        managed_transport=_managed_transport_for_provider(provider),
         source_runner_id=runner.id,
         source_runner_name=runner.name,
         managed_session_name="lh-zerg-managed-local",
-        managed_tmux_tmpdir="/tmp/lh-managed-control",
         loop_mode="manual",
     )
     db.add(session)
@@ -144,9 +150,9 @@ def test_send_text_to_managed_local_session_returns_baseline_event_id_for_claude
         assert len(dispatcher.calls) == 1
         assert dispatcher.calls[0]["runner_id"] == runner.id
         assert dispatcher.calls[0]["commis_id"] == "managed-local-control-test"
-        assert "export TMUX_TMPDIR=/tmp/lh-managed-control" in str(dispatcher.calls[0]["command"])
-        assert "send-keys -t lh-zerg-managed-local -l -- continue" in str(dispatcher.calls[0]["command"])
-        assert "send-keys -t lh-zerg-managed-local C-m" in str(dispatcher.calls[0]["command"])
+        command = str(dispatcher.calls[0]["command"])
+        assert "exec longhouse claude-channel send --session-id" in command
+        assert "--text continue" in command
 
 
 def test_await_managed_local_turn_events_returns_new_persisted_events(tmp_path):
@@ -193,7 +199,7 @@ def test_await_managed_local_turn_events_returns_new_persisted_events(tmp_path):
         assert [event.content_text for event in events] == ["after"]
 
 
-def test_send_text_to_managed_local_session_uses_bracketed_paste_for_codex(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_uses_engine_bridge_for_codex(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
@@ -214,9 +220,9 @@ def test_send_text_to_managed_local_session_uses_bracketed_paste_for_codex(monke
         assert len(dispatcher.calls) == 1
         assert dispatcher.calls[0]["runner_id"] == runner.id
         command = str(dispatcher.calls[0]["command"])
-        assert "set-buffer -b send-lh-zerg-managed-local continue" in command
-        assert "paste-buffer -dpr -b send-lh-zerg-managed-local -t lh-zerg-managed-local" in command
-        assert "send-keys -t lh-zerg-managed-local Enter" in command
+        assert 'engine="$(command -v longhouse-engine || true)"' in command
+        assert '"$engine" codex-bridge send --session-id' in command
+        assert "--text continue" in command
 
 
 def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monkeypatch, tmp_path):
@@ -255,11 +261,9 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
         assert dispatcher.calls[1]["commis_id"] == "managed-local-control-second"
         first_command = str(dispatcher.calls[0]["command"])
         second_command = str(dispatcher.calls[1]["command"])
-        assert "send-keys -t lh-zerg-managed-local -l --" in first_command
-        assert "send-keys -t lh-zerg-managed-local C-m" in first_command
+        assert "exec longhouse claude-channel send --session-id" in first_command
         assert "continue alpha" in first_command
-        assert "send-keys -t lh-zerg-managed-local -l --" in second_command
-        assert "send-keys -t lh-zerg-managed-local C-m" in second_command
+        assert "exec longhouse claude-channel send --session-id" in second_command
         assert "status? [ok]" in second_command
 
 
@@ -270,8 +274,6 @@ def test_send_text_to_managed_local_session_uses_claude_channel_bridge_command(m
 
     with SessionLocal() as db:
         user, runner, session = _seed_user_runner_and_session(db, provider="claude")
-        session.managed_transport = "claude_channel_bridge"
-        session.managed_tmux_tmpdir = None
         db.commit()
 
         result = asyncio.run(
@@ -348,7 +350,7 @@ def test_validate_managed_local_chat_done_payload_rejects_nonzero_exit_code():
     assert error == "expected exit_code=0, got 3"
 
 
-def test_send_text_to_managed_local_session_can_require_active_hook_phase(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_codex(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
@@ -370,9 +372,9 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase(monkey
         assert phases == {"thinking", "running"}
         return SessionRuntimeEvent(
             id=after_runtime_event_id + 1,
-            runtime_key=f"claude:{session_id}",
+            runtime_key=f"codex:{session_id}",
             session_id=session_id,
-            provider="claude",
+            provider="codex",
             device_id="cinder",
             source="claude_hook",
             kind="phase_signal",
@@ -390,7 +392,7 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase(monkey
     )
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, runner, session = _seed_user_runner_and_session(db, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
@@ -408,7 +410,9 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase(monkey
         assert result.verified_turn_started is True
 
 
-def test_send_text_to_managed_local_session_reports_verification_failure_without_runtime_signal(monkeypatch, tmp_path):
+def test_send_text_to_managed_local_session_reports_codex_verification_failure_without_runtime_signal(
+    monkeypatch, tmp_path
+):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
@@ -422,7 +426,7 @@ def test_send_text_to_managed_local_session_reports_verification_failure_without
     )
 
     with SessionLocal() as db:
-        user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
@@ -843,8 +847,6 @@ def test_await_managed_local_turn_terminal_accepts_runtime_terminal_without_acti
 
 def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_persisted_prompt(monkeypatch, tmp_path):
     """Native Claude channel sends verify against the persisted user prompt, not hook phases."""
-    from zerg.session_execution_home import ManagedSessionTransport
-
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)
@@ -866,7 +868,6 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
 
     with SessionLocal() as db:
         user, runner, session = _seed_user_runner_and_session(db, provider="claude")
-        # Override to channel-bridge transport (no tmux fields needed)
         session.managed_transport = ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
         session.provider_session_id = "provider-abc"
         session.cwd = "/tmp/demo"
@@ -890,8 +891,6 @@ def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_p
 
 
 def test_send_text_to_managed_local_session_reports_claude_channel_verification_failure(monkeypatch, tmp_path):
-    from zerg.session_execution_home import ManagedSessionTransport
-
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
     monkeypatch.setattr("zerg.services.managed_local_control.get_runner_job_dispatcher", lambda: dispatcher)

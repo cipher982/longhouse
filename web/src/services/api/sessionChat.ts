@@ -1,5 +1,4 @@
 import { request } from "./base";
-import type { ManagedLaunchProfile, ManagedSessionTransport, SessionExecutionHome } from "./agents";
 
 export interface SessionLockInfo {
   locked: boolean;
@@ -10,45 +9,4 @@ export interface SessionLockInfo {
 
 export async function fetchSessionLockStatus(sessionId: string): Promise<SessionLockInfo> {
   return request<SessionLockInfo>(`/sessions/${sessionId}/lock`);
-}
-
-// ---------------------------------------------------------------------------
-// Managed Local Session Launch
-// ---------------------------------------------------------------------------
-
-export type ManagedLocalProvider = "claude" | "codex";
-
-export interface ManagedLocalSessionLaunchRequest {
-  runner_target: string;
-  cwd: string;
-  provider?: ManagedLocalProvider;
-  project?: string | null;
-  git_repo?: string | null;
-  git_branch?: string | null;
-  display_name?: string | null;
-  loop_mode?: "manual" | "assist" | "autopilot";
-  claude_launch_env?: Record<string, string> | null;
-}
-
-export interface ManagedLocalSessionLaunchResponse {
-  session_id: string;
-  provider: string;
-  provider_session_id: string;
-  execution_home: SessionExecutionHome;
-  managed_transport: ManagedSessionTransport;
-  loop_mode: string;
-  source_runner_id: number | null;
-  source_runner_name: string;
-  managed_session_name: string;
-  attach_command: string;
-  managed_launch_profile?: ManagedLaunchProfile | null;
-}
-
-export async function launchManagedLocalSession(
-  body: ManagedLocalSessionLaunchRequest,
-): Promise<ManagedLocalSessionLaunchResponse> {
-  return request<ManagedLocalSessionLaunchResponse>(`/sessions/managed-local`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
 }

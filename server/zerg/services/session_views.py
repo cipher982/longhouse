@@ -54,23 +54,6 @@ def build_attach_command(session: AgentSession) -> str | None:
     return build_managed_local_attach_command(session=session)
 
 
-def _coerce_managed_launch_profile(value: Any) -> ManagedLaunchProfileResponse | None:
-    if not isinstance(value, dict):
-        return None
-    required_commands = value.get("required_commands")
-    argv = value.get("argv")
-    exported_env_keys = value.get("exported_env_keys")
-    if not isinstance(required_commands, list) or not isinstance(argv, list) or not isinstance(exported_env_keys, list):
-        return None
-    if not all(isinstance(item, str) for item in required_commands + argv + exported_env_keys):
-        return None
-    return ManagedLaunchProfileResponse(
-        required_commands=required_commands,
-        argv=argv,
-        exported_env_keys=exported_env_keys,
-    )
-
-
 def build_session_capabilities_response(
     session: AgentSession | None = None,
     *,
@@ -95,13 +78,11 @@ def build_session_control_response(
     capability_flags = capability_flags or build_session_capabilities(session)
     source_runner_name = str(getattr(session, "source_runner_name", "") or "").strip() or None
     attach_command = build_attach_command(session) if capability_flags.host_reattach_available else None
-    managed_launch_profile = _coerce_managed_launch_profile(getattr(session, "managed_launch_profile", None))
     if (
         capability_flags.managed_transport is None
         and getattr(session, "source_runner_id", None) is None
         and source_runner_name is None
         and attach_command is None
-        and managed_launch_profile is None
     ):
         return None
     return SessionControlResponse(
@@ -109,19 +90,12 @@ def build_session_control_response(
         source_runner_id=getattr(session, "source_runner_id", None),
         source_runner_name=source_runner_name,
         attach_command=attach_command,
-        managed_launch_profile=managed_launch_profile,
     )
 
 
 # ---------------------------------------------------------------------------
 # Response models
 # ---------------------------------------------------------------------------
-
-
-class ManagedLaunchProfileResponse(BaseModel):
-    required_commands: List[str] = Field(..., description="Commands that must exist before managed launch")
-    argv: List[str] = Field(..., description="Structured argv Longhouse resolved for the managed launch")
-    exported_env_keys: List[str] = Field(..., description="Env var names Longhouse exported for the launch")
 
 
 class SessionControlResponse(BaseModel):
@@ -132,10 +106,6 @@ class SessionControlResponse(BaseModel):
     source_runner_id: Optional[int] = Field(None, description="Runner id for managed local sessions")
     source_runner_name: Optional[str] = Field(None, description="Runner name for managed local sessions")
     attach_command: Optional[str] = Field(None, description="Local reattach command for managed-local sessions")
-    managed_launch_profile: Optional[ManagedLaunchProfileResponse] = Field(
-        None,
-        description="Structured managed-launch metadata for debugging tmux-backed sessions",
-    )
 
 
 class SessionCapabilitiesResponse(BaseModel):

@@ -23,7 +23,6 @@ import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useTimelineSessionStream } from "../hooks/useTimelineSessionStream";
 import { useReadinessFlag } from "../lib/readiness-contract";
-import { isRunnerSessionLaunchReady } from "../lib/runnerSessions";
 import {
   type AgentSession,
   type AgentSessionFilters,
@@ -33,7 +32,6 @@ import {
   type TimelineSessionCard,
   seedDemoSessions,
 } from "../services/api/agents";
-import type { Runner } from "../services/api";
 import {
   Button,
   Badge,
@@ -46,7 +44,6 @@ import {
 } from "../components/ui";
 import { PresenceBadge } from "../components/PresenceBadge";
 import AddRunnerModal from "../components/AddRunnerModal";
-import LaunchSessionModal from "../components/LaunchSessionModal";
 import { parseUTC } from "../lib/dateUtils";
 import { normalizeExecutionVenueLabel } from "../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../lib/sessionRuntime";
@@ -785,7 +782,6 @@ export default function SessionsPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [launchRunner, setLaunchRunner] = useState<Runner | null>(null);
   const urlState = useMemo(() => readSessionsUrlState(searchParams), [searchParams]);
   const {
     project,
@@ -841,40 +837,14 @@ export default function SessionsPage() {
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
   const { data: runnersData } = useRunners();
   const runners = runnersData ?? [];
-  const launchReadyRunners = useMemo(
-    () => runners.filter(isRunnerSessionLaunchReady),
-    [runners],
-  );
-  const singleLaunchReadyRunner = launchReadyRunners.length === 1 ? launchReadyRunners[0] : null;
-  const runnerActionLabel =
-    singleLaunchReadyRunner != null
-      ? "Start Session"
-      : launchReadyRunners.length > 1
-        ? "Choose Machine"
-        : runners.length > 0
-          ? "Open Machines"
-          : "Connect Machine";
+  const runnerActionLabel = runners.length > 0 ? "Open Machines" : "Connect Machine";
   const handleRunnerAction = useCallback(() => {
-    if (singleLaunchReadyRunner) {
-      setLaunchRunner(singleLaunchReadyRunner);
-      return;
-    }
     if (runners.length === 0) {
       setShowAddRunnerModal(true);
       return;
     }
     navigate("/runners");
-  }, [navigate, runners.length, singleLaunchReadyRunner]);
-  const handleLaunchModalClose = useCallback(() => {
-    setLaunchRunner(null);
-  }, []);
-  const launchModal = launchRunner ? (
-    <LaunchSessionModal
-      isOpen
-      onClose={handleLaunchModalClose}
-      runner={launchRunner}
-    />
-  ) : null;
+  }, [navigate, runners.length]);
   const addRunnerModal = showAddRunnerModal ? (
     <AddRunnerModal
       isOpen
@@ -1029,7 +999,7 @@ export default function SessionsPage() {
         </span>
       )}
       <Button
-        variant={singleLaunchReadyRunner ? "primary" : "secondary"}
+        variant={runners.length === 0 ? "primary" : "secondary"}
         size="sm"
         onClick={handleRunnerAction}
         data-testid="timeline-runner-action"
@@ -1225,7 +1195,6 @@ export default function SessionsPage() {
               <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
             </p>
           </div>
-          {launchModal}
           {addRunnerModal}
         </div>
       </PageShell>
@@ -1480,7 +1449,6 @@ export default function SessionsPage() {
           </div>
         )}
       </div>
-      {launchModal}
       {addRunnerModal}
     </PageShell>
   );

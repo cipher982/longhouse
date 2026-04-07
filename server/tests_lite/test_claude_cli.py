@@ -68,9 +68,9 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
             json_data={
                 "session_id": "session-123",
                 "provider_session_id": "provider-123",
-                "attach_command": "zsh -lc 'exec tmux attach -t lh-demo'",
+                "attach_command": "zsh -lc 'exec claude --resume provider-123'",
                 "source_runner_name": "work-laptop",
-                "managed_transport": "tmux",
+                "managed_transport": "claude_channel_bridge",
             },
         )
     )
@@ -97,8 +97,8 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
 
     assert result.session_id == "session-123"
     assert result.provider_session_id == "provider-123"
-    assert result.attach_command == "zsh -lc 'exec tmux attach -t lh-demo'"
-    assert result.managed_transport == "tmux"
+    assert result.attach_command == "zsh -lc 'exec claude --resume provider-123'"
+    assert result.managed_transport == "claude_channel_bridge"
     assert fake_client.calls == [
         {
             "url": "https://longhouse.test/api/sessions/managed-local/this-device",
@@ -123,11 +123,8 @@ def test_launch_managed_local_from_api_uses_this_device_endpoint(monkeypatch, tm
         }
     ]
 
-
-def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp_path):
+def test_claude_command_fails_when_native_channels_unavailable(monkeypatch, tmp_path):
     runner = CliRunner()
-    attach_calls: list[str] = []
-    open_calls: list[str] = []
     launch_calls: list[dict] = []
 
     monkeypatch.setattr(
@@ -154,17 +151,8 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
     monkeypatch.setattr(
         claude_cli,
         "_launch_managed_local_from_api",
-        lambda **kwargs: launch_calls.append(kwargs)
-        or claude_cli.ManagedLocalLaunchResponse(
-            session_id="session-123",
-            provider_session_id="provider-123",
-            attach_command="zsh -lc 'exec tmux attach -t lh-demo'",
-            source_runner_name="work-laptop",
-        ),
+        lambda **kwargs: launch_calls.append(kwargs),
     )
-    monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: True)
-    monkeypatch.setattr(claude_cli, "_run_attach_command", lambda command: attach_calls.append(command) or 0)
-    monkeypatch.setattr(claude_cli, "_open_session_url", lambda url: open_calls.append(url) or True)
 
     result = runner.invoke(
         app,
@@ -182,24 +170,10 @@ def test_claude_command_prints_attach_command_and_auto_attaches(monkeypatch, tmp
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    assert "Longhouse: https://longhouse.test" in result.output
-    assert "Native Claude channels unavailable (disabled by Claude launch env); using tmux fallback." in result.output
-    assert "Longhouse Claude session launched on this machine." in result.output
-    assert "Session ID: session-123" in result.output
-    assert "Provider session ID: provider-123" in result.output
-    assert "Session URL: https://longhouse.test/timeline/session-123" in result.output
-    assert "Attach: zsh -lc 'exec tmux attach -t lh-demo'" in result.output
-    assert "Opening session in browser..." in result.output
-    assert "Attaching..." in result.output
-    assert open_calls == ["https://longhouse.test/timeline/session-123"]
-    assert attach_calls == ["zsh -lc 'exec tmux attach -t lh-demo'"]
-    assert launch_calls[0]["claude_launch_env"] == {
-        "CLAUDE_CODE_USE_BEDROCK": "1",
-        "AWS_PROFILE": "zh-qa-engineer",
-        "AWS_REGION": "us-east-1",
-        "ANTHROPIC_MODEL": "us.anthropic.claude-sonnet-4-6",
-    }
+    assert result.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert "Native Claude channels unavailable (disabled by Claude launch env)." in result.output
+    assert "Longhouse now requires the local Claude channel bridge." in result.output
+    assert launch_calls == []
 
 
 def test_claude_command_starts_native_channel_bridge_when_api_returns_native_transport(monkeypatch, tmp_path):
@@ -352,16 +326,16 @@ def test_result_uses_native_claude_bridge_only_for_native_transport():
         source_runner_name="work-laptop",
         managed_transport="claude_channel_bridge",
     )
-    tmux = claude_cli.ManagedLocalLaunchResponse(
+    codex = claude_cli.ManagedLocalLaunchResponse(
         session_id="session-123",
         provider_session_id="provider-123",
         attach_command="attach",
         source_runner_name="work-laptop",
-        managed_transport="tmux",
+        managed_transport="codex_app_server",
     )
 
     assert claude_cli._result_uses_native_claude_bridge(native) is True
-    assert claude_cli._result_uses_native_claude_bridge(tmux) is False
+    assert claude_cli._result_uses_native_claude_bridge(codex) is False
 
 
 def test_detect_native_claude_channels_available_true_for_first_party_auth(monkeypatch):
@@ -398,7 +372,7 @@ def test_detect_native_claude_channels_available_false_for_bedrock(monkeypatch):
     assert detail == "authMethod=third_party, apiProvider=bedrock"
 
 
-def test_claude_command_forces_tmux_path_when_launch_env_requires_flag_capable_path(monkeypatch, tmp_path):
+def test_claude_command_rejects_launch_envs_that_disable_native_channels(monkeypatch, tmp_path):
     runner = CliRunner()
     launch_calls: list[dict] = []
 
@@ -426,14 +400,7 @@ def test_claude_command_forces_tmux_path_when_launch_env_requires_flag_capable_p
     monkeypatch.setattr(
         claude_cli,
         "_launch_managed_local_from_api",
-        lambda **kwargs: launch_calls.append(kwargs)
-        or claude_cli.ManagedLocalLaunchResponse(
-            session_id="session-123",
-            provider_session_id="provider-123",
-            attach_command="zsh -lc 'exec tmux attach -t lh-demo'",
-            source_runner_name="work-laptop",
-            managed_transport="tmux",
-        ),
+        lambda **kwargs: launch_calls.append(kwargs),
     )
     monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: False)
 
@@ -446,9 +413,9 @@ def test_claude_command_forces_tmux_path_when_launch_env_requires_flag_capable_p
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    assert "Native Claude channels unavailable (disabled by Claude launch env); using tmux fallback." in result.output
-    assert launch_calls[0]["native_claude_channels_available"] is False
+    assert result.exit_code == claude_cli.EXIT_SETUP_FAILED
+    assert "Native Claude channels unavailable (disabled by Claude launch env)." in result.output
+    assert launch_calls == []
 
 
 def test_claude_command_rejects_native_bridge_when_launch_env_requires_flag_capable_path(monkeypatch, tmp_path):
@@ -477,13 +444,7 @@ def test_claude_command_rejects_native_bridge_when_launch_env_requires_flag_capa
     monkeypatch.setattr(
         claude_cli,
         "_launch_managed_local_from_api",
-        lambda **_kwargs: claude_cli.ManagedLocalLaunchResponse(
-            session_id="session-123",
-            provider_session_id="provider-123",
-            attach_command="zsh -lc 'exec claude --resume provider-123'",
-            source_runner_name="work-laptop",
-            managed_transport="claude_channel_bridge",
-        ),
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("API launch should not be attempted")),
     )
     monkeypatch.setattr(
         claude_cli,
@@ -502,12 +463,13 @@ def test_claude_command_rejects_native_bridge_when_launch_env_requires_flag_capa
 
     assert result.exit_code == claude_cli.EXIT_SETUP_FAILED
     assert native_finalize_calls == []
-    assert "requires the permissive Claude path" in result.output
+    assert "Native Claude channels unavailable (disabled by Claude launch env)." in result.output
 
 
-def test_claude_command_force_native_channels_bypasses_bedrock_tmux_gate(monkeypatch, tmp_path):
+def test_claude_command_force_native_channels_bypasses_bedrock_gate(monkeypatch, tmp_path):
     runner = CliRunner()
     launch_calls: list[dict] = []
+    native_finalize_calls: list[dict] = []
 
     monkeypatch.setenv(claude_cli._FORCE_NATIVE_CLAUDE_CHANNELS_ENV, "1")
     monkeypatch.setattr(
@@ -536,12 +498,16 @@ def test_claude_command_force_native_channels_bypasses_bedrock_tmux_gate(monkeyp
         or claude_cli.ManagedLocalLaunchResponse(
             session_id="session-123",
             provider_session_id="provider-123",
-            attach_command="zsh -lc 'exec tmux attach -t lh-demo'",
+            attach_command="zsh -lc 'exec claude --resume provider-123'",
             source_runner_name="work-laptop",
-            managed_transport="tmux",
+            managed_transport="claude_channel_bridge",
         ),
     )
-    monkeypatch.setattr(claude_cli, "_interactive_stdio", lambda: False)
+    monkeypatch.setattr(
+        claude_cli,
+        "_finalize_native_claude_launch",
+        lambda **kwargs: native_finalize_calls.append(kwargs),
+    )
 
     result = runner.invoke(app, ["claude", "--cwd", str(tmp_path)])
 
@@ -552,6 +518,7 @@ def test_claude_command_force_native_channels_bypasses_bedrock_tmux_gate(monkeyp
     )
     assert "disabled by Claude launch env" not in result.output
     assert launch_calls[0]["native_claude_channels_available"] is True
+    assert native_finalize_calls
 
 
 def test_claude_command_force_native_channels_allows_bedrock_native_transport(monkeypatch, tmp_path):

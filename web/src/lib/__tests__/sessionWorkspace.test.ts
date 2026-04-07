@@ -146,7 +146,7 @@ describe("getSessionInteractionCapabilities", () => {
         provider: "claude",
         home_label: "On this Mac",
         control: {
-          managed_transport: "tmux",
+          managed_transport: "claude_channel_bridge",
           source_runner_id: null,
           source_runner_name: null,
         },

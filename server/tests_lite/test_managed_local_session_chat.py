@@ -26,6 +26,7 @@ from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers import session_chat
 from zerg.services.session_continuity import session_lock_manager
+from zerg.session_execution_home import ManagedSessionTransport
 
 
 def _make_db(tmp_path):
@@ -97,7 +98,11 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
         is_sidechain=0,
         loop_mode="assist",
         execution_home="managed_local",
-        managed_transport="tmux",
+        managed_transport=(
+            ManagedSessionTransport.CODEX_APP_SERVER.value
+            if provider == "codex"
+            else ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
+        ),
         source_runner_id=runner.id,
         source_runner_name=runner.name,
         managed_session_name="lh-hiring-chat-1234",

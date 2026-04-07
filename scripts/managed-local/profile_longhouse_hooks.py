@@ -5,12 +5,9 @@ This script executes the installed hook scripts (or provided overrides) in a
 temporary HOME-like sandbox so we can measure hook overhead without mutating
 the user's real outbox, transcript bindings, or engine state.
 
-It targets the exact question raised during managed-local debugging:
-
-- do global hooks run for normal local sessions?
-- how expensive is the plain outbox-only path?
-- how expensive is the direct network POST path?
-- how much extra cost comes from the managed-session bind branch?
+It targets the exact question raised during managed-local debugging: how
+expensive is the local-only hook hot path, and what extra cost comes from the
+managed-session bind branch?
 
 Usage examples:
 
@@ -25,19 +22,13 @@ import argparse
 import json
 import os
 import re
-import shutil
-import socket
 import statistics
 import subprocess
 import sys
 import tempfile
 import textwrap
-import threading
 import time
-from contextlib import contextmanager
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from typing import Iterable
@@ -61,8 +52,6 @@ class ScenarioSpec:
     name: str
     description: str
     hook_env: dict[str, str]
-    server_delay_ms: int | None = None
-    fresh_engine_status: bool = False
 
 
 @dataclass(frozen=True)
@@ -119,52 +108,13 @@ PROVIDER_DESCRIPTORS: dict[str, ProviderSpec] = {
 SCENARIOS: tuple[ScenarioSpec, ...] = (
     ScenarioSpec(
         name="plain_outbox",
-        description="global hook path, no LONGHOUSE_HOOK_URL/TOKEN, no managed bind",
+        description="global hook path, local outbox write only",
         hook_env={},
     ),
     ScenarioSpec(
-        name="plain_network_fast",
-        description="global hook path with direct presence POST succeeding quickly",
-        hook_env={"LONGHOUSE_HOOK_URL": "__SERVER_URL__", "LONGHOUSE_HOOK_TOKEN": "zdt_profile_token"},
-        server_delay_ms=0,
-    ),
-    ScenarioSpec(
-        name="plain_network_slow_250ms",
-        description="global hook path with successful but slower direct presence POST",
-        hook_env={"LONGHOUSE_HOOK_URL": "__SERVER_URL__", "LONGHOUSE_HOOK_TOKEN": "zdt_profile_token"},
-        server_delay_ms=250,
-    ),
-    ScenarioSpec(
-        name="plain_network_timeout",
-        description="global hook path with direct presence POST timing out and falling back to outbox",
-        hook_env={"LONGHOUSE_HOOK_URL": "__SERVER_URL__", "LONGHOUSE_HOOK_TOKEN": "zdt_profile_token"},
-        server_delay_ms=2000,
-    ),
-    ScenarioSpec(
         name="managed_bind_outbox",
-        description="managed-session bind branch, no direct POST, outbox fallback only",
+        description="managed-session bind branch plus local outbox write",
         hook_env={"LONGHOUSE_MANAGED_SESSION_ID": "managed-session-123"},
-    ),
-    ScenarioSpec(
-        name="managed_bind_network_fast",
-        description="managed-session bind branch plus successful direct presence POST",
-        hook_env={
-            "LONGHOUSE_MANAGED_SESSION_ID": "managed-session-123",
-            "LONGHOUSE_HOOK_URL": "__SERVER_URL__",
-            "LONGHOUSE_HOOK_TOKEN": "zdt_profile_token",
-        },
-        server_delay_ms=0,
-    ),
-    ScenarioSpec(
-        name="managed_bind_auto_with_daemon",
-        description="managed-session env present, but a fresh local engine status file forces outbox mode",
-        hook_env={
-            "LONGHOUSE_MANAGED_SESSION_ID": "managed-session-123",
-            "LONGHOUSE_HOOK_URL": "__SERVER_URL__",
-            "LONGHOUSE_HOOK_TOKEN": "zdt_profile_token",
-        },
-        server_delay_ms=0,
-        fresh_engine_status=True,
     ),
 )
 
@@ -263,55 +213,6 @@ def materialize_hook_script(*, source_path: Path, sandbox_home: Path, sandbox_ro
     return materialized_path
 
 
-class _RequestRecorder:
-    def __init__(self, delay_ms: int) -> None:
-        self.delay_ms = delay_ms
-        self.request_count = 0
-        self.paths: list[str] = []
-        self._lock = threading.Lock()
-
-    def record(self, path: str) -> None:
-        with self._lock:
-            self.request_count += 1
-            self.paths.append(path)
-
-
-@contextmanager
-def start_stub_server(delay_ms: int):
-    recorder = _RequestRecorder(delay_ms)
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:  # noqa: N802
-            recorder.record(self.path)
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            if length:
-                self.rfile.read(length)
-            if recorder.delay_ms > 0:
-                time.sleep(recorder.delay_ms / 1000.0)
-            self.send_response(204)
-            self.end_headers()
-
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
-            return
-
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        host, port = probe.getsockname()
-
-    server = ThreadingHTTPServer((host, port), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield {
-            "url": f"http://{host}:{port}",
-            "recorder": recorder,
-        }
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
-
-
 def _count_outbox_files(outbox_dir: Path) -> int:
     if not outbox_dir.exists():
         return 0
@@ -324,35 +225,14 @@ def _count_engine_binds(engine_log_path: Path) -> int:
     return len([line for line in engine_log_path.read_text(encoding="utf-8").splitlines() if line.strip()])
 
 
-def _write_fresh_engine_status(sandbox_home: Path) -> None:
-    status_path = sandbox_home / ".claude" / "engine-status.json"
-    status_path.parent.mkdir(parents=True, exist_ok=True)
-    status_path.write_text(
-        json.dumps(
-            {
-                "version": "profile",
-                "daemon_pid": 12345,
-                "last_updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            }
-        ),
-        encoding="utf-8",
-    )
-
-
 def _build_env(
     *,
     base_env: dict[str, str],
     scenario: ScenarioSpec,
-    server_url: str | None,
 ) -> dict[str, str]:
     env = dict(base_env)
     for key, value in scenario.hook_env.items():
-        if value == "__SERVER_URL__":
-            if not server_url:
-                raise ValueError(f"Scenario {scenario.name} requires a server URL")
-            env[key] = server_url
-        else:
-            env[key] = value
+        env[key] = value
     return env
 
 
@@ -393,8 +273,6 @@ def profile_provider_scenario(
         (sandbox_home / ".claude" / "outbox").mkdir(parents=True, exist_ok=True)
         (sandbox_home / ".claude" / "hindsight").mkdir(parents=True, exist_ok=True)
         (sandbox_home / ".codex").mkdir(parents=True, exist_ok=True)
-        if scenario.fresh_engine_status:
-            _write_fresh_engine_status(sandbox_home)
 
         materialized_hook = materialize_hook_script(
             source_path=hook_source_path,
@@ -411,18 +289,9 @@ def profile_provider_scenario(
         engine_log_path = sandbox_root / "engine-bind.log"
 
         samples: list[IterationSample] = []
-        request_count = 0
-        if scenario.server_delay_ms is None:
-            env = _build_env(base_env=base_env, scenario=scenario, server_url=None)
-            for _ in range(iterations):
-                samples.append(run_iteration(hook_path=materialized_hook, env=env, payload=payload))
-        else:
-            with start_stub_server(scenario.server_delay_ms) as server:
-                env = _build_env(base_env=base_env, scenario=scenario, server_url=str(server["url"]))
-                for _ in range(iterations):
-                    samples.append(run_iteration(hook_path=materialized_hook, env=env, payload=payload))
-                recorder = server["recorder"]
-                request_count = int(recorder.request_count)
+        env = _build_env(base_env=base_env, scenario=scenario)
+        for _ in range(iterations):
+            samples.append(run_iteration(hook_path=materialized_hook, env=env, payload=payload))
 
         elapsed_values = [sample.elapsed_ms for sample in samples]
         return ScenarioResult(
@@ -436,7 +305,7 @@ def profile_provider_scenario(
             min_ms=float(min(elapsed_values) if elapsed_values else 0.0),
             max_ms=float(max(elapsed_values) if elapsed_values else 0.0),
             exit_codes=[sample.exit_code for sample in samples],
-            http_requests=request_count,
+            http_requests=0,
             outbox_files=_count_outbox_files(outbox_dir),
             engine_bind_count=_count_engine_binds(engine_log_path),
         )

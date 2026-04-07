@@ -4026,9 +4026,9 @@ export interface paths {
         put?: never;
         /**
          * Launch Managed Local
-         * @description Start a managed local AI agent session on a connected runner.
+         * @description Legacy browser-managed launch surface.
          *
-         *     Supports both Claude and Codex providers under a transport-aware contract.
+         *     Native managed-local launch now starts on the target machine only.
          */
         post: operations["launch_managed_local_sessions_managed_local_post"];
         delete?: never;
@@ -6172,7 +6172,7 @@ export interface components {
              */
             execution_home: "legacy" | "managed_local" | "managed_hosted" | "cloud_takeover";
             /** Managed Transport */
-            managed_transport?: ("tmux" | "claude_channel_bridge" | "codex_app_server") | null;
+            managed_transport?: ("claude_channel_bridge" | "codex_app_server") | null;
             /** Source Runner Id */
             source_runner_id?: number | null;
             /** Source Runner Name */
@@ -7757,27 +7757,9 @@ export interface components {
             /** Tools */
             tools?: string[];
         };
-        /** ManagedLaunchProfileResponse */
-        ManagedLaunchProfileResponse: {
-            /**
-             * Required Commands
-             * @description Commands that must exist before managed launch
-             */
-            required_commands: string[];
-            /**
-             * Argv
-             * @description Structured argv Longhouse resolved for the managed launch
-             */
-            argv: string[];
-            /**
-             * Exported Env Keys
-             * @description Env var names Longhouse exported for the launch
-             */
-            exported_env_keys: string[];
-        };
         /**
          * ManagedLocalSessionLaunchRequest
-         * @description Request to start a managed local AI agent session on a runner.
+         * @description Deprecated request to start a managed local AI agent session on a runner.
          */
         ManagedLocalSessionLaunchRequest: {
             /**
@@ -7851,7 +7833,6 @@ export interface components {
             managed_session_name: string;
             /** Attach Command */
             attach_command: string;
-            managed_launch_profile?: components["schemas"]["ManagedLaunchProfileResponse"] | null;
         };
         /**
          * ManagedLocalThisDeviceLaunchRequest
@@ -7919,7 +7900,7 @@ export interface components {
          *     Transport is auto-determined by launch context — not user-selectable.
          * @enum {string}
          */
-        ManagedSessionTransport: "tmux" | "claude_channel_bridge" | "codex_app_server";
+        ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server";
         /** MessageCreate */
         MessageCreate: {
             /** Role */
@@ -9409,8 +9390,6 @@ export interface components {
              * @description Local reattach command for managed-local sessions
              */
             attach_command?: string | null;
-            /** @description Structured managed-launch metadata for debugging tmux-backed sessions */
-            managed_launch_profile?: components["schemas"]["ManagedLaunchProfileResponse"] | null;
         };
         /**
          * SessionExecutionHome

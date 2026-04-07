@@ -66,18 +66,11 @@ export interface AgentSession {
   user_state?: string;
 }
 
-export interface ManagedLaunchProfile {
-  required_commands: string[];
-  argv: string[];
-  exported_env_keys: string[];
-}
-
 export interface SessionControl {
   managed_transport: ManagedSessionTransport | null;
   source_runner_id: number | null;
   source_runner_name: string | null;
   attach_command?: string | null;
-  managed_launch_profile?: ManagedLaunchProfile | null;
 }
 
 export interface SessionCapabilities {
@@ -204,7 +197,7 @@ export type SessionExecutionHome =
   | "managed_local"
   | "managed_hosted"
   | "cloud_takeover";
-export type ManagedSessionTransport = "tmux" | "claude_channel_bridge" | "codex_app_server";
+export type ManagedSessionTransport = "claude_channel_bridge" | "codex_app_server";
 
 export interface AgentEvent {
   id: number;

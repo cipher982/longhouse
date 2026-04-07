@@ -583,10 +583,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN source_runner_name VARCHAR(255)"))
             if "managed_session_name" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN managed_session_name VARCHAR(255)"))
-            if "managed_tmux_tmpdir" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN managed_tmux_tmpdir TEXT"))
-            if "managed_launch_profile" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN managed_launch_profile JSON"))
             if "loop_mode" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN loop_mode VARCHAR(20) DEFAULT 'manual' NOT NULL"))
             conn.execute(text("UPDATE sessions SET loop_mode = 'manual' WHERE loop_mode IS NULL"))

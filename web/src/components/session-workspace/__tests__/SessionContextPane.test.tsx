@@ -221,10 +221,11 @@ describe("SessionContextPane", () => {
         provider: "claude",
         home_label: "On this Mac",
         control: {
-          managed_transport: "tmux",
+          managed_transport: "claude_channel_bridge",
           source_runner_id: null,
           source_runner_name: "cinder",
-          attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-claude'",
+          attach_command:
+            "zsh -lc 'cd /tmp/workspace; exec claude --dangerously-skip-permissions --session-id provider-123 --dangerously-load-development-channels server:longhouse-channel'",
         },
         capabilities: makeCapabilities({
           cloud_branch_available: true,
@@ -250,27 +251,11 @@ describe("SessionContextPane", () => {
       session: makeSession({
         home_label: "On this Mac",
         control: {
-          managed_transport: "tmux",
+          managed_transport: "claude_channel_bridge",
           source_runner_id: null,
           source_runner_name: "cinder",
-          attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
-          managed_launch_profile: {
-            required_commands: ["claude"],
-            exported_env_keys: [
-              "LONGHOUSE_MANAGED_SESSION_ID",
-              "LONGHOUSE_HOOK_URL",
-              "LONGHOUSE_HOOK_TOKEN",
-              "AWS_PROFILE",
-            ],
-            argv: [
-              "claude",
-              "--dangerously-skip-permissions",
-              "--session-id",
-              "<provider-session-id>",
-              "-n",
-              "Managed Local Proof",
-            ],
-          },
+          attach_command:
+            "zsh -lc 'cd /tmp/workspace; exec claude --dangerously-skip-permissions --session-id provider-123 --dangerously-load-development-channels server:longhouse-channel'",
         },
         capabilities: makeCapabilities({
           live_control_available: true,
@@ -284,16 +269,9 @@ describe("SessionContextPane", () => {
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach on the host machine");
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("running on cinder");
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
-      "tmux -L longhouse-managed attach -t lh-codex",
+      "claude --dangerously-skip-permissions --session-id provider-123",
     );
-    expect(screen.getByTestId("session-launch-profile")).toHaveTextContent("Managed-local launcher contract");
-    expect(screen.getByTestId("session-launch-profile")).toHaveTextContent("Required commandsclaude");
-    expect(screen.getByTestId("session-launch-profile")).toHaveTextContent(
-      "Exported env keysLONGHOUSE_MANAGED_SESSION_ID, LONGHOUSE_HOOK_URL, LONGHOUSE_HOOK_TOKEN, AWS_PROFILE",
-    );
-    expect(screen.getByTestId("session-launch-profile-argv")).toHaveTextContent(
-      "claude --dangerously-skip-permissions --session-id <provider-session-id> -n Managed Local Proof",
-    );
+    expect(screen.queryByTestId("session-launch-profile")).not.toBeInTheDocument();
   });
 
   it("drives reattach metadata from capabilities instead of display home", () => {
@@ -301,15 +279,11 @@ describe("SessionContextPane", () => {
       session: makeSession({
         home_label: null,
         control: {
-          managed_transport: "tmux",
+          managed_transport: "claude_channel_bridge",
           source_runner_id: null,
           source_runner_name: "cinder",
-          attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
-          managed_launch_profile: {
-            required_commands: ["claude"],
-            exported_env_keys: ["LONGHOUSE_MANAGED_SESSION_ID"],
-            argv: ["claude", "--session-id", "<provider-session-id>"],
-          },
+          attach_command:
+            "zsh -lc 'cd /tmp/workspace; exec claude --dangerously-skip-permissions --session-id provider-123 --dangerously-load-development-channels server:longhouse-channel'",
         },
         capabilities: makeCapabilities({
           host_reattach_available: true,
@@ -319,9 +293,8 @@ describe("SessionContextPane", () => {
 
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach on the host machine");
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
-      "tmux -L longhouse-managed attach -t lh-codex",
+      "claude --dangerously-skip-permissions --session-id provider-123",
     );
-    expect(screen.getByTestId("session-launch-profile")).toHaveTextContent("Managed-local launcher contract");
     expect(
       screen.getByText(/Start or keep the cloud branch from Longhouse below, or reattach on the host machine when available/i),
     ).toBeInTheDocument();
@@ -336,7 +309,7 @@ describe("SessionContextPane", () => {
           managed_transport: "codex_app_server",
           source_runner_id: 7,
           source_runner_name: "cinder",
-          attach_command: "zsh -lc 'exec tmux -L longhouse-managed attach -t lh-codex'",
+          attach_command: "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-123'",
         },
         capabilities: makeCapabilities({
           live_control_available: true,

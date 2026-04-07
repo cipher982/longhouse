@@ -30,6 +30,7 @@ from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_VERIFICAT
 from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
 from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
 from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
+from zerg.session_execution_home import ManagedSessionTransport
 
 
 def _make_db(tmp_path):
@@ -72,7 +73,7 @@ def _seed_user_runner_and_session(db):
         assistant_messages=0,
         tool_calls=0,
         execution_home="managed_local",
-        managed_transport="tmux",
+        managed_transport=ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value,
         source_runner_id=runner.id,
         source_runner_name=runner.name,
         managed_session_name="lh-zerg-turns",

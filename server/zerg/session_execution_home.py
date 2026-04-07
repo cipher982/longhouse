@@ -22,7 +22,6 @@ class ManagedSessionTransport(str, Enum):
     Transport is auto-determined by launch context — not user-selectable.
     """
 
-    TMUX = "tmux"
     CLAUDE_CHANNEL_BRIDGE = "claude_channel_bridge"
     CODEX_APP_SERVER = "codex_app_server"
 
@@ -35,11 +34,9 @@ class ManagedSessionTransport(str, Enum):
     ) -> "ManagedSessionTransport":
         if provider == "codex":
             return ManagedSessionTransport.CODEX_APP_SERVER
-        if provider == "claude" and str(machine_name or "").strip():
-            if native_claude_channels_available is False:
-                return ManagedSessionTransport.TMUX
+        if provider == "claude":
             return ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE
-        return ManagedSessionTransport.TMUX
+        raise ValueError(f"Unsupported managed-local provider: {provider}")
 
 
 def coerce_execution_home(value: str | None) -> SessionExecutionHome | None:

@@ -48,7 +48,6 @@ from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentEvent
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
-from zerg.request_urls import get_request_public_base_url
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
@@ -78,7 +77,6 @@ from zerg.services.session_continuity import ShipSessionResult
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_continuity import ship_session_to_zerg
 from zerg.services.session_continuity import workspace_resolver
-from zerg.services.session_views import ManagedLaunchProfileResponse
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
@@ -257,7 +255,7 @@ class SessionMessageRequest(BaseModel):
 
 
 class ManagedLocalSessionLaunchRequest(BaseModel):
-    """Request to start a managed local AI agent session on a runner."""
+    """Deprecated request to start a managed local AI agent session on a runner."""
 
     runner_target: str = Field(..., description="Runner name or runner:<id>")
     cwd: str = Field(..., min_length=1, description="Working directory on the source runner")
@@ -310,7 +308,6 @@ class ManagedLocalSessionLaunchResponse(BaseModel):
     source_runner_name: str
     managed_session_name: str
     attach_command: str
-    managed_launch_profile: ManagedLaunchProfileResponse | None = None
 
 
 class SessionLockInfo(BaseModel):
@@ -346,7 +343,6 @@ def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> i
 
 def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
     session = result.session
-    managed_launch_profile = getattr(session, "managed_launch_profile", None)
     capabilities = build_session_capabilities(session)
     if capabilities.execution_home != SessionExecutionHome.MANAGED_LOCAL:
         raise RuntimeError("Managed local launch response requires a managed_local session")
@@ -363,9 +359,6 @@ def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
         source_runner_name=session.source_runner_name or "",
         managed_session_name=session.managed_session_name or "",
         attach_command=result.attach_command,
-        managed_launch_profile=(
-            ManagedLaunchProfileResponse.model_validate(managed_launch_profile) if isinstance(managed_launch_profile, dict) else None
-        ),
     )
 
 
@@ -2111,15 +2104,13 @@ async def send_to_live_session_agents(
 @router.post("/managed-local", response_model=ManagedLocalSessionLaunchResponse)
 async def launch_managed_local(
     body: ManagedLocalSessionLaunchRequest,
-    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_oikos_user),
 ):
-    """Start a managed local AI agent session on a connected runner.
+    """Legacy browser-managed launch surface.
 
-    Supports both Claude and Codex providers under a transport-aware contract.
+    Native managed-local launch now starts on the target machine only.
     """
-    hook_url = get_request_public_base_url(request)
     try:
         result = await launch_managed_local_session(
             db,
@@ -2133,7 +2124,6 @@ async def launch_managed_local(
                 git_branch=body.git_branch,
                 display_name=body.display_name,
                 loop_mode=body.loop_mode.value,
-                hook_url=hook_url,
                 claude_launch_env=body.claude_launch_env,
             ),
         )
@@ -2151,7 +2141,6 @@ async def launch_managed_local(
 @router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)
 async def launch_managed_local_this_device(
     body: ManagedLocalThisDeviceLaunchRequest,
-    request: Request,
     db: Session = Depends(get_db),
     device_token: DeviceToken | None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
@@ -2162,7 +2151,6 @@ async def launch_managed_local_this_device(
     machine_name = (body.machine_name or "").strip() or str(getattr(device_token, "device_id", "") or "").strip()
     if not machine_name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not determine this device name")
-    hook_url = get_request_public_base_url(request)
 
     try:
         result = await launch_managed_local_session(
@@ -2177,7 +2165,6 @@ async def launch_managed_local_this_device(
                 git_branch=body.git_branch,
                 display_name=body.display_name,
                 loop_mode=body.loop_mode.value,
-                hook_url=hook_url,
                 machine_name=machine_name,
                 native_claude_channels_available=body.native_claude_channels_available,
                 claude_launch_env=body.claude_launch_env,

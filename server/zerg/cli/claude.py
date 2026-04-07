@@ -207,41 +207,6 @@ def _launch_managed_local_from_api(
     )
 
 
-def _finalize_managed_local_launch(
-    *,
-    provider_label: str,
-    base_url: str,
-    result: ManagedLocalLaunchResponse,
-    open_browser: bool,
-    attach: bool,
-) -> None:
-    session_url = _build_session_url(base_url, result.session_id)
-    typer.secho(f"Longhouse {provider_label} session launched on this machine.", fg=typer.colors.GREEN)
-    typer.echo(f"Session ID: {result.session_id}")
-    typer.echo(f"Provider session ID: {result.provider_session_id}")
-    typer.echo(f"Session URL: {session_url}")
-    typer.echo(f"Attach: {result.attach_command}")
-
-    if open_browser:
-        typer.echo("Opening session in browser...")
-        if not _open_session_url(session_url):
-            typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
-
-    if not attach:
-        return
-    if not _interactive_stdio():
-        typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
-        return
-
-    typer.echo("Attaching...")
-    exit_code = _run_attach_command(result.attach_command)
-    if exit_code != 0:
-        typer.secho(
-            f"Auto-attach exited with code {exit_code}. Run the printed attach command manually.",
-            fg=typer.colors.YELLOW,
-        )
-
-
 def _ensure_native_claude_prereqs(
     *,
     base_url: str,
@@ -405,6 +370,13 @@ def claude(
     elif force_flag_capable_path:
         native_claude_channels_available = False
         native_claude_channels_detail = "disabled by Claude launch env"
+    if not native_claude_channels_available:
+        typer.secho(
+            f"Native Claude channels unavailable ({native_claude_channels_detail}). "
+            "Longhouse now requires the local Claude channel bridge.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
     typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
         url=resolved_url,
@@ -424,29 +396,19 @@ def claude(
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=EXIT_SETUP_FAILED)
-
-    native_transport_unavailable = not _result_uses_native_claude_bridge(result)
-    if not native_claude_channels_available and native_transport_unavailable:
-        typer.secho(
-            f"Native Claude channels unavailable ({native_claude_channels_detail}); using tmux fallback.",
-            fg=typer.colors.YELLOW,
-        )
     resolved_claude_dir = Path(config_dir) if config_dir else None
-    if _result_uses_native_claude_bridge(result):
-        _finalize_native_claude_launch(
-            base_url=resolved_url,
-            token=resolved_token,
-            cwd=cwd,
-            result=result,
-            config_dir=resolved_claude_dir,
-            open_browser=open_browser,
-            attach=attach,
+    if not _result_uses_native_claude_bridge(result):
+        typer.secho(
+            "Longhouse returned an unsupported managed-local transport for Claude.",
+            fg=typer.colors.RED,
         )
-        return
-    _finalize_managed_local_launch(
-        provider_label="Claude",
+        raise typer.Exit(code=EXIT_SETUP_FAILED)
+    _finalize_native_claude_launch(
         base_url=resolved_url,
+        token=resolved_token,
+        cwd=cwd,
         result=result,
+        config_dir=resolved_claude_dir,
         open_browser=open_browser,
         attach=attach,
     )

@@ -17,7 +17,6 @@ class SessionCapabilityFlags:
     host_reattach_available: bool
     reply_to_live_session_available: bool
     home_label: str | None
-    requires_managed_local_tmux_reconcile: bool
 
 
 def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | None:
@@ -54,10 +53,18 @@ def resolve_managed_transport(session: AgentSession | None) -> ManagedSessionTra
     return _coerce_managed_transport(getattr(session, "managed_transport", None))
 
 
+def _has_supported_managed_transport(session: AgentSession | None) -> bool:
+    return resolve_managed_transport(session) is not None
+
+
 def supports_live_control(session: AgentSession | None) -> bool:
     if session is None:
         return False
-    return resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL and getattr(session, "source_runner_id", None) is not None
+    return (
+        resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL
+        and _has_supported_managed_transport(session)
+        and getattr(session, "source_runner_id", None) is not None
+    )
 
 
 def supports_cloud_branch(session: AgentSession | None) -> bool:
@@ -72,16 +79,7 @@ def supports_cloud_branch(session: AgentSession | None) -> bool:
 def supports_host_reattach(session: AgentSession | None) -> bool:
     if session is None:
         return False
-    return resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL
-
-
-def should_reconcile_managed_local_tmux_runtime(session: AgentSession | None) -> bool:
-    if session is None or getattr(session, "ended_at", None) is not None:
-        return False
-    return (
-        resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL
-        and resolve_managed_transport(session) == ManagedSessionTransport.TMUX
-    )
+    return resolve_execution_home(session) == SessionExecutionHome.MANAGED_LOCAL and _has_supported_managed_transport(session)
 
 
 def build_session_capabilities(session: AgentSession | None) -> SessionCapabilityFlags:
@@ -96,5 +94,4 @@ def build_session_capabilities(session: AgentSession | None) -> SessionCapabilit
         host_reattach_available=supports_host_reattach(session),
         reply_to_live_session_available=live_control_available,
         home_label=_execution_home_label(execution_home),
-        requires_managed_local_tmux_reconcile=should_reconcile_managed_local_tmux_runtime(session),
     )
