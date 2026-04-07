@@ -2476,26 +2476,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/internal/commis/tool_event": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Record Commis Tool Event
-         * @description Record a commis tool event from Claude Code hooks.
-         */
-        post: operations["record_commis_tool_event_internal_commis_tool_event_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/oikos/sync/push": {
         parameters: {
             query?: never;
@@ -6149,7 +6129,8 @@ export interface components {
             job_id: number;
             /**
              * Commis Id
-             * @description Commis artifact ID
+             * @description Commis artifact ID (legacy, unused)
+             * @default
              */
             commis_id: string;
             /**
@@ -6170,7 +6151,7 @@ export interface components {
         };
         /**
          * CommisInfo
-         * @description Commis spawned by spawn_workspace_commis tool.
+         * @description Commis spawned by spawn_commis tool.
          */
         CommisInfo: {
             /** Job Id */
@@ -6186,59 +6167,6 @@ export interface components {
              * @default []
              */
             tools: components["schemas"]["CommisToolInfo"][];
-        };
-        /**
-         * CommisToolEventPayload
-         * @description Payload for commis tool hook events.
-         */
-        CommisToolEventPayload: {
-            /**
-             * Job Id
-             * @description Commis job ID
-             */
-            job_id: number;
-            /**
-             * Event Type
-             * @description Hook event name (PreToolUse/PostToolUse/...)
-             */
-            event_type: string;
-            /**
-             * Timestamp
-             * @description Hook event timestamp
-             */
-            timestamp?: string | null;
-            /**
-             * Session Id
-             * @description Claude session identifier
-             */
-            session_id?: string | null;
-            /**
-             * Tool Name
-             * @description Tool name
-             */
-            tool_name?: string | null;
-            /**
-             * Tool Input
-             * @description Tool input payload
-             */
-            tool_input?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Tool Use Id
-             * @description Tool call identifier
-             */
-            tool_use_id?: string | null;
-            /**
-             * Tool Response
-             * @description Tool response payload
-             */
-            tool_response?: unknown | null;
-            /**
-             * Error
-             * @description Tool error message
-             */
-            error?: string | null;
         };
         /**
          * CommisToolInfo
@@ -15884,41 +15812,6 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["CommisCompletionPayload"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    record_commis_tool_event_internal_commis_tool_event_post: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["CommisToolEventPayload"];
             };
         };
         responses: {
