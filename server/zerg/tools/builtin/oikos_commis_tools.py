@@ -60,6 +60,23 @@ async def spawn_commis_async(
     ctx = get_oikos_context()
     oikos_run_id = ctx.run_id if ctx else None
 
+    # Operator capability ceiling enforcement
+    if ctx and ctx.operator_capability_ceiling:
+        ceiling = ctx.operator_capability_ceiling
+        if ceiling in ("notify_only", "observe_only"):
+            return tool_error(
+                ErrorType.PERMISSION_DENIED,
+                f"Capped below autonomous continuation — operator ceiling is '{ceiling}'. "
+                "Cannot spawn a background commis. Notify the user instead.",
+            )
+        if ceiling == "bounded_autonomy" and ctx.operator_target_session_id and resume_session_id:
+            if resume_session_id != ctx.operator_target_session_id:
+                return tool_error(
+                    ErrorType.PERMISSION_DENIED,
+                    "Cannot spawn commis for this session — operator policy restricts "
+                    f"to the exact session named in the turn-loop message ({ctx.operator_target_session_id}).",
+                )
+
     # Idempotency: check for existing job with same tool_call_id
     if _tool_call_id and oikos_run_id:
         existing = db.query(CommisJob).filter(CommisJob.oikos_run_id == oikos_run_id, CommisJob.tool_call_id == _tool_call_id).first()

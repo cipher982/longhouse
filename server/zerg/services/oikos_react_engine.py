@@ -412,7 +412,7 @@ async def _execute_tool(
 
     # Critical error detection (fail-fast via emitter)
     if is_error and is_critical_tool_error(raw_result, error_msg, tool_name=tool_name):
-        if emitter:
+        if emitter and hasattr(emitter, "mark_critical_error"):
             emitter.mark_critical_error(error_msg or raw_result)
         logger.warning(f"Critical tool error in {tool_name}: {error_msg or raw_result}")
 
