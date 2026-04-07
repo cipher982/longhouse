@@ -1,6 +1,7 @@
 """Main CLI entry point for Longhouse."""
 
 import json
+import sys
 from importlib import metadata
 
 import typer
@@ -25,6 +26,7 @@ from zerg.cli.serve import serve
 from zerg.cli.serve import status
 from zerg.cli.sessions import app as sessions_app
 from zerg.cli.sessions import continue_session
+from zerg.cli.update_manager import maybe_notify_update
 from zerg.cli.update_manager import record_install_command
 from zerg.cli.update_manager import upgrade_command
 from zerg.cli.update_manager import version_command
@@ -54,6 +56,7 @@ def app_callback(
     ),
 ) -> None:
     """Longhouse AI Agent Platform CLI."""
+    maybe_notify_update(sys.argv[1:])
 
 
 config_app = typer.Typer(help="Configuration management")
