@@ -20,10 +20,9 @@ Video walkthrough coming soon. In the meantime, the first run is simple:
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve
-# Open http://localhost:8080 and find one prior session
 ```
 
-On macOS, Longhouse also lives in your menu bar.
+Open `http://localhost:8080`, find one prior session, and keep the menu bar app running on macOS for local status.
 
 When you want control after launch:
 
@@ -32,7 +31,7 @@ longhouse claude
 longhouse codex
 ```
 
-If you skipped onboarding or need to repair imports later:
+Only if something looks wrong later:
 
 ```bash
 longhouse connect --install
@@ -62,7 +61,7 @@ longhouse serve
 
 Open `http://localhost:8080`.
 
-The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. On macOS, it also adds Longhouse to your menu bar.
+The installer installs the `longhouse` CLI, runs `longhouse onboard` automatically, and on macOS adds Longhouse to your menu bar.
 
 When you want a control-ready session, start it explicitly through Longhouse:
 
@@ -71,7 +70,7 @@ longhouse claude
 longhouse codex
 ```
 
-If you skipped onboarding or want to repair imports later, use:
+If something looks wrong later, use:
 
 ```bash
 longhouse connect --install
@@ -117,7 +116,7 @@ curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve
 ```
 
-The installer installs the `longhouse` CLI and runs guided onboarding so Longhouse is ready to open right away. On macOS, it also adds the Longhouse menu bar app. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
+The installer installs the `longhouse` CLI, runs guided onboarding so Longhouse is ready to open right away, and on macOS adds the Longhouse menu bar app. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
 
 Stable installs use `uv` with the published `longhouse` package, so normal CLI upgrades stay on the same path:
 
@@ -125,7 +124,7 @@ Stable installs use `uv` with the published `longhouse` package, so normal CLI u
 longhouse upgrade
 ```
 
-Repair and advanced:
+If something looks wrong later:
 
 ```bash
 longhouse connect --install

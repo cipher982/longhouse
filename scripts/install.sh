@@ -454,8 +454,8 @@ print_success() {
     echo "     longhouse serve"
     echo "  2. Open http://localhost:8080 and find one prior session"
     if has_command claude; then
-        echo "  3. When you want control after launch"
-        echo "     longhouse claude"
+      echo "  3. When you want control after launch"
+      echo "     longhouse claude"
     elif has_command codex; then
         echo "  3. When you want control after launch"
         echo "     longhouse codex"
@@ -463,7 +463,7 @@ print_success() {
     if [[ "$is_macos" == "1" ]]; then
         echo ""
         echo "macOS:"
-        echo "  Longhouse also lives in your menu bar for local status."
+        echo "  Look for Longhouse in the menu bar for local status."
     fi
     if [[ "$has_launcher_cli" == "1" ]]; then
         echo ""
@@ -471,11 +471,11 @@ print_success() {
         echo "  longhouse wrap --install    Keep typing bare claude/codex through Longhouse"
     fi
     echo ""
-    echo "Repair or advanced:"
+    echo "If something looks wrong later:"
     echo "  longhouse connect --install  Repair onboarding and automatic imports"
     echo "  longhouse ship               Import existing sessions once"
     if [[ "$is_macos" == "1" ]]; then
-        echo "  longhouse local-health       Check local status from the CLI"
+        echo "  longhouse local-health       Check the same local status from the CLI"
     fi
     echo ""
     echo "Machine surface:"
