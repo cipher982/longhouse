@@ -41,6 +41,33 @@ require_tool() {
   fi
 }
 
+remove_path() {
+  local path="$1"
+  python3 - "$path" <<'PY'
+import os
+import shutil
+import stat
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    raise SystemExit(0)
+
+def onerror(func, target, _exc_info):
+    try:
+        os.chmod(target, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    except OSError:
+        pass
+    func(target)
+
+if path.is_dir() and not path.is_symlink():
+    shutil.rmtree(path, onerror=onerror)
+else:
+    path.unlink()
+PY
+}
+
 fixture_path() {
   local name="$1"
   echo "$PKG_PATH/Fixtures/${name}.json"
@@ -64,7 +91,7 @@ xcode_ui_exec() {
   local log_path="$ARTIFACT_DIR/xcuitest.log"
   require_tool xcodegen
   require_tool xcodebuild
-  rm -rf "$result_bundle"
+  remove_path "$result_bundle"
   xcodegen --spec "$XCODE_HARNESS_PATH/project.yml" --project-root "$XCODE_HARNESS_PATH" >/dev/null
   xcodebuild \
     -project "$project_path" \

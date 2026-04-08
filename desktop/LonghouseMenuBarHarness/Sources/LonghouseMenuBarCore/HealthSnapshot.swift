@@ -217,6 +217,17 @@ public struct LaunchReadinessSnapshot: Codable, Equatable {
     public let machineName: String?
     public let serviceMachineName: String?
     public let runner: RunnerSnapshot?
+
+    enum CodingKeys: String, CodingKey {
+        case state
+        case headline
+        case reasons
+        case suggestedActions
+        case storedURL = "storedUrl"
+        case machineName
+        case serviceMachineName
+        case runner
+    }
 }
 
 public struct RunnerSnapshot: Codable, Equatable {
@@ -227,4 +238,14 @@ public struct RunnerSnapshot: Codable, Equatable {
     public let runnerID: String?
     public let runnerURLs: [String]?
     public let installMode: String?
+
+    enum CodingKeys: String, CodingKey {
+        case path
+        case exists
+        case error
+        case runnerName
+        case runnerID = "runnerId"
+        case runnerURLs = "runnerUrls"
+        case installMode
+    }
 }
