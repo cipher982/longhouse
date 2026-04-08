@@ -30,7 +30,6 @@ class ConnectorType(str, Enum):
     NOTION = "notion"
     IMESSAGE = "imessage"
     # Personal integrations
-    TRACCAR = "traccar"
     WHOOP = "whoop"
     OBSIDIAN = "obsidian"
 
@@ -295,44 +294,6 @@ CONNECTOR_REGISTRY: dict[ConnectorType, ConnectorDefinition] = {
         ],
     },
     # Personal integrations
-    ConnectorType.TRACCAR: {
-        "type": ConnectorType.TRACCAR,
-        "name": "Traccar",
-        "description": "Get GPS location from Traccar tracking server",
-        "category": "personal",
-        "icon": "map-pin",
-        "docs_url": "https://www.traccar.org/api-reference/",
-        "fields": [
-            {
-                "key": "url",
-                "label": "Traccar Server URL",
-                "type": "url",
-                "placeholder": "http://traccar.example.com:5055",
-                "required": True,
-            },
-            {
-                "key": "username",
-                "label": "Username",
-                "type": "text",
-                "placeholder": "admin",
-                "required": True,
-            },
-            {
-                "key": "password",
-                "label": "Password",
-                "type": "password",
-                "placeholder": "Your Traccar password",
-                "required": True,
-            },
-            {
-                "key": "device_id",
-                "label": "Device ID",
-                "type": "text",
-                "placeholder": "1",
-                "required": False,
-            },
-        ],
-    },
     ConnectorType.WHOOP: {
         "type": ConnectorType.WHOOP,
         "name": "WHOOP",

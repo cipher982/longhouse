@@ -1,7 +1,6 @@
 """Personal tools for Oikos integration.
 
 These tools enable Oikos to access personal data sources:
-- Location: GPS position from Traccar tracking server
 - Health: Recovery/sleep/strain from WHOOP
 - Notes: Search Obsidian vault via Runner
 
@@ -47,133 +46,6 @@ def _run_coro_sync(coro: Any) -> Any:
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(lambda: asyncio.run(coro)).result()
-
-
-# ---------------------------------------------------------------------------
-# Location Tool (Traccar)
-# ---------------------------------------------------------------------------
-
-
-def get_current_location(include_address: bool = True) -> Dict[str, Any]:
-    """Get current GPS location from Traccar tracking server.
-
-    Returns the latest position for the configured device, including
-    coordinates and optionally reverse-geocoded address.
-
-    Args:
-        include_address: Whether to include human-readable address (default: True)
-
-    Returns:
-        Success envelope with:
-        - lat: Latitude
-        - lon: Longitude
-        - address: Human-readable address (if available and requested)
-        - speed: Current speed in knots
-        - battery: Device battery percentage (if reported)
-        - updated_at: Timestamp of last position update
-
-        Or error envelope if:
-        - Traccar credentials not configured
-        - Device not found
-        - API request failed
-
-    Example:
-        >>> get_current_location()
-        {
-            "ok": True,
-            "data": {
-                "lat": 37.7749,
-                "lon": -122.4194,
-                "address": "San Francisco, CA, USA",
-                "speed": 0,
-                "updated_at": "2025-01-15T10:30:00Z"
-            }
-        }
-    """
-    resolver = get_credential_resolver()
-    if not resolver:
-        return tool_error(
-            ErrorType.VALIDATION_ERROR,
-            "Location tool requires credential context",
-        )
-
-    creds = resolver.get(ConnectorType.TRACCAR)
-    if not creds:
-        return tool_error(
-            ErrorType.VALIDATION_ERROR,
-            "Traccar integration not configured. Please add Traccar credentials in Settings > Connectors.",
-        )
-
-    url = creds.get("url", "").rstrip("/")
-    username = creds.get("username", "admin")
-    password = creds.get("password", "")
-    device_id = creds.get("device_id")
-
-    if not url or not password:
-        return tool_error(
-            ErrorType.VALIDATION_ERROR,
-            "Traccar credentials incomplete. Please configure URL and password.",
-        )
-
-    try:
-        # Traccar uses Basic Auth (username:password)
-        auth = (username, password)
-
-        with httpx.Client(timeout=10.0) as client:
-            # Get positions (latest for all devices or specific device)
-            positions_url = f"{url}/api/positions"
-            if device_id:
-                positions_url += f"?deviceId={device_id}"
-
-            response = client.get(positions_url, auth=auth)
-
-            if response.status_code == 401:
-                return tool_error(
-                    ErrorType.VALIDATION_ERROR,
-                    "Traccar authentication failed. Please check your username and password.",
-                )
-
-            if response.status_code != 200:
-                return tool_error(
-                    ErrorType.EXECUTION_ERROR,
-                    f"Traccar API returned status {response.status_code}",
-                )
-
-            positions = response.json()
-            if not positions:
-                return tool_error(
-                    ErrorType.EXECUTION_ERROR,
-                    "No position data available. Device may be offline.",
-                )
-
-            # Get the latest position (or first if only one)
-            pos = positions[0] if isinstance(positions, list) else positions
-
-            result = {
-                "lat": pos.get("latitude"),
-                "lon": pos.get("longitude"),
-                "speed": pos.get("speed", 0),
-                "updated_at": pos.get("fixTime") or pos.get("serverTime"),
-            }
-
-            # Include address if available
-            if include_address and pos.get("address"):
-                result["address"] = pos["address"]
-
-            # Include battery if available
-            attrs = pos.get("attributes", {})
-            if "batteryLevel" in attrs:
-                result["battery"] = attrs["batteryLevel"]
-
-            return tool_success(result)
-
-    except httpx.TimeoutException:
-        return tool_error(ErrorType.EXECUTION_ERROR, "Traccar request timed out")
-    except httpx.RequestError as e:
-        return tool_error(ErrorType.EXECUTION_ERROR, f"Traccar request failed: {e}")
-    except Exception as e:
-        logger.exception("Unexpected error in get_current_location")
-        return tool_error(ErrorType.EXECUTION_ERROR, f"Unexpected error: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -689,15 +561,6 @@ def _parse_ripgrep_output(output: str, vault_path: str, limit: int) -> List[Dict
 # ---------------------------------------------------------------------------
 
 TOOLS: List[StructuredTool] = [
-    StructuredTool.from_function(
-        func=get_current_location,
-        name="get_current_location",
-        description=(
-            "Get current GPS location from Traccar tracking server. "
-            "Returns latitude, longitude, address, and last update time. "
-            "Use this when the user asks about their location or whereabouts."
-        ),
-    ),
     StructuredTool.from_function(
         func=get_whoop_data,
         name="get_whoop_data",

@@ -416,7 +416,7 @@ def run_auto_seed() -> dict:
     else:
         results["user_context"] = "failed"
 
-    # Seed personal credentials (Traccar, WHOOP, etc.)
+    # Seed personal credentials (WHOOP, Obsidian, etc.)
     if _seed_personal_credentials():
         config_path = _find_config_file(CREDENTIALS_PATHS)
         if config_path:

@@ -89,7 +89,6 @@ class OikosPreferencesUpdate(BaseModel):
 # ---------------------------------------------------------------------------
 
 AVAILABLE_TOOLS = {
-    "location": {"name": "get_current_location", "description": "Get GPS location via Traccar"},
     "whoop": {"name": "get_whoop_data", "description": "Get WHOOP health metrics"},
     "obsidian": {"name": "search_notes", "description": "Search Obsidian vault via Runner"},
 }

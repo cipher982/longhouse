@@ -37,23 +37,6 @@ cases:
         max: 30000
     tags: [tool_selection, personal, live]
 
-  # Location should use Traccar, not web search
-  - id: location_traccar
-    category: tool_selection
-    description: Location request should use get_current_location
-    input: "Where am I right now?"
-    timeout: 60
-    assert:
-      - type: status
-        value: success
-      - type: tool_called
-        value: get_current_location
-      - type: not_tool_called
-        value: web_search
-      - type: latency_ms
-        max: 30000
-    tags: [tool_selection, personal, live]
-
   # GitHub should use GitHub tools, not generic HTTP
   - id: github_issues
     category: tool_selection

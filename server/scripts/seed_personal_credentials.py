@@ -2,7 +2,7 @@
 """Seed personal tool credentials from a local config file.
 
 This script populates the account_connector_credentials table with credentials
-for personal integrations (Traccar, WHOOP, Obsidian) that enable Oikos's
+for personal integrations (WHOOP, Obsidian) that enable Oikos's
 personal tools.
 
 Usage:
@@ -40,7 +40,7 @@ DEFAULT_CREDS_PATHS = [
 ]
 
 # Connector types that this script handles (personal tools from Phase 4 v2.1)
-PERSONAL_CONNECTORS = ["traccar", "whoop", "obsidian"]
+PERSONAL_CONNECTORS = ["whoop", "obsidian"]
 
 
 def load_credentials(path: Path | None = None) -> dict:
@@ -114,7 +114,7 @@ def seed_credential(
     Args:
         db: Database session
         user: User to seed credentials for
-        connector_type: Type of connector (traccar, whoop, obsidian)
+        connector_type: Type of connector (whoop, obsidian)
         creds: Credential dictionary to encrypt and store
         force: If True, overwrite existing credentials
 
