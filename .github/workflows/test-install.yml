@@ -3,29 +3,59 @@ name: Installer Validation Ring
 on:
   push:
     paths:
+      - 'desktop/**'
       - 'server/**'
       - 'web/**'
       - 'config/**'
       - 'bun.lock'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/qa/test-local-runtime-packaging.sh'
       - 'scripts/qa/test-cli-upgrade.sh'
+      - 'scripts/release/**'
+      - 'Makefile'
+      - '.github/workflows/local-runtime-release.yml'
       - '.github/workflows/test-install.yml'
   pull_request:
     paths:
+      - 'desktop/**'
       - 'server/**'
       - 'web/**'
       - 'config/**'
       - 'bun.lock'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/qa/test-local-runtime-packaging.sh'
       - 'scripts/qa/test-cli-upgrade.sh'
+      - 'scripts/release/**'
+      - 'Makefile'
+      - '.github/workflows/local-runtime-release.yml'
       - '.github/workflows/test-install.yml'
   schedule:
     - cron: '11 9 * * *'
   workflow_dispatch: {}
 
 jobs:
+  runtime-packaging-macos:
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: macos-latest
+    timeout-minutes: 20
+    name: "runtime-packaging--macos-latest"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run canonical macOS app packaging smoke
+        run: make test-runtime-packaging-macos
+
+      - name: Upload packaging artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-packaging-macos
+          if-no-files-found: ignore
+          path: artifacts/runtime-packaging
+
   installer-first-run-local:
     if: ${{ github.event_name != 'schedule' }}
     strategy:
