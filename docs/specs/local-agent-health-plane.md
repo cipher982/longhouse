@@ -262,6 +262,11 @@ Deliverables:
 - human-readable CLI output with next actions
 - tests for state classification
 
+Chosen MVP command:
+
+- `longhouse local-health`
+- `longhouse local-health --json`
+
 ### Stage 2: Faster local status writes
 
 Goal:
@@ -346,7 +351,8 @@ This effort is successful when:
 ### 2026-04-07
 
 - spec created
-- current next step: implement Stage 1 local-health contract and CLI surface
+- Stage 1 complete: `server/zerg/services/local_health.py` now defines the local-health contract and `longhouse local-health --json` exposes it for CLI and future desktop surfaces
+- current next step: Stage 2 local status freshness split, so ambient UI is not gated by the current five-minute heartbeat cadence
 
 ## References
 
