@@ -74,6 +74,9 @@ public struct HarnessRuntimeConfig {
     public let source: any HealthSnapshotSource
     public let actionLogURL: URL?
     public let uiURL: URL?
+    public let effectMode: HarnessEffectMode
+    public let exerciseActions: [HarnessAction]
+    public let quitAfterSeconds: TimeInterval?
     public let refreshIntervalSeconds: TimeInterval?
 
     public init(
@@ -81,12 +84,18 @@ public struct HarnessRuntimeConfig {
         source: any HealthSnapshotSource,
         actionLogURL: URL?,
         uiURL: URL?,
+        effectMode: HarnessEffectMode,
+        exerciseActions: [HarnessAction],
+        quitAfterSeconds: TimeInterval?,
         refreshIntervalSeconds: TimeInterval?
     ) {
         self.outputURL = outputURL
         self.source = source
         self.actionLogURL = actionLogURL
         self.uiURL = uiURL
+        self.effectMode = effectMode
+        self.exerciseActions = exerciseActions
+        self.quitAfterSeconds = quitAfterSeconds
         self.refreshIntervalSeconds = refreshIntervalSeconds
     }
 
@@ -96,6 +105,9 @@ public struct HarnessRuntimeConfig {
         var useLive = false
         var actionLogURL: URL?
         var uiURL: URL?
+        var effectMode: HarnessEffectMode = .live
+        var exerciseActions: [HarnessAction] = []
+        var quitAfterSeconds: TimeInterval?
         var refreshIntervalSeconds: TimeInterval?
 
         var index = 0
@@ -126,6 +138,35 @@ public struct HarnessRuntimeConfig {
                     throw SnapshotSourceError.invalidArguments("Expected URL after --ui-url")
                 }
                 uiURL = parsed
+            case "--effect-mode":
+                index += 1
+                guard index < arguments.count, let parsed = HarnessEffectMode(rawValue: arguments[index]) else {
+                    throw SnapshotSourceError.invalidArguments("Expected --effect-mode live|log-only")
+                }
+                effectMode = parsed
+            case "--exercise-actions":
+                index += 1
+                guard index < arguments.count else {
+                    throw SnapshotSourceError.invalidArguments("Expected comma-separated actions after --exercise-actions")
+                }
+                let tokens = arguments[index]
+                    .split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                var parsedActions: [HarnessAction] = []
+                for token in tokens {
+                    guard let action = HarnessAction(rawValue: token) else {
+                        throw SnapshotSourceError.invalidArguments("Unknown harness action: \(token)")
+                    }
+                    parsedActions.append(action)
+                }
+                exerciseActions = parsedActions
+            case "--quit-after":
+                index += 1
+                guard index < arguments.count, let parsed = TimeInterval(arguments[index]) else {
+                    throw SnapshotSourceError.invalidArguments("Expected numeric seconds after --quit-after")
+                }
+                quitAfterSeconds = parsed
             case "--live":
                 useLive = true
             case "--refresh-seconds":
@@ -154,6 +195,9 @@ public struct HarnessRuntimeConfig {
             source: source,
             actionLogURL: actionLogURL,
             uiURL: uiURL,
+            effectMode: effectMode,
+            exerciseActions: exerciseActions,
+            quitAfterSeconds: quitAfterSeconds,
             refreshIntervalSeconds: refreshIntervalSeconds
         )
     }

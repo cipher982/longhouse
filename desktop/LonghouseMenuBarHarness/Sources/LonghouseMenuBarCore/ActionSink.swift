@@ -10,6 +10,11 @@ public enum HarnessAction: String, Codable {
     case copyDiagnostics
 }
 
+public enum HarnessEffectMode: String {
+    case live
+    case logOnly = "log-only"
+}
+
 public protocol HealthActionSink {
     func handle(_ action: HarnessAction, snapshot: HealthSnapshot)
 }
@@ -17,10 +22,12 @@ public protocol HealthActionSink {
 public struct SpyHealthActionSink: HealthActionSink {
     public let logURL: URL?
     public let uiURL: URL?
+    public let effectMode: HarnessEffectMode
 
-    public init(logURL: URL?, uiURL: URL?) {
+    public init(logURL: URL?, uiURL: URL?, effectMode: HarnessEffectMode = .live) {
         self.logURL = logURL
         self.uiURL = uiURL
+        self.effectMode = effectMode
     }
 
     public func handle(_ action: HarnessAction, snapshot: HealthSnapshot) {
@@ -31,6 +38,10 @@ public struct SpyHealthActionSink: HealthActionSink {
             loggedAt: ISO8601DateFormatter().string(from: Date())
         )
         append(record: record)
+
+        guard effectMode == .live else {
+            return
+        }
 
         switch action {
         case .runDoctor:
