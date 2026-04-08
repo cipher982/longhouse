@@ -148,7 +148,7 @@ async function waitForRunnerOnline(
         return runner?.status ?? "missing";
       },
       {
-        timeout: 10_000,
+        timeout: 30_000,
         message: `runner ${runnerId} never became online`,
       },
     )

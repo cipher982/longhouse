@@ -43,20 +43,24 @@ test('chat input unblocks after oikos_complete while commis runs', async ({ page
   // Pre-fill follow-up while the first run is still "in-flight".
   await input.fill('Follow up while commis runs');
 
-  // Simulate background commis spawned + oikos completes immediately.
+  // Simulate a background spawn_commis call + immediate Oikos completion.
   await page.evaluate(() => {
     const bus = (window as any).__oikos?.eventBus;
     if (!bus) return;
-    bus.emit('oikos:commis_spawned', {
-      jobId: 101,
-      task: 'workspace',
-      timestamp: Date.now(),
+    const now = Date.now();
+    bus.emit('oikos:tool_started', {
+      runId: 1,
+      toolName: 'spawn_commis',
+      toolCallId: 'call-background-1',
+      argsPreview: 'workspace',
+      args: { task: 'workspace' },
+      timestamp: now,
     });
     bus.emit('oikos:complete', {
       runId: 1,
       result: 'Commis started',
       status: 'success',
-      timestamp: Date.now(),
+      timestamp: now + 1,
     });
   });
 

@@ -234,7 +234,7 @@ export function ChatContainer({ messages, userTranscriptPreview, showSurfaceBadg
   }, [messages, toolState.tools])
 
   // Check if any tools are actively running (for hiding typing dots)
-  const hasActiveCommis = useMemo(() => {
+  const hasActiveTools = useMemo(() => {
     return Array.from(toolState.tools.values()).some(tool => tool.status === 'running')
   }, [toolState.tools])
 
@@ -252,8 +252,8 @@ export function ChatContainer({ messages, userTranscriptPreview, showSurfaceBadg
     const isPending = isAssistant && message.status !== 'final' && message.status !== 'error' && message.status !== 'canceled'
     const surfaceBadge = showSurfaceBadges ? resolveSurfaceBadge(message) : null
 
-    // Hide thinking dots if commis are showing progress
-    const showTypingDots = isPending && !hasMessageContent && !hasActiveCommis
+    // Hide thinking dots while tool activity is already visible inline
+    const showTypingDots = isPending && !hasMessageContent && !hasActiveTools
     const usageTitle = isAssistant ? buildUsageTitle(message.usage) : null
     const usageLine = isAssistant ? buildUsageLine(message.usage) : null
 

@@ -770,22 +770,13 @@ export class OikosChatController {
 
         const messageId = payload.message_id || this.currentMessageId;
 
-        // Keep assistant bubble in 'typing' state while waiting for commis.
-        // Don't show the interrupt message - the commis card displays task details.
+        // Keep the assistant bubble in "typing" state while background work continues.
+        // Don't show the interrupt message inline; the active tool card already carries the task.
         // Final response arrives later via oikos_tokens/oikos_complete.
         if (messageId) {
           this.updateAssistantMessage(messageId, {
             status: 'typing',
             runId: this.currentRunId ?? undefined,
-          });
-        }
-
-        if (this.currentRunId) {
-          eventBus.emit('oikos:waiting', {
-            runId: this.currentRunId,
-            jobId: payload.job_id,
-            message: payload.message,  // Keep for event bus consumers (progress UI)
-            timestamp: Date.now(),
           });
         }
         break;

@@ -978,6 +978,8 @@ class OikosService:
 
                 interrupt_value = interrupt.interrupt_value
                 job_id = interrupt_value.get("job_id") if isinstance(interrupt_value, dict) else None
+                if isinstance(interrupt_value, dict):
+                    run.pending_tool_call_id = interrupt_value.get("tool_call_id")
                 interrupt_message = (
                     interrupt_value.get("message", "Working on this in the background...")
                     if isinstance(interrupt_value, dict)

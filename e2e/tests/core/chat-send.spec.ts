@@ -58,7 +58,39 @@ async function navigateToChat(page: Page, automationId: string): Promise<void> {
   await chatBtn.click();
 
   await page.waitForURL((url) => url.pathname.includes(`/automations/${automationId}/thread`), { timeout: 20000 });
-  await expect(page.locator('[data-testid="chat-page"]')).toBeVisible({ timeout: 20000 });
+  const chatPage = page.locator('[data-testid="chat-page"]');
+  await expect(chatPage).toBeVisible({ timeout: 20000 });
+
+  const createThreadButton = page.getByRole('button', { name: 'Create Thread' });
+  const chatInput = page.locator('[data-testid="chat-input"]');
+
+  await expect
+    .poll(
+      async () => {
+        if (await chatInput.isVisible().catch(() => false)) return 'ready';
+        if (await createThreadButton.isVisible().catch(() => false)) return 'needs-thread';
+        return 'loading';
+      },
+      { timeout: 20000, intervals: [250, 500, 1000] }
+    )
+    .toMatch(/^(ready|needs-thread)$/);
+
+  if (!(await chatInput.isVisible().catch(() => false)) && await createThreadButton.isVisible().catch(() => false)) {
+    const [response] = await Promise.all([
+      page.waitForResponse(
+        (r) => r.url().includes('/api/threads') && r.request().method() === 'POST' && r.status() === 201,
+        { timeout: 20000 }
+      ),
+      createThreadButton.click(),
+    ]);
+
+    const body = await response.json();
+    const threadId = String(body.id);
+    await page.waitForURL((url) => url.pathname.includes(`/automations/${automationId}/thread/${threadId}`), {
+      timeout: 20000,
+    });
+  }
+
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 20000 });
   await expect(page.locator('[data-testid="chat-input"]')).toBeEnabled({ timeout: 20000 });
 }

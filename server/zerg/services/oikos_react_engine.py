@@ -397,8 +397,14 @@ async def _execute_tool(
                 else:
                     result_content = str(observation)
 
-        except RunnerInterrupted:
-            raise
+        except RunnerInterrupted as exc:
+            interrupt_value = exc.interrupt_value
+            if tool_call_id:
+                if isinstance(interrupt_value, dict):
+                    interrupt_value = {**interrupt_value, "tool_call_id": interrupt_value.get("tool_call_id") or tool_call_id}
+                else:
+                    interrupt_value = {"tool_call_id": tool_call_id}
+            raise RunnerInterrupted(interrupt_value or {})
         except Exception as exc:
             result_content = f"<tool-error> {exc}"
             logger.exception("Error executing tool %s", tool_name)

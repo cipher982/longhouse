@@ -57,7 +57,6 @@ export interface OikosToolState {
   isActive: boolean;
   currentRunId: number | null;
   tools: Map<string, OikosToolCall>;  // keyed by toolCallId
-  deferredRuns: Set<number>;  // runIds that have gone DEFERRED
 }
 
 type Listener = () => void;
@@ -70,7 +69,6 @@ class OikosToolStore {
     isActive: false,
     currentRunId: null,
     tools: new Map(),
-    deferredRuns: new Set(),
   };
 
   private listeners = new Set<Listener>();
@@ -95,13 +93,6 @@ class OikosToolStore {
     return Array.from(this.state.tools.values())
       .filter(tool => tool.runId === runId)
       .sort((a, b) => a.startedAt - b.startedAt);
-  }
-
-  /**
-   * Check if a run has been deferred (commiss continuing in background)
-   */
-  isDeferred(runId: number | null): boolean {
-    return runId !== null && this.state.deferredRuns.has(runId);
   }
 
   /**
@@ -277,14 +268,6 @@ class OikosToolStore {
       logger.debug('[OikosToolStore] Oikos complete');
     });
 
-    // Oikos deferred - mark run as deferred (commiss continue in background)
-    eventBus.on('oikos:deferred', (data) => {
-      const newDeferredRuns = new Set(this.state.deferredRuns);
-      newDeferredRuns.add(data.runId);
-      this.setState({ deferredRuns: newDeferredRuns });
-      logger.debug(`[OikosToolStore] Run ${data.runId} deferred`);
-    });
-
     // Oikos error
     eventBus.on('oikos:error', () => {
       this.stopTicker();
@@ -330,7 +313,6 @@ class OikosToolStore {
       isActive: false,
       currentRunId: null,
       tools: new Map(),
-      deferredRuns: new Set(),
     });
     logger.debug('[OikosToolStore] Tools cleared');
   }

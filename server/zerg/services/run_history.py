@@ -40,13 +40,15 @@ async def execute_thread_run_with_history(
         trigger=trigger,
         status="queued",
     )
+    run_id = run_row.id
+    run_trace_id = str(run_row.trace_id) if getattr(run_row, "trace_id", None) else None
     # Notify queued state
     await event_bus.publish(
         EventType.RUN_CREATED,
         {
             "event_type": "run_created",
             "fiche_id": fiche.id,
-            "run_id": run_row.id,
+            "run_id": run_id,
             "status": run_row.status,
             "thread_id": thread.id,
         },
@@ -54,13 +56,13 @@ async def execute_thread_run_with_history(
 
     # Mark running
     start_ts = datetime.now(timezone.utc)
-    mark_run_running(db, run_row.id, started_at=start_ts)
+    mark_run_running(db, run_id, started_at=start_ts)
     await event_bus.publish(
         EventType.RUN_UPDATED,
         {
             "event_type": "run_updated",
             "fiche_id": fiche.id,
-            "run_id": run_row.id,
+            "run_id": run_id,
             "status": "running",
             "started_at": start_ts.isoformat(),
             "thread_id": thread.id,
@@ -74,13 +76,13 @@ async def execute_thread_run_with_history(
         # Failure path
         end_ts = datetime.now(timezone.utc)
         duration_ms = int((end_ts - start_ts).total_seconds() * 1000)
-        mark_run_failed(db, run_row.id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
+        mark_run_failed(db, run_id, finished_at=end_ts, duration_ms=duration_ms, error=str(exc))
         await event_bus.publish(
             EventType.RUN_UPDATED,
             {
                 "event_type": "run_updated",
                 "fiche_id": fiche.id,
-                "run_id": run_row.id,
+                "run_id": run_id,
                 "status": "failed",
                 "finished_at": end_ts.isoformat(),
                 "duration_ms": duration_ms,
@@ -107,7 +109,7 @@ async def execute_thread_run_with_history(
     # Mark run as finished (summary auto-extracted)
     finished_run = mark_run_finished(
         db,
-        run_row.id,
+        run_id,
         finished_at=end_ts,
         duration_ms=duration_ms,
         total_tokens=total_tokens,
@@ -123,7 +125,7 @@ async def execute_thread_run_with_history(
         {
             "event_type": "run_updated",
             "fiche_id": fiche.id,
-            "run_id": run_row.id,
+            "run_id": run_id,
             "status": "success",
             "finished_at": end_ts.isoformat(),
             "duration_ms": duration_ms,
@@ -152,10 +154,10 @@ async def execute_thread_run_with_history(
     schedule_run_summary(
         owner_id=fiche.owner_id,
         thread_id=thread.id,
-        run_id=run_row.id,
+        run_id=run_id,
         task=task or "",
         result_text=result_text or "",
-        trace_id=str(run_row.trace_id) if hasattr(run_row, "trace_id") and run_row.trace_id else None,
+        trace_id=run_trace_id,
     )
 
     return created_rows
