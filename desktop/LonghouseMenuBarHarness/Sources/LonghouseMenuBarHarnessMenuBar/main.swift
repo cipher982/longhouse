@@ -21,7 +21,7 @@ struct LonghouseMenuBarHarnessMenuBarApp: App {
         do {
             parsed = try HarnessRuntimeConfig.parse(arguments: Array(CommandLine.arguments.dropFirst()))
         } catch {
-            fputs("LonghouseMenuBarHarnessMenuBar: \(error.localizedDescription)\n", stderr)
+            fputs("LonghouseLocalHealthMenuBar: \(error.localizedDescription)\n", stderr)
             exit(2)
         }
 

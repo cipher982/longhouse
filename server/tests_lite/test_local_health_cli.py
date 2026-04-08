@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import sys
 import time
 from pathlib import Path
 
@@ -13,6 +15,7 @@ os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.cli.main import app
+from zerg.cli import local_health as local_health_cli
 from zerg.services import local_health as local_health_service
 
 
@@ -118,3 +121,65 @@ def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
     assert payload["health_state"] == "healthy"
     assert payload["service"]["status"] == "running"
     assert payload["engine_status"]["exists"] is True
+
+
+def test_local_health_menubar_launch_uses_current_python_env(monkeypatch, tmp_path: Path):
+    runner = CliRunner()
+    calls: list[dict[str, object]] = []
+
+    def fake_run(command, check, cwd):
+        calls.append({"command": command, "check": check, "cwd": cwd})
+
+    monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://david010.longhouse.ai")
+
+    result = runner.invoke(
+        app,
+        [
+            "local-health",
+            "--claude-dir",
+            str(tmp_path),
+            "menubar",
+            "--refresh-seconds",
+            "7",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    command = calls[0]["command"]
+    package_path = str(local_health_cli._desktop_package_path())
+    assert command[:4] == [
+        "swift",
+        "run",
+        "--package-path",
+        package_path,
+    ]
+    assert "LonghouseMenuBarHarnessMenuBar" in command
+    assert "--live" in command
+    assert "--refresh-seconds" in command
+    assert "--health-command" in command
+    health_command = command[command.index("--health-command") + 1]
+    assert sys.executable in health_command
+    assert "zerg.cli.main local-health --json" in health_command
+    assert shlex.quote(str(tmp_path)) in health_command
+    assert command[command.index("--ui-url") + 1] == "https://david010.longhouse.ai"
+
+
+def test_local_health_window_launch_without_url(monkeypatch):
+    runner = CliRunner()
+    calls: list[list[str]] = []
+
+    def fake_run(command, check, cwd):
+        calls.append(command)
+
+    monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: None)
+
+    result = runner.invoke(app, ["local-health", "window"])
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    command = calls[0]
+    assert "LonghouseMenuBarHarnessApp" in command
+    assert "--ui-url" not in command

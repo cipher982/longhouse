@@ -390,6 +390,23 @@ desktop/LonghouseMenuBarHarness/
   XcodeHarness/
 ```
 
+## User-Facing Launch Surface
+
+The short-term product path should stay thin:
+
+- `longhouse local-health`
+  - current textual summary / JSON contract
+- `longhouse local-health window`
+  - launches the shared local-health panel in a normal macOS window
+- `longhouse local-health menubar`
+  - launches the ambient macOS `MenuBarExtra`
+
+Important design rule:
+
+- the Python CLI owns launch semantics and config resolution
+- the Swift package owns the UI and live polling shell
+- the Swift shell should accept an explicit health-command adapter so the future packaged app can swap launch/install mechanics without changing the UI contract
+
 ## Success Criteria
 
 This effort is successful when:
@@ -414,6 +431,7 @@ This effort is successful when:
 - Stage 3a harness now has an unattended smoke path and `manifest.json` artifact output, so agents can run one command and inspect one directory instead of replaying manual shell steps
 - Stage 3b implemented: `XcodeHarness/project.yml` now generates a native wrapper app plus XCUITest target, and the harness exposes that as `make menubar-harness-xcuitest`
 - `make menubar-harness-full` now covers fixture rendering, live rendering, shell smoke, native UI tests, and one artifact directory for screenshots/logs/result bundles
+- Stage 3c implemented: `longhouse local-health window` and `longhouse local-health menubar` now launch the shared SwiftUI surface through the existing local-health contract, using an explicit health-command adapter instead of hard-coding launchd knowledge into the app
 
 ## References
 

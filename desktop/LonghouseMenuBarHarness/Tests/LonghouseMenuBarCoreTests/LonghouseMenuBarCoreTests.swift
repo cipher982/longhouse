@@ -30,7 +30,8 @@ struct LonghouseMenuBarCoreTests {
             "--effect-mode", "log-only",
             "--exercise-actions", "refresh,copyDiagnostics",
             "--quit-after", "2.5",
-            "--refresh-seconds", "5"
+            "--refresh-seconds", "5",
+            "--health-command", "python -m zerg.cli.main local-health --json"
         ])
 
         #expect(config.outputURL?.path == "/tmp/example.png")
@@ -40,6 +41,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(config.exerciseActions == [.refresh, .copyDiagnostics])
         #expect(config.quitAfterSeconds == 2.5)
         #expect(config.refreshIntervalSeconds == 5)
+        #expect(config.healthCommand == "python -m zerg.cli.main local-health --json")
     }
 
     @Test
