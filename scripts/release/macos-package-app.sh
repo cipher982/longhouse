@@ -117,7 +117,9 @@ if [[ ! -f "$BINARY_PATH" ]]; then
   exit 1
 fi
 
-case "${LSUIELEMENT,,}" in
+LSUIELEMENT_NORMALIZED="$(printf '%s' "$LSUIELEMENT" | tr '[:upper:]' '[:lower:]')"
+
+case "$LSUIELEMENT_NORMALIZED" in
   true|yes|1)
     LSUIELEMENT_XML="<true/>"
     ;;
