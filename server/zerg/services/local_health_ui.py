@@ -163,6 +163,10 @@ def get_menubar_service_info() -> dict[str, str]:
             payload = plistlib.loads(plist_path.read_bytes())
         except Exception:
             payload = None
+        if isinstance(payload, dict):
+            stdout_path = payload.get("StandardOutPath")
+            if stdout_path:
+                info["log_path"] = str(Path(str(stdout_path)).expanduser().parent / "local-health-menubar.*.log")
         program_arguments = payload.get("ProgramArguments") if isinstance(payload, dict) else None
         if isinstance(program_arguments, list) and program_arguments:
             launch_path = str(program_arguments[0])
