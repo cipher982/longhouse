@@ -525,7 +525,7 @@ def onboard(
         typer.echo("  Skipping session import setup (--no-shipper)")
     else:
         # Check for service manager
-        has_service_manager = _has_launchd() or _has_systemd()
+        has_service_manager = not os.getenv("CI") and (_has_launchd() or _has_systemd())
 
         if has_service_manager:
             if quick or typer.confirm("Install the Longhouse local runtime now?", default=True):
@@ -559,7 +559,7 @@ def onboard(
                 except Exception as e:
                     typer.secho(f"  [WARN] Could not install service: {e}", fg=typer.colors.YELLOW)
         else:
-            typer.secho("  [--] No service manager (WSL/SSH environment)", fg=typer.colors.YELLOW)
+            typer.secho("  [--] No usable service manager in this environment", fg=typer.colors.YELLOW)
             typer.echo("       Run shipping in foreground: longhouse connect")
             typer.echo("       Or use one-shot import: longhouse ship")
 

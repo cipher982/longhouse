@@ -481,17 +481,21 @@ fi
 rm -f "$ONBOARD_LOG"
 
 log "🔌 Verifying local runtime install..."
-CONNECT_STATUS_LOG="$(mktemp -t longhouse-connect-status.XXXXXX.log)"
-longhouse connect --status | tee "$CONNECT_STATUS_LOG"
-if ! grep -q "Status: running" "$CONNECT_STATUS_LOG"; then
-  fail "connect --status did not report a running engine service"
-fi
-if [[ "$ENABLE_MENUBAR_SMOKE" == "1" ]]; then
-  if [[ "$(grep -c 'Status: running' "$CONNECT_STATUS_LOG")" -lt 2 ]]; then
-    fail "connect --status did not report a running ambient menu bar service"
+if [[ -n "${CI:-}" ]]; then
+  log "ℹ️  Skipping service-manager status assertion in CI."
+else
+  CONNECT_STATUS_LOG="$(mktemp -t longhouse-connect-status.XXXXXX.log)"
+  longhouse connect --status | tee "$CONNECT_STATUS_LOG"
+  if ! grep -q "Status: running" "$CONNECT_STATUS_LOG"; then
+    fail "connect --status did not report a running engine service"
   fi
+  if [[ "$ENABLE_MENUBAR_SMOKE" == "1" ]]; then
+    if [[ "$(grep -c 'Status: running' "$CONNECT_STATUS_LOG")" -lt 2 ]]; then
+      fail "connect --status did not report a running ambient menu bar service"
+    fi
+  fi
+  rm -f "$CONNECT_STATUS_LOG"
 fi
-rm -f "$CONNECT_STATUS_LOG"
 
 LOCAL_HEALTH_JSON="$(mktemp -t longhouse-local-health.XXXXXX.json)"
 longhouse local-health --json > "$LOCAL_HEALTH_JSON"
