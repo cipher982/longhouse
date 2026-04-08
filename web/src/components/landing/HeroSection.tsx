@@ -39,8 +39,8 @@ export function HeroSection({
 
           <p className="landing-hero-subhead">
             Install Longhouse on the machine where work lives. Open one timeline for Claude Code, Codex,
-            and Gemini sessions, find one prior session fast, and recover the context you need. When you
-            want control later, start new work through Longhouse.
+            and Gemini sessions. Find a prior session fast and recover the context you need. When you want
+            to message, tail, or continue a session later, start it through Longhouse.
           </p>
 
           <p className="landing-hero-note">
