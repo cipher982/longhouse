@@ -1,11 +1,11 @@
-"""Install and locate local Longhouse runtime binaries.
+"""Install and locate local Longhouse runtime artifacts.
 
 This is the artifact layer for local Longhouse runtime components:
 
 - the Rust engine binary
 - the macOS ambient Longhouse.app bundle
-- the macOS local-health menu bar binary
-- the optional window-host binary used for debugging
+- the macOS local-health menu bar binary for local/dev fallback
+- the optional window-host binary used for debugging from source
 
 Higher-level installers (`connect --install`, the shell installer, and future
 desktop packaging) should delegate binary acquisition here instead of baking in
@@ -83,12 +83,6 @@ RELEASE_ASSET_FILENAMES: dict[RuntimeComponent, dict[str, str]] = {
     RuntimeComponent.LOCAL_HEALTH_APP: {
         "darwin-arm64": "longhouse-local-health-app-darwin-arm64.zip",
     },
-    RuntimeComponent.LOCAL_HEALTH_MENUBAR: {
-        "darwin-arm64": "longhouse-local-health-menubar-darwin-arm64",
-    },
-    RuntimeComponent.LOCAL_HEALTH_WINDOW: {
-        "darwin-arm64": "longhouse-local-health-window-darwin-arm64",
-    },
 }
 
 
@@ -153,7 +147,10 @@ def _current_release_tag() -> str:
 
 def _default_release_asset_url(component: RuntimeComponent) -> str:
     target = _platform_target()
-    asset_name = RELEASE_ASSET_FILENAMES.get(component, {}).get(target)
+    release_assets = RELEASE_ASSET_FILENAMES.get(component)
+    if not release_assets:
+        raise RuntimeError(f"{component.value} is a local-only runtime artifact and has no published release asset")
+    asset_name = release_assets.get(target)
     if not asset_name:
         raise RuntimeError(f"No released {component.value} binary for platform target {target}")
     tag = _current_release_tag()
