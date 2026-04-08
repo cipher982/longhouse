@@ -4,7 +4,6 @@ This is the artifact layer for local Longhouse runtime components:
 
 - the Rust engine binary
 - the macOS ambient Longhouse.app bundle
-- the macOS local-health menu bar binary for local/dev fallback
 - the optional window-host binary used for debugging from source
 
 Higher-level installers (`connect --install`, the shell installer, and future
@@ -36,13 +35,11 @@ DOWNLOAD_TIMEOUT_SECONDS = 30.0
 class RuntimeComponent(str, Enum):
     ENGINE = "engine"
     LOCAL_HEALTH_APP = "local-health-app"
-    LOCAL_HEALTH_MENUBAR = "local-health-menubar"
     LOCAL_HEALTH_WINDOW = "local-health-window"
 
 
 CANONICAL_BINARY_NAMES: dict[RuntimeComponent, str] = {
     RuntimeComponent.ENGINE: "longhouse-engine",
-    RuntimeComponent.LOCAL_HEALTH_MENUBAR: "longhouse-local-health-menubar",
     RuntimeComponent.LOCAL_HEALTH_WINDOW: "longhouse-local-health-window",
 }
 
@@ -59,7 +56,6 @@ class RuntimeArtifactKind(str, Enum):
 ARTIFACT_KINDS: dict[RuntimeComponent, RuntimeArtifactKind] = {
     RuntimeComponent.ENGINE: RuntimeArtifactKind.EXECUTABLE,
     RuntimeComponent.LOCAL_HEALTH_APP: RuntimeArtifactKind.APP_BUNDLE,
-    RuntimeComponent.LOCAL_HEALTH_MENUBAR: RuntimeArtifactKind.EXECUTABLE,
     RuntimeComponent.LOCAL_HEALTH_WINDOW: RuntimeArtifactKind.EXECUTABLE,
 }
 
@@ -70,7 +66,6 @@ APP_BUNDLE_EXECUTABLE_RELATIVE_PATHS: dict[RuntimeComponent, Path] = {
 DEFAULT_SOURCE_ENV_VARS: dict[RuntimeComponent, str] = {
     RuntimeComponent.ENGINE: "LONGHOUSE_ENGINE_SOURCE",
     RuntimeComponent.LOCAL_HEALTH_APP: "LONGHOUSE_LOCAL_HEALTH_APP_SOURCE",
-    RuntimeComponent.LOCAL_HEALTH_MENUBAR: "LONGHOUSE_LOCAL_HEALTH_MENUBAR_SOURCE",
     RuntimeComponent.LOCAL_HEALTH_WINDOW: "LONGHOUSE_LOCAL_HEALTH_WINDOW_SOURCE",
 }
 

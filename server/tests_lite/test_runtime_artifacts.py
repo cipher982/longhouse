@@ -33,25 +33,25 @@ def test_ensure_runtime_binary_uses_existing_engine_on_path(monkeypatch, tmp_pat
     assert result.source == "path"
 
 
-def test_ensure_runtime_binary_copies_from_local_override(monkeypatch, tmp_path: Path):
+def test_ensure_runtime_binary_copies_window_host_from_local_override(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
-    source = tmp_path / "build" / "longhouse-local-health-menubar"
+    source = tmp_path / "build" / "longhouse-local-health-window"
     source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text("menubar")
+    source.write_text("window")
     source.chmod(0o755)
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
 
     result = runtime_artifacts.ensure_runtime_binary(
-        runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_MENUBAR,
+        runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_WINDOW,
         source_override=str(source),
     )
 
-    destination = home / ".local" / "bin" / "longhouse-local-health-menubar"
+    destination = home / ".local" / "bin" / "longhouse-local-health-window"
     assert destination.exists()
-    assert destination.read_text() == "menubar"
+    assert destination.read_text() == "window"
     assert result.path == str(destination)
     assert result.launch_path == str(destination)
     assert result.installed_now is True
@@ -151,6 +151,6 @@ def test_ensure_runtime_artifact_uses_release_url_for_app_bundle(monkeypatch, tm
     ]
 
 
-def test_local_health_menubar_has_no_published_release_asset():
+def test_local_health_window_has_no_published_release_asset():
     with pytest.raises(RuntimeError, match="local-only runtime artifact"):
-        runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_MENUBAR)
+        runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_WINDOW)
