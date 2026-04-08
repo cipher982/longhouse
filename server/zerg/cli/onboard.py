@@ -422,12 +422,12 @@ def onboard(
     """
     typer.echo("")
     typer.secho("Welcome to Longhouse", fg=typer.colors.CYAN, bold=True)
-    typer.echo("Make existing sessions findable first. Start Longhouse sessions when you want control.")
+    typer.echo("Install Longhouse, open it, and find one prior session. Start Longhouse sessions later when you want control.")
     typer.echo("")
 
     # Quick vs Manual mode selection
     if not quick:
-        typer.echo("[1] QuickStart (recommended) - Find sessions first, control them second")
+        typer.echo("[1] QuickStart (recommended) - Open Longhouse first, add control later")
         typer.echo("[2] Manual Setup - Configure each option")
         typer.echo("")
 
@@ -473,7 +473,7 @@ def onboard(
     typer.echo("")
 
     # Step 2: Server setup
-    typer.secho("Step 2: Server setup", fg=typer.colors.BLUE, bold=True)
+    typer.secho("Step 2: Open Longhouse", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     api_url = _derive_client_url(host, port)
@@ -490,8 +490,8 @@ def onboard(
             typer.secho(f"  [OK] Server responding at {api_url}", fg=typer.colors.GREEN)
         else:
             # Need to start server
-            if quick or typer.confirm("Start Longhouse server?", default=True):
-                typer.echo("  Starting server in daemon mode...")
+            if quick or typer.confirm("Start Longhouse now?", default=True):
+                typer.echo("  Starting Longhouse...")
 
                 try:
                     # Start server as daemon
@@ -504,7 +504,7 @@ def onboard(
                     # Wait for it to be ready
                     typer.echo("  Waiting for server to be ready...")
                     if _wait_for_server(host, port, timeout=30):
-                        typer.secho(f"  [OK] Server started at {api_url}", fg=typer.colors.GREEN)
+                        typer.secho(f"  [OK] Longhouse started at {api_url}", fg=typer.colors.GREEN)
                     else:
                         typer.secho("  [WARN] Server started but not responding", fg=typer.colors.YELLOW)
                         typer.echo(f"         Check logs: {_get_longhouse_home() / 'server.log'}")
@@ -518,7 +518,7 @@ def onboard(
     typer.echo("")
 
     # Step 3: Import existing sessions
-    typer.secho("Step 3: Import existing sessions", fg=typer.colors.BLUE, bold=True)
+    typer.secho("Step 3: Bring in your existing sessions", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     if no_shipper:
@@ -528,7 +528,7 @@ def onboard(
         has_service_manager = not os.getenv("CI") and (_has_launchd() or _has_systemd())
 
         if has_service_manager:
-            if quick or typer.confirm("Install the Longhouse local runtime now?", default=True):
+            if quick or typer.confirm("Finish automatic imports now?", default=True):
                 try:
                     connect_args = [
                         "longhouse",
@@ -550,25 +550,25 @@ def onboard(
                     )
 
                     if result.returncode == 0:
-                        typer.secho("  [OK] Local runtime installed (engine, hooks, and ambient UI when available)", fg=typer.colors.GREEN)
+                        typer.secho("  [OK] Automatic imports are set up", fg=typer.colors.GREEN)
                     else:
-                        typer.secho("  [WARN] Service install failed", fg=typer.colors.YELLOW)
+                        typer.secho("  [WARN] Automatic import setup failed", fg=typer.colors.YELLOW)
                         typer.echo(f"         {result.stderr.strip()}")
-                        typer.echo("         Run manually: longhouse connect")
+                        typer.echo("         Run manually: longhouse connect --install")
 
                 except Exception as e:
                     typer.secho(f"  [WARN] Could not install service: {e}", fg=typer.colors.YELLOW)
         else:
-            typer.secho("  [--] No usable service manager in this environment", fg=typer.colors.YELLOW)
-            typer.echo("       Run shipping in foreground: longhouse connect")
-            typer.echo("       Or use one-shot import: longhouse ship")
+            typer.secho("  [--] Automatic background imports are not available in this environment", fg=typer.colors.YELLOW)
+            typer.echo("       Use: longhouse connect")
+            typer.echo("       Or import once with: longhouse ship")
 
         if has_any_cli and _check_server_health(host, port):
-            if quick or typer.confirm("Import any existing sessions now?", default=True):
-                typer.echo("  Importing any existing sessions now...")
+            if quick or typer.confirm("Import your existing sessions now?", default=True):
+                typer.echo("  Importing your existing sessions now...")
                 imported, detail = _run_initial_import(api_url)
                 if imported:
-                    typer.secho("  [OK] One-shot import finished", fg=typer.colors.GREEN)
+                    typer.secho("  [OK] Existing sessions are ready to look for in Longhouse", fg=typer.colors.GREEN)
                 else:
                     typer.secho("  [WARN] Initial import failed", fg=typer.colors.YELLOW)
                     if detail:
@@ -583,7 +583,7 @@ def onboard(
     typer.echo("")
 
     # Step 4: Verification
-    typer.secho("Step 4: Verify Longhouse can receive sessions", fg=typer.colors.BLUE, bold=True)
+    typer.secho("Step 4: Verify Longhouse is ready", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     if _check_server_health(host, port):
@@ -598,14 +598,13 @@ def onboard(
     typer.echo("")
 
     # Step 5: Seed demo sessions
-    typer.secho("Step 5: Demo data", fg=typer.colors.BLUE, bold=True)
+    typer.secho("Step 5: Optional demo data", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     if no_demo:
         typer.echo("  Skipping demo data (--no-demo)")
     elif has_any_cli and quick:
-        typer.echo("  Skipping demo data (real CLI import path available)")
-        typer.echo("       Run 'longhouse serve --demo' later if you want a safe preview.")
+        typer.echo("  Skipping demo data. Use 'longhouse serve --demo' later if you want a safe preview.")
     elif _check_server_health(host, port):
         should_seed_demo = quick or not has_any_cli
         if has_any_cli and not quick:
@@ -688,13 +687,15 @@ def onboard(
     typer.secho("Setup complete!", fg=typer.colors.GREEN, bold=True)
     typer.echo("=" * 50)
     typer.echo("")
-    typer.echo("First value:")
+    typer.echo("First run:")
     if has_any_cli:
-        typer.echo("  1. Open Longhouse and look for imported sessions")
-        typer.echo("  2. Search one prior solution or inspect one session")
+        typer.echo("  1. Open Longhouse")
+        typer.echo("  2. Find one prior session in the timeline")
     else:
-        typer.echo("  1. Open Longhouse and explore demo sessions")
+        typer.echo("  1. Open Longhouse")
         typer.echo("  2. Install Claude Code, Codex CLI, or Gemini CLI when you want real imports")
+    if _has_launchd():
+        typer.echo("  3. On macOS, Longhouse also lives in your menu bar")
     typer.echo("")
     typer.echo("Next, when you want control after launch:")
     if has_claude:
@@ -704,19 +705,13 @@ def onboard(
     if not (has_claude or has_codex):
         typer.echo("  Install Claude Code or Codex CLI, then start a Longhouse session")
     typer.echo("")
-    typer.echo("Quick reference:")
-    typer.echo(f"  Server:    {api_url}")
-    typer.echo(f"  Config:    {config_path}")
-    typer.echo(f"  Data:      {_get_longhouse_home()}")
-    typer.echo("")
-    typer.echo("Commands:")
-    typer.echo("  longhouse ship             Import existing sessions once")
-    typer.echo("  longhouse connect --install  Repair or reinstall the local runtime")
-    typer.echo("  longhouse wall --json      Read the machine surface")
+    typer.echo("Repair and advanced:")
+    typer.echo("  longhouse connect --install  Repair onboarding and automatic imports")
+    typer.echo("  longhouse ship               Import existing sessions once")
     if _has_launchd():
-        typer.echo("  longhouse local-health     Inspect local shipping health")
-    typer.echo("  longhouse status           Show configuration")
-    typer.echo("  longhouse serve --stop  Stop server")
+        typer.echo("  longhouse local-health       Check local status from the CLI")
+    typer.echo("  longhouse status             Show configuration")
+    typer.echo("  longhouse serve --stop       Stop server")
     typer.echo("")
 
 

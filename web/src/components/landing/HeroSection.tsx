@@ -38,15 +38,15 @@ export function HeroSection({
           </h1>
 
           <p className="landing-hero-subhead">
-            Bring Claude Code, Codex, and Gemini sessions into one searchable timeline. When Longhouse
-            is in the launch path, the session stays reachable later through live control, host reattach,
-            or an explicit cloud branch.
+            Install Longhouse on the machine where work lives. Open one timeline for Claude Code, Codex,
+            and Gemini sessions, find one prior session fast, and recover the context you need. When you
+            want control later, start new work through Longhouse.
           </p>
 
           <p className="landing-hero-note">
-            Works on your laptop. Shines on a machine that stays on. Self-host free where the work lives,
-            or use hosted beta later if you want us to run the box. Claude remains the strongest direct
-            cloud-branch path today.
+            Works on your laptop. Shines on a machine that stays on. On macOS, Longhouse also lives in
+            your menu bar. Self-host free where the work lives, or use hosted beta later if you want us
+            to run the box.
           </p>
 
           <div className="landing-hero-ctas">
@@ -64,15 +64,15 @@ export function HeroSection({
           </div>
 
           <div className="landing-hero-friction-reducers">
-            <span>One timeline first</span>
+            <span>Find prior work first</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>One session model, explicit control</span>
+            <span>Start through Longhouse when you want control</span>
             <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>CLI / API first</span>
+            <span>Browser and CLI stay in sync</span>
           </div>
 
           <div className="landing-hero-install" id="landing-install">
-            <p className="landing-hero-install-label">Get from install to first useful session in minutes</p>
+            <p className="landing-hero-install-label">Install Longhouse. Open it. Find one prior session.</p>
             <div className="landing-hero-install-grid">
               <pre className="landing-code-block">
                 <code>{"curl -fsSL https://get.longhouse.ai/install.sh | bash\nlonghouse serve"}</code>
@@ -82,11 +82,11 @@ export function HeroSection({
               </pre>
             </div>
             <p className="landing-hero-install-note">
-              The installer plus guided onboarding lay down one local runtime: CLI, engine, hooks, and
-              the macOS status menu when available. Every session lands in the same timeline. When a
-              session starts through Longhouse, browser, CLI, and <code>/api/agents/*</code> all share
-              the same session surface later.
-              Use <code> longhouse serve --demo</code> only when you want a safe preview before importing real work.
+              One command installs the CLI and runs guided onboarding. Open the timeline and look for one
+              prior session right away. On macOS, Longhouse also adds a menu bar app. Later, when you
+              want a session to stay reachable after launch, start it with <code>longhouse claude</code>{" "}
+              or <code>longhouse codex</code>. Use <code>longhouse serve --demo</code> only when you
+              want a safe preview before importing real work.
             </p>
           </div>
 
@@ -108,11 +108,11 @@ export function HeroSection({
               </div>
               <div className="landing-hero-signal-card">
                 <p className="landing-hero-signal-card-title">Control channel</p>
-                <p>Start through Longhouse so the live session can still be messaged later, or branch new cloud work from synced thread context.</p>
+                <p>Start through Longhouse when you want the session to stay reachable later from the browser or CLI.</p>
               </div>
               <div className="landing-hero-signal-card">
                 <p className="landing-hero-signal-card-title">Coordination</p>
-                <p><code>wall</code>, <code>tail</code>, <code>peers</code>, <code>message</code>, and inbox state all live on the same seam.</p>
+                <p>Timeline, browser actions, and the CLI all point at the same session.</p>
               </div>
             </div>
           </div>

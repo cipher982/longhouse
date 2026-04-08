@@ -35,14 +35,15 @@ export default function DocsPage() {
       <main className="info-page-content">
         <h1 className="info-page-title">Documentation</h1>
         <p className="info-page-subtitle">
-          Get started fast, bring sessions into one timeline, then start live control or cloud branches from synced thread context when you need them.
+          Install Longhouse, open it, and find one prior session first. When you want control after
+          launch, start new work with <code>longhouse claude</code> or <code>longhouse codex</code>.
         </p>
 
         <nav className="docs-nav">
           <a href="#quickstart" className="docs-nav-card">
             <ZapIcon width={32} height={32} className="docs-nav-icon" />
             <h3>Quick Start</h3>
-            <p>Install and run in 2 minutes</p>
+            <p>Install and open Longhouse</p>
           </a>
           <a href="#search" className="docs-nav-card">
             <SearchIcon width={32} height={32} className="docs-nav-icon" />
@@ -65,61 +66,46 @@ export default function DocsPage() {
           </p>
           <pre><code>curl -fsSL https://get.longhouse.ai/install.sh | bash</code></pre>
           <p>
-            The installer sets up the CLI and runs guided onboarding. The default path wires the local
-            runtime too: engine, hooks, and the macOS status menu when available. Requires Python 3.12+.
-            No sudo needed.
+            The installer sets up the CLI and runs guided onboarding. On macOS, Longhouse also adds a
+            menu bar app. Requires Python 3.12+. No sudo needed.
           </p>
 
-          <h3>2. Start Longhouse</h3>
+          <h3>2. Open Longhouse</h3>
           <pre><code>longhouse serve</code></pre>
           <p>
-            Opens a local web UI at <code>http://localhost:8080</code>.
-            Data is stored in a SQLite database on your machine.
+            Open <code>http://localhost:8080</code>. Your data stays in a SQLite database on your machine.
           </p>
 
-          <h3>3. Repair or reinstall the local runtime</h3>
+          <h3>3. Find one prior session</h3>
           <p>
-            If you skipped onboarding or want to reinstall the engine, hooks, or ambient macOS helper, run:
+            Use the timeline or search to find one real past session. That is the first proof that
+            Longhouse is already useful on this machine.
+          </p>
+
+          <h3>4. When you want control after launch</h3>
+          <p>
+            Keep using bare provider CLIs when you only want local work. Start through Longhouse when you
+            want the session to stay reachable later.
+          </p>
+          <pre><code>longhouse claude
+longhouse codex</code></pre>
+          <p>
+            Claude is the strongest control-ready path today. Codex and Gemini are already useful in the
+            archive and search/detail flows.
+          </p>
+
+          <h3>5. Repair and advanced</h3>
+          <p>
+            Most people should not need this on the first run:
           </p>
           <pre><code>longhouse connect --install
-longhouse local-health</code></pre>
+longhouse ship
+longhouse local-health
+longhouse serve --demo</code></pre>
           <p>
-            The runtime repair step is idempotent. After that, keep using Claude Code, Codex CLI, or
-            Gemini CLI as normal. Longhouse imports their sessions into the timeline so you can browse,
-            search, and inspect them from one place.
-          </p>
-
-          <h3>4. Start through Longhouse when you want live control</h3>
-          <p>
-            All sessions live in the same timeline. Starting through Longhouse adds an explicit control
-            capability later:
-          </p>
-          <pre><code>longhouse claude
-longhouse codex</code></pre>
-          <p>
-            Claude is the strongest cloud-branch path today. Codex and Gemini are already useful in the
-            archive, machine surface, and managed-local control path.
-          </p>
-
-          <h3>5. Optional: start future sessions through Longhouse by habit</h3>
-          <p>
-            Default install stays non-invasive. The cleanest prelaunch habit is to start control-ready
-            sessions explicitly:
-          </p>
-          <pre><code>longhouse claude
-longhouse codex</code></pre>
-          <p>
-            Keep using bare provider CLIs when you only want local work. Use the Longhouse launch commands
-            when you want the session to stay reachable from the timeline later.
-          </p>
-
-          <h3>6. Want a safe preview first?</h3>
-          <p>
-            Only use demo data when you want a safe preview before importing real sessions:
-          </p>
-          <pre><code>longhouse serve --demo</code></pre>
-          <p>
-            Use this only when you want a safe preview before importing real work.
+            <code>connect --install</code> repairs onboarding and automatic imports. <code>ship</code>{" "}
+            runs a one-time import. <code>local-health</code> checks local status. <code>serve --demo</code>{" "}
+            is only for a safe preview before importing real work.
           </p>
         </section>
 
@@ -148,14 +134,15 @@ longhouse codex</code></pre>
         <section id="agents" className="docs-section">
           <h2>Supported Agents</h2>
           <p>
-            Longhouse reads the session files these tools already produce. The installer and onboarding flow handle the normal shipping setup for supported local CLIs.
+            Longhouse reads the session files these tools already produce. Guided onboarding handles the
+            normal first-run setup for supported local CLIs.
           </p>
 
           <h3>Current Support</h3>
           <ul>
-            <li><strong>Claude Code</strong> — strongest cloud-branch path today: timeline sync, hooks, and direct browser branching</li>
-            <li><strong>Codex CLI</strong> — timeline sync, search/detail, and control-ready launches through Longhouse today; direct cloud branching is not supported yet</li>
-            <li><strong>Gemini CLI</strong> — timeline sync and search/detail today; direct cloud branching is not supported yet</li>
+            <li><strong>Claude Code</strong> — best support today for imports, search/detail, and later control when you start with <code>longhouse claude</code></li>
+            <li><strong>Codex CLI</strong> — imports, search/detail, and later control when you start with <code>longhouse codex</code></li>
+            <li><strong>Gemini CLI</strong> — imports and search/detail today</li>
           </ul>
 
           <h3>Coming Soon</h3>
