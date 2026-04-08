@@ -25,12 +25,24 @@ public struct HarnessRootView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Longhouse harness could not load a snapshot")
                         .font(.headline)
+                        .harnessAccessibility(
+                            identifier: LonghouseMenuBarAccessibilityID.Error.headline,
+                            label: "Longhouse harness could not load a snapshot"
+                        )
                     Text(store.loadError ?? "Unknown load failure")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .harnessAccessibility(
+                            identifier: LonghouseMenuBarAccessibilityID.Error.message,
+                            label: store.loadError ?? "Unknown load failure"
+                        )
                     Button("Retry") {
                         store.refresh()
                     }
+                    .harnessAccessibilityButton(
+                        identifier: LonghouseMenuBarAccessibilityID.Error.retryButton,
+                        label: "Retry"
+                    )
                 }
                 .padding(24)
                 .frame(width: 420, alignment: .leading)
@@ -45,5 +57,17 @@ public struct HarnessRootView: View {
                 store.refresh()
             }
         }
+    }
+}
+
+private extension View {
+    func harnessAccessibility(identifier: String, label: String) -> some View {
+        accessibilityIdentifier(identifier)
+            .accessibilityLabel(Text(label))
+    }
+
+    func harnessAccessibilityButton(identifier: String, label: String) -> some View {
+        accessibilityIdentifier(identifier)
+            .accessibilityLabel(Text(label))
     }
 }
