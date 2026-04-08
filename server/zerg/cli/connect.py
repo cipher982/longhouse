@@ -14,6 +14,12 @@ from pathlib import Path
 import httpx
 import typer
 
+from zerg.services.local_health_ui import default_install_menubar
+from zerg.services.local_health_ui import get_menubar_service_info
+from zerg.services.local_health_ui import install_menubar_service
+from zerg.services.local_health_ui import uninstall_menubar_service
+from zerg.services.runtime_artifacts import RuntimeComponent
+from zerg.services.runtime_artifacts import ensure_runtime_binary
 from zerg.services.shipper import clear_token
 from zerg.services.shipper import clear_zerg_url
 from zerg.services.shipper import get_service_info
@@ -26,6 +32,8 @@ from zerg.services.shipper import save_machine_name
 from zerg.services.shipper import save_token
 from zerg.services.shipper import save_zerg_url
 from zerg.services.shipper import uninstall_service
+from zerg.services.shipper.service import Platform
+from zerg.services.shipper.service import detect_platform
 from zerg.services.shipper.service import get_engine_executable
 
 
@@ -446,6 +454,11 @@ def connect(
         "-m",
         help="Name for this machine in session labels (skips interactive prompt when using --install)",
     ),
+    menubar: bool = typer.Option(
+        default_install_menubar(),
+        "--menubar/--no-menubar",
+        help="Install the ambient macOS local-health menu bar when available.",
+    ),
 ) -> None:
     """Continuous: watch and ship sessions to Longhouse via Rust engine.
 
@@ -481,7 +494,32 @@ def connect(
     if not token:
         token = load_token(config_dir)
 
-    # Auto-authenticate if no token exists
+    if hooks_only:
+        if not token:
+            typer.secho(
+                "No device token found. Installing hooks only; run 'longhouse auth' later to enable remote shipping.",
+                fg=typer.colors.YELLOW,
+            )
+        _handle_hooks_only(url=url, token=token, claude_dir=claude_dir)
+        return
+
+    if install:
+        if not token:
+            typer.secho(
+                "No device token found. Installing the local runtime without auth; run 'longhouse auth' later to enable remote shipping.",
+                fg=typer.colors.YELLOW,
+            )
+        _handle_install(
+            url=url,
+            token=token,
+            claude_dir=claude_dir,
+            interval=interval,
+            machine_name=machine_name,
+            menubar=menubar,
+        )
+        return
+
+    # Auto-authenticate if no token exists for active shipping.
     if not token:
         typer.echo("No device token found. Attempting auto-authentication...")
         auto_token = _auto_create_token(url)
@@ -496,14 +534,6 @@ def connect(
                 fg=typer.colors.YELLOW,
             )
             raise typer.Exit(code=1)
-
-    if hooks_only:
-        _handle_hooks_only(url=url, token=token, claude_dir=claude_dir)
-        return
-
-    if install:
-        _handle_install(url=url, token=token, claude_dir=claude_dir, interval=interval, machine_name=machine_name)
-        return
 
     # Normal connect mode — exec longhouse-engine (replaces this process)
 
@@ -725,6 +755,21 @@ def _handle_status() -> None:
         typer.echo(f"Config: {info.get('service_file', 'N/A')}")
         typer.echo(f"Logs: {info['log_path']}")
 
+    if detect_platform() == Platform.MACOS:
+        menubar = get_menubar_service_info()
+        typer.echo("")
+        typer.echo(f"Ambient UI: {menubar.get('service_name', 'N/A')}")
+        menubar_status = menubar["status"]
+        if menubar_status == "running":
+            typer.secho("Status: running", fg=typer.colors.GREEN)
+        elif menubar_status == "stopped":
+            typer.secho("Status: stopped", fg=typer.colors.YELLOW)
+        else:
+            typer.secho("Status: not installed", fg=typer.colors.RED)
+        if menubar_status != "not-installed":
+            typer.echo(f"Config: {menubar.get('service_file', 'N/A')}")
+            typer.echo(f"Logs: {menubar['log_path']}")
+
 
 def _handle_uninstall() -> None:
     """Handle --uninstall flag."""
@@ -734,6 +779,10 @@ def _handle_uninstall() -> None:
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+
+    if detect_platform() == Platform.MACOS:
+        menubar_result = uninstall_menubar_service()
+        typer.secho(f"[OK] {menubar_result['message']}", fg=typer.colors.GREEN)
 
 
 def _handle_hooks_only(
@@ -768,6 +817,7 @@ def _handle_install(
     claude_dir: str | None,
     interval: int,
     machine_name: str | None = None,
+    menubar: bool = False,
 ) -> None:
     """Handle --install flag."""
     # Persist url/token BEFORE installing the service so the engine
@@ -793,6 +843,17 @@ def _handle_install(
         resolved_name = sanitize_machine_name(raw)
     save_machine_name(resolved_name, config_dir)
     typer.secho(f"  Machine: {resolved_name}", fg=typer.colors.CYAN)
+
+    typer.echo("Ensuring local engine runtime is available...")
+    try:
+        engine_runtime = ensure_runtime_binary(RuntimeComponent.ENGINE)
+    except RuntimeError as e:
+        typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+    if engine_runtime.installed_now:
+        typer.secho(f"  [OK] Engine binary installed at {engine_runtime.path}", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"  [OK] Engine binary ready at {engine_runtime.path}", fg=typer.colors.GREEN)
 
     typer.echo("Installing engine service...")
     typer.echo(f"  URL: {url}")
@@ -821,6 +882,21 @@ def _handle_install(
             typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
     except Exception as e:
         typer.secho(f"  [WARN] Hook installation failed: {e}", fg=typer.colors.YELLOW)
+
+    if menubar:
+        typer.echo("")
+        typer.echo("Installing ambient local-health menu bar...")
+        try:
+            menubar_result = install_menubar_service(
+                ui_url=url,
+                claude_dir=claude_dir,
+            )
+            typer.secho(f"  [OK] {menubar_result['message']}", fg=typer.colors.GREEN)
+            typer.echo(f"  Config: {menubar_result.get('plist_path', 'N/A')}")
+            typer.echo(f"  Binary: {menubar_result.get('binary_path', 'N/A')}")
+        except RuntimeError as e:
+            typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
+            raise typer.Exit(code=1)
 
     # Verify PATH in a fresh shell
     _verify_and_warn_path()

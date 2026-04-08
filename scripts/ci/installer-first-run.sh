@@ -103,6 +103,22 @@ wait_for_health() {
   return 1
 }
 
+wait_for_down() {
+  local url="$1"
+  local name="$2"
+  local attempts="${3:-30}"
+
+  for _ in $(seq 1 "$attempts"); do
+    if ! curl -fsS "$url" >/dev/null 2>&1; then
+      log "✅ $name stopped: $url"
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
 validate_doctor_json() {
   local path="$1"
   python3 - "$path" <<'PY'
@@ -322,6 +338,17 @@ if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" && -d "$PACKAGE_SOURC
     cd web
     bun run build
   )
+
+  if [[ ! -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
+    require_cmd cargo
+    log "🦀 Building local engine binary for installer validation..."
+    (
+      cd "$ROOT_DIR/engine"
+      cargo build --release
+    )
+  else
+    log "🦀 Reusing existing local engine binary for installer validation..."
+  fi
 fi
 
 if [[ -n "$UPGRADE_PACKAGE_SOURCE" && -z "$EXPECTED_UPGRADE_VERSION" ]]; then
@@ -356,6 +383,27 @@ env_vars=(
 
 if [[ -n "$PACKAGE_SOURCE" ]]; then
   env_vars+=("LONGHOUSE_PKG_SOURCE=$PACKAGE_SOURCE")
+fi
+
+if [[ "$INSTALLER_MODE" == "local" ]]; then
+  export LONGHOUSE_ENGINE_SOURCE="$ROOT_DIR/engine/target/release/longhouse-engine"
+  env_vars+=("LONGHOUSE_ENGINE_SOURCE=$ROOT_DIR/engine/target/release/longhouse-engine")
+fi
+
+ENABLE_MENUBAR_SMOKE="${INSTALLER_TEST_MENUBAR:-}"
+if [[ -z "$ENABLE_MENUBAR_SMOKE" && "$(uname -s)" == "Darwin" && -z "${CI:-}" ]]; then
+  ENABLE_MENUBAR_SMOKE=1
+fi
+
+if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(uname -s)" == "Darwin" ]]; then
+  require_cmd swift
+  log "🍎 Building local menu bar binary for installer validation..."
+  swift build --package-path "$ROOT_DIR/desktop/LonghouseMenuBarHarness" -c release --product LonghouseMenuBarHarnessMenuBar >/dev/null
+  MENUBAR_BIN_DIR="$(swift build --package-path "$ROOT_DIR/desktop/LonghouseMenuBarHarness" -c release --show-bin-path)"
+  export LONGHOUSE_LOCAL_HEALTH_MENUBAR_SOURCE="$MENUBAR_BIN_DIR/LonghouseMenuBarHarnessMenuBar"
+  export LONGHOUSE_INSTALL_MENUBAR=1
+  env_vars+=("LONGHOUSE_LOCAL_HEALTH_MENUBAR_SOURCE=$MENUBAR_BIN_DIR/LonghouseMenuBarHarnessMenuBar")
+  env_vars+=("LONGHOUSE_INSTALL_MENUBAR=1")
 fi
 
 log "📦 Running installer..."
@@ -406,15 +454,46 @@ rm -f "$DOCTOR_JSON"
 
 log "🧭 Running onboarding quickstart (safe mode)..."
 ONBOARD_LOG="$(mktemp -t longhouse-onboard.XXXXXX.log)"
-SSH_CONNECTION="installer-smoke" longhouse onboard --quick --no-shipper --no-demo --port "$PORT" | tee "$ONBOARD_LOG"
+longhouse onboard --quick --no-demo --no-browser --port "$PORT" | tee "$ONBOARD_LOG"
 
 if grep -q "\[WARN\] Test event failed" "$ONBOARD_LOG"; then
   fail "Onboarding verification emitted a test-event warning"
 fi
 rm -f "$ONBOARD_LOG"
 
+log "🔌 Verifying local runtime install..."
+CONNECT_STATUS_LOG="$(mktemp -t longhouse-connect-status.XXXXXX.log)"
+longhouse connect --status | tee "$CONNECT_STATUS_LOG"
+if ! grep -q "Status: running" "$CONNECT_STATUS_LOG"; then
+  fail "connect --status did not report a running engine service"
+fi
+if [[ "$ENABLE_MENUBAR_SMOKE" == "1" ]]; then
+  if [[ "$(grep -c 'Status: running' "$CONNECT_STATUS_LOG")" -lt 2 ]]; then
+    fail "connect --status did not report a running ambient menu bar service"
+  fi
+fi
+rm -f "$CONNECT_STATUS_LOG"
+
+LOCAL_HEALTH_JSON="$(mktemp -t longhouse-local-health.XXXXXX.json)"
+longhouse local-health --json > "$LOCAL_HEALTH_JSON"
+python3 - "$LOCAL_HEALTH_JSON" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+if payload.get("schema_version") != 1:
+    raise SystemExit("unexpected local-health schema version")
+if payload.get("service", {}).get("status") not in {"running", "stopped", "not-installed"}:
+    raise SystemExit("unexpected local-health service status")
+PY
+rm -f "$LOCAL_HEALTH_JSON"
+
 log "🧪 Starting local server from onboarded config..."
 longhouse serve --stop >/dev/null 2>&1 || true
+if ! wait_for_down "http://127.0.0.1:${PORT}/api/readyz" "Onboarding server"; then
+  fail "Onboarding server did not stop cleanly"
+fi
 longhouse serve --host 127.0.0.1 --port "$PORT" --daemon
 
 if ! wait_for_health "http://127.0.0.1:${PORT}/api/readyz" "Onboarded local server"; then
@@ -423,6 +502,9 @@ fi
 
 log "🛑 Stopping onboarded server..."
 longhouse serve --stop
+if ! wait_for_down "http://127.0.0.1:${PORT}/api/readyz" "Onboarded local server"; then
+  fail "Onboarded local server did not stop cleanly"
+fi
 
 log "🎭 Starting demo server..."
 longhouse serve --demo-fresh --host 127.0.0.1 --port "$DEMO_PORT" --daemon

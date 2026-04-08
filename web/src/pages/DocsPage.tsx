@@ -65,7 +65,9 @@ export default function DocsPage() {
           </p>
           <pre><code>curl -fsSL https://get.longhouse.ai/install.sh | bash</code></pre>
           <p>
-            The installer sets up the CLI and runs onboarding. Requires Python 3.12+. No sudo needed.
+            The installer sets up the CLI and runs guided onboarding. The default path wires the local
+            runtime too: engine, hooks, and the macOS status menu when available. Requires Python 3.12+.
+            No sudo needed.
           </p>
 
           <h3>2. Start Longhouse</h3>
@@ -75,15 +77,16 @@ export default function DocsPage() {
             Data is stored in a SQLite database on your machine.
           </p>
 
-          <h3>3. Import existing sessions</h3>
+          <h3>3. Repair or reinstall the local runtime</h3>
           <p>
-            If you skipped onboarding or want to reinstall the background shipper and hooks, run:
+            If you skipped onboarding or want to reinstall the engine, hooks, or ambient macOS helper, run:
           </p>
           <pre><code>longhouse connect --install
-longhouse ship</code></pre>
+longhouse local-health</code></pre>
           <p>
-            Then keep using Claude Code, Codex CLI, or Gemini CLI as normal. Longhouse imports their
-            sessions into the timeline so you can browse, search, and inspect them from one place.
+            The runtime repair step is idempotent. After that, keep using Claude Code, Codex CLI, or
+            Gemini CLI as normal. Longhouse imports their sessions into the timeline so you can browse,
+            search, and inspect them from one place.
           </p>
 
           <h3>4. Start through Longhouse when you want live control</h3>

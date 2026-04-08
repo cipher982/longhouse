@@ -403,6 +403,11 @@ def onboard(
         "--no-demo",
         help="Skip seeding demo sessions",
     ),
+    no_browser: bool = typer.Option(
+        False,
+        "--no-browser",
+        help="Skip auto-opening the browser at the end of onboarding.",
+    ),
 ) -> None:
     """Run the Longhouse onboarding wizard.
 
@@ -518,25 +523,34 @@ def onboard(
 
     if no_shipper:
         typer.echo("  Skipping session import setup (--no-shipper)")
-    elif not has_any_cli:
-        typer.echo("  No supported CLI found, so there is nothing to import yet.")
-        typer.echo("  You can still explore demo sessions now.")
-        typer.echo("  Install Claude Code, Codex CLI, or Gemini CLI later, then run: longhouse connect --install")
     else:
         # Check for service manager
         has_service_manager = _has_launchd() or _has_systemd()
 
         if has_service_manager:
-            if quick or typer.confirm("Install background shipper so Longhouse keeps importing sessions?", default=True):
+            if quick or typer.confirm("Install the Longhouse local runtime now?", default=True):
                 try:
+                    connect_args = [
+                        "longhouse",
+                        "connect",
+                        "--install",
+                        "--url",
+                        api_url,
+                        "--machine-name",
+                        socket.gethostname(),
+                    ]
+                    if sys.platform == "darwin" and _has_gui() and not os.getenv("CI"):
+                        connect_args.append("--menubar")
+                    else:
+                        connect_args.append("--no-menubar")
                     result = subprocess.run(
-                        ["longhouse", "connect", "--install", "--url", api_url],
+                        connect_args,
                         capture_output=True,
                         text=True,
                     )
 
                     if result.returncode == 0:
-                        typer.secho("  [OK] Background session import path installed", fg=typer.colors.GREEN)
+                        typer.secho("  [OK] Local runtime installed (engine, hooks, and ambient UI when available)", fg=typer.colors.GREEN)
                     else:
                         typer.secho("  [WARN] Service install failed", fg=typer.colors.YELLOW)
                         typer.echo(f"         {result.stderr.strip()}")
@@ -549,7 +563,7 @@ def onboard(
             typer.echo("       Run shipping in foreground: longhouse connect")
             typer.echo("       Or use one-shot import: longhouse ship")
 
-        if _check_server_health(host, port):
+        if has_any_cli and _check_server_health(host, port):
             if quick or typer.confirm("Import any existing sessions now?", default=True):
                 typer.echo("  Importing any existing sessions now...")
                 imported, detail = _run_initial_import(api_url)
@@ -560,6 +574,9 @@ def onboard(
                     if detail:
                         typer.echo(f"         {detail}")
                     typer.echo("         Retry with: longhouse ship")
+        elif not has_any_cli:
+            typer.echo("  No supported CLI found yet, so Longhouse skipped the initial import.")
+            typer.echo("  Install Claude Code, Codex CLI, or Gemini CLI later, then run: longhouse ship")
         else:
             typer.echo("  Skipping initial import (server not running)")
 
@@ -656,7 +673,7 @@ def onboard(
     typer.echo("")
 
     # Step 8: Open browser (if GUI available)
-    if _has_gui() and _check_server_health(host, port):
+    if not no_browser and _has_gui() and _check_server_health(host, port):
         if quick or typer.confirm("Open Longhouse in browser?", default=True):
             typer.echo(f"  Opening {api_url}...")
             try:
@@ -694,8 +711,10 @@ def onboard(
     typer.echo("")
     typer.echo("Commands:")
     typer.echo("  longhouse ship             Import existing sessions once")
-    typer.echo("  longhouse connect --install  Keep importing sessions in background")
+    typer.echo("  longhouse connect --install  Repair or reinstall the local runtime")
     typer.echo("  longhouse wall --json      Read the machine surface")
+    if _has_launchd():
+        typer.echo("  longhouse local-health     Inspect local shipping health")
     typer.echo("  longhouse status           Show configuration")
     typer.echo("  longhouse serve --stop  Stop server")
     typer.echo("")

@@ -1,0 +1,115 @@
+name: Local Runtime Binary Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Existing git tag to publish from (for example v0.1.6)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  attestations: write
+  id-token: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            engine_asset: longhouse-engine-darwin-arm64
+            build_desktop: true
+          - os: ubuntu-latest
+            engine_asset: longhouse-engine-linux-x64
+            build_desktop: false
+          - os: ubuntu-24.04-arm
+            engine_asset: longhouse-engine-linux-arm64
+            build_desktop: false
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build engine binary
+        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
+
+      - name: Collect engine binary
+        run: |
+          mkdir -p binaries
+          cp engine/target/release/longhouse-engine "binaries/${{ matrix.engine_asset }}"
+          chmod +x "binaries/${{ matrix.engine_asset }}"
+
+      - name: Ad-hoc sign macOS engine binary
+        if: ${{ matrix.os == 'macos-latest' }}
+        run: codesign -s - "binaries/${{ matrix.engine_asset }}"
+
+      - name: Build macOS desktop binaries
+        if: ${{ matrix.build_desktop }}
+        run: |
+          swift build --package-path desktop/LonghouseMenuBarHarness -c release --product LonghouseMenuBarHarnessMenuBar
+          swift build --package-path desktop/LonghouseMenuBarHarness -c release --product LonghouseMenuBarHarnessApp
+          BIN_DIR="$(swift build --package-path desktop/LonghouseMenuBarHarness -c release --show-bin-path)"
+          cp "$BIN_DIR/LonghouseMenuBarHarnessMenuBar" binaries/longhouse-local-health-menubar-darwin-arm64
+          cp "$BIN_DIR/LonghouseMenuBarHarnessApp" binaries/longhouse-local-health-window-darwin-arm64
+          chmod +x binaries/longhouse-local-health-menubar-darwin-arm64 binaries/longhouse-local-health-window-darwin-arm64
+
+      - name: Ad-hoc sign macOS desktop binaries
+        if: ${{ matrix.build_desktop }}
+        run: |
+          codesign -s - binaries/longhouse-local-health-menubar-darwin-arm64
+          codesign -s - binaries/longhouse-local-health-window-darwin-arm64
+
+      - name: Upload runtime artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: runtime-${{ matrix.os }}
+          path: binaries/*
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Download runtime artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: binaries
+          merge-multiple: true
+
+      - name: List runtime artifacts
+        run: ls -la binaries
+
+      - name: Generate checksums
+        run: |
+          cd binaries
+          sha256sum * > local-runtime-checksums.txt
+
+      - name: Upload runtime assets to release
+        run: gh release upload "$RELEASE_TAG" binaries/* --clobber
+
+      - name: Attest runtime release artifacts
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            binaries/longhouse-engine-darwin-arm64
+            binaries/longhouse-engine-linux-x64
+            binaries/longhouse-engine-linux-arm64
+            binaries/longhouse-local-health-menubar-darwin-arm64
+            binaries/longhouse-local-health-window-darwin-arm64
+            binaries/local-runtime-checksums.txt

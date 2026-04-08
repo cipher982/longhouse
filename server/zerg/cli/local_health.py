@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
-import shlex
 import subprocess
-import sys
+from contextlib import contextmanager
+from importlib import resources
 from pathlib import Path
 
 import typer
 
 from zerg.services.local_health import collect_local_health
+from zerg.services.local_health_ui import build_local_health_command
+from zerg.services.runtime_artifacts import CANONICAL_BINARY_NAMES
+from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.shipper import get_zerg_url
 
 app = typer.Typer(
@@ -106,48 +109,74 @@ def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _desktop_package_path() -> Path:
-    return _repo_root() / "desktop" / "LonghouseMenuBarHarness"
+@contextmanager
+def _desktop_package_path():
+    repo_path = _repo_root() / "desktop" / "LonghouseMenuBarHarness"
+    if repo_path.exists():
+        yield repo_path
+        return
+
+    packaged_path = resources.files("zerg").joinpath("_desktop", "LonghouseMenuBarHarness")
+    with resources.as_file(packaged_path) as resolved:
+        yield resolved
 
 
-def _health_command(*, claude_dir: str | None) -> str:
-    command = [
-        sys.executable,
-        "-m",
-        "zerg.cli.main",
-        "local-health",
-        "--json",
-    ]
-    if claude_dir:
-        command.extend(["--claude-dir", claude_dir])
-    return shlex.join(command)
+def _prebuilt_binary_path(component: RuntimeComponent) -> Path | None:
+    path = Path.home() / ".local" / "bin" / CANONICAL_BINARY_NAMES[component]
+    return path if path.exists() else None
 
 
 def _launch_desktop_surface(
     *,
     product: str,
+    component: RuntimeComponent | None,
     claude_dir: str | None,
     refresh_seconds: int,
 ) -> None:
-    package_path = _desktop_package_path()
     ui_url = get_zerg_url(Path(claude_dir) if claude_dir else None)
-    command = [
-        "swift",
-        "run",
-        "--package-path",
-        str(package_path),
-        product,
-        "--live",
-        "--refresh-seconds",
-        str(refresh_seconds),
-        "--health-command",
-        _health_command(claude_dir=claude_dir),
-    ]
-    if ui_url:
-        command.extend(["--ui-url", ui_url])
+
+    prebuilt_binary = _prebuilt_binary_path(component) if component is not None else None
+    if prebuilt_binary is not None:
+        command = [
+            str(prebuilt_binary),
+            "--live",
+            "--refresh-seconds",
+            str(refresh_seconds),
+            "--health-command",
+            build_local_health_command(claude_dir=claude_dir),
+        ]
+        if ui_url:
+            command.extend(["--ui-url", ui_url])
+        cwd = prebuilt_binary.parent
+    else:
+        with _desktop_package_path() as package_path:
+            command = [
+                "swift",
+                "run",
+                "--package-path",
+                str(package_path),
+                product,
+                "--live",
+                "--refresh-seconds",
+                str(refresh_seconds),
+                "--health-command",
+                build_local_health_command(claude_dir=claude_dir),
+            ]
+            if ui_url:
+                command.extend(["--ui-url", ui_url])
+            cwd = package_path
+            try:
+                subprocess.run(command, check=True, cwd=cwd)
+                return
+            except FileNotFoundError as exc:
+                typer.secho(f"Missing required tool: {exc.filename}", fg=typer.colors.RED)
+                raise typer.Exit(code=1) from exc
+            except subprocess.CalledProcessError as exc:
+                typer.secho(f"Desktop local-health UI failed with exit code {exc.returncode}.", fg=typer.colors.RED)
+                raise typer.Exit(code=exc.returncode or 1) from exc
 
     try:
-        subprocess.run(command, check=True, cwd=package_path)
+        subprocess.run(command, check=True, cwd=cwd)
     except FileNotFoundError as exc:
         typer.secho(f"Missing required tool: {exc.filename}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
@@ -182,6 +211,7 @@ def local_health_window(
     claude_dir = (ctx.obj or {}).get("claude_dir")
     _launch_desktop_surface(
         product="LonghouseMenuBarHarnessApp",
+        component=RuntimeComponent.LOCAL_HEALTH_WINDOW,
         claude_dir=claude_dir,
         refresh_seconds=refresh_seconds,
     )
@@ -196,6 +226,7 @@ def local_health_menubar(
     claude_dir = (ctx.obj or {}).get("claude_dir")
     _launch_desktop_surface(
         product="LonghouseMenuBarHarnessMenuBar",
+        component=RuntimeComponent.LOCAL_HEALTH_MENUBAR,
         claude_dir=claude_dir,
         refresh_seconds=refresh_seconds,
     )

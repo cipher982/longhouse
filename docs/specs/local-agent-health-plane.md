@@ -14,6 +14,8 @@ Keep Longhouse's hot path brutally simple:
 
 This document defines the local health plane that sits beside the transport plane. It also defines the modular seam that lets Longhouse ship a lightweight CLI-first MVP now and pivot to a proper macOS menu bar app with app-owned helper management later without rethinking the whole product.
 
+Packaging and release mechanics for that surface live in `docs/specs/distribution-update-loop.md`.
+
 ## Vision
 
 Longhouse on a user machine should feel like a real local product, not an invisible background daemon.

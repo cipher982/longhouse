@@ -51,8 +51,9 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
       <div className="install-header">
         <h3>Get started in seconds</h3>
         <p>
-          One install command. The installer runs onboarding so your timeline fills first, then you can
-          start through Longhouse or enable wrappers when you want live control later.
+          One install command. Guided onboarding installs the CLI, the local engine runtime, session
+          hooks, and the macOS status menu when available, so the timeline fills first and control is
+          ready when you want it.
         </p>
       </div>
 
@@ -104,7 +105,8 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
       )}
 
       <p className="install-note">
-        Safe demo mode is optional. The default path is real onboarding with your own sessions.
+        Safe demo mode is optional. The default path is real onboarding with your own sessions and the
+        local runtime already wired.
       </p>
 
       <div className="install-features">
@@ -118,7 +120,7 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
           </svg>
-          Works offline
+          Local runtime included
         </span>
         <span className="install-feature">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
