@@ -2,33 +2,32 @@
 
 Audit date: 2026-04-07. Goal: delete dead code, remove non-launch integrations, reduce confusion for fresh AI agents.
 
-## Phase 1: Delete Dead Files (no risk)
+## Phase 1: Delete Dead Files — DONE
 
-- [ ] Remove tracked dead files: `agents_def/`, `libs/`, `forum.css`, `.nvmrc`
-- [ ] Remove untracked junk: `.env-backups-2025-12-16/`, `.tmp/`, `archive/`, `app.db`, `qa-oss-server.log`
-- [ ] Remove empty/legacy dirs: `static/avatars/`, `patrol/reports/`, `logs/jarvis-*`, `logs/postgres/`, `docs/reports/`
-- [ ] Remove dead frontend files: `web/src/lib/fiches.ts`
-- [ ] Remove legacy data dirs: `data/funnel.db`, `data/swarmlet/`, `data/workers/`
-- [ ] Commit
+Commit: `bff3b8b5` (754 lines deleted)
 
-## Phase 2: Remove Traccar Integration
+- [x] Remove tracked dead files: `agents_def/`, `libs/`, `forum.css`, `.nvmrc`
+- [x] Remove untracked junk: `.env-backups-2025-12-16/`, `.tmp/`, `archive/`, `app.db`, `qa-oss-server.log`
+- [x] Remove empty/legacy dirs: `static/avatars/`, `patrol/`, `logs/jarvis-*`, `logs/postgres/`, `docs/reports/`
+- [x] Remove dead frontend files: `web/src/lib/fiches.ts`
+- [x] Remove legacy data dirs: `data/funnel.db`, `data/swarmlet/`, `data/workers/`
 
-Traccar is a David-specific personal tool, not OSS core. 19 files reference it.
+## Phase 2: Remove Traccar Integration — DONE
 
-- [ ] Remove traccar from connectors (registry, testers, status_builder)
-- [ ] Remove traccar from schemas (bootstrap.py)
-- [ ] Remove get_current_location from personal_tools.py
-- [ ] Remove traccar from frontend (SettingsPage, connectors type, oikos config)
-- [ ] Remove config/script files: `config/.traccar_config.json.example`, `server/scripts/test_traccar.py`
-- [ ] Remove traccar from eval dataset and seed scripts
-- [ ] Regenerate `web/src/generated/openapi-types.ts`
-- [ ] Run `make test` to verify
-- [ ] Commit
+Commit: `d28c9784` (303 lines deleted, 15 files)
 
-## Phase 3: CSS Cleanup (docketed)
+- [x] Remove traccar from connectors (registry, testers, status_builder)
+- [x] Remove traccar from schemas (bootstrap.py)
+- [x] Remove get_current_location from personal_tools.py
+- [x] Remove traccar from frontend (SettingsPage, connectors type, oikos config)
+- [x] Remove config/script files
+- [x] Remove traccar from eval dataset and seed scripts
+- [x] All pre-commit hooks pass, 1291 backend tests pass
 
-Deferred to docket. Current CSS has dead files and naming mismatches (forum.css for timeline).
+## Phase 3: CSS Cleanup — Docketed
 
-## Phase 4: Giant File Modularization (docketed)
+Docket item: `no-date--zerg--prelaunch-css-cleanup-and-naming.md`
 
-Deferred to docket. Major files: shipper.rs (3496), agents_store.py (2862), session_chat.py (2230), session_turn_reviews.py (1786).
+## Phase 4: Giant File Modularization — Docketed
+
+Docket item: `no-date--zerg--giant-file-modularization-prelaunch.md`
