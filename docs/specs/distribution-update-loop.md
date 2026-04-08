@@ -128,12 +128,11 @@ This keeps the local runtime install surface singular even if the shell installe
 
 ## Local Runtime Artifacts
 
-The local runtime now has four artifact classes:
+The local runtime now has three published artifact classes:
 
 - Python wheel: `longhouse`
 - engine binary: `longhouse-engine-<platform>`
 - macOS ambient app bundle archive: `longhouse-local-health-app-darwin-arm64.zip`
-- macOS debug window binary: `longhouse-local-health-window-darwin-arm64`
 
 Artifact policy:
 
@@ -141,6 +140,7 @@ Artifact policy:
 - the CLI version and runtime artifact version should match the same tag by default
 - local/dev validation may override artifact sources explicitly
 - on macOS, `connect --install` should install the ambient helper as `~/Applications/Longhouse.app`
+- raw menu bar/window executables are repo-local harness artifacts, not consumer release assets
 
 The shell installer should not know asset naming rules itself forever. The long-term goal is that the CLI/runtime layer owns artifact resolution while the shell script stays thin.
 

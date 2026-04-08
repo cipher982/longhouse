@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
 from cryptography.fernet import Fernet
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -148,3 +149,8 @@ def test_ensure_runtime_artifact_uses_release_url_for_app_bundle(monkeypatch, tm
             expected_path,
         )
     ]
+
+
+def test_local_health_menubar_has_no_published_release_asset():
+    with pytest.raises(RuntimeError, match="local-only runtime artifact"):
+        runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_MENUBAR)

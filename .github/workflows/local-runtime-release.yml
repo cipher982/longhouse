@@ -57,21 +57,13 @@ jobs:
         if: ${{ matrix.os == 'macos-latest' }}
         run: codesign -s - "binaries/${{ matrix.engine_asset }}"
 
-      - name: Build macOS desktop binaries
+      - name: Build macOS ambient app payload
         if: ${{ matrix.build_desktop }}
         run: |
           swift build --package-path desktop/LonghouseMenuBarHarness -c release --product LonghouseMenuBarHarnessMenuBar
-          swift build --package-path desktop/LonghouseMenuBarHarness -c release --product LonghouseMenuBarHarnessApp
           BIN_DIR="$(swift build --package-path desktop/LonghouseMenuBarHarness -c release --show-bin-path)"
-          cp "$BIN_DIR/LonghouseMenuBarHarnessMenuBar" binaries/longhouse-local-health-menubar-darwin-arm64
-          cp "$BIN_DIR/LonghouseMenuBarHarnessApp" binaries/longhouse-local-health-window-darwin-arm64
-          chmod +x binaries/longhouse-local-health-menubar-darwin-arm64 binaries/longhouse-local-health-window-darwin-arm64
-
-      - name: Ad-hoc sign macOS desktop binaries
-        if: ${{ matrix.build_desktop }}
-        run: |
-          codesign -s - binaries/longhouse-local-health-menubar-darwin-arm64
-          codesign -s - binaries/longhouse-local-health-window-darwin-arm64
+          cp "$BIN_DIR/LonghouseMenuBarHarnessMenuBar" "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
+          chmod +x "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
 
       - name: Configure macOS signing keychain
         if: ${{ matrix.build_desktop }}
@@ -160,7 +152,7 @@ jobs:
           mkdir -p "$APP_STAGE_DIR"
 
           scripts/release/macos-package-app.sh \
-            --binary binaries/longhouse-local-health-menubar-darwin-arm64 \
+            --binary "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar" \
             --app-name "$AMBIENT_APP_NAME" \
             --exec-name Longhouse \
             --bundle-id ai.longhouse.localhealth \
@@ -251,8 +243,6 @@ jobs:
             binaries/longhouse-engine-darwin-arm64
             binaries/longhouse-engine-linux-x64
             binaries/longhouse-engine-linux-arm64
-            binaries/longhouse-local-health-menubar-darwin-arm64
-            binaries/longhouse-local-health-window-darwin-arm64
             binaries/longhouse-local-health-app-darwin-arm64.zip
             binaries/local-runtime-macos-packaging.json
             binaries/local-runtime-checksums.txt
