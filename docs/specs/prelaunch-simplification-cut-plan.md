@@ -116,9 +116,9 @@ Why:
 
 Direct surface measured:
 
-- loop inbox direct surface: about 2.3K LOC
-- Gmail auth/connect surface: about 1.0K LOC direct, with larger hidden complexity behind it
-- proactive operator spec/docs are substantial even where direct code is still modest
+- loop inbox page, route, style, and direct tests: about 3.8K LOC
+- turn-review and operator pipeline around that inbox: about 6.1K LOC direct
+- Gmail and email-connect surface: about 3.4K LOC direct before broader auth and UI spillover
 
 What to do:
 
@@ -236,6 +236,6 @@ If you follow this cut order, the realistic prelaunch removal opportunity is on 
 
 - **8K+ LOC** from cloud-branch semantics alone
 - **5K+ LOC** from jobs/product-surface code
-- **3K-5K+ LOC** from loop inbox, email, briefings, and adjacent launch-discourse surface area
+- **7K-10K+ LOC** from loop inbox, turn-review/operator, email, briefings, and adjacent launch-discourse surface area
 
 That is enough to materially reduce bug-report surface area without touching the core ingest, timeline, runner, or managed-local control loop.
