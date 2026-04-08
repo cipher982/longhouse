@@ -29,6 +29,7 @@ make menubar-harness-smoke      # boot both app shells and dry-run all controls
 make menubar-harness-xcuitest   # generate the Xcode wrapper and run macOS XCUITests
 make menubar-harness-window     # launch as a normal window
 make menubar-harness-menubar    # launch as a real menu bar extra
+make test-install-macos-ambient # full disposable installer smoke for engine + menu bar on local macOS
 ```
 
 ## Artifacts
@@ -49,6 +50,7 @@ Typical files:
 - `xcuitest.log`
 - `LonghouseMenuBarWindowHost.xcresult`
 - `manifest.json`
+- installer temp-home artifacts under `/var/folders/.../longhouse-install-smoke-*` during `make test-install-macos-ambient`
 
 ## Source Layout
 
@@ -71,3 +73,4 @@ desktop/LonghouseMenuBarHarness/
 - Treat the Xcode wrapper as generated harness infrastructure; regenerate it via the script instead of hand-editing `.xcodeproj` files.
 - Use live PNG/window/menubar runs only after the fixture loop is stable.
 - Reuse the existing `longhouse local-health --json` contract. Do not teach the Swift code to parse launchd directly.
+- Use `make test-install-macos-ambient` when changing the unified install path, launchd wiring, or menu bar runtime packaging.

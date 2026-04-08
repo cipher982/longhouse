@@ -78,13 +78,14 @@ export function HeroSection({
                 <code>{"curl -fsSL https://get.longhouse.ai/install.sh | bash\nlonghouse serve"}</code>
               </pre>
               <pre className="landing-code-block">
-                <code>{"longhouse connect --install\nlonghouse ship"}</code>
+                <code>{"longhouse claude\nlonghouse codex"}</code>
               </pre>
             </div>
             <p className="landing-hero-install-note">
-              Every session lands in the same timeline. When a session starts through Longhouse or its
-              launch commands, browser, CLI, and <code>/api/agents/*</code> all share the same session
-              surface later.
+              The installer plus guided onboarding lay down one local runtime: CLI, engine, hooks, and
+              the macOS status menu when available. Every session lands in the same timeline. When a
+              session starts through Longhouse, browser, CLI, and <code>/api/agents/*</code> all share
+              the same session surface later.
               Use <code> longhouse serve --demo</code> only when you want a safe preview before importing real work.
             </p>
           </div>

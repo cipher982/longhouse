@@ -1,6 +1,6 @@
 # Distribution And Update Loop
 
-Status: Active MVP
+Status: Active Buildout
 Last updated: 2026-04-07
 
 ## Goal
@@ -12,6 +12,23 @@ Make Longhouse installation, upgrade, and release behavior explicit across three
 - the separately installed runner binary/service
 
 The product should never imply that a hosted deploy updates the local CLI, and the local CLI should not silently bypass the package manager that installed it.
+
+## Vision
+
+Longhouse should have one obvious zero-to-one local install story:
+
+1. run the shell installer
+2. finish guided onboarding
+3. end up with one local runtime, not a bag of separate steps
+
+For local users, "Longhouse installed" means:
+
+- the `longhouse` CLI is on PATH
+- the engine binary exists locally
+- `connect --install` can lay down the engine service and hooks without extra artifact hunts
+- macOS users can also get the ambient local-health menu bar from the same runtime lane
+
+Homebrew remains a possible secondary channel later. It is not the primary product story now.
 
 ## Current State
 
@@ -71,6 +88,10 @@ This is a different release and update lane from the main `longhouse` CLI packag
 - The package manager that installed the CLI remains the source of truth for upgrades.
 - Longhouse should record enough local install metadata to recommend the correct upgrade command later.
 - Upgrades that affect local hooks or background services must explicitly call out the repair step instead of assuming the package update handled everything.
+- The shell installer is the primary acquisition path until there is a fully bundled desktop app.
+- `longhouse connect --install` is the canonical local-runtime install verb after the CLI is present.
+- The local runtime must ship as explicit versioned artifacts; the installer may not assume repo-local builds.
+- On macOS, the ambient menu bar helper belongs to the same local-runtime lane as the engine service, not a separate product path.
 
 ## Install Source Policy
 
@@ -80,7 +101,22 @@ This is a different release and update lane from the main `longhouse` CLI packag
 - Canonical package manager path: `uv tool install longhouse`
 - Bootstrap convenience path: `curl -fsSL https://get.longhouse.ai/install.sh | bash`
 
-The shell installer should be a thin bootstrap wrapper around the same package story users will use later for upgrades.
+The shell installer remains the thin bootstrap wrapper around the same package story users will use later for upgrades.
+
+### Canonical local runtime
+
+After the CLI is present, one command owns local runtime repair and reinstallation:
+
+- `longhouse connect --install`
+
+That command is responsible for:
+
+- ensuring the engine binary exists locally
+- installing the engine launchd/systemd service
+- installing provider hooks
+- installing the ambient macOS local-health menu bar when enabled
+
+This keeps the local runtime install surface singular even if the shell installer, onboarding flow, and future bundled app all call into it.
 
 ### Deferred
 
@@ -88,6 +124,23 @@ The shell installer should be a thin bootstrap wrapper around the same package s
 - preview channel
 - signed release manifest with min-supported versions
 - fully automatic runner and engine update coordination
+- notarized standalone macOS app bundle with app-owned helper lifecycle
+
+## Local Runtime Artifacts
+
+The local runtime now has three artifact classes:
+
+- Python wheel: `longhouse`
+- engine binary: `longhouse-engine-<platform>`
+- macOS desktop binaries: `longhouse-local-health-menubar-darwin-arm64`, `longhouse-local-health-window-darwin-arm64`
+
+Artifact policy:
+
+- the `vX.Y.Z` GitHub release is the versioned source of truth for local runtime binaries
+- the CLI version and runtime artifact version should match the same tag by default
+- local/dev validation may override artifact sources explicitly
+
+The shell installer should not know asset naming rules itself forever. The long-term goal is that the CLI/runtime layer owns artifact resolution while the shell script stays thin.
 
 ## Local Install Metadata
 
@@ -189,6 +242,7 @@ This isolates:
 - `~/.local/bin`
 - shell profile changes
 - onboarding and `connect --install` side effects
+- local runtime artifact installation
 
 ### MVP upgrade test
 
@@ -217,6 +271,17 @@ Implement now:
 - `longhouse upgrade`
 - installer writes metadata
 - disposable temp-home upgrade smoke
+- released engine binaries and macOS menu bar binaries
+- `connect --install` as the singular local-runtime repair/install seam
+- installer/onboarding language that describes one runtime, not a second hidden step
+
+## Success Criteria
+
+- New users have one obvious acquisition path: the shell installer.
+- Onboarding plus `connect --install` produce one coherent local runtime instead of separate manual engine/menu-bar steps.
+- The ambient macOS menu bar is installed from the same runtime lane as the engine service.
+- The local installer smoke validates the real runtime path in a disposable `HOME`.
+- Future pivot to a bundled macOS app remains a control-adapter swap, not a rewrite of health classification or UI state contracts.
 
 Do not implement yet:
 

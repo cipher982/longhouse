@@ -132,6 +132,7 @@ def test_local_health_menubar_launch_uses_current_python_env(monkeypatch, tmp_pa
 
     monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
     monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://david010.longhouse.ai")
+    monkeypatch.setattr(local_health_cli, "_prebuilt_binary_path", lambda component: None)
 
     result = runner.invoke(
         app,
@@ -148,12 +149,13 @@ def test_local_health_menubar_launch_uses_current_python_env(monkeypatch, tmp_pa
     assert result.exit_code == 0, result.output
     assert len(calls) == 1
     command = calls[0]["command"]
-    package_path = str(local_health_cli._desktop_package_path())
+    with local_health_cli._desktop_package_path() as package_path:
+        resolved_package_path = str(package_path)
     assert command[:4] == [
         "swift",
         "run",
         "--package-path",
-        package_path,
+        resolved_package_path,
     ]
     assert "LonghouseMenuBarHarnessMenuBar" in command
     assert "--live" in command
@@ -175,6 +177,7 @@ def test_local_health_window_launch_without_url(monkeypatch):
 
     monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
     monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: None)
+    monkeypatch.setattr(local_health_cli, "_prebuilt_binary_path", lambda component: None)
 
     result = runner.invoke(app, ["local-health", "window"])
 
@@ -183,3 +186,26 @@ def test_local_health_window_launch_without_url(monkeypatch):
     command = calls[0]
     assert "LonghouseMenuBarHarnessApp" in command
     assert "--ui-url" not in command
+
+
+def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
+    runner = CliRunner()
+    calls: list[list[str]] = []
+
+    def fake_run(command, check, cwd):
+        calls.append(command)
+
+    monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        local_health_cli,
+        "_prebuilt_binary_path",
+        lambda component: Path("/Users/test/.local/bin/longhouse-local-health-menubar"),
+    )
+    monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://longhouse.ai")
+
+    result = runner.invoke(app, ["local-health", "menubar"])
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert calls[0][0] == "/Users/test/.local/bin/longhouse-local-health-menubar"
+    assert "swift" not in calls[0]

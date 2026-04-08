@@ -434,8 +434,12 @@ run_onboard() {
 # Print final instructions
 print_success() {
     local has_launcher_cli=0
+    local is_macos=0
     if has_command claude || has_command codex; then
         has_launcher_cli=1
+    fi
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        is_macos=1
     fi
 
     echo ""
@@ -448,16 +452,21 @@ print_success() {
     echo "First run:"
     echo "  1. Start Longhouse"
     echo "     longhouse serve"
-    echo "  2. Import existing sessions"
+    echo "  2. Open http://localhost:8080 and find one prior session"
+    echo "  3. If you skipped onboarding or need to repair the local runtime"
     echo "     longhouse connect --install"
-    echo "     longhouse ship"
-    echo "  3. Open http://localhost:8080 and find one prior session"
     if has_command claude; then
         echo "  4. When you want control after launch"
         echo "     longhouse claude"
     elif has_command codex; then
         echo "  4. When you want control after launch"
         echo "     longhouse codex"
+    fi
+    if [[ "$is_macos" == "1" ]]; then
+        echo ""
+        echo "macOS ambient status:"
+        echo "  The local runtime install also manages the Longhouse menu bar helper."
+        echo "  Launch it on demand with: longhouse local-health menubar"
     fi
     if [[ "$has_launcher_cli" == "1" ]]; then
         echo ""
