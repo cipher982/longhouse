@@ -1,13 +1,24 @@
-"""CLI surface for local Longhouse engine health."""
+"""CLI surface for local Longhouse engine health and menu bar tools."""
 
 from __future__ import annotations
 
 import json
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import typer
 
 from zerg.services.local_health import collect_local_health
+from zerg.services.shipper import get_zerg_url
+
+app = typer.Typer(
+    name="local-health",
+    help="Inspect local Longhouse shipping health and launch the ambient macOS UI.",
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
 
 
 def _format_age(age_seconds: int | None) -> str:
@@ -20,22 +31,12 @@ def _format_age(age_seconds: int | None) -> str:
     return f"{age_seconds // 3600}h"
 
 
-def local_health(
-    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
-    claude_dir: str | None = typer.Option(
-        None,
-        "--claude-dir",
-        help="Claude config directory override (default: ~/.claude or CLAUDE_CONFIG_DIR).",
-    ),
-) -> None:
-    """Show local Longhouse shipping health for this machine."""
-    snapshot = collect_local_health(Path(claude_dir) if claude_dir else None)
-
+def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     if json_output:
         typer.echo(json.dumps(snapshot, indent=2))
         return
 
-    severity = snapshot["severity"]
+    severity = str(snapshot["severity"])
     color = {
         "green": typer.colors.GREEN,
         "yellow": typer.colors.YELLOW,
@@ -49,10 +50,10 @@ def local_health(
         bold=True,
     )
 
-    service = snapshot["service"]
-    engine_status = snapshot["engine_status"]
-    payload = engine_status.get("payload") or {}
-    outbox = snapshot["outbox"]
+    service = dict(snapshot["service"])
+    engine_status = dict(snapshot["engine_status"])
+    payload = dict(engine_status.get("payload") or {})
+    outbox = dict(snapshot["outbox"])
 
     typer.echo("")
     typer.echo("Service")
@@ -82,16 +83,119 @@ def local_health(
     typer.echo(f"  files: {outbox.get('file_count', 0)}")
     typer.echo(f"  oldest: {_format_age(outbox.get('oldest_age_seconds'))}")
 
-    reasons = snapshot.get("reasons") or []
+    reasons = list(snapshot.get("reasons") or [])
     if reasons:
         typer.echo("")
         typer.echo("Reasons")
         for reason in reasons:
             typer.echo(f"  - {reason}")
 
-    actions = snapshot.get("suggested_actions") or []
+    actions = list(snapshot.get("suggested_actions") or [])
     if actions:
         typer.echo("")
         typer.echo("Next")
         for action in actions:
             typer.echo(f"  - {action}")
+
+
+def _collect_snapshot(claude_dir: str | None) -> dict[str, object]:
+    return collect_local_health(Path(claude_dir) if claude_dir else None)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _desktop_package_path() -> Path:
+    return _repo_root() / "desktop" / "LonghouseMenuBarHarness"
+
+
+def _health_command(*, claude_dir: str | None) -> str:
+    command = [
+        sys.executable,
+        "-m",
+        "zerg.cli.main",
+        "local-health",
+        "--json",
+    ]
+    if claude_dir:
+        command.extend(["--claude-dir", claude_dir])
+    return shlex.join(command)
+
+
+def _launch_desktop_surface(
+    *,
+    product: str,
+    claude_dir: str | None,
+    refresh_seconds: int,
+) -> None:
+    package_path = _desktop_package_path()
+    ui_url = get_zerg_url(Path(claude_dir) if claude_dir else None)
+    command = [
+        "swift",
+        "run",
+        "--package-path",
+        str(package_path),
+        product,
+        "--live",
+        "--refresh-seconds",
+        str(refresh_seconds),
+        "--health-command",
+        _health_command(claude_dir=claude_dir),
+    ]
+    if ui_url:
+        command.extend(["--ui-url", ui_url])
+
+    try:
+        subprocess.run(command, check=True, cwd=package_path)
+    except FileNotFoundError as exc:
+        typer.secho(f"Missing required tool: {exc.filename}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    except subprocess.CalledProcessError as exc:
+        typer.secho(f"Desktop local-health UI failed with exit code {exc.returncode}.", fg=typer.colors.RED)
+        raise typer.Exit(code=exc.returncode or 1) from exc
+
+
+@app.callback()
+def local_health_callback(
+    ctx: typer.Context,
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    claude_dir: str | None = typer.Option(
+        None,
+        "--claude-dir",
+        help="Claude config directory override (default: ~/.claude or CLAUDE_CONFIG_DIR).",
+    ),
+) -> None:
+    """Show local Longhouse shipping health for this machine."""
+    if ctx.invoked_subcommand:
+        ctx.obj = {"claude_dir": claude_dir}
+        return
+    _render_snapshot(_collect_snapshot(claude_dir), json_output=json_output)
+
+
+@app.command("window")
+def local_health_window(
+    ctx: typer.Context,
+    refresh_seconds: int = typer.Option(10, "--refresh-seconds", min=2, help="Live refresh cadence in seconds."),
+) -> None:
+    """Launch the local-health panel in a normal macOS window."""
+    claude_dir = (ctx.obj or {}).get("claude_dir")
+    _launch_desktop_surface(
+        product="LonghouseMenuBarHarnessApp",
+        claude_dir=claude_dir,
+        refresh_seconds=refresh_seconds,
+    )
+
+
+@app.command("menubar")
+def local_health_menubar(
+    ctx: typer.Context,
+    refresh_seconds: int = typer.Option(10, "--refresh-seconds", min=2, help="Live refresh cadence in seconds."),
+) -> None:
+    """Launch the ambient macOS menu bar UI for local shipping health."""
+    claude_dir = (ctx.obj or {}).get("claude_dir")
+    _launch_desktop_surface(
+        product="LonghouseMenuBarHarnessMenuBar",
+        claude_dir=claude_dir,
+        refresh_seconds=refresh_seconds,
+    )

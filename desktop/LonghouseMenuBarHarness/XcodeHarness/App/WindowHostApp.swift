@@ -14,7 +14,7 @@ struct WindowHostApp: App {
         do {
             parsed = try HarnessRuntimeConfig.parse(arguments: Array(CommandLine.arguments.dropFirst()))
         } catch {
-            fputs("WindowHostApp: \(error.localizedDescription)\n", stderr)
+            fputs("LonghouseLocalHealthWindowHost: \(error.localizedDescription)\n", stderr)
             exit(2)
         }
 
@@ -32,7 +32,7 @@ struct WindowHostApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Longhouse Menu Bar Harness") {
+        WindowGroup("Longhouse Local Health") {
             HarnessRootView(
                 store: store,
                 actionSink: actionSink,

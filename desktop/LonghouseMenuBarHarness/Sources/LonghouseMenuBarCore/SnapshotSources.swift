@@ -78,6 +78,7 @@ public struct HarnessRuntimeConfig {
     public let exerciseActions: [HarnessAction]
     public let quitAfterSeconds: TimeInterval?
     public let refreshIntervalSeconds: TimeInterval?
+    public let healthCommand: String?
 
     public init(
         outputURL: URL?,
@@ -87,7 +88,8 @@ public struct HarnessRuntimeConfig {
         effectMode: HarnessEffectMode,
         exerciseActions: [HarnessAction],
         quitAfterSeconds: TimeInterval?,
-        refreshIntervalSeconds: TimeInterval?
+        refreshIntervalSeconds: TimeInterval?,
+        healthCommand: String?
     ) {
         self.outputURL = outputURL
         self.source = source
@@ -97,6 +99,7 @@ public struct HarnessRuntimeConfig {
         self.exerciseActions = exerciseActions
         self.quitAfterSeconds = quitAfterSeconds
         self.refreshIntervalSeconds = refreshIntervalSeconds
+        self.healthCommand = healthCommand
     }
 
     public static func parse(arguments: [String]) throws -> HarnessRuntimeConfig {
@@ -109,6 +112,7 @@ public struct HarnessRuntimeConfig {
         var exerciseActions: [HarnessAction] = []
         var quitAfterSeconds: TimeInterval?
         var refreshIntervalSeconds: TimeInterval?
+        var healthCommand: String?
 
         var index = 0
         while index < arguments.count {
@@ -175,6 +179,12 @@ public struct HarnessRuntimeConfig {
                     throw SnapshotSourceError.invalidArguments("Expected numeric seconds after --refresh-seconds")
                 }
                 refreshIntervalSeconds = parsed
+            case "--health-command":
+                index += 1
+                guard index < arguments.count else {
+                    throw SnapshotSourceError.invalidArguments("Expected shell command after --health-command")
+                }
+                healthCommand = arguments[index]
             default:
                 throw SnapshotSourceError.invalidArguments("Unknown argument: \(arg)")
             }
@@ -185,7 +195,8 @@ public struct HarnessRuntimeConfig {
         if let inputURL {
             source = FixtureHealthSnapshotSource(fileURL: inputURL)
         } else if useLive {
-            source = CLIHealthSnapshotSource()
+            let liveArguments = healthCommand.map { ["-lc", $0] } ?? ["-lc", "longhouse local-health --json"]
+            source = CLIHealthSnapshotSource(arguments: liveArguments)
         } else {
             throw SnapshotSourceError.invalidArguments("Pass either --input <file> or --live")
         }
@@ -198,7 +209,8 @@ public struct HarnessRuntimeConfig {
             effectMode: effectMode,
             exerciseActions: exerciseActions,
             quitAfterSeconds: quitAfterSeconds,
-            refreshIntervalSeconds: refreshIntervalSeconds
+            refreshIntervalSeconds: refreshIntervalSeconds,
+            healthCommand: healthCommand
         )
     }
 }
