@@ -74,9 +74,6 @@ CONNECTOR_TOOL_MAPPING = {
     ConnectorType.IMESSAGE: [
         "send_imessage",
     ],
-    ConnectorType.TRACCAR: [
-        "get_current_location",
-    ],
     ConnectorType.WHOOP: [
         "get_whoop_data",
     ],
@@ -132,11 +129,6 @@ CONNECTOR_CAPABILITIES = {
     ConnectorType.IMESSAGE: [
         "Send iMessages (requires macOS host)",
         "Deliver mobile notifications",
-    ],
-    ConnectorType.TRACCAR: [
-        "Track device GPS location",
-        "Query location history",
-        "Get real-time position data",
     ],
     ConnectorType.WHOOP: [
         "Access recovery and HRV data",

@@ -67,6 +67,5 @@ export type ConnectorType =
   | "linear"
   | "notion"
   | "imessage"
-  | "traccar"
   | "whoop"
   | "obsidian";

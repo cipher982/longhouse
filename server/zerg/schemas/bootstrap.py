@@ -71,15 +71,6 @@ class RunnersSeedRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class TraccarCredentials(BaseModel):
-    """Traccar GPS tracking credentials."""
-
-    url: str = Field(..., description="Traccar server URL")
-    username: str = Field(..., description="Traccar username")
-    password: str = Field(..., description="Traccar password")
-    device_id: str = Field(..., description="Device ID to query")
-
-
 class WhoopCredentials(BaseModel):
     """WHOOP health tracker OAuth credentials."""
 
@@ -103,7 +94,6 @@ class CredentialsSeedRequest(BaseModel):
     All credentials are Fernet-encrypted before storage.
     """
 
-    traccar: TraccarCredentials | None = Field(None, description="Traccar GPS credentials")
     whoop: WhoopCredentials | None = Field(None, description="WHOOP health credentials")
     obsidian: ObsidianCredentials | None = Field(None, description="Obsidian vault credentials")
 

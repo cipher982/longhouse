@@ -36,7 +36,6 @@ interface SettingsFormState {
 }
 
 const TOOL_DEFINITIONS = [
-  { id: "location", name: "Location", desc: "Get current GPS location via Traccar" },
   { id: "whoop", name: "WHOOP Health Data", desc: "Get WHOOP health metrics and recovery data" },
   { id: "obsidian", name: "Obsidian Notes", desc: "Search and read notes from your Obsidian vault" },
   { id: "oikos", name: "Oikos", desc: "Delegate complex multi-step tasks to Oikos" },
@@ -45,7 +44,6 @@ const TOOL_DEFINITIONS = [
 function buildToolsState(tools?: UserContext["tools"]): Record<string, boolean> {
   return {
     ...(tools || {}),
-    location: tools?.location ?? true,
     whoop: tools?.whoop ?? true,
     obsidian: tools?.obsidian ?? true,
     oikos: tools?.oikos ?? true,

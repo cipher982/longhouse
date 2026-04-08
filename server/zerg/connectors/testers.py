@@ -54,7 +54,6 @@ def test_connector(connector_type: ConnectorType | str, credentials: dict[str, A
         ConnectorType.LINEAR: _test_linear,
         ConnectorType.NOTION: _test_notion,
         ConnectorType.IMESSAGE: _test_imessage,
-        ConnectorType.TRACCAR: _test_traccar,
         ConnectorType.WHOOP: _test_whoop,
         ConnectorType.OBSIDIAN: _test_obsidian,
     }
@@ -418,73 +417,6 @@ def _test_imessage(creds: dict[str, Any]) -> dict[str, Any]:
         "message": "iMessage configured (requires macOS host at runtime)",
         "metadata": {"enabled": True},
     }
-
-
-def _test_traccar(creds: dict[str, Any]) -> dict[str, Any]:
-    """Validate Traccar credentials by fetching session info.
-
-    Authenticates with the Traccar server and retrieves the current session
-    to verify credentials are valid and discover user information.
-    """
-    url = creds.get("url")
-    username = creds.get("username")
-    password = creds.get("password")
-    device_id = creds.get("device_id")
-
-    if not url:
-        return {"success": False, "message": "Missing url"}
-    if not username:
-        return {"success": False, "message": "Missing username"}
-    if not password:
-        return {"success": False, "message": "Missing password"}
-
-    # Normalize URL
-    url = url.rstrip("/")
-
-    # Authenticate and get session info
-    response = httpx.post(
-        f"{url}/api/session",
-        data={"email": username, "password": password},
-        timeout=TEST_TIMEOUT,
-    )
-
-    if response.status_code == 200:
-        try:
-            data = response.json()
-            user_name = data.get("name") or data.get("email", username)
-
-            metadata: dict[str, Any] = {
-                "user": user_name,
-                "server": url,
-            }
-
-            # If device_id provided, verify it exists
-            if device_id:
-                cookies = response.cookies
-                devices_response = httpx.get(
-                    f"{url}/api/devices",
-                    cookies=cookies,
-                    timeout=TEST_TIMEOUT,
-                )
-                if devices_response.status_code == 200:
-                    devices = devices_response.json()
-                    device = next((d for d in devices if str(d.get("id")) == str(device_id)), None)
-                    if device:
-                        metadata["device"] = device.get("name", f"Device {device_id}")
-                    else:
-                        return {"success": False, "message": f"Device ID {device_id} not found"}
-
-            return {
-                "success": True,
-                "message": f"Connected as {user_name}",
-                "metadata": metadata,
-            }
-        except Exception:
-            return {"success": True, "message": "Traccar credentials valid"}
-
-    if response.status_code == 401:
-        return {"success": False, "message": "Invalid username or password"}
-    return {"success": False, "message": f"Traccar returned {response.status_code}"}
 
 
 def _test_whoop(creds: dict[str, Any]) -> dict[str, Any]:

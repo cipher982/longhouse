@@ -72,12 +72,6 @@ function getInstructions(): string {
 // These are listed here so fallback instructions can describe capabilities.
 const toolsConfig: ToolConfig[] = [
   {
-    name: 'get_current_location',
-    description: 'Get current GPS location with coordinates and address',
-    enabled: true,
-    // Executed by Oikos via Traccar connector
-  },
-  {
     name: 'get_whoop_data',
     description: 'Get WHOOP health metrics (recovery, sleep, strain)',
     enabled: true,

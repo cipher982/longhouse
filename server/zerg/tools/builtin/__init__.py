@@ -39,7 +39,7 @@ from zerg.tools.builtin.web_search import TOOLS as WEB_SEARCH_TOOLS
 
 TELEGRAM_TOOLS = [_TELEGRAM_TOOL]
 
-# Personal tools (Traccar, WHOOP, Obsidian) are David-specific integrations,
+# Personal tools (WHOOP, Obsidian) are David-specific integrations,
 # not part of the OSS core. Gate behind PERSONAL_TOOLS_ENABLED env var.
 _PERSONAL_TOOLS_ENABLED = os.getenv("PERSONAL_TOOLS_ENABLED", "").lower() in ("1", "true", "yes")
 

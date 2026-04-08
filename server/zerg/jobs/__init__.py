@@ -6,7 +6,7 @@ shares lineage with Sauron but is not the standalone Sauron service.
 
 Job Categories:
 - backups: Backup verification and sync (backup-sentinel, minio-sync)
-- monitoring: Infrastructure monitoring (disk-health, traccar-watchdog)
+- monitoring: Infrastructure monitoring (disk-health)
 - digests: Daily digests and reports (worklog, google-ads-digest)
 - maintenance: Cleanup and maintenance tasks
 
