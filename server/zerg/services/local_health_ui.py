@@ -172,7 +172,7 @@ def get_menubar_service_info() -> dict[str, str]:
                 info["runtime_mode"] = "broken-app-bundle"
             else:
                 info["artifact_path"] = launch_path
-                info["runtime_mode"] = "unsupported-install"
+                info["runtime_mode"] = "legacy-binary-install"
     return info
 
 
