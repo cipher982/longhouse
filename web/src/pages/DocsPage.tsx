@@ -99,14 +99,14 @@ longhouse codex</code></pre>
           <p>
             Most people should not need this on the first run:
           </p>
-          <pre><code>longhouse connect --install
-longhouse ship
-longhouse local-health
-longhouse serve --demo</code></pre>
+          <pre><code>longhouse doctor
+longhouse connect --install
+longhouse local-health</code></pre>
           <p>
-            <code>connect --install</code> repairs onboarding and automatic imports. <code>ship</code>{" "}
-            runs a one-time import. <code>local-health</code> checks local status. <code>serve --demo</code>{" "}
-            is only for a safe preview before importing real work.
+            <code>doctor</code> tells you what looks wrong. <code>connect --install</code> repairs onboarding
+            and automatic imports. <code>local-health</code> checks local status, and on macOS the menu bar app
+            is the same health surface in ambient form. Use <code>ship</code> later as an advanced one-time
+            import, and <code>serve --demo</code> only for a safe preview before importing real work.
           </p>
         </section>
 
