@@ -57,6 +57,8 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     engine_status = dict(snapshot["engine_status"])
     payload = dict(engine_status.get("payload") or {})
     outbox = dict(snapshot["outbox"])
+    launch_readiness = dict(snapshot.get("launch_readiness") or {})
+    runner = dict(launch_readiness.get("runner") or {})
 
     typer.echo("")
     typer.echo("Service")
@@ -85,6 +87,17 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
     typer.echo(f"  path: {outbox.get('path', '-')}")
     typer.echo(f"  files: {outbox.get('file_count', 0)}")
     typer.echo(f"  oldest: {_format_age(outbox.get('oldest_age_seconds'))}")
+
+    typer.echo("")
+    typer.echo("Launch")
+    typer.echo(f"  state: {launch_readiness.get('state', '-')}")
+    typer.echo(f"  stored url: {launch_readiness.get('stored_url') or '-'}")
+    typer.echo(f"  machine name: {launch_readiness.get('machine_name') or '-'}")
+    typer.echo(f"  service machine: {launch_readiness.get('service_machine_name') or '-'}")
+    typer.echo(f"  runner env: {runner.get('path') or '-'}")
+    typer.echo(f"  runner name: {runner.get('runner_name') or '-'}")
+    runner_urls = ", ".join(str(item) for item in list(runner.get("runner_urls") or []) if str(item))
+    typer.echo(f"  runner urls: {runner_urls or '-'}")
 
     reasons = list(snapshot.get("reasons") or [])
     if reasons:

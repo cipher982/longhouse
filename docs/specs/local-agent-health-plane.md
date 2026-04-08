@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: local machine surface
-Updated: 2026-04-07
+Updated: 2026-04-08
 
 ## Goal
 
@@ -48,6 +48,17 @@ Today the raw pieces already exist:
 - `longhouse doctor` and `longhouse connect --status` already expose fragments of the picture
 
 What is missing is a user-facing local health plane.
+
+### Fresh lesson from April 8
+
+The first real machine failure after the menu bar MVP work was not a dead daemon. It was a **coherence failure**:
+
+- local CLI URL pointed at `127.0.0.1:8080`
+- runner daemon was healthy against `david010.longhouse.ai`
+- CLI machine label was `cinder.local`
+- runner identity was `cinder`
+
+Shipping looked mostly healthy in isolation, but managed launch was broken. That means the health plane cannot stop at daemon/outbox status. It must also surface **identity and launch-readiness coherence**.
 
 ### What is actually risky
 
@@ -99,6 +110,11 @@ These gather facts only. No product policy.
   - reports current outbox count and oldest file age
 - `log_probe`
   - reports latest engine log path and mtime
+- `launch_config_probe`
+  - reads local Longhouse URL + machine label
+  - reads local runner config when present
+  - reads installed service machine-name arguments when available
+  - reports whether managed-local launch inputs are coherent on this machine
 
 ### 2. Health Classifier
 
@@ -186,6 +202,24 @@ Recommended shape:
     "file_count": 0,
     "oldest_age_seconds": null
   },
+  "launch_readiness": {
+    "state": "ready",
+    "headline": "Managed launch configuration looks coherent",
+    "reasons": [],
+    "suggested_actions": [],
+    "stored_url": "https://david010.longhouse.ai",
+    "machine_name": "cinder",
+    "service_machine_name": "cinder",
+    "runner": {
+      "path": "/Users/davidrose/.config/longhouse/runner.env",
+      "exists": true,
+      "runner_name": "cinder",
+      "runner_urls": [
+        "https://david010.longhouse.ai"
+      ],
+      "install_mode": "desktop"
+    }
+  },
   "thresholds": {
     "engine_fresh_seconds": 30,
     "engine_stale_seconds": 120,
@@ -215,6 +249,7 @@ This is acceptable for users who have not completed Longhouse setup yet.
 - no dead letters
 - no consecutive ship failures
 - backlog absent or negligible
+- launch configuration is coherent, or not configured at all yet
 
 ### `degraded` / `yellow`
 
@@ -230,6 +265,7 @@ This is acceptable for users who have not completed Longhouse setup yet.
 - dead letters present
 - disk critically low
 - backlog exceeds a clear threshold
+- managed-local launch inputs disagree (URL mismatch, machine-label mismatch, or service/runtime identity mismatch)
 
 ## UX Rules
 
