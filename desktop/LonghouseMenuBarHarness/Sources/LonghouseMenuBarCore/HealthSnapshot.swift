@@ -49,6 +49,7 @@ public struct HealthSnapshot: Codable, Equatable {
     public let service: ServiceSnapshot?
     public let engineStatus: EngineStatusSnapshot?
     public let outbox: OutboxSnapshot?
+    public let launchReadiness: LaunchReadinessSnapshot?
 
     public init(
         schemaVersion: Int?,
@@ -60,7 +61,8 @@ public struct HealthSnapshot: Codable, Equatable {
         suggestedActions: [String],
         service: ServiceSnapshot?,
         engineStatus: EngineStatusSnapshot?,
-        outbox: OutboxSnapshot?
+        outbox: OutboxSnapshot?,
+        launchReadiness: LaunchReadinessSnapshot?
     ) {
         self.schemaVersion = schemaVersion
         self.collectedAt = collectedAt
@@ -72,6 +74,7 @@ public struct HealthSnapshot: Codable, Equatable {
         self.service = service
         self.engineStatus = engineStatus
         self.outbox = outbox
+        self.launchReadiness = launchReadiness
     }
 
     public var parsedSeverity: HarnessSeverity {
@@ -114,6 +117,26 @@ public struct HealthSnapshot: Codable, Equatable {
 
     public var spoolDeadLabel: String {
         String(engineStatus?.payload?.spoolDeadCount ?? 0)
+    }
+
+    public var launchStateLabel: String {
+        launchReadiness?.state ?? "-"
+    }
+
+    public var machineRunnerLabel: String {
+        let machineName = launchReadiness?.machineName ?? "-"
+        let runnerName = launchReadiness?.runner?.runnerName ?? "-"
+        return "\(machineName) / \(runnerName)"
+    }
+
+    public var serviceMachineLabel: String {
+        launchReadiness?.serviceMachineName ?? "-"
+    }
+
+    public var storedRunnerURLLabel: String {
+        let storedURL = launchReadiness?.storedURL ?? "-"
+        let runnerURL = launchReadiness?.runner?.runnerURLs?.joined(separator: ", ") ?? "-"
+        return "\(storedURL) / \(runnerURL)"
     }
 
     private static func ageLabel(seconds: Int) -> String {
@@ -183,4 +206,25 @@ public struct OutboxSnapshot: Codable, Equatable {
     public let path: String?
     public let fileCount: Int?
     public let oldestAgeSeconds: Int?
+}
+
+public struct LaunchReadinessSnapshot: Codable, Equatable {
+    public let state: String?
+    public let headline: String?
+    public let reasons: [String]?
+    public let suggestedActions: [String]?
+    public let storedURL: String?
+    public let machineName: String?
+    public let serviceMachineName: String?
+    public let runner: RunnerSnapshot?
+}
+
+public struct RunnerSnapshot: Codable, Equatable {
+    public let path: String?
+    public let exists: Bool?
+    public let error: String?
+    public let runnerName: String?
+    public let runnerID: String?
+    public let runnerURLs: [String]?
+    public let installMode: String?
 }
