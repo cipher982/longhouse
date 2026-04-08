@@ -3,6 +3,7 @@
 This is the artifact layer for local Longhouse runtime components:
 
 - the Rust engine binary
+- the macOS ambient Longhouse.app bundle
 - the macOS local-health menu bar binary
 - the optional window-host binary used for debugging
 
@@ -17,10 +18,13 @@ import os
 import platform
 import shutil
 import stat
+import tempfile
+import zipfile
 from dataclasses import dataclass
 from enum import Enum
 from importlib import metadata
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 
@@ -31,6 +35,7 @@ DOWNLOAD_TIMEOUT_SECONDS = 30.0
 
 class RuntimeComponent(str, Enum):
     ENGINE = "engine"
+    LOCAL_HEALTH_APP = "local-health-app"
     LOCAL_HEALTH_MENUBAR = "local-health-menubar"
     LOCAL_HEALTH_WINDOW = "local-health-window"
 
@@ -41,8 +46,30 @@ CANONICAL_BINARY_NAMES: dict[RuntimeComponent, str] = {
     RuntimeComponent.LOCAL_HEALTH_WINDOW: "longhouse-local-health-window",
 }
 
+CANONICAL_APP_BUNDLE_NAMES: dict[RuntimeComponent, str] = {
+    RuntimeComponent.LOCAL_HEALTH_APP: "Longhouse.app",
+}
+
+
+class RuntimeArtifactKind(str, Enum):
+    EXECUTABLE = "executable"
+    APP_BUNDLE = "app-bundle"
+
+
+ARTIFACT_KINDS: dict[RuntimeComponent, RuntimeArtifactKind] = {
+    RuntimeComponent.ENGINE: RuntimeArtifactKind.EXECUTABLE,
+    RuntimeComponent.LOCAL_HEALTH_APP: RuntimeArtifactKind.APP_BUNDLE,
+    RuntimeComponent.LOCAL_HEALTH_MENUBAR: RuntimeArtifactKind.EXECUTABLE,
+    RuntimeComponent.LOCAL_HEALTH_WINDOW: RuntimeArtifactKind.EXECUTABLE,
+}
+
+APP_BUNDLE_EXECUTABLE_RELATIVE_PATHS: dict[RuntimeComponent, Path] = {
+    RuntimeComponent.LOCAL_HEALTH_APP: Path("Contents") / "MacOS" / "Longhouse",
+}
+
 DEFAULT_SOURCE_ENV_VARS: dict[RuntimeComponent, str] = {
     RuntimeComponent.ENGINE: "LONGHOUSE_ENGINE_SOURCE",
+    RuntimeComponent.LOCAL_HEALTH_APP: "LONGHOUSE_LOCAL_HEALTH_APP_SOURCE",
     RuntimeComponent.LOCAL_HEALTH_MENUBAR: "LONGHOUSE_LOCAL_HEALTH_MENUBAR_SOURCE",
     RuntimeComponent.LOCAL_HEALTH_WINDOW: "LONGHOUSE_LOCAL_HEALTH_WINDOW_SOURCE",
 }
@@ -52,6 +79,9 @@ RELEASE_ASSET_FILENAMES: dict[RuntimeComponent, dict[str, str]] = {
         "darwin-arm64": "longhouse-engine-darwin-arm64",
         "linux-x64": "longhouse-engine-linux-x64",
         "linux-arm64": "longhouse-engine-linux-arm64",
+    },
+    RuntimeComponent.LOCAL_HEALTH_APP: {
+        "darwin-arm64": "longhouse-local-health-app-darwin-arm64.zip",
     },
     RuntimeComponent.LOCAL_HEALTH_MENUBAR: {
         "darwin-arm64": "longhouse-local-health-menubar-darwin-arm64",
@@ -63,19 +93,38 @@ RELEASE_ASSET_FILENAMES: dict[RuntimeComponent, dict[str, str]] = {
 
 
 @dataclass(frozen=True)
-class InstalledRuntimeBinary:
+class InstalledRuntimeArtifact:
     component: RuntimeComponent
     path: str
+    launch_path: str
     source: str
     installed_now: bool
+    kind: RuntimeArtifactKind
+
+
+InstalledRuntimeBinary = InstalledRuntimeArtifact
 
 
 def _local_bin_dir() -> Path:
     return Path.home() / ".local" / "bin"
 
 
+def _local_applications_dir() -> Path:
+    return Path.home() / "Applications"
+
+
 def _canonical_destination(component: RuntimeComponent) -> Path:
+    kind = ARTIFACT_KINDS[component]
+    if kind == RuntimeArtifactKind.APP_BUNDLE:
+        return _local_applications_dir() / CANONICAL_APP_BUNDLE_NAMES[component]
     return _local_bin_dir() / CANONICAL_BINARY_NAMES[component]
+
+
+def _artifact_launch_path(component: RuntimeComponent, artifact_path: Path) -> Path:
+    kind = ARTIFACT_KINDS[component]
+    if kind == RuntimeArtifactKind.APP_BUNDLE:
+        return artifact_path / APP_BUNDLE_EXECUTABLE_RELATIVE_PATHS[component]
+    return artifact_path
 
 
 def _platform_target() -> str:
@@ -111,15 +160,33 @@ def _default_release_asset_url(component: RuntimeComponent) -> str:
     return f"https://github.com/{RELEASE_REPO}/releases/download/{tag}/{asset_name}"
 
 
-def _resolve_existing_binary(component: RuntimeComponent) -> Path | None:
+def resolve_installed_runtime_artifact(component: RuntimeComponent) -> InstalledRuntimeArtifact | None:
     canonical_path = _canonical_destination(component)
     if canonical_path.exists():
-        return canonical_path
+        launch_path = _artifact_launch_path(component, canonical_path)
+        if launch_path.exists():
+            source = "managed-local-app" if ARTIFACT_KINDS[component] == RuntimeArtifactKind.APP_BUNDLE else "managed-local-bin"
+            return InstalledRuntimeArtifact(
+                component=component,
+                path=str(canonical_path),
+                launch_path=str(launch_path),
+                source=source,
+                installed_now=False,
+                kind=ARTIFACT_KINDS[component],
+            )
 
     if component == RuntimeComponent.ENGINE:
         found = shutil.which(CANONICAL_BINARY_NAMES[component])
         if found:
-            return Path(found)
+            found_path = Path(found)
+            return InstalledRuntimeArtifact(
+                component=component,
+                path=str(found_path),
+                launch_path=str(found_path),
+                source="path",
+                installed_now=False,
+                kind=RuntimeArtifactKind.EXECUTABLE,
+            )
 
     return None
 
@@ -132,9 +199,65 @@ def _copy_local_binary(source_path: Path, destination_path: Path) -> None:
     destination_path.chmod(destination_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def _download_binary(url: str, destination_path: Path) -> None:
+def _copy_local_app_bundle(source_path: Path, destination_path: Path) -> None:
+    if not source_path.exists():
+        raise RuntimeError(f"Runtime app bundle source does not exist: {source_path}")
+    if not source_path.is_dir() or source_path.suffix != ".app":
+        raise RuntimeError(f"Runtime app bundle source must be a .app directory: {source_path}")
     destination_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = destination_path.with_suffix(destination_path.suffix + ".download")
+    temp_path = destination_path.parent / f".{destination_path.name}.installing"
+    try:
+        shutil.rmtree(temp_path, ignore_errors=True)
+        shutil.copytree(source_path, temp_path)
+        shutil.rmtree(destination_path, ignore_errors=True)
+        temp_path.replace(destination_path)
+    finally:
+        shutil.rmtree(temp_path, ignore_errors=True)
+
+
+def _extract_app_bundle_archive(source_path: Path, destination_path: Path) -> None:
+    if source_path.suffix != ".zip":
+        raise RuntimeError(f"Unsupported app bundle archive format: {source_path}")
+
+    extract_root = destination_path.parent / f".{destination_path.name}.extract"
+    try:
+        shutil.rmtree(extract_root, ignore_errors=True)
+        extract_root.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(source_path) as archive:
+            archive.extractall(extract_root)
+        app_candidates = [path for path in extract_root.rglob("*.app") if path.is_dir()]
+        if len(app_candidates) != 1:
+            raise RuntimeError(f"Expected exactly one .app bundle in runtime archive {source_path}, found {len(app_candidates)}")
+        _copy_local_app_bundle(app_candidates[0], destination_path)
+    finally:
+        shutil.rmtree(extract_root, ignore_errors=True)
+
+
+def _install_artifact_from_local_source(
+    component: RuntimeComponent,
+    source_path: Path,
+    destination_path: Path,
+) -> None:
+    kind = ARTIFACT_KINDS[component]
+    expanded_source = source_path.expanduser()
+    if kind == RuntimeArtifactKind.APP_BUNDLE:
+        if expanded_source.is_dir():
+            _copy_local_app_bundle(expanded_source, destination_path)
+            return
+        if expanded_source.is_file():
+            _extract_app_bundle_archive(expanded_source, destination_path)
+            return
+        raise RuntimeError(f"Runtime artifact source does not exist: {expanded_source}")
+
+    _copy_local_binary(expanded_source, destination_path)
+
+
+def _download_to_temp_path(url: str) -> Path:
+    parsed = Path(urlparse(url).path)
+    suffix = "".join(parsed.suffixes)
+    fd, raw_path = tempfile.mkstemp(prefix="longhouse-runtime-", suffix=suffix)
+    os.close(fd)
+    temp_path = Path(raw_path)
     try:
         with httpx.stream("GET", url, follow_redirects=True, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:
             response.raise_for_status()
@@ -142,23 +265,35 @@ def _download_binary(url: str, destination_path: Path) -> None:
                 for chunk in response.iter_bytes():
                     if chunk:
                         handle.write(chunk)
-        temp_path.chmod(temp_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-        temp_path.replace(destination_path)
+        return temp_path
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+
+def _install_artifact_from_remote_source(
+    component: RuntimeComponent,
+    url: str,
+    destination_path: Path,
+) -> None:
+    temp_path = _download_to_temp_path(url)
+    try:
+        _install_artifact_from_local_source(component, temp_path, destination_path)
     finally:
         temp_path.unlink(missing_ok=True)
 
 
-def ensure_runtime_binary(
+def ensure_runtime_artifact(
     component: RuntimeComponent,
     *,
     source_override: str | None = None,
     overwrite: bool = False,
-) -> InstalledRuntimeBinary:
-    """Ensure a runtime binary is available locally and return its path.
+) -> InstalledRuntimeArtifact:
+    """Ensure a runtime artifact is available locally and return its paths.
 
     Resolution order:
     1. explicit source override (path or URL)
-    2. already-installed canonical binary in ``~/.local/bin``
+    2. already-installed canonical artifact in ``~/.local/bin`` or ``~/Applications``
     3. existing engine binary already on PATH (engine only)
     4. released GitHub asset for the current Longhouse version
     """
@@ -167,31 +302,43 @@ def ensure_runtime_binary(
     destination_path = _canonical_destination(component)
 
     if not raw_override and not overwrite:
-        existing = _resolve_existing_binary(component)
+        existing = resolve_installed_runtime_artifact(component)
         if existing is not None:
-            source = "managed-local-bin" if existing == destination_path else "path"
-            return InstalledRuntimeBinary(
-                component=component,
-                path=str(existing),
-                source=source,
-                installed_now=False,
-            )
+            return existing
 
     if raw_override:
         if raw_override.startswith(("http://", "https://")):
-            _download_binary(raw_override, destination_path)
+            _install_artifact_from_remote_source(component, raw_override, destination_path)
             source = raw_override
         else:
-            _copy_local_binary(Path(raw_override).expanduser(), destination_path)
+            _install_artifact_from_local_source(component, Path(raw_override), destination_path)
             source = str(Path(raw_override).expanduser())
     else:
         release_url = _default_release_asset_url(component)
-        _download_binary(release_url, destination_path)
+        _install_artifact_from_remote_source(component, release_url, destination_path)
         source = release_url
 
-    return InstalledRuntimeBinary(
+    return InstalledRuntimeArtifact(
         component=component,
         path=str(destination_path),
+        launch_path=str(_artifact_launch_path(component, destination_path)),
         source=source,
         installed_now=True,
+        kind=ARTIFACT_KINDS[component],
     )
+
+
+def ensure_runtime_binary(
+    component: RuntimeComponent,
+    *,
+    source_override: str | None = None,
+    overwrite: bool = False,
+) -> InstalledRuntimeBinary:
+    artifact = ensure_runtime_artifact(
+        component,
+        source_override=source_override,
+        overwrite=overwrite,
+    )
+    if artifact.kind != RuntimeArtifactKind.EXECUTABLE:
+        raise RuntimeError(f"{component.value} is packaged as {artifact.kind.value}, not a raw executable")
+    return artifact

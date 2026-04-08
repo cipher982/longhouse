@@ -72,7 +72,6 @@ The real product problem is that the user may keep working while Longhouse is de
 
 ## Non-Goals
 
-- shipping a full signed/notarized macOS app bundle in the first MVP
 - replacing the current launchd service install path immediately
 - using notifications as the primary health surface
 - injecting synthetic transcript messages into live provider transcripts
@@ -91,7 +90,7 @@ The Apple-native direction is straightforward:
 This implies a clean two-step plan:
 
 1. **Short-term MVP:** keep the existing daemon install path, expose a stable local-health contract, and add a menu-bar-friendly status surface.
-2. **Proper app path:** wrap the same health contract in a signed app bundle that owns the helper lifecycle through Apple-native service management.
+2. **Proper app path:** package the ambient surface as `Longhouse.app` first, then later let that same app own the helper lifecycle through Apple-native service management.
 
 ## Decision
 
@@ -345,6 +344,19 @@ Deliverables:
 - real `MenuBarExtra` host for the actual menu bar shape
 - action log output for control-surface smoke checks
 - stable Make targets / scripts so future sessions can resume without re-deriving the loop
+
+### Stage 3b: App bundle packaging
+
+Goal:
+
+- keep the current launchd-managed runtime path, but package the ambient surface as a real `Longhouse.app`
+
+Deliverables:
+
+- `Longhouse.app` installs into `~/Applications`
+- launchd launches the app's inner executable for the ambient menu bar surface
+- `longhouse local-health menubar` prefers the installed app bundle
+- the window-host binary remains a debug/developer surface, not the primary installed artifact
 
 ### Stage 4: Proper app-owned helper management
 

@@ -73,6 +73,51 @@ cargo_build_release() {
   fail "Rust toolchain unavailable for cargo build --release"
 }
 
+build_local_health_app_bundle() {
+  local bundle_root="$1"
+  local package_path="$ROOT_DIR/desktop/LonghouseMenuBarHarness"
+  local app_path="$bundle_root/Longhouse.app"
+  local exec_path="$app_path/Contents/MacOS/Longhouse"
+
+  require_cmd swift
+  log "🍎 Building local Longhouse.app bundle for installer validation..." >&2
+  swift build --package-path "$package_path" -c release --product LonghouseMenuBarHarnessMenuBar >/dev/null
+  local menubar_bin_dir
+  menubar_bin_dir="$(swift build --package-path "$package_path" -c release --show-bin-path)"
+
+  rm -rf "$app_path"
+  mkdir -p "$app_path/Contents/MacOS"
+  cp "$menubar_bin_dir/LonghouseMenuBarHarnessMenuBar" "$exec_path"
+  chmod +x "$exec_path"
+  cat > "$app_path/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>Longhouse</string>
+  <key>CFBundleIdentifier</key>
+  <string>ai.longhouse.localhealth</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>Longhouse</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.0.0-dev</string>
+  <key>CFBundleVersion</key>
+  <string>0.0.0-dev</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+
+  printf '%s\n' "$app_path"
+}
 pick_port() {
   python3 - <<'PY'
 import socket
@@ -415,13 +460,11 @@ if [[ -z "$ENABLE_MENUBAR_SMOKE" && "$(uname -s)" == "Darwin" && -z "${CI:-}" ]]
 fi
 
 if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(uname -s)" == "Darwin" ]]; then
-  require_cmd swift
-  log "🍎 Building local menu bar binary for installer validation..."
-  swift build --package-path "$ROOT_DIR/desktop/LonghouseMenuBarHarness" -c release --product LonghouseMenuBarHarnessMenuBar >/dev/null
-  MENUBAR_BIN_DIR="$(swift build --package-path "$ROOT_DIR/desktop/LonghouseMenuBarHarness" -c release --show-bin-path)"
-  export LONGHOUSE_LOCAL_HEALTH_MENUBAR_SOURCE="$MENUBAR_BIN_DIR/LonghouseMenuBarHarnessMenuBar"
+  APP_BUNDLE_STAGE_DIR="$HOME/.longhouse-app-build"
+  LONGHOUSE_APP_BUNDLE="$(build_local_health_app_bundle "$APP_BUNDLE_STAGE_DIR")"
+  export LONGHOUSE_LOCAL_HEALTH_APP_SOURCE="$LONGHOUSE_APP_BUNDLE"
   export LONGHOUSE_INSTALL_MENUBAR=1
-  env_vars+=("LONGHOUSE_LOCAL_HEALTH_MENUBAR_SOURCE=$MENUBAR_BIN_DIR/LonghouseMenuBarHarnessMenuBar")
+  env_vars+=("LONGHOUSE_LOCAL_HEALTH_APP_SOURCE=$LONGHOUSE_APP_BUNDLE")
   env_vars+=("LONGHOUSE_INSTALL_MENUBAR=1")
 fi
 

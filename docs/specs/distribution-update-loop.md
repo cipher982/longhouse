@@ -114,7 +114,7 @@ That command is responsible for:
 - ensuring the engine binary exists locally
 - installing the engine launchd/systemd service
 - installing provider hooks
-- installing the ambient macOS local-health menu bar when enabled
+- installing the ambient macOS `Longhouse.app` helper when enabled
 
 This keeps the local runtime install surface singular even if the shell installer, onboarding flow, and future bundled app all call into it.
 
@@ -124,21 +124,23 @@ This keeps the local runtime install surface singular even if the shell installe
 - preview channel
 - signed release manifest with min-supported versions
 - fully automatic runner and engine update coordination
-- notarized standalone macOS app bundle with app-owned helper lifecycle
+- app-owned helper lifecycle through Apple-native service management
 
 ## Local Runtime Artifacts
 
-The local runtime now has three artifact classes:
+The local runtime now has four artifact classes:
 
 - Python wheel: `longhouse`
 - engine binary: `longhouse-engine-<platform>`
-- macOS desktop binaries: `longhouse-local-health-menubar-darwin-arm64`, `longhouse-local-health-window-darwin-arm64`
+- macOS ambient app bundle archive: `longhouse-local-health-app-darwin-arm64.zip`
+- macOS debug window binary: `longhouse-local-health-window-darwin-arm64`
 
 Artifact policy:
 
 - the `vX.Y.Z` GitHub release is the versioned source of truth for local runtime binaries
 - the CLI version and runtime artifact version should match the same tag by default
 - local/dev validation may override artifact sources explicitly
+- on macOS, `connect --install` should install the ambient helper as `~/Applications/Longhouse.app`
 
 The shell installer should not know asset naming rules itself forever. The long-term goal is that the CLI/runtime layer owns artifact resolution while the shell script stays thin.
 

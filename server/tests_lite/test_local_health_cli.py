@@ -7,6 +7,7 @@ import shlex
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
 from typer.testing import CliRunner
@@ -200,7 +201,7 @@ def test_local_health_menubar_launch_uses_current_python_env(monkeypatch, tmp_pa
 
     monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
     monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://david010.longhouse.ai")
-    monkeypatch.setattr(local_health_cli, "_prebuilt_binary_path", lambda component: None)
+    monkeypatch.setattr(local_health_cli, "_prebuilt_runtime_artifact", lambda component: None)
 
     result = runner.invoke(
         app,
@@ -245,7 +246,7 @@ def test_local_health_window_launch_without_url(monkeypatch):
 
     monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
     monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: None)
-    monkeypatch.setattr(local_health_cli, "_prebuilt_binary_path", lambda component: None)
+    monkeypatch.setattr(local_health_cli, "_prebuilt_runtime_artifact", lambda component: None)
 
     result = runner.invoke(app, ["local-health", "window"])
 
@@ -266,8 +267,11 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
     monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
     monkeypatch.setattr(
         local_health_cli,
-        "_prebuilt_binary_path",
-        lambda component: Path("/Users/test/.local/bin/longhouse-local-health-menubar"),
+        "_prebuilt_runtime_artifact",
+        lambda component: SimpleNamespace(
+            path="/Users/test/Applications/Longhouse.app",
+            launch_path="/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+        ),
     )
     monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://longhouse.ai")
 
@@ -275,5 +279,5 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert len(calls) == 1
-    assert calls[0][0] == "/Users/test/.local/bin/longhouse-local-health-menubar"
+    assert calls[0][0] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
     assert "swift" not in calls[0]
