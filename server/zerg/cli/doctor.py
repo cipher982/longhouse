@@ -452,8 +452,13 @@ def _check_shipper() -> list[CheckResult]:
                 if artifact_path:
                     label = f"{label} ({artifact_path})"
                 results.append(CheckResult(PASS, label))
-            elif runtime_mode == "legacy-binary":
-                label = "Ambient UI using legacy binary"
+            elif runtime_mode == "unsupported-install":
+                label = "Ambient UI using unsupported install"
+                if artifact_path:
+                    label = f"{label} ({artifact_path})"
+                results.append(CheckResult(WARN, label, "Run: longhouse connect --install"))
+            elif runtime_mode == "broken-app-bundle":
+                label = "Ambient UI app bundle missing or broken"
                 if artifact_path:
                     label = f"{label} ({artifact_path})"
                 results.append(CheckResult(WARN, label, "Run: longhouse connect --install"))

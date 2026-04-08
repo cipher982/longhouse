@@ -70,7 +70,7 @@ def test_check_shipper_reports_ambient_app_bundle(tmp_path, monkeypatch):
     assert labels["Ambient UI installed as Longhouse.app (/Users/test/Applications/Longhouse.app)"] == doctor.PASS
 
 
-def test_check_shipper_warns_when_ambient_ui_uses_legacy_binary(tmp_path, monkeypatch):
+def test_check_shipper_warns_when_ambient_ui_uses_unsupported_install(tmp_path, monkeypatch):
     claude_dir = tmp_path / ".claude"
     _seed_claude_dir(claude_dir, settings={})
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
@@ -78,11 +78,11 @@ def test_check_shipper_warns_when_ambient_ui_uses_legacy_binary(tmp_path, monkey
     monkeypatch.setattr(local_health_ui, "get_menubar_service_info", lambda: {
         "status": "running",
         "artifact_path": "/Users/test/.local/bin/longhouse-local-health-menubar",
-        "runtime_mode": "legacy-binary",
+        "runtime_mode": "unsupported-install",
     })
     monkeypatch.setattr("zerg.services.shipper.service.detect_platform", lambda: Platform.MACOS)
 
     results = doctor._check_shipper()
     labels = {r.label: r.status for r in results}
 
-    assert labels["Ambient UI using legacy binary (/Users/test/.local/bin/longhouse-local-health-menubar)"] == doctor.WARN
+    assert labels["Ambient UI using unsupported install (/Users/test/.local/bin/longhouse-local-health-menubar)"] == doctor.WARN
