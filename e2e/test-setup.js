@@ -4,7 +4,7 @@
  * SQLite-based E2E isolation: Creates per-worker SQLite databases
  * in a temp directory. No Postgres schemas needed.
  *
- * See: VISION.md (SQLite-only OSS Pivot section)
+ * See: VISION.md (Architecture Constraints / SQLite-only core)
  */
 
 import path from 'path';
