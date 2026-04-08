@@ -41,6 +41,17 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name || inputs.tag_name }}
 
+      - name: Classify release tier
+        id: release_tier
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tier=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "tier=smoke" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -70,12 +81,13 @@ jobs:
         id: macos_signing
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
           MACOS_SIGNING_CERT_P12_BASE64: ${{ secrets.MACOS_SIGNING_CERT_P12_BASE64 }}
           MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
           if [[ -z "${MACOS_SIGNING_CERT_P12_BASE64:-}" || -z "${MACOS_SIGNING_CERT_PASSWORD:-}" || -z "${MACOS_SIGNING_IDENTITY:-}" ]]; then
-            if [[ "${RELEASE_TAG}" == v* ]]; then
+            if [[ "${RELEASE_TIER}" == "stable" ]]; then
               echo "Stable macOS releases require Developer ID signing credentials." >&2
               exit 1
             fi
@@ -114,7 +126,7 @@ jobs:
         if: ${{ matrix.build_desktop }}
         id: macos_notary
         env:
-          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
           SIGNING_ENABLED: ${{ steps.macos_signing.outputs.enabled }}
           KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
@@ -127,7 +139,7 @@ jobs:
           fi
 
           if [[ -z "${MACOS_NOTARY_APPLE_ID:-}" || -z "${MACOS_NOTARY_TEAM_ID:-}" || -z "${MACOS_NOTARY_APP_PASSWORD:-}" ]]; then
-            if [[ "${RELEASE_TAG}" == v* ]]; then
+            if [[ "${RELEASE_TIER}" == "stable" ]]; then
               echo "Stable macOS releases require notarization credentials." >&2
               exit 1
             fi
@@ -147,6 +159,7 @@ jobs:
       - name: Package macOS desktop app bundles
         if: ${{ matrix.build_desktop }}
         env:
+          RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
           SIGNING_MODE: ${{ steps.macos_signing.outputs.signing_mode }}
           CODESIGN_IDENTITY: ${{ steps.macos_signing.outputs.codesign_identity }}
           NOTARY_ENABLED: ${{ steps.macos_notary.outputs.enabled }}
@@ -194,6 +207,7 @@ jobs:
           {
             "schema_version": 1,
             "release_tag": "${RELEASE_TAG}",
+            "release_tier": "${RELEASE_TIER}",
             "version": "${VERSION}",
             "signing_mode": "${SIGNING_MODE}",
             "notarization_status": "${NOTARIZATION_STATUS}",
