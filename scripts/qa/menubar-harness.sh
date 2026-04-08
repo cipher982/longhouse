@@ -145,12 +145,21 @@ run_smoke_shell() {
   local log_path="$3"
   shift 3
   rm -f "$log_path"
+  set +e
   "$@" \
     --input "$(fixture_path "$fixture")" \
     --action-log "$log_path" \
     --effect-mode log-only \
     --exercise-actions "$SMOKE_ACTIONS" \
     --quit-after 1.5
+  local command_status=$?
+  set -e
+
+  # SwiftUI harness shells can exit via SIGTERM when NSApplication terminates itself.
+  if [[ $command_status -ne 0 && $command_status -ne 143 ]]; then
+    return "$command_status"
+  fi
+
   verify_action_log "$log_path" "$label"
 }
 
