@@ -67,13 +67,14 @@ export default function DocsPage() {
           <pre><code>curl -fsSL https://get.longhouse.ai/install.sh | bash</code></pre>
           <p>
             The installer sets up the CLI and runs guided onboarding. On macOS, Longhouse also adds a
-            menu bar app. Requires Python 3.12+. No sudo needed.
+            menu bar app, which is the always-on local status surface. Requires Python 3.12+. No sudo needed.
           </p>
 
           <h3>2. Open Longhouse</h3>
           <pre><code>longhouse serve</code></pre>
           <p>
             Open <code>http://localhost:8080</code>. Your data stays in a SQLite database on your machine.
+            On macOS, keep the menu bar app around for live local status while you work.
           </p>
 
           <h3>3. Find one prior session</h3>
@@ -94,7 +95,7 @@ longhouse codex</code></pre>
             archive and search/detail flows.
           </p>
 
-          <h3>5. Repair and advanced</h3>
+          <h3>5. Only if something looks wrong</h3>
           <p>
             Most people should not need this on the first run:
           </p>

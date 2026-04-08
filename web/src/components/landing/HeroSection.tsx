@@ -83,10 +83,11 @@ export function HeroSection({
             </div>
             <p className="landing-hero-install-note">
               One command installs the CLI and runs guided onboarding. Open the timeline and look for one
-              prior session right away. On macOS, Longhouse also adds a menu bar app. Later, when you
-              want a session to stay reachable after launch, start it with <code>longhouse claude</code>{" "}
-              or <code>longhouse codex</code>. Use <code>longhouse serve --demo</code> only when you
-              want a safe preview before importing real work.
+              prior session right away. On macOS, Longhouse also adds a menu bar app so local status is
+              always visible. Later, when you want a session to stay reachable after launch, start it
+              with <code>longhouse claude</code> or <code>longhouse codex</code>. Use{" "}
+              <code>longhouse serve --demo</code> only when you want a safe preview before importing
+              real work.
             </p>
           </div>
 

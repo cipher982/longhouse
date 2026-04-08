@@ -106,9 +106,10 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
 
       <p className="install-note">
         Open Longhouse, find one prior session, then go back to work. When you want control after
-        launch, start with <code>longhouse claude</code> or <code>longhouse codex</code>. Need repair
-        later? Use <code>longhouse connect --install</code>, <code>longhouse ship</code>, and{" "}
-        <code>longhouse serve --demo</code>.
+        launch, start with <code>longhouse claude</code> or <code>longhouse codex</code>. On macOS,
+        keep Longhouse in the menu bar for live local status. If something looks wrong later, use{" "}
+        <code>longhouse connect --install</code>, <code>longhouse ship</code>, or{" "}
+        <code>longhouse local-health</code>.
       </p>
 
       <div className="install-features">
