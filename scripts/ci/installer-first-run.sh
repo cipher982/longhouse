@@ -77,7 +77,6 @@ build_local_health_app_bundle() {
   local bundle_root="$1"
   local package_path="$ROOT_DIR/desktop/LonghouseMenuBarHarness"
   local app_path="$bundle_root/Longhouse.app"
-  local exec_path="$app_path/Contents/MacOS/Longhouse"
 
   require_cmd swift
   log "🍎 Building local Longhouse.app bundle for installer validation..." >&2
@@ -85,36 +84,16 @@ build_local_health_app_bundle() {
   local menubar_bin_dir
   menubar_bin_dir="$(swift build --package-path "$package_path" -c release --show-bin-path)"
 
-  rm -rf "$app_path"
-  mkdir -p "$app_path/Contents/MacOS"
-  cp "$menubar_bin_dir/LonghouseMenuBarHarnessMenuBar" "$exec_path"
-  chmod +x "$exec_path"
-  cat > "$app_path/Contents/Info.plist" <<'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleDevelopmentRegion</key>
-  <string>en</string>
-  <key>CFBundleExecutable</key>
-  <string>Longhouse</string>
-  <key>CFBundleIdentifier</key>
-  <string>ai.longhouse.localhealth</string>
-  <key>CFBundleInfoDictionaryVersion</key>
-  <string>6.0</string>
-  <key>CFBundleName</key>
-  <string>Longhouse</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>CFBundleShortVersionString</key>
-  <string>0.0.0-dev</string>
-  <key>CFBundleVersion</key>
-  <string>0.0.0-dev</string>
-  <key>LSUIElement</key>
-  <true/>
-</dict>
-</plist>
-PLIST
+  "$ROOT_DIR/scripts/release/macos-package-app.sh" \
+    --binary "$menubar_bin_dir/LonghouseMenuBarHarnessMenuBar" \
+    --app-name Longhouse \
+    --exec-name Longhouse \
+    --bundle-id ai.longhouse.localhealth \
+    --version 0.0.0-dev \
+    --short-version 0.0.0-dev \
+    --output-dir "$bundle_root" \
+    --icon-png "$ROOT_DIR/web/public/favicon-512.png" \
+    --lsuielement true >/dev/null
 
   printf '%s\n' "$app_path"
 }

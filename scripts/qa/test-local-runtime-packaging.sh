@@ -46,6 +46,7 @@ log "📦 Packaging Longhouse.app..."
   --version 0.0.0-smoke \
   --short-version 0.0.0-smoke \
   --output-dir "$STAGE_DIR" \
+  --icon-png "$ROOT_DIR/web/public/favicon-512.png" \
   --lsuielement true >/dev/null
 
 log "✍️  Ad-hoc signing Longhouse.app..."
@@ -80,6 +81,7 @@ with zipfile.ZipFile(archive_path) as archive:
 required_names = {
     "Longhouse.app/Contents/Info.plist",
     "Longhouse.app/Contents/MacOS/Longhouse",
+    "Longhouse.app/Contents/Resources/AppIcon.icns",
 }
 missing = sorted(required_names - names)
 if missing:

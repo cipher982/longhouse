@@ -167,6 +167,7 @@ jobs:
             --version "$VERSION" \
             --short-version "$VERSION" \
             --output-dir "$APP_STAGE_DIR" \
+            --icon-png web/public/favicon-512.png \
             --lsuielement true
 
           scripts/release/macos-sign-app.sh \
