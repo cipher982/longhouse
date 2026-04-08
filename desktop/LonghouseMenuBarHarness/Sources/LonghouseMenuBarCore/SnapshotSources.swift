@@ -185,6 +185,11 @@ public struct HarnessRuntimeConfig {
                     throw SnapshotSourceError.invalidArguments("Expected shell command after --health-command")
                 }
                 healthCommand = arguments[index]
+            case "-ApplePersistenceIgnoreState":
+                index += 1
+                guard index < arguments.count else {
+                    throw SnapshotSourceError.invalidArguments("Expected value after -ApplePersistenceIgnoreState")
+                }
             default:
                 throw SnapshotSourceError.invalidArguments("Unknown argument: \(arg)")
             }

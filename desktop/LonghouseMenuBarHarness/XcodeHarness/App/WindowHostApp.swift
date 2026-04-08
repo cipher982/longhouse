@@ -40,6 +40,6 @@ struct WindowHostApp: App {
             )
         }
         .windowResizability(.contentSize)
-        .defaultSize(width: 460, height: 640)
+        .defaultSize(width: 520, height: 860)
     }
 }

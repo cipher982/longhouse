@@ -16,14 +16,20 @@ public struct MenuBarPanelView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            header
-            metrics
-            detailBlocks
-            controls
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                header
+                metrics
+                controls
+                detailBlocks
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.panel)
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(18)
-        .frame(width: 420, alignment: .leading)
+        .frame(width: 420, alignment: .topLeading)
+        .frame(maxHeight: 760, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color(nsColor: .windowBackgroundColor))
