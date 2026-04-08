@@ -1,7 +1,7 @@
 # Distribution And Update Loop
 
 Status: Active Buildout
-Last updated: 2026-04-07
+Last updated: 2026-04-08
 
 ## Goal
 
@@ -141,6 +141,49 @@ Artifact policy:
 - local/dev validation may override artifact sources explicitly
 - on macOS, `connect --install` should install the ambient helper as `~/Applications/Longhouse.app`
 - raw menu bar/window executables are repo-local harness artifacts, not consumer release assets
+
+## macOS Trust Lane
+
+`Longhouse.app` is now the canonical macOS ambient runtime artifact. For smoke and local packaging runs, ad-hoc signing is acceptable. For real stable semver releases, it is not.
+
+Release policy:
+
+- tags that match `vX.Y.Z` are `stable`
+- any other release tag is `smoke`
+- stable macOS releases must be Developer ID signed and notarized
+- stable releases must fail in CI if the trust path is unavailable
+- smoke releases may still use ad-hoc signing and skip notarization
+
+Required GitHub secrets for stable macOS releases:
+
+- `MACOS_SIGNING_CERT_P12_BASE64`
+- `MACOS_SIGNING_CERT_PASSWORD`
+- `MACOS_SIGNING_IDENTITY`
+- `MACOS_NOTARY_APPLE_ID`
+- `MACOS_NOTARY_TEAM_ID`
+- `MACOS_NOTARY_APP_PASSWORD`
+
+Expected packaging manifest for a healthy stable release:
+
+```json
+{
+  "signing_mode": "developer-id",
+  "notarization_status": "notarized",
+  "artifacts": [
+    {
+      "bundle_id": "ai.longhouse.app",
+      "app_name": "Longhouse"
+    }
+  ]
+}
+```
+
+Fast operator checks before attempting to wire the GitHub secrets:
+
+- `security find-identity -v -p codesigning`
+- `xcrun notarytool history --keychain-profile <profile>`
+
+If there is no local Developer ID identity or notary profile yet, the trust lane is blocked on Apple credential provisioning, not repo code.
 
 The shell installer should not know asset naming rules itself forever. The long-term goal is that the CLI/runtime layer owns artifact resolution while the shell script stays thin.
 
