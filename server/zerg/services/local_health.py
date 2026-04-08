@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
+import shlex
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -42,6 +44,190 @@ def _coerce_path(path: str | Path | None) -> Path:
     if config_dir:
         return Path(config_dir).expanduser()
     return Path.home() / ".claude"
+
+
+def _read_trimmed_file(path: Path) -> str | None:
+    try:
+        value = path.read_text().strip()
+    except OSError:
+        return None
+    return value or None
+
+
+def _collect_local_config(claude_dir: Path) -> dict[str, Any]:
+    url_path = claude_dir / "longhouse-url"
+    machine_name_path = claude_dir / "longhouse-machine-name"
+    return {
+        "url_path": str(url_path),
+        "machine_name_path": str(machine_name_path),
+        "stored_url": _read_trimmed_file(url_path),
+        "machine_name": _read_trimmed_file(machine_name_path),
+    }
+
+
+def _candidate_runner_env_paths() -> list[Path]:
+    paths = [Path.home() / ".config" / "longhouse" / "runner.env"]
+    if os.name != "nt":
+        paths.append(Path("/etc/longhouse/runner.env"))
+    return paths
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+    payload: dict[str, str] = {}
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        normalized_key = key.strip()
+        normalized_value = value.strip().strip("\"'")
+        if normalized_key:
+            payload[normalized_key] = normalized_value
+    return payload
+
+
+def _collect_runner_config() -> dict[str, Any]:
+    for path in _candidate_runner_env_paths():
+        if not path.exists():
+            continue
+        try:
+            env = _parse_env_file(path)
+        except OSError as exc:
+            return {
+                "path": str(path),
+                "exists": True,
+                "error": str(exc),
+                "runner_name": None,
+                "runner_id": None,
+                "runner_urls": [],
+                "install_mode": None,
+            }
+
+        urls: list[str] = []
+        raw_urls = str(env.get("LONGHOUSE_URLS") or "").strip()
+        if raw_urls:
+            urls = [item.strip() for item in raw_urls.split(",") if item.strip()]
+        else:
+            raw_url = str(env.get("LONGHOUSE_URL") or "").strip()
+            if raw_url:
+                urls = [raw_url]
+
+        return {
+            "path": str(path),
+            "exists": True,
+            "error": None,
+            "runner_name": str(env.get("RUNNER_NAME") or "").strip() or None,
+            "runner_id": str(env.get("RUNNER_ID") or "").strip() or None,
+            "runner_urls": urls,
+            "install_mode": str(env.get("RUNNER_INSTALL_MODE") or "").strip() or None,
+        }
+
+    return {
+        "path": str(_candidate_runner_env_paths()[0]),
+        "exists": False,
+        "error": None,
+        "runner_name": None,
+        "runner_id": None,
+        "runner_urls": [],
+        "install_mode": None,
+    }
+
+
+def _extract_machine_name_from_args(arguments: list[str]) -> str | None:
+    for index, arg in enumerate(arguments[:-1]):
+        if arg == "--machine-name":
+            candidate = str(arguments[index + 1] or "").strip()
+            return candidate or None
+    return None
+
+
+def _extract_service_machine_name(service_file: str | None) -> str | None:
+    raw = str(service_file or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.exists():
+        return None
+
+    try:
+        if path.suffix == ".plist":
+            payload = plistlib.loads(path.read_bytes())
+            arguments = [str(item) for item in payload.get("ProgramArguments") or []]
+            return _extract_machine_name_from_args(arguments)
+
+        if path.suffix == ".service":
+            for raw_line in path.read_text().splitlines():
+                line = raw_line.strip()
+                if not line.startswith("ExecStart="):
+                    continue
+                arguments = shlex.split(line.split("=", 1)[1].strip())
+                return _extract_machine_name_from_args(arguments)
+    except Exception:
+        return None
+
+    return None
+
+
+def _collect_launch_readiness(claude_dir: Path, *, service: dict[str, Any]) -> dict[str, Any]:
+    config = _collect_local_config(claude_dir)
+    runner = _collect_runner_config()
+    service_machine_name = _extract_service_machine_name(service.get("service_file"))
+    reasons: list[str] = []
+    actions: list[str] = []
+
+    stored_url = str(config.get("stored_url") or "").strip() or None
+    machine_name = str(config.get("machine_name") or "").strip() or None
+    runner_name = str(runner.get("runner_name") or "").strip() or None
+    runner_urls = [str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()]
+
+    if stored_url and runner_urls and stored_url not in runner_urls:
+        reasons.append("config_url_runner_url_mismatch")
+        _with_action(
+            actions,
+            f"Run: longhouse connect --install --url {runner_urls[0]} --machine-name {runner_name or machine_name or 'this-machine'}",
+        )
+
+    if machine_name and runner_name and machine_name != runner_name:
+        reasons.append("machine_name_runner_name_mismatch")
+        _with_action(
+            actions,
+            f"Run: longhouse connect --install --url {stored_url or (runner_urls[0] if runner_urls else 'https://<your-longhouse>')} --machine-name {runner_name}",
+        )
+
+    if machine_name and service_machine_name and machine_name != service_machine_name:
+        reasons.append("service_machine_name_mismatch")
+        _with_action(actions, "Run: longhouse connect --install")
+
+    if runner_name and service_machine_name and runner_name != service_machine_name:
+        reasons.append("service_runner_name_mismatch")
+        _with_action(actions, "Run: longhouse connect --install")
+
+    configured = bool(stored_url or machine_name or service_machine_name or runner.get("exists"))
+
+    if reasons:
+        state = "broken"
+        headline = "Managed launch config is inconsistent"
+    elif configured:
+        state = "ready"
+        headline = "Managed launch configuration looks coherent"
+    else:
+        state = "unconfigured"
+        headline = "Managed launch has not been configured on this machine"
+
+    return {
+        "state": state,
+        "headline": headline,
+        "reasons": reasons,
+        "suggested_actions": actions,
+        "stored_url": stored_url,
+        "machine_name": machine_name,
+        "service_machine_name": service_machine_name,
+        "runner": runner,
+    }
 
 
 def _collect_engine_status(claude_dir: Path, *, now: datetime) -> dict[str, Any]:
@@ -136,6 +322,7 @@ def _classify_health(
     service: dict[str, Any],
     engine_status: dict[str, Any],
     outbox: dict[str, Any],
+    launch_readiness: dict[str, Any],
 ) -> tuple[str, str, str, list[str], list[str]]:
     reasons: list[str] = []
     actions: list[str] = []
@@ -153,6 +340,13 @@ def _classify_health(
     disk_free_bytes = payload.get("disk_free_bytes")
     outbox_count = int(outbox.get("file_count") or 0)
     outbox_oldest = outbox.get("oldest_age_seconds")
+    launch_state = str(launch_readiness.get("state") or "unconfigured")
+    launch_reasons = [str(item) for item in list(launch_readiness.get("reasons") or [])]
+    launch_actions = [str(item) for item in list(launch_readiness.get("suggested_actions") or [])]
+
+    reasons.extend(launch_reasons)
+    for action in launch_actions:
+        _with_action(actions, action)
 
     if service_status == "not-installed":
         reasons.append("service_not_installed")
@@ -209,7 +403,7 @@ def _classify_health(
             reasons.append("disk_low")
             _with_action(actions, "Consider freeing disk space soon")
 
-    if service_status == "not-installed" and not engine_exists and outbox_count == 0 and spool_pending == 0:
+    if service_status == "not-installed" and not engine_exists and outbox_count == 0 and spool_pending == 0 and launch_state != "broken":
         return (
             "uninstalled",
             "gray",
@@ -220,6 +414,11 @@ def _classify_health(
 
     broken = False
     degraded = False
+
+    if launch_state == "broken":
+        broken = True
+    elif launch_state == "degraded":
+        degraded = True
 
     if service_status == "stopped":
         broken = True
@@ -258,7 +457,17 @@ def _classify_health(
 
     if broken:
         headline = "Longhouse shipping needs repair"
-        if "service_stopped" in reasons:
+        if any(
+            reason in reasons
+            for reason in (
+                "config_url_runner_url_mismatch",
+                "machine_name_runner_name_mismatch",
+                "service_machine_name_mismatch",
+                "service_runner_name_mismatch",
+            )
+        ):
+            headline = "Longhouse launch config is inconsistent"
+        elif "service_stopped" in reasons:
             headline = "Longhouse engine service is stopped"
         elif "spool_dead" in reasons:
             headline = "Longhouse has dead-lettered data to repair"
@@ -287,10 +496,12 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     service = _collect_service()
     engine_status = _collect_engine_status(resolved_claude_dir, now=now)
     outbox = _collect_outbox(resolved_claude_dir, now=now)
+    launch_readiness = _collect_launch_readiness(resolved_claude_dir, service=service)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
         engine_status=engine_status,
         outbox=outbox,
+        launch_readiness=launch_readiness,
     )
 
     return {
@@ -304,6 +515,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "service": service,
         "engine_status": engine_status,
         "outbox": outbox,
+        "launch_readiness": launch_readiness,
         "thresholds": {
             "engine_fresh_seconds": ENGINE_FRESH_SECONDS,
             "engine_stale_seconds": ENGINE_STALE_SECONDS,

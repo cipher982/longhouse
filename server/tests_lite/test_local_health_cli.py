@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import shlex
 import sys
 import time
@@ -19,12 +20,12 @@ from zerg.cli import local_health as local_health_cli
 from zerg.services import local_health as local_health_service
 
 
-def _service_info(status: str) -> dict:
+def _service_info(status: str, *, service_file: str = "/Users/test/Library/LaunchAgents/com.longhouse.shipper.plist") -> dict:
     return {
         "platform": "macos",
         "status": status,
         "service_name": "com.longhouse.shipper",
-        "service_file": "/Users/test/Library/LaunchAgents/com.longhouse.shipper.plist",
+        "service_file": service_file,
         "log_path": "/Users/test/.claude/logs/engine.log.*",
     }
 
@@ -62,7 +63,49 @@ def _write_outbox_file(tmp_path: Path, *, age_seconds: int = 0, name: str = "prs
     os.utime(path, (timestamp, timestamp))
 
 
+def _write_local_config(tmp_path: Path, *, url: str, machine_name: str) -> None:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "longhouse-url").write_text(url + "\n")
+    (tmp_path / "longhouse-machine-name").write_text(machine_name + "\n")
+
+
+def _write_runner_env(tmp_path: Path, *, url: str, runner_name: str) -> Path:
+    env_path = tmp_path / "runner.env"
+    env_path.write_text(
+        "\n".join(
+            [
+                f"LONGHOUSE_URL={url}",
+                f"RUNNER_NAME={runner_name}",
+                "RUNNER_SECRET=test-secret",
+                "RUNNER_INSTALL_MODE=desktop",
+            ]
+        )
+        + "\n"
+    )
+    return env_path
+
+
+def _write_service_plist(tmp_path: Path, *, machine_name: str) -> Path:
+    path = tmp_path / "com.longhouse.shipper.plist"
+    payload = {
+        "Label": "com.longhouse.shipper",
+        "ProgramArguments": [
+            "/Users/test/.local/bin/longhouse-engine",
+            "connect",
+            "--machine-name",
+            machine_name,
+        ],
+    }
+    path.write_bytes(plistlib.dumps(payload))
+    return path
+
+
+def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
+
+
 def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
@@ -72,9 +115,11 @@ def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
     assert snapshot["severity"] == "green"
     assert snapshot["headline"] == "Longhouse shipping healthy"
     assert snapshot["engine_status"]["fresh"] is True
+    assert snapshot["launch_readiness"]["state"] == "unconfigured"
 
 
 def test_collect_local_health_degraded_while_waiting_for_first_status(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
 
     snapshot = local_health_service.collect_local_health(tmp_path)
@@ -86,6 +131,7 @@ def test_collect_local_health_degraded_while_waiting_for_first_status(monkeypatc
 
 
 def test_collect_local_health_degraded_when_status_is_aging(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=90)
 
@@ -97,6 +143,7 @@ def test_collect_local_health_degraded_when_status_is_aging(monkeypatch, tmp_pat
 
 
 def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("stopped"))
     _write_outbox_file(tmp_path, age_seconds=300)
 
@@ -108,8 +155,28 @@ def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monk
     assert "outbox_stuck" in snapshot["reasons"]
 
 
+def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, tmp_path: Path):
+    service_file = _write_service_plist(tmp_path, machine_name="cinder.local")
+    runner_env = _write_runner_env(tmp_path, url="https://david010.longhouse.ai", runner_name="cinder")
+    _write_local_config(tmp_path, url="http://127.0.0.1:8080", machine_name="cinder.local")
+    _write_engine_status(tmp_path, age_seconds=5)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running", service_file=str(service_file)))
+    monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [runner_env])
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "broken"
+    assert snapshot["severity"] == "red"
+    assert snapshot["launch_readiness"]["state"] == "broken"
+    assert "config_url_runner_url_mismatch" in snapshot["reasons"]
+    assert "machine_name_runner_name_mismatch" in snapshot["reasons"]
+    assert "launch config" in snapshot["headline"].lower()
+    assert any("connect --install" in action for action in snapshot["suggested_actions"])
+
+
 def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
     runner = CliRunner()
+    _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=2)
 
@@ -121,6 +188,7 @@ def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
     assert payload["health_state"] == "healthy"
     assert payload["service"]["status"] == "running"
     assert payload["engine_status"]["exists"] is True
+    assert payload["launch_readiness"]["state"] == "unconfigured"
 
 
 def test_local_health_menubar_launch_uses_current_python_env(monkeypatch, tmp_path: Path):
