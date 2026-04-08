@@ -101,7 +101,7 @@ jobs:
           sha256sum * > local-runtime-checksums.txt
 
       - name: Upload runtime assets to release
-        run: gh release upload "$RELEASE_TAG" binaries/* --clobber
+        run: gh release upload "$RELEASE_TAG" binaries/* --clobber --repo "${{ github.repository }}"
 
       - name: Attest runtime release artifacts
         uses: actions/attest-build-provenance@v3
