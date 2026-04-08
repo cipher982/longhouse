@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import plistlib
 import shlex
 import subprocess
 import sys
@@ -140,9 +141,6 @@ def get_menubar_service_status() -> LocalHealthUiStatus:
 
 
 def get_menubar_service_info() -> dict[str, str]:
-    artifact = resolve_installed_runtime_artifact(RuntimeComponent.LOCAL_HEALTH_APP)
-    if artifact is None:
-        artifact = resolve_installed_runtime_artifact(RuntimeComponent.LOCAL_HEALTH_MENUBAR)
     log_dir = _log_dir(None)
     info = {
         "platform": detect_platform().value,
@@ -151,11 +149,30 @@ def get_menubar_service_info() -> dict[str, str]:
         "service_file": str(_launchd_plist_path()),
         "log_path": str(log_dir / "local-health-menubar.*.log"),
     }
+    artifact = resolve_installed_runtime_artifact(RuntimeComponent.LOCAL_HEALTH_APP)
     if artifact is not None:
         info["artifact_component"] = artifact.component.value
         info["artifact_path"] = artifact.path
         info["launch_path"] = artifact.launch_path
-        info["runtime_mode"] = "app-bundle" if artifact.component == RuntimeComponent.LOCAL_HEALTH_APP else "legacy-binary"
+        info["runtime_mode"] = "app-bundle"
+        return info
+
+    plist_path = _launchd_plist_path()
+    if plist_path.exists():
+        try:
+            payload = plistlib.loads(plist_path.read_bytes())
+        except Exception:
+            payload = None
+        program_arguments = payload.get("ProgramArguments") if isinstance(payload, dict) else None
+        if isinstance(program_arguments, list) and program_arguments:
+            launch_path = str(program_arguments[0])
+            info["launch_path"] = launch_path
+            if ".app/Contents/MacOS/" in launch_path:
+                info["artifact_path"] = launch_path.split("/Contents/MacOS/", 1)[0]
+                info["runtime_mode"] = "broken-app-bundle"
+            else:
+                info["artifact_path"] = launch_path
+                info["runtime_mode"] = "unsupported-install"
     return info
 
 

@@ -297,6 +297,18 @@ def _validate_token(url: str, token: str) -> bool:
         return False
 
 
+def _resolve_configured_url(url: str | None, config_dir: Path | None) -> str:
+    if url:
+        return url
+    stored_url = get_zerg_url(config_dir)
+    if stored_url:
+        return stored_url
+
+    typer.secho("No Longhouse URL configured.", fg=typer.colors.RED)
+    typer.echo("Run `longhouse onboard` for a local setup, `longhouse auth --url <url>` for a remote instance, or pass `--url` explicitly.")
+    raise typer.Exit(code=1)
+
+
 def ship(
     url: str = typer.Option(
         None,
@@ -344,9 +356,7 @@ def ship(
 
     config_dir = Path(claude_dir) if claude_dir else None
 
-    # Load stored credentials if not provided
-    if not url:
-        url = get_zerg_url(config_dir) or "http://localhost:8080"
+    url = _resolve_configured_url(url, config_dir)
     if not token:
         token = load_token(config_dir)
 
@@ -435,8 +445,7 @@ def connect(
     ),
     hooks_only: bool = typer.Option(
         False,
-        "--hooks-only",
-        help="Install only Claude Code hooks (no background service)",
+        hidden=True,
     ),
     uninstall: bool = typer.Option(
         False,
@@ -468,7 +477,6 @@ def connect(
 
     Service management:
         --install    Install background service + Claude Code hooks
-        --hooks-only Install only Claude Code hooks (no daemon)
         --uninstall  Stop and remove the background service
         --status     Check the status of the background service
 
@@ -488,20 +496,13 @@ def connect(
         _handle_uninstall()
         return
 
-    # Load stored credentials if not provided
-    if not url:
-        url = get_zerg_url(config_dir) or "http://localhost:8080"
+    url = _resolve_configured_url(url, config_dir)
     if not token:
         token = load_token(config_dir)
 
     if hooks_only:
-        if not token:
-            typer.secho(
-                "No device token found. Installing hooks only; run 'longhouse auth' later to enable remote shipping.",
-                fg=typer.colors.YELLOW,
-            )
-        _handle_hooks_only(url=url, token=token, claude_dir=claude_dir)
-        return
+        typer.secho("--hooks-only is no longer supported. Use `longhouse connect --install`.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
     if install:
         if not token:
@@ -773,12 +774,15 @@ def _handle_status() -> None:
             artifact_path = menubar.get("artifact_path")
             launch_path = menubar.get("launch_path")
             if artifact_path:
-                label = "App" if runtime_mode == "app-bundle" else "Binary"
-                typer.echo(f"{label}: {artifact_path}")
+                typer.echo(f"App: {artifact_path}")
             if launch_path:
                 typer.echo(f"Launch: {launch_path}")
-            if runtime_mode == "legacy-binary":
-                typer.secho("Runtime: legacy binary (run: longhouse connect --install)", fg=typer.colors.YELLOW)
+            if runtime_mode == "unsupported-install":
+                typer.secho("Runtime: unsupported ambient install (run: longhouse connect --install)", fg=typer.colors.YELLOW)
+            elif runtime_mode == "broken-app-bundle":
+                typer.secho(
+                    "Runtime: configured Longhouse.app is missing or broken (run: longhouse connect --install)", fg=typer.colors.YELLOW
+                )
 
 
 def _handle_uninstall() -> None:
@@ -793,32 +797,6 @@ def _handle_uninstall() -> None:
     if detect_platform() == Platform.MACOS:
         menubar_result = uninstall_menubar_service()
         typer.secho(f"[OK] {menubar_result['message']}", fg=typer.colors.GREEN)
-
-
-def _handle_hooks_only(
-    url: str,
-    token: str | None,
-    claude_dir: str | None,
-) -> None:
-    """Handle --hooks-only flag: install Claude Code + Codex hooks without the daemon."""
-    typer.echo("Installing hooks...")
-    typer.echo(f"  URL: {url}")
-
-    try:
-        actions = install_hooks(url=url, token=token, claude_dir=claude_dir)
-        typer.echo("")
-        for action in actions:
-            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
-    except Exception as e:
-        typer.secho(f"[ERROR] Failed to install hooks: {e}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-
-    # Verify PATH in a fresh shell
-    _verify_and_warn_path()
-
-    typer.echo("")
-    typer.echo("Hooks installed for Claude Code and Codex (if present).")
-    typer.echo("Sessions will ship on each Stop event with real-time presence.")
 
 
 def _handle_install(

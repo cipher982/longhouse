@@ -2,21 +2,11 @@
 
 from pathlib import Path
 
+import pytest
+from click.exceptions import Exit as ClickExit
+
 from zerg.cli import connect
 from zerg.services.shipper.service import Platform
-
-
-def test_handle_hooks_only_does_not_create_global_mcp_configs(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    claude_dir = home / ".claude"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(connect, "install_hooks", lambda url, token, claude_dir: ["hooks installed"])
-    monkeypatch.setattr(connect, "_verify_and_warn_path", lambda: None)
-
-    connect._handle_hooks_only("https://example.com", None, str(claude_dir))
-
-    assert not (home / ".claude.json").exists()
-    assert not (home / ".codex" / "config.toml").exists()
 
 
 def test_handle_install_does_not_create_global_mcp_configs(tmp_path, monkeypatch):
@@ -142,45 +132,6 @@ def test_connect_install_skips_auto_auth_when_no_token(monkeypatch):
     ]
 
 
-def test_connect_hooks_only_skips_auto_auth_when_no_token(monkeypatch):
-    calls: list[tuple[str, dict]] = []
-
-    monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: None)
-    monkeypatch.setattr(connect, "load_token", lambda config_dir=None: None)
-    monkeypatch.setattr(connect, "_auto_create_token", lambda url: (_ for _ in ()).throw(AssertionError("should not auto-auth")))
-    monkeypatch.setattr(
-        connect,
-        "_handle_hooks_only",
-        lambda **kwargs: calls.append(("hooks", kwargs)),
-    )
-
-    connect.connect(
-        url="https://example.com",
-        token=None,
-        interval=300,
-        debounce=500,
-        claude_dir=None,
-        verbose=False,
-        install=False,
-        hooks_only=True,
-        uninstall=False,
-        status=False,
-        machine_name=None,
-        menubar=False,
-    )
-
-    assert calls == [
-        (
-            "hooks",
-            {
-                "url": "https://example.com",
-                "token": None,
-                "claude_dir": None,
-            },
-        )
-    ]
-
-
 def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
     monkeypatch.setattr(
         connect,
@@ -214,3 +165,54 @@ def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
     assert "Ambient UI: com.longhouse.local-health-menubar" in output
     assert "App: /Users/test/Applications/Longhouse.app" in output
     assert "Launch: /Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse" in output
+
+
+def test_connect_hooks_only_exits_with_error(monkeypatch):
+    monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: "https://example.com")
+    monkeypatch.setattr(connect, "load_token", lambda config_dir=None: None)
+
+    with pytest.raises(ClickExit) as exc:
+        connect.connect(
+            url=None,
+            token=None,
+            interval=300,
+            debounce=500,
+            claude_dir=None,
+            verbose=False,
+            install=False,
+            hooks_only=True,
+            uninstall=False,
+            status=False,
+            machine_name=None,
+            menubar=False,
+        )
+    assert exc.value.exit_code == 1
+
+
+def test_ship_requires_configured_url(monkeypatch):
+    monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: None)
+
+    with pytest.raises(ClickExit) as exc:
+        connect.ship(url=None, token=None, file=None, claude_dir=None, verbose=False, quiet=False)
+    assert exc.value.exit_code == 1
+
+
+def test_connect_requires_configured_url(monkeypatch):
+    monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: None)
+
+    with pytest.raises(ClickExit) as exc:
+        connect.connect(
+            url=None,
+            token=None,
+            interval=300,
+            debounce=500,
+            claude_dir=None,
+            verbose=False,
+            install=True,
+            hooks_only=False,
+            uninstall=False,
+            status=False,
+            machine_name="test-box",
+            menubar=False,
+        )
+    assert exc.value.exit_code == 1
