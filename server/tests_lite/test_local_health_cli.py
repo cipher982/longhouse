@@ -82,6 +82,17 @@ def test_collect_local_health_degraded_while_waiting_for_first_status(monkeypatc
     assert "first local status update" in snapshot["headline"].lower()
 
 
+def test_collect_local_health_degraded_when_status_is_aging(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=90)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert "engine_status_aging" in snapshot["reasons"]
+    assert "aging" in snapshot["headline"].lower()
+
+
 def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("stopped"))
     _write_outbox_file(tmp_path, age_seconds=300)

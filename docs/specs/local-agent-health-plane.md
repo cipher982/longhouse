@@ -352,7 +352,8 @@ This effort is successful when:
 
 - spec created
 - Stage 1 complete: `server/zerg/services/local_health.py` now defines the local-health contract and `longhouse local-health --json` exposes it for CLI and future desktop surfaces
-- current next step: Stage 2 local status freshness split, so ambient UI is not gated by the current five-minute heartbeat cadence
+- Stage 2 implemented in code: the daemon now refreshes the local status file on a short cadence while keeping server heartbeat coarse
+- current next step: Stage 3 menu bar MVP on macOS, built against the existing CLI/local-health contract instead of launchd-specific logic
 
 ## References
 

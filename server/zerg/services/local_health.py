@@ -173,6 +173,8 @@ def _classify_health(
     elif engine_age is not None and engine_age > ENGINE_STALE_SECONDS:
         reasons.append("engine_status_stale")
         _with_action(actions, "Inspect logs: ~/.claude/logs/engine.log.*")
+    elif engine_age is not None and engine_age > ENGINE_FRESH_SECONDS:
+        reasons.append("engine_status_aging")
 
     if is_offline:
         reasons.append("engine_offline")
@@ -271,6 +273,8 @@ def _classify_health(
         elif "engine_status_missing" in reasons and service_status == "running":
             headline = "Longhouse is waiting for its first local status update"
         elif "engine_status_stale" in reasons:
+            headline = "Longhouse local status is aging"
+        elif "engine_status_aging" in reasons:
             headline = "Longhouse local status is aging"
         return ("degraded", "yellow", headline, reasons, actions)
 
