@@ -292,6 +292,22 @@ Deliverables:
 - dropdown with headline, last ship time, backlog, dead letters, and actions
 - actions for restart, open logs, open Longhouse, copy diagnostics
 
+### Stage 3a: Agent Harness
+
+Goal:
+
+- give coding agents a fast, low-token loop for iterating on the macOS surface without depending on brittle GUI automation first
+
+Deliverables:
+
+- shared SwiftUI core package for the menu bar panel
+- fixture-driven JSON inputs for healthy / degraded / broken states
+- PNG snapshot renderer for deterministic visual output
+- window-host app for normal desktop inspection
+- real `MenuBarExtra` host for the actual menu bar shape
+- action log output for control-surface smoke checks
+- stable Make targets / scripts so future sessions can resume without re-deriving the loop
+
 ### Stage 4: Proper app-owned helper management
 
 Goal:
@@ -335,6 +351,36 @@ The menu bar app should depend on the **contract**, not the implementation:
 
 The menu bar app must not parse launchd output itself if the CLI already owns that knowledge.
 
+## Harness Control Surfaces
+
+The macOS harness should expose one obvious control surface per need:
+
+- `make menubar-harness-test`
+  - build and run Swift package tests
+- `make menubar-harness-fixtures`
+  - render deterministic fixture PNGs for visual review
+- `make menubar-harness-live`
+  - render the current machine state to a PNG from `longhouse local-health --json`
+- `make menubar-harness-window`
+  - launch the shared panel in a normal macOS window
+- `make menubar-harness-menubar`
+  - launch the actual `MenuBarExtra` shell
+
+Important design rule:
+
+- the snapshot renderer, window host, and menu bar host must all reuse the same shared SwiftUI view so visual drift is impossible
+
+Current package layout:
+
+```text
+desktop/LonghouseMenuBarHarness/
+  Fixtures/
+  Sources/LonghouseMenuBarCore/
+  Sources/LonghouseMenuBarHarnessSnapshot/
+  Sources/LonghouseMenuBarHarnessApp/
+  Sources/LonghouseMenuBarHarnessMenuBar/
+```
+
 ## Success Criteria
 
 This effort is successful when:
@@ -345,6 +391,7 @@ This effort is successful when:
 - users get explicit recovery guidance without transcript pollution
 - a future menu bar app can be built against the existing health contract
 - swapping launchd for an app-owned helper does not require a new UX/state model
+- agents can iterate on the macOS UI through a deterministic snapshot/window/menubar loop without re-inventing local scripts every session
 
 ## Progress
 
@@ -353,7 +400,8 @@ This effort is successful when:
 - spec created
 - Stage 1 complete: `server/zerg/services/local_health.py` now defines the local-health contract and `longhouse local-health --json` exposes it for CLI and future desktop surfaces
 - Stage 2 implemented in code: the daemon now refreshes the local status file on a short cadence while keeping server heartbeat coarse
-- current next step: Stage 3 menu bar MVP on macOS, built against the existing CLI/local-health contract instead of launchd-specific logic
+- Stage 3a harness landed: a Swift package under `desktop/LonghouseMenuBarHarness/` now provides shared UI, fixture/live snapshot rendering, a window host, a real menu bar host, and stable Make/script entrypoints
+- current next step: build native UI automation on top of the harness rather than trying to start with fragile AppleScript-only workflows
 
 ## References
 
