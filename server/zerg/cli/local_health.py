@@ -154,6 +154,12 @@ def _launch_desktop_surface(
 
     prebuilt_artifact = _prebuilt_runtime_artifact(component) if component is not None else None
     if prebuilt_artifact is not None:
+        artifact_component = getattr(prebuilt_artifact, "component", component)
+        if component == RuntimeComponent.LOCAL_HEALTH_APP and artifact_component != RuntimeComponent.LOCAL_HEALTH_APP:
+            typer.secho(
+                "Using legacy ambient menu bar binary. Run: longhouse connect --install",
+                fg=typer.colors.YELLOW,
+            )
         command = [
             str(prebuilt_artifact.launch_path),
             "--live",

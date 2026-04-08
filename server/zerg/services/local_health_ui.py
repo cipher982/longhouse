@@ -12,6 +12,7 @@ from typing import Literal
 
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import ensure_runtime_artifact
+from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 from zerg.services.shipper.service import Platform
 from zerg.services.shipper.service import detect_platform
 
@@ -139,14 +140,23 @@ def get_menubar_service_status() -> LocalHealthUiStatus:
 
 
 def get_menubar_service_info() -> dict[str, str]:
+    artifact = resolve_installed_runtime_artifact(RuntimeComponent.LOCAL_HEALTH_APP)
+    if artifact is None:
+        artifact = resolve_installed_runtime_artifact(RuntimeComponent.LOCAL_HEALTH_MENUBAR)
     log_dir = _log_dir(None)
-    return {
+    info = {
         "platform": detect_platform().value,
         "status": get_menubar_service_status(),
         "service_name": LAUNCHD_LABEL,
         "service_file": str(_launchd_plist_path()),
         "log_path": str(log_dir / "local-health-menubar.*.log"),
     }
+    if artifact is not None:
+        info["artifact_component"] = artifact.component.value
+        info["artifact_path"] = artifact.path
+        info["launch_path"] = artifact.launch_path
+        info["runtime_mode"] = "app-bundle" if artifact.component == RuntimeComponent.LOCAL_HEALTH_APP else "legacy-binary"
+    return info
 
 
 def install_menubar_service(
