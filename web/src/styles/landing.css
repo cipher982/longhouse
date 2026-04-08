@@ -1897,6 +1897,20 @@
     color: var(--color-text-secondary);
   }
 
+  .install-proof {
+    margin-top: var(--space-4);
+  }
+
+  .install-proof .app-screenshot-frame {
+    max-width: 420px;
+  }
+
+  .install-proof-caption {
+    margin-top: var(--space-3);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+
   .install-features {
     display: flex;
     flex-wrap: wrap;

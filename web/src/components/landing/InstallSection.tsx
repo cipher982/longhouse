@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AppScreenshotFrame } from "./AppScreenshotFrame";
 
 type Platform = "macos" | "linux" | "windows";
 
@@ -110,6 +111,19 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
         keep Longhouse in the menu bar for live local status. If something looks wrong later, start
         with <code>longhouse doctor</code> and repair with <code>longhouse connect --install</code>.
       </p>
+
+      <div className="install-proof">
+        <AppScreenshotFrame
+          src="/images/landing/ambient-menu-bar.png"
+          alt="Longhouse local status panel showing the menu bar app in a healthy state"
+          title="Longhouse in your menu bar"
+          aspectRatio="4/3"
+          theme="cool-pop"
+        />
+        <p className="install-proof-caption">
+          Longhouse stays in your menu bar on macOS with live health, launch-readiness checks, and repair actions.
+        </p>
+      </div>
 
       <div className="install-features">
         <span className="install-feature">

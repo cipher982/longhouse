@@ -69,6 +69,16 @@ export default function DocsPage() {
             The installer sets up the CLI and runs guided onboarding. On macOS, Longhouse also adds a
             menu bar app, which is the always-on local status surface. Requires Python 3.12+. No sudo needed.
           </p>
+          <figure className="docs-ambient-preview">
+            <img
+              src="/images/landing/ambient-menu-bar.png"
+              alt="Longhouse menu bar app showing healthy local status"
+            />
+            <figcaption>
+              On macOS, look for Longhouse in the menu bar. Green means local shipping is healthy;
+              yellow or red means Longhouse has a local issue to repair.
+            </figcaption>
+          </figure>
 
           <h3>2. Open Longhouse</h3>
           <pre><code>longhouse serve</code></pre>
