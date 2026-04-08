@@ -15,17 +15,31 @@ Self-host free on the machine where work should live, or use hosted beta later w
 <!-- Video: Replace this section with a Loom/YouTube embed once the walkthrough is recorded.
      Target: 60-90 second tour covering install -> search/detail -> wall/message -> continue. -->
 
-Video walkthrough coming soon. In the meantime, try the real launch loop:
+Video walkthrough coming soon. In the meantime, the first run is simple:
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve
-longhouse connect --install
-longhouse ship
-# Open http://localhost:8080
+# Open http://localhost:8080 and find one prior session
 ```
 
-The bundled web UI is the easiest way to look around, but the session surface is scriptable too:
+On macOS, Longhouse also lives in your menu bar.
+
+When you want control after launch:
+
+```bash
+longhouse claude
+longhouse codex
+```
+
+If you skipped onboarding or need to repair imports later:
+
+```bash
+longhouse connect --install
+longhouse ship
+```
+
+The web UI is the easiest place to look around, but the session surface is scriptable too:
 
 ```bash
 longhouse wall --json
@@ -48,7 +62,16 @@ longhouse serve
 
 Open `http://localhost:8080`.
 
-The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. If you skipped onboarding or want to re-run the import path setup, use:
+The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. On macOS, it also adds Longhouse to your menu bar.
+
+When you want a control-ready session, start it explicitly through Longhouse:
+
+```bash
+longhouse claude
+longhouse codex
+```
+
+If you skipped onboarding or want to repair imports later, use:
 
 ```bash
 longhouse connect --install
@@ -61,21 +84,14 @@ Want a safe preview before importing real sessions?
 longhouse serve --demo
 ```
 
-When you want a control-ready session, start it explicitly through Longhouse:
-
-```bash
-longhouse claude
-longhouse codex
-```
-
 ### Canonical proof journey
 
-1. Install and start Longhouse.
-2. Import existing sessions with `longhouse connect --install` and `longhouse ship`.
-3. Search for a real prior topic in the timeline.
-4. Open raw session detail.
-5. Show `longhouse wall --json`.
-6. Continue or message a real Claude session after launch.
+1. Install Longhouse.
+2. Open Longhouse at `http://localhost:8080`.
+3. Find one prior session in the timeline.
+4. Start `longhouse claude` or `longhouse codex` when you want control after launch.
+
+On macOS, Longhouse also lives in your menu bar.
 
 ### Hosted beta (later)
 
@@ -101,7 +117,7 @@ curl -fsSL https://get.longhouse.ai/install.sh | bash
 longhouse serve
 ```
 
-The installer installs the `longhouse` CLI and runs `longhouse onboard` automatically. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
+The installer installs the `longhouse` CLI and runs guided onboarding so Longhouse is ready to open right away. On macOS, it also adds the Longhouse menu bar app. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
 
 Stable installs use `uv` with the published `longhouse` package, so normal CLI upgrades stay on the same path:
 
@@ -109,18 +125,15 @@ Stable installs use `uv` with the published `longhouse` package, so normal CLI u
 longhouse upgrade
 ```
 
-Import existing sessions right away:
+Repair and advanced:
 
 ```bash
 longhouse connect --install
 longhouse ship
-```
-
-Preview with sample data only if you want a safe fallback:
-
-```bash
 longhouse serve --demo
 ```
+
+Use `connect --install` if onboarding was skipped or imports need repair. Use `ship` for a one-time import. Use `serve --demo` only when you want a safe preview before importing real work.
 
 ### 1. Self-host with `uv`
 ```bash

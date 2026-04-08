@@ -64,12 +64,12 @@ def test_onboard_quick_imports_existing_sessions_first(monkeypatch, tmp_path):
     result = runner.invoke(app, ["onboard", "--quick"])
 
     assert result.exit_code == 0, result.output
-    assert "Make existing sessions findable first. Start Longhouse sessions when you want control." in result.output
-    assert "Step 3: Import existing sessions" in result.output
-    assert "Importing any existing sessions now..." in result.output
-    assert "[OK] One-shot import finished" in result.output
-    assert "Skipping demo data (real CLI import path available)" in result.output
-    assert "Open Longhouse and look for imported sessions" in result.output
+    assert "Install Longhouse, open it, and find one prior session." in result.output
+    assert "Step 3: Bring in your existing sessions" in result.output
+    assert "Importing your existing sessions now..." in result.output
+    assert "[OK] Existing sessions are ready to look for in Longhouse" in result.output
+    assert "Skipping demo data. Use 'longhouse serve --demo' later if you want a safe preview." in result.output
+    assert "Find one prior session in the timeline" in result.output
     assert "longhouse claude" in result.output
     assert "longhouse wrap --install" not in result.output
     assert "wrapper mode" not in result.output
@@ -111,11 +111,11 @@ def test_onboard_quick_without_cli_seeds_demo_sessions(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     assert "No supported AI CLI found" in result.output
     assert "You can still set up the server now and connect a CLI later." in result.output
-    assert "[OK] Local runtime installed (engine, hooks, and ambient UI when available)" in result.output
+    assert "[OK] Automatic imports are set up" in result.output
     assert "No supported CLI found yet, so Longhouse skipped the initial import." in result.output
     assert "Seeding demo sessions..." in result.output
     assert "[OK] Seeded 7 demo sessions" in result.output
-    assert "Open Longhouse and explore demo sessions" in result.output
+    assert "Open Longhouse" in result.output
     assert demo_client.calls == ["http://127.0.0.1:8080/api/agents/demo"]
     assert any(
         call[:4] == ["longhouse", "connect", "--install", "--url"]
@@ -150,8 +150,8 @@ def test_onboard_quick_in_ci_skips_service_manager_install(monkeypatch, tmp_path
     result = runner.invoke(app, ["onboard", "--quick"])
 
     assert result.exit_code == 0, result.output
-    assert "[--] No usable service manager in this environment" in result.output
-    assert "Run shipping in foreground: longhouse connect" in result.output
+    assert "[--] Automatic background imports are not available in this environment" in result.output
+    assert "Use: longhouse connect" in result.output
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
     assert not any(call[:2] == ["longhouse", "connect"] for call in subprocess_calls)
 

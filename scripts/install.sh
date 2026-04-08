@@ -453,26 +453,29 @@ print_success() {
     echo "  1. Start Longhouse"
     echo "     longhouse serve"
     echo "  2. Open http://localhost:8080 and find one prior session"
-    echo "  3. If you skipped onboarding or need to repair the local runtime"
-    echo "     longhouse connect --install"
     if has_command claude; then
-        echo "  4. When you want control after launch"
+        echo "  3. When you want control after launch"
         echo "     longhouse claude"
     elif has_command codex; then
-        echo "  4. When you want control after launch"
+        echo "  3. When you want control after launch"
         echo "     longhouse codex"
     fi
     if [[ "$is_macos" == "1" ]]; then
         echo ""
-        echo "macOS ambient status:"
-        echo "  The local runtime install manages Longhouse.app in ~/Applications for ambient status."
-        echo "  Repair or reinstall it with: longhouse connect --install"
-        echo "  Launch it on demand with: longhouse local-health menubar"
+        echo "macOS:"
+        echo "  Longhouse also lives in your menu bar for local status."
     fi
     if [[ "$has_launcher_cli" == "1" ]]; then
         echo ""
         echo "Optional:"
         echo "  longhouse wrap --install    Keep typing bare claude/codex through Longhouse"
+    fi
+    echo ""
+    echo "Repair or advanced:"
+    echo "  longhouse connect --install  Repair onboarding and automatic imports"
+    echo "  longhouse ship               Import existing sessions once"
+    if [[ "$is_macos" == "1" ]]; then
+        echo "  longhouse local-health       Check local status from the CLI"
     fi
     echo ""
     echo "Machine surface:"

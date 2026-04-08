@@ -49,11 +49,11 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
   return (
     <div className={`install-section ${className}`}>
       <div className="install-header">
-        <h3>Get started in seconds</h3>
+        <h3>Get started fast</h3>
         <p>
-          One install command. Guided onboarding installs the CLI, the local engine runtime, session
-          hooks, and the macOS status menu when available, so the timeline fills first and control is
-          ready when you want it.
+          One install command. Guided onboarding gets you to the first useful moment: open Longhouse,
+          find one prior session, and start using the timeline. On macOS, Longhouse also adds a menu
+          bar app.
         </p>
       </div>
 
@@ -105,8 +105,10 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
       )}
 
       <p className="install-note">
-        Safe demo mode is optional. The default path is real onboarding with your own sessions and the
-        local runtime already wired.
+        Open Longhouse, find one prior session, then go back to work. When you want control after
+        launch, start with <code>longhouse claude</code> or <code>longhouse codex</code>. Need repair
+        later? Use <code>longhouse connect --install</code>, <code>longhouse ship</code>, and{" "}
+        <code>longhouse serve --demo</code>.
       </p>
 
       <div className="install-features">
@@ -120,13 +122,13 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
           </svg>
-          Local runtime included
+          Guided onboarding included
         </span>
         <span className="install-feature">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
             <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
           </svg>
-          &lt;2 min setup
+          Menu bar app on macOS
         </span>
       </div>
     </div>
