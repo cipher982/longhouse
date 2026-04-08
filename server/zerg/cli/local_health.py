@@ -214,12 +214,12 @@ def local_health_callback(
     _render_snapshot(_collect_snapshot(claude_dir), json_output=json_output)
 
 
-@app.command("window")
+@app.command("window", hidden=True)
 def local_health_window(
     ctx: typer.Context,
     refresh_seconds: int = typer.Option(10, "--refresh-seconds", min=2, help="Live refresh cadence in seconds."),
 ) -> None:
-    """Launch the local-health panel in a normal macOS window."""
+    """Launch the developer window-host for local-health UI debugging."""
     claude_dir = (ctx.obj or {}).get("claude_dir")
     _launch_desktop_surface(
         product="LonghouseMenuBarHarnessApp",
