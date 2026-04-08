@@ -97,6 +97,7 @@ def _seed_completion_task(
     assistant_text: str = "Only targeted verification remains. Run the pending targeted tests.",
     task_type: str = "turn_loop",
     execution_home: str | None = None,
+    managed_transport: str | None = None,
 ):
     db = factory()
     user = User(email="owner@example.com", context=user_context or {})
@@ -117,6 +118,7 @@ def _seed_completion_task(
         user_state="active",
         loop_mode=loop_mode.value,
         execution_home=execution_home,
+        managed_transport=managed_transport,
     )
     db.add(session)
     user_event = AgentEvent(
@@ -963,6 +965,7 @@ async def test_turn_loop_task_records_review_after_active_presence_settle_window
         presence_updated_at=datetime.now(timezone.utc),
         loop_mode=SessionLoopMode.ASSIST,
         execution_home="managed_local",
+        managed_transport="claude_channel_bridge",
         user_context={
             "preferences": {
                 "operator_mode": {
