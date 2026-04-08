@@ -43,6 +43,7 @@ def test_onboard_quick_imports_existing_sessions_first(monkeypatch, tmp_path):
     runner = CliRunner()
     subprocess_calls: list[list[str]] = []
 
+    monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
     monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)
@@ -86,6 +87,7 @@ def test_onboard_quick_without_cli_seeds_demo_sessions(monkeypatch, tmp_path):
     demo_client = _DemoClient(_DemoResponse(200, {"seeded": True, "sessions_created": 7}))
     subprocess_calls: list[list[str]] = []
 
+    monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(onboard_cli, "_has_command", lambda _cmd: False)
     monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
     monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)
@@ -121,6 +123,37 @@ def test_onboard_quick_without_cli_seeds_demo_sessions(monkeypatch, tmp_path):
         and "--no-menubar" in call
         for call in subprocess_calls
     )
+
+
+def test_onboard_quick_in_ci_skips_service_manager_install(monkeypatch, tmp_path):
+    runner = CliRunner()
+    subprocess_calls: list[list[str]] = []
+
+    monkeypatch.setenv("CI", "1")
+    monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
+    monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
+    monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)
+    monkeypatch.setattr(onboard_cli, "_is_server_running", lambda: (False, None))
+    monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(onboard_cli, "_emit_test_event", lambda api_url: True)
+    monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
+    monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
+    monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
+    monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+
+    def _fake_run(args: list[str], **kwargs):
+        subprocess_calls.append(args)
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
+
+    result = runner.invoke(app, ["onboard", "--quick"])
+
+    assert result.exit_code == 0, result.output
+    assert "[--] No usable service manager in this environment" in result.output
+    assert "Run shipping in foreground: longhouse connect" in result.output
+    assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
+    assert not any(call[:2] == ["longhouse", "connect"] for call in subprocess_calls)
 
 
 def test_onboard_interactive_stays_focused_on_explicit_launch_paths(monkeypatch, tmp_path):
