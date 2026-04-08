@@ -31,6 +31,22 @@ require_cmd() {
   fi
 }
 
+ensure_frontend_dist() {
+  if [[ -f "$ROOT_DIR/web/dist/index.html" ]]; then
+    echo "♻️  Reusing existing web/dist for upgrade rehearsal"
+    return 0
+  fi
+
+  require_cmd bun
+  echo "🏗️  Building frontend dist for upgrade rehearsal"
+  (
+    cd "$ROOT_DIR"
+    bun install --frozen-lockfile --silent
+    cd web
+    bun run build
+  )
+}
+
 cleanup() {
   if [[ "$KEEP_WORK_ROOT" -eq 0 && -n "$WORK_ROOT" && -d "$WORK_ROOT" ]]; then
     rm -rf "$WORK_ROOT"
@@ -65,12 +81,13 @@ done
 require_cmd rsync
 require_cmd perl
 require_cmd uv
-require_cmd bun
 require_cmd python3
 
 if [[ -z "$WORK_ROOT" ]]; then
   WORK_ROOT="$(mktemp -d -t longhouse-cli-upgrade-XXXXXX)"
 fi
+
+ensure_frontend_dist
 
 CURRENT_VERSION="$(python3 - <<'PY'
 import tomllib
@@ -93,7 +110,13 @@ PY
 prepare_pkg() {
   local version="$1"
   local target="$WORK_ROOT/$version"
-  mkdir -p "$target/server" "$target/web" "$target/control-plane" "$target/config"
+  local wheel_path=""
+  mkdir -p \
+    "$target/server" \
+    "$target/web" \
+    "$target/control-plane" \
+    "$target/config" \
+    "$target/desktop/LonghouseMenuBarHarness"
   rsync -a \
     --exclude '.uv_cache' \
     --exclude '.uv_tmp' \
@@ -105,12 +128,19 @@ prepare_pkg() {
   cp -R "$ROOT_DIR/web/dist" "$target/web/dist"
   cp -R "$ROOT_DIR/control-plane/longhouse_shared" "$target/control-plane/longhouse_shared"
   cp "$ROOT_DIR/config/models.json" "$target/config/models.json"
+  cp "$ROOT_DIR/desktop/LonghouseMenuBarHarness/Package.swift" "$target/desktop/LonghouseMenuBarHarness/Package.swift"
+  cp -R "$ROOT_DIR/desktop/LonghouseMenuBarHarness/Sources" "$target/desktop/LonghouseMenuBarHarness/Sources"
+  cp -R "$ROOT_DIR/desktop/LonghouseMenuBarHarness/Fixtures" "$target/desktop/LonghouseMenuBarHarness/Fixtures"
   perl -0pi -e 's/^version = "[^"]+"/version = "'"$version"'"/m' "$target/server/pyproject.toml"
   (
     cd "$target/server"
     uv build --wheel >/dev/null
   )
-  find "$target/server/dist" -maxdepth 1 -name 'longhouse-*.whl' | head -1
+  wheel_path="$(find "$target/server/dist" -maxdepth 1 -name 'longhouse-*.whl' | head -1)"
+  if [[ -z "$wheel_path" ]]; then
+    fail "Failed to build wheel for version $version"
+  fi
+  printf '%s\n' "$wheel_path"
 }
 
 OLD_WHEEL="$(prepare_pkg "$CURRENT_VERSION")"

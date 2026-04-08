@@ -53,6 +53,26 @@ require_cmd() {
   fi
 }
 
+cargo_build_release() {
+  if command -v cargo >/dev/null 2>&1; then
+    if cargo --version >/dev/null 2>&1; then
+      cargo build --release "$@"
+      return 0
+    fi
+    if cargo +stable --version >/dev/null 2>&1; then
+      cargo +stable build --release "$@"
+      return 0
+    fi
+  fi
+
+  if command -v rustup >/dev/null 2>&1 && rustup run stable cargo --version >/dev/null 2>&1; then
+    rustup run stable cargo build --release "$@"
+    return 0
+  fi
+
+  fail "Rust toolchain unavailable for cargo build --release"
+}
+
 pick_port() {
   python3 - <<'PY'
 import socket
@@ -340,11 +360,10 @@ if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" && -d "$PACKAGE_SOURC
   )
 
   if [[ ! -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
-    require_cmd cargo
     log "🦀 Building local engine binary for installer validation..."
     (
       cd "$ROOT_DIR/engine"
-      cargo build --release
+      cargo_build_release
     )
   else
     log "🦀 Reusing existing local engine binary for installer validation..."
@@ -494,15 +513,16 @@ longhouse serve --stop >/dev/null 2>&1 || true
 if ! wait_for_down "http://127.0.0.1:${PORT}/api/readyz" "Onboarding server"; then
   fail "Onboarding server did not stop cleanly"
 fi
-longhouse serve --host 127.0.0.1 --port "$PORT" --daemon
+RUNTIME_PORT="$(pick_port)"
+longhouse serve --host 127.0.0.1 --port "$RUNTIME_PORT" --daemon
 
-if ! wait_for_health "http://127.0.0.1:${PORT}/api/readyz" "Onboarded local server"; then
+if ! wait_for_health "http://127.0.0.1:${RUNTIME_PORT}/api/readyz" "Onboarded local server"; then
   fail "Onboarding server did not become ready"
 fi
 
 log "🛑 Stopping onboarded server..."
 longhouse serve --stop
-if ! wait_for_down "http://127.0.0.1:${PORT}/api/readyz" "Onboarded local server"; then
+if ! wait_for_down "http://127.0.0.1:${RUNTIME_PORT}/api/readyz" "Onboarded local server"; then
   fail "Onboarded local server did not stop cleanly"
 fi
 
