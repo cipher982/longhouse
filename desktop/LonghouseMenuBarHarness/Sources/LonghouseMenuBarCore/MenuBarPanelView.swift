@@ -105,6 +105,14 @@ public struct MenuBarPanelView: View {
             labeledRow(label: "Log Path", value: snapshot.service?.logPath ?? "-")
             labeledRow(label: "Spool Pending", value: snapshot.spoolPendingLabel)
             labeledRow(label: "Outbox Oldest", value: snapshot.outboxOldestLabel)
+            labeledRow(label: "Launch State", value: snapshot.launchStateLabel)
+            labeledRow(label: "Machine / Runner", value: snapshot.machineRunnerLabel)
+            labeledRow(label: "Service Machine", value: snapshot.serviceMachineLabel)
+            labeledRow(label: "Stored / Runner URL", value: snapshot.storedRunnerURLLabel)
+
+            if let launchReasons = snapshot.launchReadiness?.reasons, !launchReasons.isEmpty {
+                tagSection(title: "Launch Checks", values: launchReasons, color: snapshot.parsedSeverity.accentColor)
+            }
 
             if !snapshot.reasons.isEmpty {
                 tagSection(title: "Reasons", values: snapshot.reasons, color: snapshot.parsedSeverity.accentColor)

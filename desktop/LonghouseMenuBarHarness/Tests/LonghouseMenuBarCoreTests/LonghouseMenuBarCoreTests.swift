@@ -18,6 +18,8 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.parsedSeverity == .green)
         #expect(snapshot.service?.status == "running")
         #expect(snapshot.engineStatus?.payload?.spoolPendingCount == 0)
+        #expect(snapshot.launchReadiness?.state == "ready")
+        #expect(snapshot.launchReadiness?.runner?.runnerName == "cinder")
     }
 
     @Test
@@ -61,7 +63,8 @@ struct LonghouseMenuBarCoreTests {
             suggestedActions: [],
             service: nil,
             engineStatus: nil,
-            outbox: nil
+            outbox: nil,
+            launchReadiness: nil
         )
 
         let sink = SpyHealthActionSink(logURL: logURL, uiURL: nil, effectMode: .logOnly)

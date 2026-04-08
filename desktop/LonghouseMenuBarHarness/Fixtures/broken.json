@@ -52,5 +52,25 @@
     "path": "/Users/davidrose/.claude/outbox",
     "file_count": 8,
     "oldest_age_seconds": 310
+  },
+  "launch_readiness": {
+    "state": "ready",
+    "headline": "Managed launch configuration looks coherent",
+    "reasons": [],
+    "suggested_actions": [],
+    "stored_url": "https://david010.longhouse.ai",
+    "machine_name": "cinder",
+    "service_machine_name": "cinder",
+    "runner": {
+      "path": "/Users/davidrose/.config/longhouse/runner.env",
+      "exists": true,
+      "error": null,
+      "runner_name": "cinder",
+      "runner_id": null,
+      "runner_urls": [
+        "https://david010.longhouse.ai"
+      ],
+      "install_mode": "desktop"
+    }
   }
 }
