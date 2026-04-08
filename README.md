@@ -31,12 +31,7 @@ longhouse claude
 longhouse codex
 ```
 
-Only if something looks wrong later:
-
-```bash
-longhouse connect --install
-longhouse ship
-```
+If something looks wrong later, start with `longhouse doctor` and repair with `longhouse connect --install`.
 
 The web UI is the easiest place to look around, but the session surface is scriptable too:
 
@@ -62,6 +57,7 @@ longhouse serve
 Open `http://localhost:8080`.
 
 The installer installs the `longhouse` CLI, runs `longhouse onboard` automatically, and on macOS adds Longhouse to your menu bar.
+The menu bar app is the local health surface on macOS.
 
 When you want a control-ready session, start it explicitly through Longhouse:
 
@@ -70,12 +66,7 @@ longhouse claude
 longhouse codex
 ```
 
-If something looks wrong later, use:
-
-```bash
-longhouse connect --install
-longhouse ship
-```
+If something looks wrong later, use `longhouse doctor` first, then `longhouse connect --install`.
 
 Want a safe preview before importing real sessions?
 
@@ -124,15 +115,14 @@ Stable installs use `uv` with the published `longhouse` package, so normal CLI u
 longhouse upgrade
 ```
 
-If something looks wrong later:
+If something looks wrong later, start with:
 
 ```bash
+longhouse doctor
 longhouse connect --install
-longhouse ship
-longhouse serve --demo
 ```
 
-Use `connect --install` if onboarding was skipped or imports need repair. Use `ship` for a one-time import. Use `serve --demo` only when you want a safe preview before importing real work.
+Use `connect --install` if onboarding was skipped or imports need repair. Use `ship` later as an advanced one-time import. Use `serve --demo` only when you want a safe preview before importing real work.
 
 ### 1. Self-host with `uv`
 ```bash
