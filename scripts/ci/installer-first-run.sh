@@ -88,7 +88,7 @@ build_local_health_app_bundle() {
     --binary "$menubar_bin_dir/LonghouseMenuBarHarnessMenuBar" \
     --app-name Longhouse \
     --exec-name Longhouse \
-    --bundle-id ai.longhouse.localhealth \
+    --bundle-id ai.longhouse.app \
     --version 0.0.0-dev \
     --short-version 0.0.0-dev \
     --output-dir "$bundle_root" \
