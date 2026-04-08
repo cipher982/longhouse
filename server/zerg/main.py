@@ -381,7 +381,10 @@ async def lifespan(app: FastAPI):
             from zerg.database import default_engine
 
             if not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
-                logger.info("SQLite mode: single-writer serializer active. " "See VISION.md (SQLite-only OSS Pivot section) for details.")
+                logger.info(
+                    "SQLite mode: single-writer serializer active. "
+                    "See VISION.md (Architecture Constraints / SQLite-only core) for details."
+                )
         except Exception as _e:
             logger.error(str(_e))
             raise
