@@ -113,23 +113,23 @@ def _watchman_timeout_seconds() -> float:
     return max(5.0, float(os.getenv("OPS_WATCHMAN_LLM_TIMEOUT_SECONDS", str(DEFAULT_TIMEOUT_SECONDS))))
 
 
-def _watchman_reasoning() -> dict[str, Any] | None:
+def _watchman_reasoning_effort() -> str | None:
     raw = os.getenv("OPS_WATCHMAN_REASONING_EFFORT", DEFAULT_REASONING_EFFORT).strip().lower()
     if raw in {"", "off", "none", "disable", "disabled", "false", "0"}:
         return None
     if raw in {"low", "medium", "high"}:
-        return {"effort": raw}
+        return raw
     logger.warning("Invalid OPS_WATCHMAN_REASONING_EFFORT=%r; disabling explicit reasoning control", raw)
     return None
 
 
-def _watchman_model_config() -> tuple[str, str, str, str | None, dict[str, Any] | None]:
+def _watchman_model_config() -> tuple[str, str, str, str | None, str | None]:
     model_id = os.getenv("OPS_WATCHMAN_MODEL", DEFAULT_MODEL_ID).strip() or DEFAULT_MODEL_ID
     base_url = os.getenv("OPS_WATCHMAN_BASE_URL", DEFAULT_BASE_URL).strip() or DEFAULT_BASE_URL
     api_key_env = os.getenv("OPS_WATCHMAN_API_KEY_ENV", DEFAULT_API_KEY_ENV).strip() or DEFAULT_API_KEY_ENV
     api_key = os.getenv(api_key_env, "").strip() or None
-    reasoning = _watchman_reasoning()
-    return model_id, base_url, api_key_env, api_key, reasoning
+    reasoning_effort = _watchman_reasoning_effort()
+    return model_id, base_url, api_key_env, api_key, reasoning_effort
 
 
 def _db_file_paths() -> tuple[Path, Path] | None:
@@ -529,7 +529,7 @@ async def analyze_context(context: dict[str, Any]) -> tuple[dict[str, Any] | Non
     if settings.llm_disabled:
         return None, {}, None, "LLM_DISABLED=1"
 
-    model_id, base_url, api_key_env, api_key, reasoning = _watchman_model_config()
+    model_id, base_url, api_key_env, api_key, reasoning_effort = _watchman_model_config()
     if not api_key:
         return None, {}, model_id, f"{api_key_env} not set"
 
@@ -546,8 +546,8 @@ async def analyze_context(context: dict[str, Any]) -> tuple[dict[str, Any] | Non
             "response_format": {"type": "json_object"},
             "max_completion_tokens": 768,
         }
-        if reasoning is not None:
-            request["reasoning"] = reasoning
+        if reasoning_effort is not None:
+            request["reasoning_effort"] = reasoning_effort
 
         response = await client.chat.completions.create(
             **request,
