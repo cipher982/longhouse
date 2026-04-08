@@ -43,6 +43,8 @@ const INITIAL_SPOOL_PATH_LIMIT: usize = 100;
 const PERIODIC_SPOOL_PATH_LIMIT: usize = 50;
 const PATH_SPOOL_REPLAY_LIMIT: usize = 50;
 const LOCAL_RETRY_DELAY_SECS: u64 = 5;
+const LOCAL_STATUS_INTERVAL_SECS: u64 = 10;
+const SERVER_HEARTBEAT_INTERVAL_SECS: u64 = 5 * 60;
 
 /// Offline / connectivity state.
 struct OfflineState {
@@ -190,7 +192,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let spool_interval = Duration::from_secs(config.spool_replay_secs.max(5));
     let health_check_interval = Duration::from_secs(60);
     let prune_interval = Duration::from_secs(24 * 3600);
-    let heartbeat_interval = Duration::from_secs(5 * 60);
+    let heartbeat_interval = Duration::from_secs(SERVER_HEARTBEAT_INTERVAL_SECS);
 
     let mut fallback_timer = tokio::time::interval(fallback_interval);
     fallback_timer.tick().await; // consume first immediate tick
@@ -206,6 +208,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
     heartbeat_timer.tick().await; // consume first immediate tick
+    let mut local_status_timer = tokio::time::interval(Duration::from_secs(LOCAL_STATUS_INTERVAL_SECS));
 
     let mut outbox_timer = tokio::time::interval(Duration::from_secs(1));
     outbox_timer.tick().await; // consume first immediate tick
@@ -391,18 +394,28 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                 }
             }
 
-            // Periodic heartbeat
+            // Frequent local status file refresh for ambient UX and debugging
+            _ = local_status_timer.tick() => {
+                write_local_status_snapshot(
+                    &conn,
+                    &tracker,
+                    &parse_tracker,
+                    offline.is_offline,
+                    &last_ship_at,
+                    &claude_dir,
+                );
+            }
+
+            // Periodic server heartbeat
             _ = heartbeat_timer.tick() => {
-                let spool = Spool::new(&conn);
-                let stats = heartbeat::HeartbeatStats {
-                    spool: &spool,
-                    tracker: &tracker,
-                    parse_tracker: &parse_tracker,
-                    is_offline: offline.is_offline,
-                    last_ship_at: last_ship_at.clone(),
-                };
-                let payload = heartbeat::HeartbeatPayload::build(&stats);
-                heartbeat::write_status_file(&payload, &stats, &claude_dir);
+                let payload = write_local_status_snapshot(
+                    &conn,
+                    &tracker,
+                    &parse_tracker,
+                    offline.is_offline,
+                    &last_ship_at,
+                    &claude_dir,
+                );
                 if !offline.is_offline {
                     if let Err(e) = heartbeat::send_heartbeat(&client, &payload).await {
                         tracing::debug!("Heartbeat send failed: {}", e);
@@ -414,6 +427,27 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     tracing::info!("Daemon shutdown complete");
     Ok(())
+}
+
+fn write_local_status_snapshot(
+    conn: &rusqlite::Connection,
+    tracker: &ConsecutiveErrorTracker,
+    parse_tracker: &RecentIssueTracker,
+    is_offline: bool,
+    last_ship_at: &Option<String>,
+    claude_dir: &Path,
+) -> heartbeat::HeartbeatPayload {
+    let spool = Spool::new(conn);
+    let stats = heartbeat::HeartbeatStats {
+        spool: &spool,
+        tracker,
+        parse_tracker,
+        is_offline,
+        last_ship_at: last_ship_at.clone(),
+    };
+    let payload = heartbeat::HeartbeatPayload::build(&stats);
+    heartbeat::write_status_file(&payload, &stats, claude_dir);
+    payload
 }
 
 fn daemon_max_in_flight(config: &ShipperConfig) -> usize {

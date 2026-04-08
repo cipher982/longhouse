@@ -1,7 +1,9 @@
 //! Periodic heartbeat emitter.
 //!
-//! Every 5 minutes, POSTs a heartbeat payload to `/api/agents/heartbeat`
-//! and writes `~/.claude/engine-status.json` for local support/debugging.
+//! The daemon reuses this payload for two related jobs:
+//!
+//! - frequent local status-file writes for ambient UX / debugging
+//! - less frequent server heartbeats to `/api/agents/heartbeat`
 
 use std::path::PathBuf;
 
