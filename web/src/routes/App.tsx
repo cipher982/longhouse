@@ -3,7 +3,15 @@ import { useRoutes, Outlet, Navigate, useLocation } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
 import PricingPage from "../pages/PricingPage";
-import DocsPage from "../pages/DocsPage";
+import DocsLayout from "../pages/docs/DocsLayout";
+import DocsOverviewPage from "../pages/docs/OverviewPage";
+import DocsQuickStartPage from "../pages/docs/QuickStartPage";
+import DocsSearchPage from "../pages/docs/SearchPage";
+import DocsRemoteControlPage from "../pages/docs/RemoteControlPage";
+import DocsCLIReferencePage from "../pages/docs/CLIReferencePage";
+import DocsMachineAPIPage from "../pages/docs/MachineAPIPage";
+import DocsIntegrationsPage from "../pages/docs/IntegrationsPage";
+import DocsConfigurationPage from "../pages/docs/ConfigurationPage";
 import ChangelogPage from "../pages/ChangelogPage";
 import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
@@ -146,9 +154,19 @@ export default function App() {
       path: "/docs",
       element: (
         <ErrorBoundary>
-          <DocsPage />
+          <DocsLayout />
         </ErrorBoundary>
       ),
+      children: [
+        { index: true, element: <DocsOverviewPage /> },
+        { path: "quickstart", element: <DocsQuickStartPage /> },
+        { path: "search", element: <DocsSearchPage /> },
+        { path: "remote-control", element: <DocsRemoteControlPage /> },
+        { path: "cli", element: <DocsCLIReferencePage /> },
+        { path: "api", element: <DocsMachineAPIPage /> },
+        { path: "integrations", element: <DocsIntegrationsPage /> },
+        { path: "configuration", element: <DocsConfigurationPage /> },
+      ],
     },
     {
       path: "/changelog",
@@ -235,45 +253,60 @@ export default function App() {
             </ErrorBoundary>
           ),
         },
-        {
-          path: "/docs",
-          element: (
-            <ErrorBoundary>
-              <DocsPage />
-            </ErrorBoundary>
-          ),
-        },
-        {
-          path: "/changelog",
-          element: (
-            <ErrorBoundary>
-              <ChangelogPage />
-            </ErrorBoundary>
-          ),
-        },
-        {
-          path: "/privacy",
-          element: (
-            <ErrorBoundary>
-              <PrivacyPage />
-            </ErrorBoundary>
-          ),
-        },
-        {
-          path: "/security",
-          element: (
-            <ErrorBoundary>
-              <SecurityPage />
-            </ErrorBoundary>
-          ),
-        },
       ];
+
+  // Public reference pages — always available, even on single-tenant instances
+  const publicInfoRoutes = [
+    {
+      path: "/docs",
+      element: (
+        <ErrorBoundary>
+          <DocsLayout />
+        </ErrorBoundary>
+      ),
+      children: [
+        { index: true, element: <DocsOverviewPage /> },
+        { path: "quickstart", element: <DocsQuickStartPage /> },
+        { path: "search", element: <DocsSearchPage /> },
+        { path: "remote-control", element: <DocsRemoteControlPage /> },
+        { path: "cli", element: <DocsCLIReferencePage /> },
+        { path: "api", element: <DocsMachineAPIPage /> },
+        { path: "integrations", element: <DocsIntegrationsPage /> },
+        { path: "configuration", element: <DocsConfigurationPage /> },
+      ],
+    },
+    {
+      path: "/changelog",
+      element: (
+        <ErrorBoundary>
+          <ChangelogPage />
+        </ErrorBoundary>
+      ),
+    },
+    {
+      path: "/privacy",
+      element: (
+        <ErrorBoundary>
+          <PrivacyPage />
+        </ErrorBoundary>
+      ),
+    },
+    {
+      path: "/security",
+      element: (
+        <ErrorBoundary>
+          <SecurityPage />
+        </ErrorBoundary>
+      ),
+    },
+  ];
 
   const routes = useRoutes(
     config.demoMode
       ? demoRoutes
       : [
           ...marketingRoutes,
+          ...publicInfoRoutes,
           {
             element: <AuthenticatedLoopApp />,
             children: [
