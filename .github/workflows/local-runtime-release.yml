@@ -69,11 +69,16 @@ jobs:
         if: ${{ matrix.build_desktop }}
         id: macos_signing
         env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
           MACOS_SIGNING_CERT_P12_BASE64: ${{ secrets.MACOS_SIGNING_CERT_P12_BASE64 }}
           MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
         run: |
           if [[ -z "${MACOS_SIGNING_CERT_P12_BASE64:-}" || -z "${MACOS_SIGNING_CERT_PASSWORD:-}" || -z "${MACOS_SIGNING_IDENTITY:-}" ]]; then
+            if [[ "${RELEASE_TAG}" == v* ]]; then
+              echo "Stable macOS releases require Developer ID signing credentials." >&2
+              exit 1
+            fi
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "signing_mode=adhoc" >> "$GITHUB_OUTPUT"
             echo "codesign_identity=-" >> "$GITHUB_OUTPUT"
@@ -109,6 +114,7 @@ jobs:
         if: ${{ matrix.build_desktop }}
         id: macos_notary
         env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
           SIGNING_ENABLED: ${{ steps.macos_signing.outputs.enabled }}
           KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
           MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
@@ -121,6 +127,10 @@ jobs:
           fi
 
           if [[ -z "${MACOS_NOTARY_APPLE_ID:-}" || -z "${MACOS_NOTARY_TEAM_ID:-}" || -z "${MACOS_NOTARY_APP_PASSWORD:-}" ]]; then
+            if [[ "${RELEASE_TAG}" == v* ]]; then
+              echo "Stable macOS releases require notarization credentials." >&2
+              exit 1
+            fi
             echo "enabled=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -155,7 +165,7 @@ jobs:
             --binary "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar" \
             --app-name "$AMBIENT_APP_NAME" \
             --exec-name Longhouse \
-            --bundle-id ai.longhouse.localhealth \
+            --bundle-id ai.longhouse.app \
             --version "$VERSION" \
             --short-version "$VERSION" \
             --output-dir "$APP_STAGE_DIR" \
@@ -190,7 +200,7 @@ jobs:
             "artifacts": [
               {
                 "component": "local-health-app",
-                "bundle_id": "ai.longhouse.localhealth",
+                "bundle_id": "ai.longhouse.app",
                 "app_name": "${AMBIENT_APP_NAME}",
                 "archive": "$(basename "$AMBIENT_ARCHIVE")"
               }

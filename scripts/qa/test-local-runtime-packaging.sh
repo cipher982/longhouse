@@ -42,7 +42,7 @@ log "📦 Packaging Longhouse.app..."
   --binary "$BIN_DIR/LonghouseMenuBarHarnessMenuBar" \
   --app-name Longhouse \
   --exec-name Longhouse \
-  --bundle-id ai.longhouse.localhealth \
+  --bundle-id ai.longhouse.app \
   --version 0.0.0-smoke \
   --short-version 0.0.0-smoke \
   --output-dir "$STAGE_DIR" \
@@ -72,7 +72,7 @@ with open(plist_path, "rb") as fh:
 
 assert plist["CFBundleName"] == "Longhouse"
 assert plist["CFBundleExecutable"] == "Longhouse"
-assert plist["CFBundleIdentifier"] == "ai.longhouse.localhealth"
+assert plist["CFBundleIdentifier"] == "ai.longhouse.app"
 assert plist["LSUIElement"] is True
 
 with zipfile.ZipFile(archive_path) as archive:
@@ -90,7 +90,7 @@ if missing:
 manifest = {
     "schema_version": 1,
     "app_name": "Longhouse",
-    "bundle_id": "ai.longhouse.localhealth",
+    "bundle_id": "ai.longhouse.app",
     "archive": archive_path,
     "archive_size_bytes": os.path.getsize(archive_path),
     "info_plist": plist_path,
