@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-04-08T01:52:00Z",
+  "health_state": "healthy",
+  "severity": "green",
+  "headline": "Longhouse shipping healthy",
+  "reasons": [],
+  "suggested_actions": [],
+  "service": {
+    "platform": "macos",
+    "status": "running",
+    "service_name": "com.longhouse.shipper",
+    "service_file": "/Users/davidrose/Library/LaunchAgents/com.longhouse.shipper.plist",
+    "log_path": "/Users/davidrose/.claude/logs/engine.log.*"
+  },
+  "engine_status": {
+    "path": "/Users/davidrose/.claude/engine-status.json",
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 4,
+    "payload": {
+      "version": "0.1.0",
+      "daemon_pid": 24653,
+      "last_ship_at": "2026-04-08T01:51:58Z",
+      "spool_pending_count": 0,
+      "spool_dead_count": 0,
+      "parse_error_count_1h": 0,
+      "consecutive_ship_failures": 0,
+      "disk_free_bytes": 37299638272,
+      "is_offline": false,
+      "recent_dead_letters": [],
+      "last_updated": "2026-04-08T01:52:00Z"
+    },
+    "error": null
+  },
+  "outbox": {
+    "path": "/Users/davidrose/.claude/outbox",
+    "file_count": 0,
+    "oldest_age_seconds": null
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-04-08T01:52:00Z",
+  "health_state": "broken",
+  "severity": "red",
+  "headline": "Longhouse engine service is stopped",
+  "reasons": [
+    "service_stopped",
+    "spool_dead",
+    "outbox_stuck"
+  ],
+  "suggested_actions": [
+    "Run: longhouse connect --install",
+    "Repair dead letters before trusting continuity",
+    "Inspect logs: ~/.claude/logs/engine.log.*"
+  ],
+  "service": {
+    "platform": "macos",
+    "status": "stopped",
+    "service_name": "com.longhouse.shipper",
+    "service_file": "/Users/davidrose/Library/LaunchAgents/com.longhouse.shipper.plist",
+    "log_path": "/Users/davidrose/.claude/logs/engine.log.*"
+  },
+  "engine_status": {
+    "path": "/Users/davidrose/.claude/engine-status.json",
+    "exists": true,
+    "fresh": false,
+    "age_seconds": 480,
+    "payload": {
+      "version": "0.1.0",
+      "daemon_pid": 24653,
+      "last_ship_at": "2026-04-08T01:44:00Z",
+      "spool_pending_count": 31,
+      "spool_dead_count": 3,
+      "parse_error_count_1h": 2,
+      "consecutive_ship_failures": 5,
+      "disk_free_bytes": 972963840,
+      "is_offline": true,
+      "recent_dead_letters": [
+        {
+          "provider": "claude",
+          "file_path": "/Users/davidrose/.claude/projects/demo/transcript.jsonl",
+          "range_bytes": 92104,
+          "created_at": "2026-04-08T01:43:00Z"
+        }
+      ],
+      "last_updated": "2026-04-08T01:44:00Z"
+    },
+    "error": null
+  },
+  "outbox": {
+    "path": "/Users/davidrose/.claude/outbox",
+    "file_count": 8,
+    "oldest_age_seconds": 310
+  }
+}

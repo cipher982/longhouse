@@ -1,0 +1,28 @@
+import AppKit
+import SwiftUI
+
+@MainActor
+public enum SnapshotRenderer {
+    public static func renderPNG(
+        snapshot: HealthSnapshot,
+        actionSink: any HealthActionSink,
+        outputURL: URL
+    ) throws {
+        let view = MenuBarPanelView(snapshot: snapshot, actionSink: actionSink, refresh: {})
+            .background(Color.white)
+
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+
+        guard let cgImage = renderer.cgImage else {
+            throw SnapshotSourceError.commandFailed("Failed to render snapshot image")
+        }
+
+        let rep = NSBitmapImageRep(cgImage: cgImage)
+        guard let pngData = rep.representation(using: .png, properties: [:]) else {
+            throw SnapshotSourceError.commandFailed("Failed to encode PNG snapshot")
+        }
+
+        try pngData.write(to: outputURL)
+    }
+}

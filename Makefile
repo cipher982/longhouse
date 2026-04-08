@@ -9,7 +9,7 @@ export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 # Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps ensure-playwright-browser test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-chat qa-live-conversations qa-live-perf reprovision deploy-status qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runner-vm-canary test-install test-install-first-run test-install-remote test-install-upgrade test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-sdk validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
+.PHONY: help dev dev-demo demo-db stop dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps ensure-playwright-browser test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-chat qa-live-conversations qa-live-perf menubar-harness-test menubar-harness-fixtures menubar-harness-live menubar-harness-window menubar-harness-menubar reprovision deploy-status qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runner-vm-canary test-install test-install-first-run test-install-remote test-install-upgrade test-provision-e2e test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-sdk validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
 
 
 # ---------------------------------------------------------------------------
@@ -713,6 +713,21 @@ deploy-status: ## Show deployed SHA, health, and uptime for all Longhouse surfac
 qa-live-perf: ## Profile hosted timeline -> session detail journey on the live instance
 	@$(MAKE) ensure-js-deps
 	@./scripts/qa/run-prod-e2e.sh tests/live/user-instance-perf.spec.ts --timeout=90000 --reporter=line
+
+menubar-harness-test: ## Build/test the local macOS menu bar harness package
+	@./scripts/qa/menubar-harness.sh test
+
+menubar-harness-fixtures: ## Render healthy/degraded/broken menu bar harness fixture PNGs
+	@./scripts/qa/menubar-harness.sh render-fixtures
+
+menubar-harness-live: ## Render a live local-health harness PNG to artifacts/menubar-harness/live.png
+	@./scripts/qa/menubar-harness.sh snapshot-live
+
+menubar-harness-window: ## Launch the harness as a normal macOS window against live local-health data
+	@./scripts/qa/menubar-harness.sh window-live
+
+menubar-harness-menubar: ## Launch the harness as a real menu bar extra against live local-health data
+	@./scripts/qa/menubar-harness.sh menubar-live
 
 
 test-ci: ## Simulate push/PR CI locally — run this before pushing (~3min)
