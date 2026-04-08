@@ -282,6 +282,29 @@
     color: var(--color-text-secondary);
   }
 
+  .docs-ambient-preview {
+    margin: var(--space-5) 0;
+    padding: var(--space-4);
+    background: var(--color-surface-section);
+    border: 1px solid var(--color-border-subtle);
+    border-radius: var(--radius-lg);
+  }
+
+  .docs-ambient-preview img {
+    display: block;
+    width: min(100%, 420px);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-border-subtle);
+    box-shadow: var(--shadow-md);
+  }
+
+  .docs-ambient-preview figcaption {
+    margin-top: var(--space-3);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
   .docs-inline-icon {
     vertical-align: middle;
     margin-right: var(--space-2);
