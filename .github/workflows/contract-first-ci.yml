@@ -126,6 +126,32 @@ jobs:
     - name: Run Runner Unit Tests
       run: make test-runner
 
+  wheel-package:
+    runs-on: ubuntu-latest
+    name: "📦 wheel-package--build-verify"
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Setup Node
+      uses: actions/setup-node@v6
+      with:
+        node-version: '20'
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: '1.2.20'
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Install build tools
+      run: sudo apt-get update && sudo apt-get install -y make
+
+    - name: Verify CLI wheel packaging
+      run: make test-wheel-package
+
   e2e:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: cube-browser
