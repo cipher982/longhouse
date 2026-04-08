@@ -41,6 +41,9 @@ jobs:
         working-directory: server
         run: uv build --wheel
 
+      - name: Verify wheel archive
+        run: python3 scripts/qa/check-wheel.py server/dist/longhouse-*.whl
+
       - name: Upload release wheel assets
         env:
           GH_TOKEN: ${{ github.token }}
