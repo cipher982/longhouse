@@ -430,6 +430,36 @@ def _check_shipper() -> list[CheckResult]:
         # Service check not available on this platform
         pass
 
+    try:
+        from zerg.services.local_health_ui import get_menubar_service_info
+        from zerg.services.shipper.service import Platform
+        from zerg.services.shipper.service import detect_platform
+
+        if detect_platform() == Platform.MACOS:
+            ambient = get_menubar_service_info()
+            ambient_status = ambient.get("status")
+            if ambient_status == "running":
+                results.append(CheckResult(PASS, "Ambient UI running"))
+            elif ambient_status == "stopped":
+                results.append(CheckResult(WARN, "Ambient UI stopped", "Run: longhouse connect --install"))
+            else:
+                results.append(CheckResult(WARN, "Ambient UI not installed", "Run: longhouse connect --install"))
+
+            runtime_mode = ambient.get("runtime_mode")
+            artifact_path = ambient.get("artifact_path")
+            if runtime_mode == "app-bundle":
+                label = "Ambient UI installed as Longhouse.app"
+                if artifact_path:
+                    label = f"{label} ({artifact_path})"
+                results.append(CheckResult(PASS, label))
+            elif runtime_mode == "legacy-binary":
+                label = "Ambient UI using legacy binary"
+                if artifact_path:
+                    label = f"{label} ({artifact_path})"
+                results.append(CheckResult(WARN, label, "Run: longhouse connect --install"))
+    except Exception:
+        pass
+
     return results
 
 
