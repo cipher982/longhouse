@@ -769,6 +769,16 @@ def _handle_status() -> None:
         if menubar_status != "not-installed":
             typer.echo(f"Config: {menubar.get('service_file', 'N/A')}")
             typer.echo(f"Logs: {menubar['log_path']}")
+            runtime_mode = menubar.get("runtime_mode")
+            artifact_path = menubar.get("artifact_path")
+            launch_path = menubar.get("launch_path")
+            if artifact_path:
+                label = "App" if runtime_mode == "app-bundle" else "Binary"
+                typer.echo(f"{label}: {artifact_path}")
+            if launch_path:
+                typer.echo(f"Launch: {launch_path}")
+            if runtime_mode == "legacy-binary":
+                typer.secho("Runtime: legacy binary (run: longhouse connect --install)", fg=typer.colors.YELLOW)
 
 
 def _handle_uninstall() -> None:

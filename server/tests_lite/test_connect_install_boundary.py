@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from zerg.cli import connect
+from zerg.services.shipper.service import Platform
 
 
 def test_handle_hooks_only_does_not_create_global_mcp_configs(tmp_path, monkeypatch):
@@ -178,3 +179,38 @@ def test_connect_hooks_only_skips_auto_auth_when_no_token(monkeypatch):
             },
         )
     ]
+
+
+def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
+    monkeypatch.setattr(
+        connect,
+        "get_service_info",
+        lambda: {
+            "platform": "macos",
+            "status": "running",
+            "service_name": "com.longhouse.shipper",
+            "service_file": "/tmp/shipper.plist",
+            "log_path": "/tmp/engine.log",
+        },
+    )
+    monkeypatch.setattr(connect, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(
+        connect,
+        "get_menubar_service_info",
+        lambda: {
+            "status": "running",
+            "service_name": "com.longhouse.local-health-menubar",
+            "service_file": "/tmp/menubar.plist",
+            "log_path": "/tmp/menubar.log",
+            "artifact_path": "/Users/test/Applications/Longhouse.app",
+            "launch_path": "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            "runtime_mode": "app-bundle",
+        },
+    )
+
+    connect._handle_status()
+
+    output = capsys.readouterr().out
+    assert "Ambient UI: com.longhouse.local-health-menubar" in output
+    assert "App: /Users/test/Applications/Longhouse.app" in output
+    assert "Launch: /Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse" in output

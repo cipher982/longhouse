@@ -281,3 +281,29 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
     assert len(calls) == 1
     assert calls[0][0] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
     assert "swift" not in calls[0]
+
+
+def test_local_health_menubar_warns_when_using_legacy_binary_fallback(monkeypatch):
+    runner = CliRunner()
+    calls: list[list[str]] = []
+
+    def fake_run(command, check, cwd):
+        calls.append(command)
+
+    monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        local_health_cli,
+        "_prebuilt_runtime_artifact",
+        lambda component: SimpleNamespace(
+            component=local_health_cli.RuntimeComponent.LOCAL_HEALTH_MENUBAR,
+            path="/Users/test/.local/bin/longhouse-local-health-menubar",
+            launch_path="/Users/test/.local/bin/longhouse-local-health-menubar",
+        ),
+    )
+    monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: None)
+
+    result = runner.invoke(app, ["local-health", "menubar"])
+
+    assert result.exit_code == 0, result.output
+    assert "Using legacy ambient menu bar binary" in result.output
+    assert calls[0][0] == "/Users/test/.local/bin/longhouse-local-health-menubar"

@@ -78,3 +78,27 @@ def test_get_menubar_service_status_returns_not_installed_when_plist_missing(mon
     monkeypatch.setattr(local_health_ui, "detect_platform", lambda: Platform.MACOS)
 
     assert local_health_ui.get_menubar_service_status() == "not-installed"
+
+
+def test_get_menubar_service_info_includes_app_bundle_details(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(local_health_ui, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(local_health_ui, "get_menubar_service_status", lambda: "running")
+    monkeypatch.setattr(
+        local_health_ui,
+        "resolve_installed_runtime_artifact",
+        lambda component: SimpleNamespace(
+            component=local_health_ui.RuntimeComponent.LOCAL_HEALTH_APP,
+            path="/Users/test/Applications/Longhouse.app",
+            launch_path="/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+        ) if component == local_health_ui.RuntimeComponent.LOCAL_HEALTH_APP else None,
+    )
+
+    info = local_health_ui.get_menubar_service_info()
+
+    assert info["status"] == "running"
+    assert info["artifact_path"] == "/Users/test/Applications/Longhouse.app"
+    assert info["launch_path"] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
+    assert info["runtime_mode"] == "app-bundle"
