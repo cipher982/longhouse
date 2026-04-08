@@ -1,0 +1,361 @@
+# Local Agent Health Plane
+
+Status: Active
+Owner: local machine surface
+Updated: 2026-04-07
+
+## Goal
+
+Keep Longhouse's hot path brutally simple:
+
+- hooks write local state and return immediately
+- the Rust engine owns batching, retry, and remote shipping
+- users get an explicit local health surface when shipping is degraded
+
+This document defines the local health plane that sits beside the transport plane. It also defines the modular seam that lets Longhouse ship a lightweight CLI-first MVP now and pivot to a proper macOS menu bar app with app-owned helper management later without rethinking the whole product.
+
+## Vision
+
+Longhouse on a user machine should feel like a real local product, not an invisible background daemon.
+
+The user should always be able to answer three questions quickly:
+
+1. Is Longhouse healthy on this machine right now?
+2. If not, is the problem local daemon health, remote connectivity, or durable dead-letter/backpressure?
+3. What is the next action to recover?
+
+The user should not have to infer health from missing sessions, stale presence, or a log file grep.
+
+## Product Principles
+
+- **Do not block the coding session on remote shipping.** A broken shipper must not stall Claude/Codex tool execution.
+- **Do not hide degraded shipping.** Local-only hot paths require an explicit health plane.
+- **Keep transport and health separate.** Hooks write local. Engine ships remote. Health surfaces observe both.
+- **Preserve a stable contract.** UI surfaces must depend on a stable local-health schema, not launchd or plist internals.
+- **Prefer ambient surfaces over transcript pollution.** Menu bar, status view, and one-shot warnings are better than fake in-band chat messages.
+- **Fail new managed launches before lying.** Managed launch can fail fast if local health is broken. Ongoing sessions should degrade visibly, not be interrupted.
+
+## Current State
+
+Today the raw pieces already exist:
+
+- hooks write presence JSON to `~/.claude/outbox`
+- the engine drains outbox every second
+- the engine writes `~/.claude/engine-status.json`
+- the engine service is supervised by launchd on macOS with `KeepAlive=true`
+- `longhouse doctor` and `longhouse connect --status` already expose fragments of the picture
+
+What is missing is a user-facing local health plane.
+
+### What is actually risky
+
+The main failure is **silent degradation**, not infinite outbox growth.
+
+- Presence outbox files are ephemeral and pruned when stale.
+- The daemon already does startup recovery and fallback scans when it returns.
+- launchd already restarts simple crashes.
+
+The real product problem is that the user may keep working while Longhouse is degraded and never realize continuity is unhealthy until later.
+
+## Non-Goals
+
+- shipping a full signed/notarized macOS app bundle in the first MVP
+- replacing the current launchd service install path immediately
+- using notifications as the primary health surface
+- injecting synthetic transcript messages into live provider transcripts
+- changing the transport contract back to hook-time network I/O
+
+## Research Summary
+
+The Apple-native direction is straightforward:
+
+- `MenuBarExtra` is the correct primitive for a persistent ambient utility in the macOS menu bar.
+- A utility app that primarily lives in the menu bar is a valid product shape.
+- Local notifications require explicit permission and should not be the main status surface.
+- `launchd` is a legitimate background-agent model for the current CLI-installed daemon.
+- `ServiceManagement` / `SMAppService` is the right future path when Longhouse becomes a bundled app that owns its helper lifecycle.
+
+This implies a clean two-step plan:
+
+1. **Short-term MVP:** keep the existing daemon install path, expose a stable local-health contract, and add a menu-bar-friendly status surface.
+2. **Proper app path:** wrap the same health contract in a signed app bundle that owns the helper lifecycle through Apple-native service management.
+
+## Decision
+
+Introduce an explicit **Local Agent Health Plane** with four layers:
+
+### 1. Raw Probes
+
+These gather facts only. No product policy.
+
+- `engine_status_probe`
+  - reads `~/.claude/engine-status.json`
+  - reports age, `last_ship_at`, spool counts, dead letters, disk free, offline flag
+- `service_probe`
+  - reports installed/running/stopped state from launchd/systemd through existing service helpers
+- `outbox_probe`
+  - reports current outbox count and oldest file age
+- `log_probe`
+  - reports latest engine log path and mtime
+
+### 2. Health Classifier
+
+This converts raw probes into a small stable state model.
+
+Stable derived fields:
+
+- `health_state`: `healthy | degraded | broken | uninstalled`
+- `severity`: `green | yellow | red | gray`
+- `reasons`: list of machine-readable reason codes
+- `headline`: single short human summary
+- `suggested_actions`: ordered recovery actions
+
+Important rule:
+
+- preserve raw fields in the output
+- add derived state for UI convenience
+- never make the derived state the only thing available
+
+### 3. Surfaces
+
+Surfaces consume the same local-health contract.
+
+- CLI human view
+- CLI JSON view
+- `doctor` summary/handoff
+- future menu bar utility
+- future web/device UI if we mirror local status back to Longhouse
+
+### 4. Control Adapter
+
+This is the only layer allowed to know how the helper is managed.
+
+Short-term:
+
+- launchd/systemd via current Python service helpers
+
+Future:
+
+- app-owned helper via `ServiceManagement` / `SMAppService`
+
+The surfaces and the classifier must not care which control adapter is underneath.
+
+## Stable Contract
+
+The MVP must define one stable machine-readable contract that survives the launchd -> bundled-app transition.
+
+Recommended shape:
+
+```json
+{
+  "schema_version": 1,
+  "collected_at": "2026-04-07T00:00:00Z",
+  "health_state": "healthy",
+  "severity": "green",
+  "headline": "Longhouse shipping healthy",
+  "reasons": [],
+  "suggested_actions": [],
+  "service": {
+    "platform": "macos",
+    "status": "running",
+    "service_name": "com.longhouse.shipper",
+    "service_file": "...",
+    "log_path": "..."
+  },
+  "engine_status": {
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 4,
+    "payload": {
+      "version": "0.1.0",
+      "daemon_pid": 123,
+      "last_ship_at": "...",
+      "spool_pending_count": 0,
+      "spool_dead_count": 0,
+      "parse_error_count_1h": 0,
+      "consecutive_ship_failures": 0,
+      "disk_free_bytes": 123456,
+      "is_offline": false,
+      "recent_dead_letters": [],
+      "last_updated": "..."
+    }
+  },
+  "outbox": {
+    "file_count": 0,
+    "oldest_age_seconds": null
+  },
+  "thresholds": {
+    "engine_fresh_seconds": 30,
+    "engine_stale_seconds": 120,
+    "degraded_backlog_count": 1,
+    "broken_backlog_count": 25
+  }
+}
+```
+
+The exact thresholds may change. The schema shape should stay stable.
+
+## Health State Rules
+
+Initial classifier policy:
+
+### `uninstalled` / `gray`
+
+- service not installed
+- no local engine status
+
+This is acceptable for users who have not completed Longhouse setup yet.
+
+### `healthy` / `green`
+
+- service running
+- engine status exists and is fresh
+- no dead letters
+- no consecutive ship failures
+- backlog absent or negligible
+
+### `degraded` / `yellow`
+
+- service running but engine status is aging
+- service running and engine reports offline/retrying
+- service running with small or moderate backlog
+- parse errors or ship failures are non-zero but not catastrophic
+
+### `broken` / `red`
+
+- service stopped while local work is pending
+- engine status stale or missing while backlog exists
+- dead letters present
+- disk critically low
+- backlog exceeds a clear threshold
+
+## UX Rules
+
+### Primary surfaces
+
+- CLI status command
+- future menu bar utility
+
+### Secondary surfaces
+
+- one-shot local notification on health transition to red
+- startup warning banner or brief notice when the user begins a new Longhouse-managed session while the local health state is red
+
+### Explicitly avoid
+
+- repeated intrusive modal dialogs
+- synthetic transcript messages inside Claude/Codex mid-session
+- blocking a running session because remote shipping is degraded
+
+## MVP Stages
+
+### Stage 1: Local health contract + CLI
+
+Goal:
+
+- users and future UI can inspect one canonical local-health snapshot
+
+Deliverables:
+
+- a reusable local-health module in Python
+- a machine-readable CLI output surface
+- human-readable CLI output with next actions
+- tests for state classification
+
+### Stage 2: Faster local status writes
+
+Goal:
+
+- local health becomes fresh enough for ambient UX
+
+Deliverables:
+
+- separate local status write interval from server heartbeat interval
+- keep server heartbeat coarse if desired
+- refresh local engine status every few seconds instead of every five minutes
+
+### Stage 3: Menu bar MVP
+
+Goal:
+
+- ambient local UX on macOS without changing the helper lifecycle yet
+
+Deliverables:
+
+- tiny menu bar utility
+- green/yellow/red icon
+- dropdown with headline, last ship time, backlog, dead letters, and actions
+- actions for restart, open logs, open Longhouse, copy diagnostics
+
+### Stage 4: Proper app-owned helper management
+
+Goal:
+
+- Longhouse behaves like a native desktop product
+
+Deliverables:
+
+- signed app bundle
+- helper bundled inside the app
+- helper lifecycle managed through Apple-native service management
+- same local-health contract preserved
+
+## Integration Plan
+
+To avoid a future rewrite, keep the code modular:
+
+### Python modules
+
+- `server/zerg/services/local_health.py`
+  - dataclasses / typed dicts for probe output and classified snapshot
+  - raw probe readers
+  - classifier
+- `server/zerg/cli/...`
+  - thin command wrapper only
+- `server/zerg/cli/doctor.py`
+  - can consume the same module for summary output
+
+### Rust engine
+
+- continue writing `engine-status.json`
+- split local status refresh cadence from remote heartbeat cadence
+- keep the file as raw signal, not UI policy
+
+### Future menu bar app
+
+The menu bar app should depend on the **contract**, not the implementation:
+
+- short-term: shell out to the CLI JSON surface, or re-read the same raw files and apply the same classifier rules
+- longer-term: talk to a bundled helper or native adapter that emits the same schema
+
+The menu bar app must not parse launchd output itself if the CLI already owns that knowledge.
+
+## Success Criteria
+
+This effort is successful when:
+
+- hook hot path remains local-only
+- local health can be queried in one command and one JSON payload
+- local status freshness is suitable for ambient UX
+- users get explicit recovery guidance without transcript pollution
+- a future menu bar app can be built against the existing health contract
+- swapping launchd for an app-owned helper does not require a new UX/state model
+
+## Progress
+
+### 2026-04-07
+
+- spec created
+- current next step: implement Stage 1 local-health contract and CLI surface
+
+## References
+
+- `engine/src/heartbeat.rs`
+- `engine/src/daemon.rs`
+- `engine/src/outbox.rs`
+- `server/zerg/services/shipper/service.py`
+- `server/zerg/cli/doctor.py`
+- Apple Developer Documentation: `MenuBarExtra`
+- Apple Developer Documentation: `ServiceManagement` / `SMAppService`
+- Apple Human Interface Guidelines: Notifications
+- Apple documentation archive: `Creating Launchd Jobs`
