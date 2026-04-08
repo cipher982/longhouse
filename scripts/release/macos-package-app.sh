@@ -11,6 +11,7 @@ Usage: macos-package-app.sh \
   --version <build-version> \
   --short-version <marketing-version> \
   --output-dir <dir> \
+  [--icon-png <path>] \
   [--min-macos <version>] \
   [--category <uti>] \
   [--lsuielement true|false]
@@ -36,6 +37,7 @@ BUNDLE_ID=""
 VERSION=""
 SHORT_VERSION=""
 OUTPUT_DIR=""
+ICON_PNG=""
 MIN_MACOS="14.0"
 CATEGORY="public.app-category.developer-tools"
 LSUIELEMENT="false"
@@ -75,6 +77,11 @@ while [[ $# -gt 0 ]]; do
     --output-dir)
       require_value "$1" "${2:-}"
       OUTPUT_DIR="$2"
+      shift 2
+      ;;
+    --icon-png)
+      require_value "$1" "${2:-}"
+      ICON_PNG="$2"
       shift 2
       ;;
     --min-macos)
@@ -135,11 +142,58 @@ esac
 APP_DIR="${OUTPUT_DIR}/${APP_NAME}.app"
 CONTENTS_DIR="${APP_DIR}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
+RESOURCES_DIR="${CONTENTS_DIR}/Resources"
 
 rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR" "${CONTENTS_DIR}/Resources"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BINARY_PATH" "${MACOS_DIR}/${EXEC_NAME}"
 chmod +x "${MACOS_DIR}/${EXEC_NAME}"
+
+if [[ -n "$ICON_PNG" ]]; then
+  if [[ ! -f "$ICON_PNG" ]]; then
+    echo "Icon PNG not found: $ICON_PNG" >&2
+    exit 1
+  fi
+  if ! command -v sips >/dev/null 2>&1; then
+    echo "sips is required when --icon-png is provided" >&2
+    exit 1
+  fi
+  if ! command -v iconutil >/dev/null 2>&1; then
+    echo "iconutil is required when --icon-png is provided" >&2
+    exit 1
+  fi
+
+  ICON_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/longhouse-icon.XXXXXX")"
+  ICONSET_DIR="${ICON_TMP_DIR}/AppIcon.iconset"
+  PADDED_ICON="${ICON_TMP_DIR}/AppIcon-base.png"
+  mkdir -p "$ICONSET_DIR"
+
+  cleanup_icon_tmp() {
+    rm -rf "$ICON_TMP_DIR"
+  }
+  trap cleanup_icon_tmp EXIT
+
+  sips --padToHeightWidth 512 512 "$ICON_PNG" --out "$PADDED_ICON" >/dev/null
+
+  make_icon() {
+    local pixels="$1"
+    local filename="$2"
+    sips --resampleHeightWidth "$pixels" "$pixels" "$PADDED_ICON" --out "${ICONSET_DIR}/${filename}" >/dev/null
+  }
+
+  make_icon 16 icon_16x16.png
+  make_icon 32 icon_16x16@2x.png
+  make_icon 32 icon_32x32.png
+  make_icon 64 icon_32x32@2x.png
+  make_icon 128 icon_128x128.png
+  make_icon 256 icon_128x128@2x.png
+  make_icon 256 icon_256x256.png
+  make_icon 512 icon_256x256@2x.png
+  make_icon 512 icon_512x512.png
+  make_icon 1024 icon_512x512@2x.png
+
+  iconutil -c icns "$ICONSET_DIR" -o "${RESOURCES_DIR}/AppIcon.icns"
+fi
 
 cat > "${CONTENTS_DIR}/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -156,6 +210,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
   <string>${BUNDLE_ID}</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleName</key>
   <string>${APP_NAME}</string>
   <key>CFBundlePackageType</key>
@@ -180,5 +236,9 @@ EOF
 
 printf 'APPL????' > "${CONTENTS_DIR}/PkgInfo"
 plutil -lint "${CONTENTS_DIR}/Info.plist" >/dev/null
+if [[ -n "$ICON_PNG" ]]; then
+  trap - EXIT
+  cleanup_icon_tmp
+fi
 
 echo "Created app bundle: ${APP_DIR}"
