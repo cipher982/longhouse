@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PKG_PATH="$ROOT/desktop/LonghouseMenuBarHarness"
+XCODE_HARNESS_PATH="$PKG_PATH/XcodeHarness"
 ARTIFACT_DIR="$ROOT/artifacts/menubar-harness"
 
 cmd="${1:-}"
@@ -18,6 +19,7 @@ Usage:
   scripts/qa/menubar-harness.sh snapshot-live [output.png]
   scripts/qa/menubar-harness.sh render-fixtures
   scripts/qa/menubar-harness.sh smoke [fixture-name]
+  scripts/qa/menubar-harness.sh xcuitest
   scripts/qa/menubar-harness.sh full
   scripts/qa/menubar-harness.sh window-fixture <fixture-name>
   scripts/qa/menubar-harness.sh window-live
@@ -29,6 +31,14 @@ Fixtures:
   degraded
   broken
 EOF
+}
+
+require_tool() {
+  local name="$1"
+  if ! command -v "$name" >/dev/null 2>&1; then
+    echo "missing required tool: $name" >&2
+    exit 2
+  fi
 }
 
 fixture_path() {
@@ -46,6 +56,22 @@ app_exec() {
 
 menubar_exec() {
   swift run --package-path "$PKG_PATH" LonghouseMenuBarHarnessMenuBar "$@"
+}
+
+xcode_ui_exec() {
+  local project_path="$XCODE_HARNESS_PATH/LonghouseMenuBarHarnessXcode.xcodeproj"
+  local result_bundle="$ARTIFACT_DIR/LonghouseMenuBarWindowHost.xcresult"
+  local log_path="$ARTIFACT_DIR/xcuitest.log"
+  require_tool xcodegen
+  require_tool xcodebuild
+  rm -rf "$result_bundle"
+  xcodegen --spec "$XCODE_HARNESS_PATH/project.yml" --project-root "$XCODE_HARNESS_PATH" >/dev/null
+  xcodebuild \
+    -project "$project_path" \
+    -scheme LonghouseMenuBarWindowHost \
+    -destination 'platform=macOS' \
+    -resultBundlePath "$result_bundle" \
+    test | tee "$log_path"
 }
 
 SMOKE_ACTIONS="refresh,runDoctor,repairInstall,openLogs,openLonghouse,copyDiagnostics"
@@ -122,6 +148,8 @@ manifest = {
         "live_png": str(artifact_dir / "live.png"),
         "window_smoke_log": str(artifact_dir / "window-smoke-actions.jsonl"),
         "menubar_smoke_log": str(artifact_dir / "menubar-smoke-actions.jsonl"),
+        "xcuitest_log": str(artifact_dir / "xcuitest.log"),
+        "xcuitest_result_bundle": str(artifact_dir / "LonghouseMenuBarWindowHost.xcresult"),
     },
 }
 path = artifact_dir / "manifest.json"
@@ -163,11 +191,16 @@ case "$cmd" in
     run_smoke_shell "window" "$fixture" "$ARTIFACT_DIR/window-smoke-actions.jsonl" app_exec
     run_smoke_shell "menubar" "$fixture" "$ARTIFACT_DIR/menubar-smoke-actions.jsonl" menubar_exec
     ;;
+  xcuitest)
+    cleanup_harness_processes
+    xcode_ui_exec
+    ;;
   full)
     "$0" test
     "$0" render-fixtures
     "$0" snapshot-live "$ARTIFACT_DIR/live.png"
     "$0" smoke healthy
+    "$0" xcuitest
     write_manifest
     ;;
   window-fixture)

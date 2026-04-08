@@ -26,6 +26,7 @@ make menubar-harness-test       # build + Swift tests
 make menubar-harness-fixtures   # render healthy/degraded/broken PNGs
 make menubar-harness-live       # render live local-health PNG
 make menubar-harness-smoke      # boot both app shells and dry-run all controls
+make menubar-harness-xcuitest   # generate the Xcode wrapper and run macOS XCUITests
 make menubar-harness-window     # launch as a normal window
 make menubar-harness-menubar    # launch as a real menu bar extra
 ```
@@ -45,6 +46,8 @@ Typical files:
 - `live.png`
 - `window-smoke-actions.jsonl`
 - `menubar-smoke-actions.jsonl`
+- `xcuitest.log`
+- `LonghouseMenuBarWindowHost.xcresult`
 - `manifest.json`
 
 ## Source Layout
@@ -56,6 +59,7 @@ desktop/LonghouseMenuBarHarness/
   Sources/LonghouseMenuBarHarnessSnapshot/
   Sources/LonghouseMenuBarHarnessApp/
   Sources/LonghouseMenuBarHarnessMenuBar/
+  XcodeHarness/                    generated-on-demand Xcode wrapper for XCUITest
 ```
 
 ## Rules
@@ -64,5 +68,6 @@ desktop/LonghouseMenuBarHarness/
 - Prefer adding accessibility identifiers at the shared view layer.
 - Use fixture PNGs first when changing layout or state presentation.
 - Prefer `make menubar-harness-full` when you need the whole unattended loop.
+- Treat the Xcode wrapper as generated harness infrastructure; regenerate it via the script instead of hand-editing `.xcodeproj` files.
 - Use live PNG/window/menubar runs only after the fixture loop is stable.
 - Reuse the existing `longhouse local-health --json` contract. Do not teach the Swift code to parse launchd directly.

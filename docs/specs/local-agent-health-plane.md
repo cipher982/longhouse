@@ -363,8 +363,10 @@ The macOS harness should expose one obvious control surface per need:
   - render the current machine state to a PNG from `longhouse local-health --json`
 - `make menubar-harness-smoke`
   - boot both app shells, dry-run every control action, and assert action logs
+- `make menubar-harness-xcuitest`
+  - generate the native Xcode wrapper and run macOS XCUITests against the shared panel
 - `make menubar-harness-full`
-  - run the full unattended loop and write an artifact manifest
+  - run the full unattended loop, including native UI tests, and write an artifact manifest
 - `make menubar-harness-window`
   - launch the shared panel in a normal macOS window
 - `make menubar-harness-menubar`
@@ -374,6 +376,7 @@ Important design rule:
 
 - the snapshot renderer, window host, and menu bar host must all reuse the same shared SwiftUI view so visual drift is impossible
 - unattended smoke should exercise the same action layer in `log-only` mode so boot and control wiring can be verified without destructive local side effects
+- native UI automation should target the window host generated from `XcodeHarness/project.yml` so the shared panel can be exercised through XCUITest without duplicating the SwiftUI surface
 
 Current package layout:
 
@@ -384,6 +387,7 @@ desktop/LonghouseMenuBarHarness/
   Sources/LonghouseMenuBarHarnessSnapshot/
   Sources/LonghouseMenuBarHarnessApp/
   Sources/LonghouseMenuBarHarnessMenuBar/
+  XcodeHarness/
 ```
 
 ## Success Criteria
@@ -397,6 +401,7 @@ This effort is successful when:
 - a future menu bar app can be built against the existing health contract
 - swapping launchd for an app-owned helper does not require a new UX/state model
 - agents can iterate on the macOS UI through a deterministic snapshot/window/menubar loop without re-inventing local scripts every session
+- agents can run one native XCUITest command against the shared panel without relying on AppleScript/System Events access
 
 ## Progress
 
@@ -407,7 +412,8 @@ This effort is successful when:
 - Stage 2 implemented in code: the daemon now refreshes the local status file on a short cadence while keeping server heartbeat coarse
 - Stage 3a harness landed: a Swift package under `desktop/LonghouseMenuBarHarness/` now provides shared UI, fixture/live snapshot rendering, a window host, a real menu bar host, and stable Make/script entrypoints
 - Stage 3a harness now has an unattended smoke path and `manifest.json` artifact output, so agents can run one command and inspect one directory instead of replaying manual shell steps
-- current next step: build native UI automation on top of the harness rather than trying to start with fragile AppleScript-only workflows
+- Stage 3b implemented: `XcodeHarness/project.yml` now generates a native wrapper app plus XCUITest target, and the harness exposes that as `make menubar-harness-xcuitest`
+- `make menubar-harness-full` now covers fixture rendering, live rendering, shell smoke, native UI tests, and one artifact directory for screenshots/logs/result bundles
 
 ## References
 
