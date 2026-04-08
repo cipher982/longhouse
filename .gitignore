@@ -229,6 +229,7 @@ videos/
 # UI capture debug bundles
 artifacts/ui-capture/
 artifacts/menubar-harness/
+desktop/LonghouseMenuBarHarness/XcodeHarness/*.xcodeproj/
 
 # Swift menu bar harness build outputs
 desktop/LonghouseMenuBarHarness/.build/

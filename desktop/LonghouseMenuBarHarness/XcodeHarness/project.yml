@@ -1,0 +1,62 @@
+name: LonghouseMenuBarHarnessXcode
+
+options:
+  minimumXcodeGenVersion: 2.45.3
+  developmentLanguage: en
+  deploymentTarget:
+    macOS: "14.0"
+
+packages:
+  HarnessPackage:
+    path: ..
+
+targets:
+  LonghouseMenuBarWindowHost:
+    type: application
+    platform: macOS
+    supportedDestinations: [macOS]
+    sources:
+      - path: App
+        createIntermediateGroups: true
+    dependencies:
+      - package: HarnessPackage
+        product: LonghouseMenuBarCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.MenuBarHarnessWindowHost
+        PRODUCT_NAME: LonghouseMenuBarWindowHost
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Automatic
+  LonghouseMenuBarWindowHostUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    supportedDestinations: [macOS]
+    sources:
+      - path: UITests
+        createIntermediateGroups: true
+    dependencies:
+      - target: LonghouseMenuBarWindowHost
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.MenuBarHarnessWindowHostUITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: LonghouseMenuBarWindowHost
+        SWIFT_VERSION: "6.0"
+
+schemes:
+  LonghouseMenuBarWindowHost:
+    build:
+      targets:
+        LonghouseMenuBarWindowHost: all
+        LonghouseMenuBarWindowHostUITests: [test]
+    run:
+      config: Debug
+      executable: LonghouseMenuBarWindowHost
+    test:
+      config: Debug
+      gatherCoverageData: false
+      captureScreenshotsAutomatically: true
+      preferredScreenCaptureFormat: screenshots
+      targets:
+        - name: LonghouseMenuBarWindowHostUITests
