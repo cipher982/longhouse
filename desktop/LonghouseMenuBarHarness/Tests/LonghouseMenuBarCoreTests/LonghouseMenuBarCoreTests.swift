@@ -27,12 +27,18 @@ struct LonghouseMenuBarCoreTests {
             "--output", "/tmp/example.png",
             "--action-log", "/tmp/actions.jsonl",
             "--ui-url", "https://longhouse.ai",
+            "--effect-mode", "log-only",
+            "--exercise-actions", "refresh,copyDiagnostics",
+            "--quit-after", "2.5",
             "--refresh-seconds", "5"
         ])
 
         #expect(config.outputURL?.path == "/tmp/example.png")
         #expect(config.actionLogURL?.path == "/tmp/actions.jsonl")
         #expect(config.uiURL?.absoluteString == "https://longhouse.ai")
+        #expect(config.effectMode == .logOnly)
+        #expect(config.exerciseActions == [.refresh, .copyDiagnostics])
+        #expect(config.quitAfterSeconds == 2.5)
         #expect(config.refreshIntervalSeconds == 5)
     }
 
@@ -56,7 +62,7 @@ struct LonghouseMenuBarCoreTests {
             outbox: nil
         )
 
-        let sink = SpyHealthActionSink(logURL: logURL, uiURL: nil)
+        let sink = SpyHealthActionSink(logURL: logURL, uiURL: nil, effectMode: .logOnly)
         sink.handle(.refresh, snapshot: snapshot)
 
         let content = try String(contentsOf: logURL)
