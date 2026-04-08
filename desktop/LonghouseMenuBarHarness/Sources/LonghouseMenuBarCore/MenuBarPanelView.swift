@@ -34,7 +34,6 @@ public struct MenuBarPanelView: View {
                 .stroke(Color.black.opacity(0.05), lineWidth: 1)
         )
         .padding(12)
-        .accessibilityIdentifier("LonghouseMenuBarPanel")
     }
 
     private var header: some View {
@@ -47,13 +46,16 @@ public struct MenuBarPanelView: View {
                     .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(snapshot.parsedSeverity.accentColor)
             }
-            .accessibilityIdentifier("LonghouseStatusGlyph")
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(snapshot.headline)
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.primary)
-                    .accessibilityIdentifier("LonghouseHeadline")
+                    .harnessAccessibility(
+                        identifier: LonghouseMenuBarAccessibilityID.Header.headline,
+                        label: snapshot.headline
+                    )
 
                 Text(snapshot.statusBadge)
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -62,34 +64,52 @@ public struct MenuBarPanelView: View {
                     .padding(.vertical, 4)
                     .background(snapshot.parsedSeverity.accentColor.opacity(0.12))
                     .clipShape(Capsule())
-                    .accessibilityIdentifier("LonghouseStatusBadge")
+                    .harnessAccessibility(
+                        identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge,
+                        label: snapshot.statusBadge
+                    )
 
                 Text("Last ship: \(snapshot.lastShipLabel)")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.secondary)
-                    .accessibilityIdentifier("LonghouseLastShip")
+                    .harnessAccessibility(
+                        identifier: LonghouseMenuBarAccessibilityID.Header.lastShip,
+                        label: "Last ship: \(snapshot.lastShipLabel)"
+                    )
             }
         }
     }
 
     private var metrics: some View {
         HStack(spacing: 10) {
-            metricCard(title: "Service", value: snapshot.serviceStatusLabel, tint: Color.blue)
-            metricCard(title: "Engine Age", value: snapshot.engineAgeLabel, tint: Color.indigo)
-            metricCard(title: "Outbox", value: "\(snapshot.outboxCount)", tint: Color.teal)
-            metricCard(title: "Dead", value: snapshot.spoolDeadLabel, tint: snapshot.parsedSeverity.accentColor)
+            metricCard(title: "Service", value: snapshot.serviceStatusLabel, tint: Color.blue, metric: .service)
+            metricCard(title: "Engine Age", value: snapshot.engineAgeLabel, tint: Color.indigo, metric: .engineAge)
+            metricCard(title: "Outbox", value: "\(snapshot.outboxCount)", tint: Color.teal, metric: .outbox)
+            metricCard(title: "Dead", value: snapshot.spoolDeadLabel, tint: snapshot.parsedSeverity.accentColor, metric: .dead)
         }
-        .accessibilityIdentifier("LonghouseMetricRow")
     }
 
-    private func metricCard(title: String, value: String, tint: Color) -> some View {
+    private func metricCard(
+        title: String,
+        value: String,
+        tint: Color,
+        metric: LonghouseMenuBarAccessibilityID.Metric
+    ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title.uppercased())
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.secondary)
+                .harnessAccessibility(
+                    identifier: metric.title,
+                    label: title.uppercased()
+                )
             Text(value)
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.primary)
+                .harnessAccessibility(
+                    identifier: metric.value,
+                    label: value
+                )
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(10)
@@ -101,49 +121,84 @@ public struct MenuBarPanelView: View {
 
     private var detailBlocks: some View {
         VStack(alignment: .leading, spacing: 10) {
-            labeledRow(label: "Service File", value: snapshot.service?.serviceFile ?? "-")
-            labeledRow(label: "Log Path", value: snapshot.service?.logPath ?? "-")
-            labeledRow(label: "Spool Pending", value: snapshot.spoolPendingLabel)
-            labeledRow(label: "Outbox Oldest", value: snapshot.outboxOldestLabel)
-            labeledRow(label: "Launch State", value: snapshot.launchStateLabel)
-            labeledRow(label: "Machine / Runner", value: snapshot.machineRunnerLabel)
-            labeledRow(label: "Service Machine", value: snapshot.serviceMachineLabel)
-            labeledRow(label: "Stored / Runner URL", value: snapshot.storedRunnerURLLabel)
+            labeledRow(label: "Service File", value: snapshot.service?.serviceFile ?? "-", detail: .serviceFile)
+            labeledRow(label: "Log Path", value: snapshot.service?.logPath ?? "-", detail: .logPath)
+            labeledRow(label: "Spool Pending", value: snapshot.spoolPendingLabel, detail: .spoolPending)
+            labeledRow(label: "Outbox Oldest", value: snapshot.outboxOldestLabel, detail: .outboxOldest)
+            labeledRow(label: "Launch State", value: snapshot.launchStateLabel, detail: .launchState)
+            labeledRow(label: "Machine / Runner", value: snapshot.machineRunnerLabel, detail: .machineRunner)
+            labeledRow(label: "Service Machine", value: snapshot.serviceMachineLabel, detail: .serviceMachine)
+            labeledRow(label: "Stored / Runner URL", value: snapshot.storedRunnerURLLabel, detail: .storedRunnerURL)
 
             if let launchReasons = snapshot.launchReadiness?.reasons, !launchReasons.isEmpty {
-                tagSection(title: "Launch Checks", values: launchReasons, color: snapshot.parsedSeverity.accentColor)
+                tagSection(
+                    title: "Launch Checks",
+                    values: launchReasons,
+                    color: snapshot.parsedSeverity.accentColor,
+                    section: .launchChecks
+                )
             }
 
             if !snapshot.reasons.isEmpty {
-                tagSection(title: "Reasons", values: snapshot.reasons, color: snapshot.parsedSeverity.accentColor)
+                tagSection(
+                    title: "Reasons",
+                    values: snapshot.reasons,
+                    color: snapshot.parsedSeverity.accentColor,
+                    section: .reasons
+                )
             }
 
             if !snapshot.suggestedActions.isEmpty {
-                tagSection(title: "Next", values: snapshot.suggestedActions, color: Color.blue)
+                tagSection(
+                    title: "Next",
+                    values: snapshot.suggestedActions,
+                    color: Color.blue,
+                    section: .next
+                )
             }
         }
-        .accessibilityIdentifier("LonghouseDetails")
     }
 
-    private func labeledRow(label: String, value: String) -> some View {
+    private func labeledRow(
+        label: String,
+        value: String,
+        detail: LonghouseMenuBarAccessibilityID.Detail
+    ) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(label.uppercased())
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.secondary)
+                .harnessAccessibility(
+                    identifier: detail.label,
+                    label: label.uppercased()
+                )
             Text(value)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.primary)
                 .textSelection(.enabled)
+                .harnessAccessibility(
+                    identifier: detail.value,
+                    label: value
+                )
         }
     }
 
-    private func tagSection(title: String, values: [String], color: Color) -> some View {
+    private func tagSection(
+        title: String,
+        values: [String],
+        color: Color,
+        section: LonghouseMenuBarAccessibilityID.Section
+    ) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title.uppercased())
                 .font(.system(size: 9, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.secondary)
+                .harnessAccessibility(
+                    identifier: section.title,
+                    label: title.uppercased()
+                )
 
-            FlowLayout(values: values, color: color)
+            FlowLayout(values: values, color: color, section: section)
         }
     }
 
@@ -155,34 +210,52 @@ public struct MenuBarPanelView: View {
                     actionSink.handle(.refresh, snapshot: snapshot)
                     refresh()
                 }
-                .accessibilityIdentifier("LonghouseRefreshButton")
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.refresh,
+                    label: "Refresh"
+                )
 
                 controlButton("Doctor", systemImage: "stethoscope") {
                     actionSink.handle(.runDoctor, snapshot: snapshot)
                 }
-                .accessibilityIdentifier("LonghouseDoctorButton")
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.doctor,
+                    label: "Doctor"
+                )
 
                 controlButton("Repair", systemImage: "wrench.and.screwdriver") {
                     actionSink.handle(.repairInstall, snapshot: snapshot)
                 }
-                .accessibilityIdentifier("LonghouseRepairButton")
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.repair,
+                    label: "Repair"
+                )
             }
 
             HStack(spacing: 8) {
                 controlButton("Copy JSON", systemImage: "doc.on.doc") {
                     actionSink.handle(.copyDiagnostics, snapshot: snapshot)
                 }
-                .accessibilityIdentifier("LonghouseCopyDiagnosticsButton")
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.copyDiagnostics,
+                    label: "Copy JSON"
+                )
 
                 controlButton("Logs", systemImage: "doc.text.magnifyingglass") {
                     actionSink.handle(.openLogs, snapshot: snapshot)
                 }
-                .accessibilityIdentifier("LonghouseOpenLogsButton")
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.openLogs,
+                    label: "Logs"
+                )
 
                 controlButton("Open Longhouse", systemImage: "arrow.up.forward.square") {
                     actionSink.handle(.openLonghouse, snapshot: snapshot)
                 }
-                .accessibilityIdentifier("LonghouseOpenURLButton")
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
+                    label: "Open Longhouse"
+                )
             }
         }
     }
@@ -206,10 +279,11 @@ public struct MenuBarPanelView: View {
 private struct FlowLayout: View {
     let values: [String]
     let color: Color
+    let section: LonghouseMenuBarAccessibilityID.Section
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(values, id: \.self) { value in
+            ForEach(Array(values.enumerated()), id: \.offset) { index, value in
                 Text(value)
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(color)
@@ -217,7 +291,23 @@ private struct FlowLayout: View {
                     .padding(.vertical, 5)
                     .background(color.opacity(0.12))
                     .clipShape(Capsule())
+                    .harnessAccessibility(
+                        identifier: section.tag(index),
+                        label: value
+                    )
             }
         }
+    }
+}
+
+private extension View {
+    func harnessAccessibility(identifier: String, label: String) -> some View {
+        accessibilityIdentifier(identifier)
+            .accessibilityLabel(Text(label))
+    }
+
+    func harnessAccessibilityButton(identifier: String, label: String) -> some View {
+        accessibilityIdentifier(identifier)
+            .accessibilityLabel(Text(label))
     }
 }
