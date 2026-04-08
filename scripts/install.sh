@@ -465,7 +465,8 @@ print_success() {
     if [[ "$is_macos" == "1" ]]; then
         echo ""
         echo "macOS ambient status:"
-        echo "  The local runtime install also manages the Longhouse menu bar helper."
+        echo "  The local runtime install manages Longhouse.app in ~/Applications for ambient status."
+        echo "  Repair or reinstall it with: longhouse connect --install"
         echo "  Launch it on demand with: longhouse local-health menubar"
     fi
     if [[ "$has_launcher_cli" == "1" ]]; then

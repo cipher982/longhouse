@@ -153,62 +153,37 @@ jobs:
         run: |
           VERSION="${RELEASE_TAG#v}"
           APP_STAGE_DIR="$RUNNER_TEMP/macos-app-bundles"
-          WINDOW_APP_NAME="Longhouse Local Health"
-          MENUBAR_APP_NAME="Longhouse Local Health Menu Bar"
-          WINDOW_APP_PATH="$APP_STAGE_DIR/${WINDOW_APP_NAME}.app"
-          MENUBAR_APP_PATH="$APP_STAGE_DIR/${MENUBAR_APP_NAME}.app"
-          WINDOW_ARCHIVE="binaries/longhouse-local-health-window-darwin-arm64.app.zip"
-          MENUBAR_ARCHIVE="binaries/longhouse-local-health-menubar-darwin-arm64.app.zip"
+          AMBIENT_APP_NAME="Longhouse"
+          AMBIENT_APP_PATH="$APP_STAGE_DIR/${AMBIENT_APP_NAME}.app"
+          AMBIENT_ARCHIVE="binaries/longhouse-local-health-app-darwin-arm64.zip"
 
           mkdir -p "$APP_STAGE_DIR"
 
           scripts/release/macos-package-app.sh \
-            --binary binaries/longhouse-local-health-window-darwin-arm64 \
-            --app-name "$WINDOW_APP_NAME" \
-            --exec-name LonghouseLocalHealthWindow \
-            --bundle-id ai.longhouse.localhealth.window \
-            --version "$VERSION" \
-            --short-version "$VERSION" \
-            --output-dir "$APP_STAGE_DIR" \
-            --lsuielement false
-
-          scripts/release/macos-package-app.sh \
             --binary binaries/longhouse-local-health-menubar-darwin-arm64 \
-            --app-name "$MENUBAR_APP_NAME" \
-            --exec-name LonghouseLocalHealthMenuBar \
-            --bundle-id ai.longhouse.localhealth.menubar \
+            --app-name "$AMBIENT_APP_NAME" \
+            --exec-name Longhouse \
+            --bundle-id ai.longhouse.localhealth \
             --version "$VERSION" \
             --short-version "$VERSION" \
             --output-dir "$APP_STAGE_DIR" \
             --lsuielement true
 
           scripts/release/macos-sign-app.sh \
-            --app "$WINDOW_APP_PATH" \
-            --identity "$CODESIGN_IDENTITY" \
-            --mode "$SIGNING_MODE"
-
-          scripts/release/macos-sign-app.sh \
-            --app "$MENUBAR_APP_PATH" \
+            --app "$AMBIENT_APP_PATH" \
             --identity "$CODESIGN_IDENTITY" \
             --mode "$SIGNING_MODE"
 
           if [[ "$NOTARY_ENABLED" == "true" ]]; then
             scripts/release/macos-notarize-app.sh \
-              --app "$WINDOW_APP_PATH" \
-              --archive "$WINDOW_ARCHIVE" \
-              --keychain-profile "$NOTARY_PROFILE" \
-              --keychain "$KEYCHAIN_PATH"
-
-            scripts/release/macos-notarize-app.sh \
-              --app "$MENUBAR_APP_PATH" \
-              --archive "$MENUBAR_ARCHIVE" \
+              --app "$AMBIENT_APP_PATH" \
+              --archive "$AMBIENT_ARCHIVE" \
               --keychain-profile "$NOTARY_PROFILE" \
               --keychain "$KEYCHAIN_PATH"
 
             NOTARIZATION_STATUS="notarized"
           else
-            ditto -c -k --sequesterRsrc --keepParent "$WINDOW_APP_PATH" "$WINDOW_ARCHIVE"
-            ditto -c -k --sequesterRsrc --keepParent "$MENUBAR_APP_PATH" "$MENUBAR_ARCHIVE"
+            ditto -c -k --sequesterRsrc --keepParent "$AMBIENT_APP_PATH" "$AMBIENT_ARCHIVE"
             NOTARIZATION_STATUS="not-configured"
           fi
 
@@ -221,16 +196,10 @@ jobs:
             "notarization_status": "${NOTARIZATION_STATUS}",
             "artifacts": [
               {
-                "component": "local-health-window",
-                "bundle_id": "ai.longhouse.localhealth.window",
-                "app_name": "${WINDOW_APP_NAME}",
-                "archive": "$(basename "$WINDOW_ARCHIVE")"
-              },
-              {
-                "component": "local-health-menubar",
-                "bundle_id": "ai.longhouse.localhealth.menubar",
-                "app_name": "${MENUBAR_APP_NAME}",
-                "archive": "$(basename "$MENUBAR_ARCHIVE")"
+                "component": "local-health-app",
+                "bundle_id": "ai.longhouse.localhealth",
+                "app_name": "${AMBIENT_APP_NAME}",
+                "archive": "$(basename "$AMBIENT_ARCHIVE")"
               }
             ]
           }
@@ -283,7 +252,6 @@ jobs:
             binaries/longhouse-engine-linux-arm64
             binaries/longhouse-local-health-menubar-darwin-arm64
             binaries/longhouse-local-health-window-darwin-arm64
-            binaries/longhouse-local-health-menubar-darwin-arm64.app.zip
-            binaries/longhouse-local-health-window-darwin-arm64.app.zip
+            binaries/longhouse-local-health-app-darwin-arm64.zip
             binaries/local-runtime-macos-packaging.json
             binaries/local-runtime-checksums.txt
