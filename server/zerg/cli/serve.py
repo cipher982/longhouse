@@ -14,6 +14,7 @@ import os
 import secrets
 import signal
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 from urllib.parse import urlparse
@@ -315,6 +316,18 @@ def serve(
 
         try:
             os.kill(pid, signal.SIGTERM)
+            for _ in range(50):
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                typer.secho(
+                    f"Timed out waiting for server process {pid} to exit",
+                    fg=typer.colors.RED,
+                )
+                raise typer.Exit(code=1)
             typer.secho(f"Stopped server (PID {pid})", fg=typer.colors.GREEN)
             _get_pid_file().unlink(missing_ok=True)
         except OSError as e:
