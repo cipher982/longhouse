@@ -63,7 +63,6 @@ export interface EventMap {
   };
   'oikos:error': { message: string; details?: string; timestamp: number; traceId?: string; runId?: number };
   'oikos:deferred': { runId: number; message: string; attachUrl?: string; timestamp: number };
-  'oikos:waiting': { runId: number; jobId?: number; message: string; timestamp: number };
   'oikos:resumed': { runId: number; timestamp: number };
   'oikos:cleared': { timestamp: number };
 

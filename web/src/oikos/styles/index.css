@@ -29,9 +29,6 @@
 /* Animations and transitions (200 lines) */
 @import url("./animations.css");
 
-/* Commis progress indicator (shows when oikos delegates to commis) */
-@import url("./commis-progress.css");
-
 /* Additional component styles can be added here as needed */
 
 /* =================================================================

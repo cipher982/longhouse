@@ -1,37 +1,23 @@
 /**
- * Core User Journey E2E Test
+ * Core User Journey E2E tests.
  *
- * Tests the oikos -> response flow using the gpt-scripted model
- * for deterministic behavior without real LLM calls.
- *
- * The gpt-scripted model has predefined scenarios that emit specific responses
- * based on message patterns. This enables fully deterministic E2E testing.
- *
- * Primary test: generic_oikos scenario
- * - User sends any message (e.g., "hello oikos")
- * - Oikos returns direct scripted response
- * - No commis spawning (avoids continuation complexity)
- *
- * For commis flow testing with spawn_workspace_commis, see TODO: commis_flow.spec.ts
+ * Keep this file focused on the current surface:
+ * - direct Oikos responses
+ * - generic tool-card rendering
+ * - API event persistence
  */
 
 import { randomUUID } from 'node:crypto';
 
 import { test, expect, type Page } from '../fixtures';
 import { postSseAndCollect } from '../helpers/sse';
+import { resetDatabase } from '../test-utils';
 
-/**
- * Navigate to Oikos chat page and wait for it to be ready
- */
 async function navigateToChatPage(page: Page): Promise<void> {
   await page.goto('/chat');
-  // Wait for chat interface using data-testid (not CSS class per banana handoff)
   await expect(page.locator('[data-testid="chat-input"]')).toBeVisible({ timeout: 15000 });
 }
 
-/**
- * Ensure event bus is ready and tool listeners are attached before emitting test events.
- */
 async function waitForEventBusReady(page: Page): Promise<void> {
   await page.waitForFunction(() => {
     const bus = (window as any).__oikos?.eventBus;
@@ -39,9 +25,6 @@ async function waitForEventBusReady(page: Page): Promise<void> {
   }, null, { timeout: 15000 });
 }
 
-/**
- * Query run events from the API
- */
 async function getRunEvents(
   request: import('@playwright/test').APIRequestContext,
   runId: number,
@@ -57,17 +40,13 @@ async function getRunEvents(
 }
 
 test.describe('Core User Journey - Scripted LLM', () => {
-  // Set longer timeout for this test as it involves full oikos flow
   test.setTimeout(120000);
 
-  test('oikos direct response flow with gpt-scripted model', async ({ page, request, backendUrl, commisId }) => {
-    console.log('[Core Journey] Starting test');
+  test.beforeEach(async ({ request }) => {
+    await resetDatabase(request);
+  });
 
-    // Send a simple message that uses the "generic_oikos" scenario
-    // This scenario returns a direct response without spawning commis,
-    // which avoids the continuation flow complexity for this core test.
-    //
-    // For commis flow testing, see commis_flow.spec.ts (TODO)
+  test('oikos direct response flow with gpt-scripted model', async ({ request, backendUrl, commisId }) => {
     const events = await postSseAndCollect({
       backendUrl,
       commisId,
@@ -81,498 +60,174 @@ test.describe('Core User Journey - Scripted LLM', () => {
       stopEvent: 'oikos_complete',
       timeoutMs: 60000,
     });
-    console.log('[Core Journey] SSE events received:', events.length);
-    console.log(
-      '[Core Journey] Parsed SSE events:',
-      events.map((e) => e.event)
-    );
 
-    // Step 3: Extract run_id from connected event
     const connectedEvent = events.find((e) => e.event === 'connected');
     expect(connectedEvent).toBeTruthy();
     const runId = (connectedEvent?.data as { run_id?: number })?.run_id;
     expect(runId).toBeTruthy();
-    console.log('[Core Journey] Run ID:', runId);
 
-    // Step 4: Verify we got oikos_complete event
-    // The generic_oikos scenario doesn't spawn commis, so we get complete directly
     const completeEvent = events.find((e) => e.event === 'oikos_complete');
     expect(completeEvent).toBeTruthy();
-    console.log('[Core Journey] Found oikos_complete event');
 
-    // Step 5: Extract and verify response contains expected scripted text
     const completePayload = (completeEvent?.data as { payload?: { result?: string } })?.payload;
     const result = completePayload?.result || '';
-    console.log('[Core Journey] Result:', result.substring(0, 200));
+    expect(/^(ok|task completed successfully\.?)$/i.test(result.trim())).toBeTruthy();
 
-    // The scripted model can return a simple ok or a completion summary
-    const normalizedResult = result.trim().toLowerCase();
-    expect(/^(ok|task completed successfully\.?)$/.test(normalizedResult)).toBeTruthy();
-    console.log('[Core Journey] Expected scripted response text found');
-
-    // Step 6: Query events API to verify run execution was recorded
-    // Use polling instead of sleep to wait for event persistence (per banana handoff)
     let allEvents = await getRunEvents(request, runId!);
+    await expect
+      .poll(
+        async () => {
+          allEvents = await getRunEvents(request, runId!);
+          const types = allEvents.events.map((e) => e.event_type);
+          return types.includes('oikos_started');
+        },
+        { timeout: 20000, intervals: [200, 500, 1000, 2000] }
+      )
+      .toBeTruthy();
 
-    // Poll until trace includes oikos lifecycle evidence (events are persisted async)
-    await expect.poll(
-      async () => {
-        allEvents = await getRunEvents(request, runId!);
-        const types = allEvents.events.map((e) => e.event_type);
-        return {
-          total: allEvents.total,
-          hasOikosStarted: types.includes('oikos_started'),
-        };
-      },
-      { timeout: 20000, intervals: [200, 500, 1000, 2000] }
-    ).toEqual(expect.objectContaining({ hasOikosStarted: true }));
-
-    console.log('[Core Journey] Total events for run:', allEvents.total);
-    console.log(
-      '[Core Journey] Event types:',
-      allEvents.events.map((e) => e.event_type)
-    );
-
-    // Verify we have evidence of oikos execution
-    const hasOikosStart = allEvents.events.some((e) => e.event_type === 'oikos_started');
-    expect(hasOikosStart).toBeTruthy();
-    console.log('[Core Journey] oikos_started event found in trace');
-
-    console.log('[Core Journey] Test completed successfully');
+    expect(allEvents.events.some((e) => e.event_type === 'oikos_started')).toBeTruthy();
   });
 
   test('run status indicator is present in DOM', async ({ page }) => {
-    console.log('[Status Indicator] Starting test');
-
     await navigateToChatPage(page);
 
-    // Verify the run status indicator exists in the DOM
     const statusIndicator = page.locator('[data-testid="run-status"]');
     await expect(statusIndicator).toBeAttached({ timeout: 5000 });
-
-    // Verify initial state is idle or a completed run (history can rehydrate)
     await expect(statusIndicator).toHaveAttribute('data-run-status', /^(idle|complete)$/, { timeout: 5000 });
-    console.log('[Status Indicator] Initial state is idle or complete');
-
-    console.log('[Status Indicator] Test completed successfully');
   });
 
-  test('commis tool rows display command preview', async ({ page }) => {
-    console.log('[Commis Tool UI] Starting test');
-
+  test('generic tool card shows spawn_commis preview', async ({ page }) => {
     await navigateToChatPage(page);
     await waitForEventBusReady(page);
 
     const runId = 101;
-    const toolCallId = 'call-spawn-1';
-    const commisId = 'e2e-commis-1';
-    const jobId = 9001;
+    const toolCallId = 'call-spawn-preview';
     const uniqueToken = `e2e-${randomUUID().slice(0, 8)}`;
     const task = `Check disk space (${uniqueToken})`;
 
     await page.evaluate(
-      ({ runId, toolCallId, commisId, jobId, task }) => {
+      ({ runId, toolCallId, task }) => {
         const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
-        bus.emit('oikos:started', { runId, task: 'Test task', timestamp: now });
+        bus.emit('oikos:started', { runId, task: 'Tool preview test', timestamp: now });
         bus.emit('oikos:tool_started', {
           runId,
-          toolName: 'spawn_workspace_commis',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_workspace_commis args',
+          argsPreview: task,
           args: { task },
           timestamp: now + 1,
         });
-        bus.emit('oikos:commis_spawned', {
-          jobId,
-          task,
-          toolCallId,
-          timestamp: now + 2,
-        });
-        bus.emit('oikos:commis_started', {
-          jobId,
-          commisId,
-          timestamp: now + 3,
-        });
-        bus.emit('commis:tool_started', {
-          commisId,
-          toolName: 'runner_exec',
-          toolCallId: 'call-tool-1',
-          argsPreview: "{'target':'cube','command':'df -h'}",
-          timestamp: now + 4,
-        });
-        bus.emit('commis:tool_completed', {
-          commisId,
-          toolName: 'runner_exec',
-          toolCallId: 'call-tool-1',
-          durationMs: 12,
-          resultPreview: "{'exit_code': 0, 'stdout': 'ok'}",
-          timestamp: now + 5,
-        });
       },
-      { runId, toolCallId, commisId, jobId, task }
+      { runId, toolCallId, task }
     );
 
-    const commisCard = page.locator('[data-testid="commis-tool-card"]', { hasText: uniqueToken });
-    await expect(commisCard).toBeVisible({ timeout: 5000 });
-
-    const commandLabel = commisCard.locator('.nested-tool-name--command');
-    await expect(commandLabel).toContainText('df -h', { timeout: 5000 });
-
-    const toolMeta = commisCard.locator('.nested-tool-meta');
-    await expect(toolMeta).toContainText('runner_exec', { timeout: 5000 });
-    await expect(toolMeta).toContainText('target: cube', { timeout: 5000 });
-    await expect(toolMeta).toContainText('exit 0', { timeout: 5000 });
-
-    console.log('[Commis Tool UI] Command preview verified');
+    const toolCard = page.locator(`[data-testid="tool-card"][data-tool-call-id="${toolCallId}"]`);
+    await expect(toolCard).toBeVisible({ timeout: 5000 });
+    await expect(toolCard).toContainText('Start cloud session');
+    await expect(toolCard).toContainText(uniqueToken);
   });
 
-  test('nested tool details drawer expands on click', async ({ page }) => {
-    console.log('[Details Drawer] Starting test');
-
+  test('tool card expands to show input, result, and raw payload', async ({ page }) => {
     await navigateToChatPage(page);
     await waitForEventBusReady(page);
 
-    const runId = 201;
+    const runId = 102;
     const toolCallId = 'call-spawn-details';
-    const commisId = 'e2e-commis-details';
-    const jobId = 9002;
+    const task = 'Analyze repository state';
+    const resultPreview = 'Workspace commis completed successfully.';
 
     await page.evaluate(
-      ({ runId, toolCallId, commisId, jobId }) => {
+      ({ runId, toolCallId, task, resultPreview }) => {
         const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
-        bus.emit('oikos:started', { runId, task: 'Details test', timestamp: now });
+        bus.emit('oikos:started', { runId, task: 'Tool details test', timestamp: now });
         bus.emit('oikos:tool_started', {
           runId,
-          toolName: 'spawn_workspace_commis',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_workspace_commis args',
-          args: { task: 'Test details drawer' },
+          argsPreview: task,
+          args: { task, git_repo: 'https://github.com/octocat/Hello-World.git' },
           timestamp: now + 1,
         });
-        bus.emit('oikos:commis_spawned', {
-          jobId,
-          task: 'Test details drawer',
+        bus.emit('oikos:tool_completed', {
+          runId,
+          toolName: 'spawn_commis',
           toolCallId,
+          durationMs: 1200,
+          resultPreview,
+          result: { status: 'success', summary: resultPreview },
           timestamp: now + 2,
         });
-        bus.emit('oikos:commis_started', {
-          jobId,
-          commisId,
-          timestamp: now + 3,
-        });
-        bus.emit('commis:tool_started', {
-          commisId,
-          toolName: 'ssh_exec',
-          toolCallId: 'call-tool-details',
-          argsPreview: '{"target":"cube","command":"ls -la /tmp"}',
-          timestamp: now + 4,
-        });
-        bus.emit('commis:tool_completed', {
-          commisId,
-          toolName: 'ssh_exec',
-          toolCallId: 'call-tool-details',
-          durationMs: 25,
-          argsPreview: '{"target":"cube","command":"ls -la /tmp"}',
-          resultPreview: '{"exit_code": 0, "stdout": "drwxrwxrwt 15 root root 4096 Jan 16 10:00 ."}',
-          timestamp: now + 5,
-        });
       },
-      { runId, toolCallId, commisId, jobId }
+      { runId, toolCallId, task, resultPreview }
     );
 
-    const commisCard = page.locator('[data-testid="commis-tool-card"]', {
-      hasText: 'ls -la /tmp',
-    });
-    await expect(commisCard).toBeVisible({ timeout: 15000 });
+    const toolCard = page.locator(`[data-testid="tool-card"][data-tool-call-id="${toolCallId}"]`);
+    await expect(toolCard).toBeVisible({ timeout: 5000 });
+    await toolCard.click();
 
-    // Click on the nested tool row to expand details
-    const nestedToolRow = commisCard.locator('.nested-tool-row', { hasText: 'ls -la /tmp' }).first();
-    await expect(nestedToolRow).toBeVisible({ timeout: 15000 });
-    await nestedToolRow.click();
+    await expect(toolCard).toContainText('Input:');
+    await expect(toolCard).toContainText(task);
+    await expect(toolCard).toContainText('Result:');
+    await expect(toolCard).toContainText(resultPreview);
 
-    // Verify details drawer is visible
-    const detailsDrawer = commisCard.locator('[data-testid="nested-tool-details"]');
-    await expect(detailsDrawer).toBeVisible({ timeout: 5000 });
+    const rawToggle = toolCard.getByRole('button', { name: 'Show Raw' });
+    await rawToggle.click();
 
-    // Verify content sections are present
-    await expect(detailsDrawer.locator('.nested-tool-details__label').first()).toContainText('Args', { timeout: 5000 });
-    await expect(detailsDrawer.locator('.nested-tool-details__content').first()).toBeVisible({ timeout: 5000 });
-
-    console.log('[Details Drawer] Details drawer expands correctly');
+    await expect(toolCard).toContainText('"git_repo": "https://github.com/octocat/Hello-World.git"');
+    await expect(toolCard).toContainText('"summary": "Workspace commis completed successfully."');
   });
 
-  test('source badge displays for exec tools', async ({ page }) => {
-    console.log('[Source Badge] Starting test');
-
+  test('tool card shows failed state', async ({ page }) => {
     await navigateToChatPage(page);
     await waitForEventBusReady(page);
 
-    const runId = 202;
-    const toolCallId = 'call-spawn-source';
-    const commisId = 'e2e-commis-source';
-    const jobId = 9003;
+    const runId = 103;
+    const toolCallId = 'call-spawn-failed';
+    const task = 'Check remote runner health';
+    const error = 'Runner offline: cube is not responding';
 
     await page.evaluate(
-      ({ runId, toolCallId, commisId, jobId }) => {
+      ({ runId, toolCallId, task, error }) => {
         const bus = (window as any).__oikos.eventBus;
         const now = Date.now();
 
-        bus.emit('oikos:started', { runId, task: 'Source badge test', timestamp: now });
+        bus.emit('oikos:started', { runId, task: 'Tool failure test', timestamp: now });
         bus.emit('oikos:tool_started', {
           runId,
-          toolName: 'spawn_workspace_commis',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_workspace_commis args',
-          args: { task: 'Test source badge' },
+          argsPreview: task,
+          args: { task },
           timestamp: now + 1,
         });
-        bus.emit('oikos:commis_spawned', {
-          jobId,
-          task: 'Test source badge',
-          toolCallId,
-          timestamp: now + 2,
-        });
-        bus.emit('oikos:commis_started', {
-          jobId,
-          commisId,
-          timestamp: now + 3,
-        });
-        bus.emit('commis:tool_started', {
-          commisId,
-          toolName: 'runner_exec',
-          toolCallId: 'call-tool-source',
-          argsPreview: '{"target":"laptop","command":"uname -a"}',
-          timestamp: now + 4,
-        });
-      },
-      { runId, toolCallId, commisId, jobId }
-    );
-
-    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
-    await expect(commisCard).toBeVisible({ timeout: 5000 });
-
-    // Verify source badge is visible
-    const sourceBadge = commisCard.locator('.nested-tool-meta-item--source');
-    await expect(sourceBadge).toContainText('Runner', { timeout: 5000 });
-
-    console.log('[Source Badge] Source badge displays correctly');
-  });
-
-  test('offline badge displays for connection errors', async ({ page }) => {
-    console.log('[Offline Badge] Starting test');
-
-    await navigateToChatPage(page);
-    await waitForEventBusReady(page);
-
-    const runId = 203;
-    const toolCallId = 'call-spawn-offline';
-    const commisId = 'e2e-commis-offline';
-    const jobId = 9004;
-
-    await page.evaluate(
-      ({ runId, toolCallId, commisId, jobId }) => {
-        const bus = (window as any).__oikos.eventBus;
-        const now = Date.now();
-
-        bus.emit('oikos:started', { runId, task: 'Offline badge test', timestamp: now });
-        bus.emit('oikos:tool_started', {
+        bus.emit('oikos:tool_failed', {
           runId,
-          toolName: 'spawn_workspace_commis',
+          toolName: 'spawn_commis',
           toolCallId,
-          argsPreview: 'spawn_workspace_commis args',
-          args: { task: 'Test offline badge' },
-          timestamp: now + 1,
-        });
-        bus.emit('oikos:commis_spawned', {
-          jobId,
-          task: 'Test offline badge',
-          toolCallId,
+          durationMs: 500,
+          error,
+          errorDetails: { code: 'runner_offline' },
           timestamp: now + 2,
         });
-        bus.emit('oikos:commis_started', {
-          jobId,
-          commisId,
-          timestamp: now + 3,
-        });
-        bus.emit('commis:tool_started', {
-          commisId,
-          toolName: 'runner_exec',
-          toolCallId: 'call-tool-offline',
-          argsPreview: '{"target":"cube","command":"whoami"}',
-          timestamp: now + 4,
-        });
-        bus.emit('commis:tool_failed', {
-          commisId,
-          toolName: 'runner_exec',
-          toolCallId: 'call-tool-offline',
-          durationMs: 5000,
-          error: 'Runner offline: cube is not responding',
-          timestamp: now + 5,
-        });
       },
-      { runId, toolCallId, commisId, jobId }
+      { runId, toolCallId, task, error }
     );
 
-    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
-    await expect(commisCard).toBeVisible({ timeout: 5000 });
-
-    // Verify offline badge is visible
-    const offlineBadge = commisCard.locator('.nested-tool-meta-item--offline');
-    await expect(offlineBadge).toContainText('Runner offline', { timeout: 5000 });
-
-    console.log('[Offline Badge] Offline badge displays correctly');
-  });
-
-  test('compact mode toggle hides previews', async ({ page }) => {
-    console.log('[Compact Mode] Starting test');
-
-    await navigateToChatPage(page);
-    await waitForEventBusReady(page);
-
-    const runId = 204;
-    const toolCallId = 'call-spawn-compact';
-    const commisId = 'e2e-commis-compact';
-    const jobId = 9005;
-
-    await page.evaluate(
-      ({ runId, toolCallId, commisId, jobId }) => {
-        const bus = (window as any).__oikos.eventBus;
-        const now = Date.now();
-
-        bus.emit('oikos:started', { runId, task: 'Compact mode test', timestamp: now });
-        bus.emit('oikos:tool_started', {
-          runId,
-          toolName: 'spawn_workspace_commis',
-          toolCallId,
-          argsPreview: 'spawn_workspace_commis args',
-          args: { task: 'Test compact mode' },
-          timestamp: now + 1,
-        });
-        bus.emit('oikos:commis_spawned', {
-          jobId,
-          task: 'Test compact mode',
-          toolCallId,
-          timestamp: now + 2,
-        });
-        bus.emit('oikos:commis_started', {
-          jobId,
-          commisId,
-          timestamp: now + 3,
-        });
-        bus.emit('commis:tool_started', {
-          commisId,
-          toolName: 'ssh_exec',
-          toolCallId: 'call-tool-compact',
-          argsPreview: '{"target":"cube","command":"echo hello"}',
-          timestamp: now + 4,
-        });
-        bus.emit('commis:tool_completed', {
-          commisId,
-          toolName: 'ssh_exec',
-          toolCallId: 'call-tool-compact',
-          durationMs: 10,
-          resultPreview: '{"exit_code": 0, "stdout": "hello world output here"}',
-          timestamp: now + 5,
-        });
-      },
-      { runId, toolCallId, commisId, jobId }
-    );
-
-    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
-    await expect(commisCard).toBeVisible({ timeout: 5000 });
-
-    // Verify preview is visible initially
-    const previewText = commisCard.locator('.nested-tool-preview');
-    await expect(previewText).toBeVisible({ timeout: 5000 });
-
-    // Click compact toggle
-    const compactToggle = commisCard.locator('.commis-tool-card__compact-toggle');
-    await compactToggle.click();
-
-    // Verify compact class is applied
-    await expect(commisCard).toHaveClass(/commis-tool-card--compact/, { timeout: 5000 });
-
-    // Preview should be hidden in compact mode (CSS display: none)
-    await expect(previewText).not.toBeVisible({ timeout: 5000 });
-
-    console.log('[Compact Mode] Compact mode toggle works correctly');
-  });
-
-  test('copy button is visible for command tools', async ({ page }) => {
-    console.log('[Copy Button] Starting test');
-
-    await navigateToChatPage(page);
-    await waitForEventBusReady(page);
-
-    const runId = 205;
-    const toolCallId = 'call-spawn-copy';
-    const commisId = 'e2e-commis-copy';
-    const jobId = 9006;
-
-    await page.evaluate(
-      ({ runId, toolCallId, commisId, jobId }) => {
-        const bus = (window as any).__oikos.eventBus;
-        const now = Date.now();
-
-        bus.emit('oikos:started', { runId, task: 'Copy button test', timestamp: now });
-        bus.emit('oikos:tool_started', {
-          runId,
-          toolName: 'spawn_workspace_commis',
-          toolCallId,
-          argsPreview: 'spawn_workspace_commis args',
-          args: { task: 'Test copy button' },
-          timestamp: now + 1,
-        });
-        bus.emit('oikos:commis_spawned', {
-          jobId,
-          task: 'Test copy button',
-          toolCallId,
-          timestamp: now + 2,
-        });
-        bus.emit('oikos:commis_started', {
-          jobId,
-          commisId,
-          timestamp: now + 3,
-        });
-        bus.emit('commis:tool_started', {
-          commisId,
-          toolName: 'runner_exec',
-          toolCallId: 'call-tool-copy',
-          argsPreview: '{"target":"laptop","command":"pwd"}',
-          timestamp: now + 4,
-        });
-      },
-      { runId, toolCallId, commisId, jobId }
-    );
-
-    const commisCard = page.locator(`[data-testid="commis-tool-card"][data-tool-call-id="${toolCallId}"]`);
-    await expect(commisCard).toBeVisible({ timeout: 5000 });
-
-    // Hover over the nested tool row to make copy button visible
-    // Wait for element to be stable before hovering (avoids DOM detachment during React re-render)
-    const nestedToolRow = commisCard.locator('.nested-tool-row').first();
-    await expect(nestedToolRow).toBeVisible({ timeout: 5000 });
-    await nestedToolRow.hover({ timeout: 5000 });
-
-    // Verify copy button exists (it's there but hidden until hover in CSS)
-    const copyButton = commisCard.locator('.nested-tool-copy');
-    await expect(copyButton).toBeAttached({ timeout: 5000 });
-
-    // Clicking copy button should not throw an error
-    await copyButton.click({ timeout: 5000 });
-
-    console.log('[Copy Button] Copy button is present and clickable');
+    const toolCard = page.locator(`[data-testid="tool-card"][data-tool-call-id="${toolCallId}"]`);
+    await expect(toolCard).toBeVisible({ timeout: 5000 });
+    await toolCard.click();
+    await expect(toolCard).toContainText(error);
   });
 });
 
 test.describe('Core Journey - API Flow', () => {
   test.setTimeout(60000);
 
-  test('oikos_complete event contains result text', async ({ request, backendUrl, commisId }) => {
+  test('oikos_complete event contains result text', async ({ backendUrl, commisId }) => {
     const events = await postSseAndCollect({
       backendUrl,
       commisId,
@@ -587,19 +242,15 @@ test.describe('Core Journey - API Flow', () => {
       timeoutMs: 30000,
     });
 
-    // Verify connected event
     const connectedEvent = events.find((e) => e.event === 'connected');
     expect(connectedEvent).toBeTruthy();
 
-    // Verify oikos_complete event exists
     const completeEvent = events.find((e) => e.event === 'oikos_complete');
     expect(completeEvent).toBeTruthy();
 
-    // Verify the payload structure
     const completePayload = (completeEvent?.data as { payload?: { result?: string; status?: string } })?.payload;
     expect(completePayload).toBeTruthy();
     expect(completePayload?.status).toBe('success');
-    console.log('[API Flow] oikos_complete event validated');
   });
 
   test('run events endpoint returns events for a run', async ({ request, backendUrl, commisId }) => {
@@ -617,12 +268,10 @@ test.describe('Core Journey - API Flow', () => {
       timeoutMs: 30000,
     });
 
-    // Extract run_id
     const connectedEvent = events.find((e) => e.event === 'connected');
     const runId = (connectedEvent?.data as { run_id?: number })?.run_id;
     expect(runId).toBeTruthy();
 
-    // Query the events endpoint
     const eventsResponse = await request.get(`/api/oikos/runs/${runId}/events`);
     expect(eventsResponse.status()).toBe(200);
 
@@ -630,7 +279,5 @@ test.describe('Core Journey - API Flow', () => {
     expect(eventsData.run_id).toBe(runId);
     expect(eventsData.events).toBeInstanceOf(Array);
     expect(eventsData.total).toBeGreaterThanOrEqual(0);
-
-    console.log('[Events API] Endpoint returns valid response structure');
   });
 });

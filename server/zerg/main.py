@@ -978,6 +978,15 @@ from zerg.middleware.request_timeout import RequestTimeoutMiddleware
 app.add_middleware(RequestTimeoutMiddleware)
 
 # ---------------------------------------------------------------------------
+# E2E SQLite commis routing - keep HTTP requests on the same per-commis DB
+# as websocket routes that use ``commis=...``.
+# Added before SafeErrorResponseMiddleware so safe-error stays outermost.
+# ---------------------------------------------------------------------------
+from zerg.middleware.test_commis_routing import E2ECommisRoutingMiddleware
+
+app.add_middleware(E2ECommisRoutingMiddleware, enabled=_settings.testing)
+
+# ---------------------------------------------------------------------------
 # SafeErrorResponseMiddleware - MUST be added LAST to be the outermost wrapper.
 # In Starlette, add_middleware() inserts at the START of the list, so the last
 # middleware added becomes the outermost layer that sees requests first and

@@ -113,7 +113,13 @@ async def spawn_commis_async(
     asyncio.create_task(run_commis_job(job.id))
 
     # Pause Oikos until the job completes
-    raise RunnerInterrupted({"type": "commis_pending", "job_id": job.id})
+    raise RunnerInterrupted(
+        {
+            "type": "commis_pending",
+            "job_id": job.id,
+            "tool_call_id": _tool_call_id,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
