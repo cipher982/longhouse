@@ -12,8 +12,8 @@ import typer
 
 from zerg.services.local_health import collect_local_health
 from zerg.services.local_health_ui import build_local_health_command
-from zerg.services.runtime_artifacts import CANONICAL_BINARY_NAMES
 from zerg.services.runtime_artifacts import RuntimeComponent
+from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 from zerg.services.shipper import get_zerg_url
 
 app = typer.Typer(
@@ -134,9 +134,13 @@ def _desktop_package_path():
         yield resolved
 
 
-def _prebuilt_binary_path(component: RuntimeComponent) -> Path | None:
-    path = Path.home() / ".local" / "bin" / CANONICAL_BINARY_NAMES[component]
-    return path if path.exists() else None
+def _prebuilt_runtime_artifact(component: RuntimeComponent):
+    artifact = resolve_installed_runtime_artifact(component)
+    if artifact is not None:
+        return artifact
+    if component == RuntimeComponent.LOCAL_HEALTH_APP:
+        return resolve_installed_runtime_artifact(RuntimeComponent.LOCAL_HEALTH_MENUBAR)
+    return None
 
 
 def _launch_desktop_surface(
@@ -148,10 +152,10 @@ def _launch_desktop_surface(
 ) -> None:
     ui_url = get_zerg_url(Path(claude_dir) if claude_dir else None)
 
-    prebuilt_binary = _prebuilt_binary_path(component) if component is not None else None
-    if prebuilt_binary is not None:
+    prebuilt_artifact = _prebuilt_runtime_artifact(component) if component is not None else None
+    if prebuilt_artifact is not None:
         command = [
-            str(prebuilt_binary),
+            str(prebuilt_artifact.launch_path),
             "--live",
             "--refresh-seconds",
             str(refresh_seconds),
@@ -160,7 +164,7 @@ def _launch_desktop_surface(
         ]
         if ui_url:
             command.extend(["--ui-url", ui_url])
-        cwd = prebuilt_binary.parent
+        cwd = Path(prebuilt_artifact.path) if component == RuntimeComponent.LOCAL_HEALTH_APP else Path(prebuilt_artifact.launch_path).parent
     else:
         with _desktop_package_path() as package_path:
             command = [
@@ -239,7 +243,7 @@ def local_health_menubar(
     claude_dir = (ctx.obj or {}).get("claude_dir")
     _launch_desktop_surface(
         product="LonghouseMenuBarHarnessMenuBar",
-        component=RuntimeComponent.LOCAL_HEALTH_MENUBAR,
+        component=RuntimeComponent.LOCAL_HEALTH_APP,
         claude_dir=claude_dir,
         refresh_seconds=refresh_seconds,
     )

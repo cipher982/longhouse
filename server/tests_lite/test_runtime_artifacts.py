@@ -27,6 +27,7 @@ def test_ensure_runtime_binary_uses_existing_engine_on_path(monkeypatch, tmp_pat
     result = runtime_artifacts.ensure_runtime_binary(runtime_artifacts.RuntimeComponent.ENGINE)
 
     assert result.path == str(existing)
+    assert result.launch_path == str(existing)
     assert result.installed_now is False
     assert result.source == "path"
 
@@ -51,24 +52,51 @@ def test_ensure_runtime_binary_copies_from_local_override(monkeypatch, tmp_path:
     assert destination.exists()
     assert destination.read_text() == "menubar"
     assert result.path == str(destination)
+    assert result.launch_path == str(destination)
     assert result.installed_now is True
+
+
+def test_ensure_runtime_artifact_copies_app_bundle_from_local_override(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    source_app = tmp_path / "build" / "Longhouse.app"
+    executable = source_app / "Contents" / "MacOS" / "Longhouse"
+    executable.parent.mkdir(parents=True, exist_ok=True)
+    executable.write_text("app")
+    executable.chmod(0o755)
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(runtime_artifacts, "_local_applications_dir", lambda: home / "Applications")
+
+    result = runtime_artifacts.ensure_runtime_artifact(
+        runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_APP,
+        source_override=str(source_app),
+    )
+
+    destination = home / "Applications" / "Longhouse.app"
+    assert destination.exists()
+    assert (destination / "Contents" / "MacOS" / "Longhouse").read_text() == "app"
+    assert result.path == str(destination)
+    assert result.launch_path == str(destination / "Contents" / "MacOS" / "Longhouse")
+    assert result.installed_now is True
+    assert result.kind == runtime_artifacts.RuntimeArtifactKind.APP_BUNDLE
 
 
 def test_ensure_runtime_binary_uses_release_url_when_override_missing(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
 
-    downloads: list[tuple[str, Path]] = []
+    downloads: list[tuple[runtime_artifacts.RuntimeComponent, str, Path]] = []
 
-    def fake_download(url: str, destination_path: Path) -> None:
-        downloads.append((url, destination_path))
+    def fake_install_remote(component: runtime_artifacts.RuntimeComponent, url: str, destination_path: Path) -> None:
+        downloads.append((component, url, destination_path))
         destination_path.parent.mkdir(parents=True, exist_ok=True)
         destination_path.write_text("binary")
         destination_path.chmod(0o755)
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
-    monkeypatch.setattr(runtime_artifacts, "_download_binary", fake_download)
+    monkeypatch.setattr(runtime_artifacts, "_install_artifact_from_remote_source", fake_install_remote)
     monkeypatch.setattr(runtime_artifacts, "_platform_target", lambda: "linux-x64")
     monkeypatch.setattr(runtime_artifacts.metadata, "version", lambda package: "0.1.9")
     monkeypatch.setattr(runtime_artifacts.shutil, "which", lambda name: None)
@@ -76,9 +104,11 @@ def test_ensure_runtime_binary_uses_release_url_when_override_missing(monkeypatc
     result = runtime_artifacts.ensure_runtime_binary(runtime_artifacts.RuntimeComponent.ENGINE)
 
     assert result.path == str(home / ".local" / "bin" / "longhouse-engine")
+    assert result.launch_path == str(home / ".local" / "bin" / "longhouse-engine")
     assert result.installed_now is True
     assert downloads == [
         (
+            runtime_artifacts.RuntimeComponent.ENGINE,
             "https://github.com/cipher982/longhouse/releases/download/v0.1.9/longhouse-engine-linux-x64",
             home / ".local" / "bin" / "longhouse-engine",
         )

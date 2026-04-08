@@ -37,9 +37,10 @@ def test_install_menubar_service_writes_plist_and_loads(monkeypatch, tmp_path: P
     monkeypatch.setattr(local_health_ui, "detect_platform", lambda: Platform.MACOS)
     monkeypatch.setattr(
         local_health_ui,
-        "ensure_runtime_binary",
+        "ensure_runtime_artifact",
         lambda component, source_override=None: SimpleNamespace(
-            path="/Users/test/.local/bin/longhouse-local-health-menubar",
+            path="/Users/test/Applications/Longhouse.app",
+            launch_path="/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
             source="override",
             installed_now=True,
         ),
@@ -61,11 +62,13 @@ def test_install_menubar_service_writes_plist_and_loads(monkeypatch, tmp_path: P
     plist_path = home / "Library" / "LaunchAgents" / "com.longhouse.local-health-menubar.plist"
     assert plist_path.exists()
     plist = plist_path.read_text(encoding="utf-8")
-    assert "/Users/test/.local/bin/longhouse-local-health-menubar" in plist
+    assert "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse" in plist
     assert "--health-command" in plist
     assert "https://longhouse.ai" in plist
     assert calls[-1] == ["launchctl", "load", str(plist_path)]
     assert result["plist_path"] == str(plist_path)
+    assert result["app_path"] == "/Users/test/Applications/Longhouse.app"
+    assert result["launch_path"] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
 
 
 def test_get_menubar_service_status_returns_not_installed_when_plist_missing(monkeypatch, tmp_path: Path):

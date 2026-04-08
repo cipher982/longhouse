@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 
 from zerg.services.runtime_artifacts import RuntimeComponent
-from zerg.services.runtime_artifacts import ensure_runtime_binary
+from zerg.services.runtime_artifacts import ensure_runtime_artifact
 from zerg.services.shipper.service import Platform
 from zerg.services.shipper.service import detect_platform
 
@@ -56,14 +56,14 @@ def _launchd_plist_path() -> Path:
 
 def _generate_launchd_plist(
     *,
-    binary_path: str,
+    launch_path: str,
     health_command: str,
     refresh_seconds: int,
     ui_url: str | None,
     claude_dir: str | None,
 ) -> str:
     program_arguments = [
-        binary_path,
+        launch_path,
         "--live",
         "--refresh-seconds",
         str(refresh_seconds),
@@ -154,14 +154,14 @@ def install_menubar_service(
     ui_url: str | None,
     claude_dir: str | None,
     refresh_seconds: int = DEFAULT_REFRESH_SECONDS,
-    binary_source_override: str | None = None,
+    app_source_override: str | None = None,
 ) -> dict[str, str]:
     if detect_platform() != Platform.MACOS:
         raise RuntimeError("Ambient local-health menu bar is only supported on macOS")
 
-    installed_binary = ensure_runtime_binary(
-        RuntimeComponent.LOCAL_HEALTH_MENUBAR,
-        source_override=binary_source_override,
+    installed_app = ensure_runtime_artifact(
+        RuntimeComponent.LOCAL_HEALTH_APP,
+        source_override=app_source_override,
     )
     plist_path = _launchd_plist_path()
     plist_path.parent.mkdir(parents=True, exist_ok=True)
@@ -171,7 +171,7 @@ def install_menubar_service(
 
     plist_path.write_text(
         _generate_launchd_plist(
-            binary_path=installed_binary.path,
+            launch_path=installed_app.launch_path,
             health_command=build_local_health_command(claude_dir=claude_dir),
             refresh_seconds=refresh_seconds,
             ui_url=ui_url,
@@ -194,8 +194,10 @@ def install_menubar_service(
         "message": "Ambient local-health menu bar installed",
         "service": "launchd",
         "plist_path": str(plist_path),
-        "binary_path": installed_binary.path,
-        "binary_source": installed_binary.source,
+        "app_path": installed_app.path,
+        "launch_path": installed_app.launch_path,
+        "binary_path": installed_app.launch_path,
+        "binary_source": installed_app.source,
     }
 
 

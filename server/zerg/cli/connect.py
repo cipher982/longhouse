@@ -893,7 +893,9 @@ def _handle_install(
             )
             typer.secho(f"  [OK] {menubar_result['message']}", fg=typer.colors.GREEN)
             typer.echo(f"  Config: {menubar_result.get('plist_path', 'N/A')}")
-            typer.echo(f"  Binary: {menubar_result.get('binary_path', 'N/A')}")
+            if menubar_result.get("app_path"):
+                typer.echo(f"  App: {menubar_result['app_path']}")
+            typer.echo(f"  Launch: {menubar_result.get('launch_path') or menubar_result.get('binary_path', 'N/A')}")
         except RuntimeError as e:
             typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
             raise typer.Exit(code=1)
