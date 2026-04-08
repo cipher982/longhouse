@@ -361,6 +361,10 @@ The macOS harness should expose one obvious control surface per need:
   - render deterministic fixture PNGs for visual review
 - `make menubar-harness-live`
   - render the current machine state to a PNG from `longhouse local-health --json`
+- `make menubar-harness-smoke`
+  - boot both app shells, dry-run every control action, and assert action logs
+- `make menubar-harness-full`
+  - run the full unattended loop and write an artifact manifest
 - `make menubar-harness-window`
   - launch the shared panel in a normal macOS window
 - `make menubar-harness-menubar`
@@ -369,6 +373,7 @@ The macOS harness should expose one obvious control surface per need:
 Important design rule:
 
 - the snapshot renderer, window host, and menu bar host must all reuse the same shared SwiftUI view so visual drift is impossible
+- unattended smoke should exercise the same action layer in `log-only` mode so boot and control wiring can be verified without destructive local side effects
 
 Current package layout:
 
@@ -401,6 +406,7 @@ This effort is successful when:
 - Stage 1 complete: `server/zerg/services/local_health.py` now defines the local-health contract and `longhouse local-health --json` exposes it for CLI and future desktop surfaces
 - Stage 2 implemented in code: the daemon now refreshes the local status file on a short cadence while keeping server heartbeat coarse
 - Stage 3a harness landed: a Swift package under `desktop/LonghouseMenuBarHarness/` now provides shared UI, fixture/live snapshot rendering, a window host, a real menu bar host, and stable Make/script entrypoints
+- Stage 3a harness now has an unattended smoke path and `manifest.json` artifact output, so agents can run one command and inspect one directory instead of replaying manual shell steps
 - current next step: build native UI automation on top of the harness rather than trying to start with fragile AppleScript-only workflows
 
 ## References
