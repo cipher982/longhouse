@@ -6498,8 +6498,6 @@ export interface components {
          *     All credentials are Fernet-encrypted before storage.
          */
         CredentialsSeedRequest: {
-            /** @description Traccar GPS credentials */
-            traccar?: components["schemas"]["TraccarCredentials"] | null;
             /** @description WHOOP health credentials */
             whoop?: components["schemas"]["WhoopCredentials"] | null;
             /** @description Obsidian vault credentials */
@@ -10631,32 +10629,6 @@ export interface components {
         TopAutomationsResponse: {
             /** Top Automations */
             top_automations: components["schemas"]["OpsTopAutomation"][];
-        };
-        /**
-         * TraccarCredentials
-         * @description Traccar GPS tracking credentials.
-         */
-        TraccarCredentials: {
-            /**
-             * Url
-             * @description Traccar server URL
-             */
-            url: string;
-            /**
-             * Username
-             * @description Traccar username
-             */
-            username: string;
-            /**
-             * Password
-             * @description Traccar password
-             */
-            password: string;
-            /**
-             * Device Id
-             * @description Device ID to query
-             */
-            device_id: string;
         };
         /** Trigger */
         Trigger: {
