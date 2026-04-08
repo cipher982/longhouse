@@ -3,8 +3,6 @@ from __future__ import annotations
 import json
 import os
 import plistlib
-import shlex
-import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -192,7 +190,7 @@ def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
     assert payload["launch_readiness"]["state"] == "unconfigured"
 
 
-def test_local_health_menubar_launch_uses_current_python_env(monkeypatch, tmp_path: Path):
+def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     calls: list[dict[str, object]] = []
 
@@ -215,26 +213,9 @@ def test_local_health_menubar_launch_uses_current_python_env(monkeypatch, tmp_pa
         ],
     )
 
-    assert result.exit_code == 0, result.output
-    assert len(calls) == 1
-    command = calls[0]["command"]
-    with local_health_cli._desktop_package_path() as package_path:
-        resolved_package_path = str(package_path)
-    assert command[:4] == [
-        "swift",
-        "run",
-        "--package-path",
-        resolved_package_path,
-    ]
-    assert "LonghouseMenuBarHarnessMenuBar" in command
-    assert "--live" in command
-    assert "--refresh-seconds" in command
-    assert "--health-command" in command
-    health_command = command[command.index("--health-command") + 1]
-    assert sys.executable in health_command
-    assert "zerg.cli.main local-health --json" in health_command
-    assert shlex.quote(str(tmp_path)) in health_command
-    assert command[command.index("--ui-url") + 1] == "https://david010.longhouse.ai"
+    assert result.exit_code == 1, result.output
+    assert "connect --install" in result.output
+    assert calls == []
 
 
 def test_local_health_window_launch_without_url(monkeypatch):

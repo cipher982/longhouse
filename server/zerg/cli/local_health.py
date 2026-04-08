@@ -144,6 +144,7 @@ def _launch_desktop_surface(
     component: RuntimeComponent | None,
     claude_dir: str | None,
     refresh_seconds: int,
+    allow_source_fallback: bool = False,
 ) -> None:
     ui_url = get_zerg_url(Path(claude_dir) if claude_dir else None)
 
@@ -161,6 +162,12 @@ def _launch_desktop_surface(
             command.extend(["--ui-url", ui_url])
         cwd = Path(prebuilt_artifact.path) if component == RuntimeComponent.LOCAL_HEALTH_APP else Path(prebuilt_artifact.launch_path).parent
     else:
+        if not allow_source_fallback:
+            typer.secho(
+                "Longhouse.app is not installed. Run `longhouse connect --install` to install or repair the local runtime.",
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1)
         with _desktop_package_path() as package_path:
             command = [
                 "swift",
@@ -226,6 +233,7 @@ def local_health_window(
         component=RuntimeComponent.LOCAL_HEALTH_WINDOW,
         claude_dir=claude_dir,
         refresh_seconds=refresh_seconds,
+        allow_source_fallback=True,
     )
 
 

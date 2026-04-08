@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -154,3 +155,51 @@ def test_ensure_runtime_artifact_uses_release_url_for_app_bundle(monkeypatch, tm
 def test_local_health_window_has_no_published_release_asset():
     with pytest.raises(RuntimeError, match="local-only runtime artifact"):
         runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_WINDOW)
+
+
+def test_verify_download_checksum_accepts_matching_release_asset(monkeypatch, tmp_path: Path):
+    artifact_path = tmp_path / "longhouse-engine-linux-x64"
+    artifact_path.write_bytes(b"engine-bytes")
+    expected_checksum = hashlib.sha256(b"engine-bytes").hexdigest()
+
+    monkeypatch.setattr(
+        runtime_artifacts,
+        "_load_release_checksums",
+        lambda tag: {"longhouse-engine-linux-x64": expected_checksum},
+    )
+
+    runtime_artifacts._verify_download_checksum(
+        "https://github.com/cipher982/longhouse/releases/download/v0.1.9/longhouse-engine-linux-x64",
+        artifact_path,
+    )
+
+
+def test_verify_download_checksum_rejects_mismatched_release_asset(monkeypatch, tmp_path: Path):
+    artifact_path = tmp_path / "longhouse-engine-linux-x64"
+    artifact_path.write_bytes(b"wrong-bytes")
+    expected_checksum = hashlib.sha256(b"engine-bytes").hexdigest()
+
+    monkeypatch.setattr(
+        runtime_artifacts,
+        "_load_release_checksums",
+        lambda tag: {"longhouse-engine-linux-x64": expected_checksum},
+    )
+
+    with pytest.raises(RuntimeError, match="Checksum mismatch"):
+        runtime_artifacts._verify_download_checksum(
+            "https://github.com/cipher982/longhouse/releases/download/v0.1.9/longhouse-engine-linux-x64",
+            artifact_path,
+        )
+
+
+def test_verify_download_checksum_skips_non_release_urls(monkeypatch, tmp_path: Path):
+    artifact_path = tmp_path / "custom.zip"
+    artifact_path.write_bytes(b"custom-bytes")
+
+    monkeypatch.setattr(
+        runtime_artifacts,
+        "_load_release_checksums",
+        lambda tag: pytest.fail("non-release URLs should not fetch release checksums"),
+    )
+
+    runtime_artifacts._verify_download_checksum("https://example.com/custom.zip", artifact_path)

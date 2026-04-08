@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import plistlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -102,3 +103,29 @@ def test_get_menubar_service_info_includes_app_bundle_details(monkeypatch, tmp_p
     assert info["artifact_path"] == "/Users/test/Applications/Longhouse.app"
     assert info["launch_path"] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
     assert info["runtime_mode"] == "app-bundle"
+
+
+def test_get_menubar_service_info_uses_plist_log_dir(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    launch_agents = home / "Library" / "LaunchAgents"
+    launch_agents.mkdir(parents=True)
+    plist_path = launch_agents / "com.longhouse.local-health-menubar.plist"
+    plist_path.write_bytes(
+        plistlib.dumps(
+            {
+                "Label": "com.longhouse.local-health-menubar",
+                "ProgramArguments": ["/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"],
+                "StandardOutPath": "/tmp/custom-claude/logs/local-health-menubar.stdout.log",
+            }
+        )
+    )
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(local_health_ui, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(local_health_ui, "get_menubar_service_status", lambda: "running")
+    monkeypatch.setattr(local_health_ui, "resolve_installed_runtime_artifact", lambda component: None)
+
+    info = local_health_ui.get_menubar_service_info()
+
+    assert info["log_path"] == "/tmp/custom-claude/logs/local-health-menubar.*.log"
+    assert info["runtime_mode"] == "broken-app-bundle"

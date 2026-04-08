@@ -13,6 +13,7 @@ release-URL logic or local-path heuristics independently.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import shutil
@@ -21,6 +22,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from enum import Enum
+from functools import lru_cache
 from importlib import metadata
 from pathlib import Path
 from urllib.parse import urlparse
@@ -30,6 +32,7 @@ import httpx
 RELEASE_REPO = "cipher982/longhouse"
 RELEASE_TAG_PREFIX = "v"
 DOWNLOAD_TIMEOUT_SECONDS = 30.0
+RELEASE_CHECKSUMS_FILENAME = "local-runtime-checksums.txt"
 
 
 class RuntimeComponent(str, Enum):
@@ -152,12 +155,71 @@ def _default_release_asset_url(component: RuntimeComponent) -> str:
     return f"https://github.com/{RELEASE_REPO}/releases/download/{tag}/{asset_name}"
 
 
+def _release_download_info(url: str) -> tuple[str, str] | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or parsed.netloc != "github.com":
+        return None
+
+    parts = [part for part in parsed.path.split("/") if part]
+    repo_parts = RELEASE_REPO.split("/")
+    if len(parts) < 6 or parts[:2] != repo_parts or parts[2:4] != ["releases", "download"]:
+        return None
+
+    tag = parts[4]
+    asset_name = parts[5]
+    return tag, asset_name
+
+
+@lru_cache(maxsize=8)
+def _load_release_checksums(tag: str) -> dict[str, str]:
+    url = f"https://github.com/{RELEASE_REPO}/releases/download/{tag}/{RELEASE_CHECKSUMS_FILENAME}"
+    response = httpx.get(url, follow_redirects=True, timeout=DOWNLOAD_TIMEOUT_SECONDS)
+    response.raise_for_status()
+
+    checksums: dict[str, str] = {}
+    for raw_line in response.text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        checksum, filename = parts
+        checksums[Path(filename.lstrip("*")).name] = checksum.lower()
+    return checksums
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            if chunk:
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_download_checksum(url: str, downloaded_path: Path) -> None:
+    download_info = _release_download_info(url)
+    if download_info is None:
+        return
+
+    tag, asset_name = download_info
+    checksums = _load_release_checksums(tag)
+    expected = checksums.get(asset_name)
+    if not expected:
+        raise RuntimeError(f"Missing checksum for runtime artifact {asset_name} in release {tag}")
+
+    actual = _sha256_file(downloaded_path)
+    if actual != expected:
+        raise RuntimeError(f"Checksum mismatch for runtime artifact {asset_name} from release {tag}")
+
+
 def resolve_installed_runtime_artifact(component: RuntimeComponent) -> InstalledRuntimeArtifact | None:
     canonical_path = _canonical_destination(component)
     if canonical_path.exists():
         launch_path = _artifact_launch_path(component, canonical_path)
         if launch_path.exists():
-            source = "managed-local-app" if ARTIFACT_KINDS[component] == RuntimeArtifactKind.APP_BUNDLE else "managed-local-bin"
+            source = "local-runtime-app" if ARTIFACT_KINDS[component] == RuntimeArtifactKind.APP_BUNDLE else "local-runtime-bin"
             return InstalledRuntimeArtifact(
                 component=component,
                 path=str(canonical_path),
@@ -270,6 +332,7 @@ def _install_artifact_from_remote_source(
 ) -> None:
     temp_path = _download_to_temp_path(url)
     try:
+        _verify_download_checksum(url, temp_path)
         _install_artifact_from_local_source(component, temp_path, destination_path)
     finally:
         temp_path.unlink(missing_ok=True)
