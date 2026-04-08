@@ -155,27 +155,14 @@ async function waitForRunnerOnline(
     .toBe("online");
 }
 
-async function openLaunchModalFromTimeline(
+async function openMachinesFromTimeline(
   page: Page,
-  runnerId: number,
 ): Promise<void> {
   const runnerAction = page.getByTestId("timeline-empty-runner-action");
   await expect(runnerAction).toBeVisible();
   await runnerAction.click();
-
-  const modal = page.getByTestId("launch-session-modal");
-  if (await modal.isVisible({ timeout: 2_000 }).catch(() => false)) {
-    await expect(modal).toBeVisible();
-    return;
-  }
-
   await page.waitForURL("**/runners", { timeout: 15_000 });
   await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
-
-  const runnerCard = page.getByTestId(`runner-card-${runnerId}`);
-  await expect(runnerCard).toBeVisible();
-  await runnerCard.getByTestId(`runner-launch-button-${runnerId}`).click();
-  await expect(modal).toBeVisible();
 }
 
 test.describe("Session activation surfaces", () => {
@@ -207,7 +194,7 @@ test.describe("Session activation surfaces", () => {
     await expect(page.getByRole("heading", { name: "Machines" })).toBeVisible();
   });
 
-  test("timeline runner action keeps launch reachable when a ready runner exists", async ({
+  test("timeline runner action opens the machines page when a ready runner exists", async ({
     page,
     request,
     backendUrl,
@@ -217,55 +204,22 @@ test.describe("Session activation surfaces", () => {
     const disconnectRunner = await connectRunner(backendUrl, commisId, runner);
     await waitForRunnerOnline(request, runner.id);
 
-    let launchBody: Record<string, unknown> | null = null;
-    await page.route("**/api/sessions/managed-local", async (route) => {
-      launchBody = route.request().postDataJSON() as Record<string, unknown>;
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({
-          session_id: randomUUID(),
-          provider: "claude",
-          provider_session_id: `provider-${randomUUID()}`,
-          execution_home: "managed_local",
-          managed_transport: "claude_desktop_mcp",
-          loop_mode: "manual",
-          source_runner_id: runner.id,
-          source_runner_name: runner.name,
-          managed_session_name: `lh-${runner.name}`,
-          attach_command: `ssh ${runner.name}`,
-        }),
-      });
-    });
-
     try {
       await page.goto("/timeline");
       await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
-      await openLaunchModalFromTimeline(page, runner.id);
+      await openMachinesFromTimeline(page);
 
-      const modal = page.getByTestId("launch-session-modal");
-      await expect(modal).toBeVisible();
-      await page.locator("#launch-cwd").fill("/Users/davidrose/git/zerg");
-      await page.locator("#launch-project").fill("zerg");
-      await page.locator("#launch-display-name").fill("Activation E2E");
-      await page.getByRole("button", { name: "Launch" }).click();
-
-      await expect(modal).toContainText(`Session started on ${runner.name}`);
-      await expect(modal).toContainText(`ssh ${runner.name}`);
-      expect(launchBody).toMatchObject({
-        runner_target: `runner:${runner.id}`,
-        cwd: "/Users/davidrose/git/zerg",
-        provider: "claude",
-        project: "zerg",
-        display_name: "Activation E2E",
-      });
+      const runnerCard = page.getByTestId(`runner-card-${runner.id}`);
+      await expect(runnerCard).toBeVisible();
+      await expect(runnerCard).toContainText(runner.name);
+      await expect(runnerCard).toContainText("online");
     } finally {
       await disconnectRunner();
     }
   });
 
-  test("multiple ready machines send users to the machines grid, where launch stays one click away", async ({
+  test("multiple ready machines keep runner detail one click away from the machines grid", async ({
     page,
     request,
     backendUrl,
@@ -283,21 +237,15 @@ test.describe("Session activation surfaces", () => {
       await page.goto("/timeline");
       await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
-      const runnerAction = page.getByTestId("timeline-empty-runner-action");
-      await expect(runnerAction).toBeVisible();
-      await runnerAction.click();
-
-      await page.waitForURL("**/runners", { timeout: 15_000 });
-      await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
+      await openMachinesFromTimeline(page);
 
       const secondRunnerCard = page.getByTestId(`runner-card-${secondRunner.id}`);
       await expect(secondRunnerCard).toContainText(secondRunner.name);
-      await secondRunnerCard.getByTestId(`runner-launch-button-${secondRunner.id}`).click();
+      await secondRunnerCard.click();
 
-      const modal = page.getByTestId("launch-session-modal");
-      await expect(modal).toBeVisible();
-      await expect(modal.getByRole("heading", { name: "Start Session" })).toBeVisible();
-      await expect(page.locator("#launch-cwd")).toBeVisible();
+      await page.waitForURL(`**/runners/${secondRunner.id}`, { timeout: 15_000 });
+      await expect(page.getByRole("heading", { name: secondRunner.name })).toBeVisible();
+      await expect(page.getByRole("button", { name: /back/i })).toBeVisible();
     } finally {
       await disconnectSecond();
       await disconnectFirst();
