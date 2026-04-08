@@ -246,6 +246,14 @@ This isolates:
 - onboarding and `connect --install` side effects
 - local runtime artifact installation
 
+### Canonical macOS packaging loop
+
+Use the dedicated packaging smoke target when changing runtime artifact names, app-bundle metadata, or release scripts:
+
+- `make test-runtime-packaging-macos`
+
+This proves the canonical `Longhouse.app` archive can be built, ad-hoc signed, zipped, and structurally validated locally before touching a tag or GitHub Actions release run.
+
 ### MVP upgrade test
 
 The smoke harness should support:
