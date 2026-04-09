@@ -777,11 +777,10 @@ def _handle_status() -> None:
                 typer.echo(f"App: {artifact_path}")
             if launch_path:
                 typer.echo(f"Launch: {launch_path}")
-            if runtime_mode == "legacy-binary-install":
-                typer.secho("Runtime: legacy ambient binary install (run: longhouse connect --install)", fg=typer.colors.YELLOW)
-            elif runtime_mode == "broken-app-bundle":
+            if runtime_mode == "broken-install":
                 typer.secho(
-                    "Runtime: configured Longhouse.app is missing or broken (run: longhouse connect --install)", fg=typer.colors.YELLOW
+                    "Runtime: ambient install is missing, broken, or unsupported (run: longhouse connect --install)",
+                    fg=typer.colors.YELLOW,
                 )
 
 

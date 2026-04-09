@@ -128,4 +128,4 @@ def test_get_menubar_service_info_uses_plist_log_dir(monkeypatch, tmp_path: Path
     info = local_health_ui.get_menubar_service_info()
 
     assert info["log_path"] == "/tmp/custom-claude/logs/local-health-menubar.*.log"
-    assert info["runtime_mode"] == "broken-app-bundle"
+    assert info["runtime_mode"] == "broken-install"
