@@ -119,7 +119,7 @@ def test_watchman_model_config_defaults_to_openrouter(monkeypatch):
     assert base_url == "https://openrouter.ai/api/v1"
     assert api_key_env == "OPENROUTER_API_KEY"
     assert api_key is None
-    assert reasoning == {"effort": "low"}
+    assert reasoning == "low"
 
 
 @pytest.mark.asyncio
