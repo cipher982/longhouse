@@ -42,8 +42,10 @@ _ALL_COMMIS_TOOLS: List[StructuredTool] = [
     ),
 ]
 
-# TOOLS is always populated. The job queue gate in main.py prevents execution
-# when JOB_QUEUE_ENABLED is off; dispatch_contract.py skips normalization.
+# TOOLS is always populated so tests and tool discovery work without env setup.
+# When JOB_QUEUE_ENABLED is off: main.py skips starting the job queue/scheduler,
+# and dispatch_contract.py skips backend normalization. The tools remain callable
+# but jobs won't be picked up by the processor.
 TOOLS: List[StructuredTool] = _ALL_COMMIS_TOOLS
 
 # ---------------------------------------------------------------------------
