@@ -75,7 +75,7 @@ def _apply_dispatch_contract(tool_calls: list[dict] | None, messages: list[BaseM
     if not tool_calls:
         return tool_calls
 
-    if os.getenv("JOB_QUEUE_ENABLED", "").lower() not in ("1", "true", "yes"):
+    if os.getenv("JOB_QUEUE_ENABLED", "").strip().lower() not in ("1", "true", "yes", "on"):
         return tool_calls
 
     requested_backend = _infer_requested_backend(messages)

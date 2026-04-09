@@ -23,8 +23,15 @@ jobs:
     name: "Gate image on CI success"
     runs-on: ubuntu-latest
     if: ${{ github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' || github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      head_sha: ${{ steps.meta.outputs.head_sha }}
     steps:
-      - run: echo "CI gate passed — proceeding with image build"
+      - name: Resolve target commit
+        id: meta
+        run: |
+          HEAD_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
+          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "CI gate passed — building image for $HEAD_SHA"
 
   build-and-push:
     runs-on: ubuntu-latest
@@ -32,6 +39,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.gate.outputs.head_sha }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -47,14 +56,15 @@ jobs:
         id: image
         env:
           IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-runtime
+          HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           {
             echo "tags<<EOF"
-            if [[ "${GITHUB_REF_TYPE}" == "branch" && "${GITHUB_REF_NAME}" == "$DEFAULT_BRANCH" ]]; then
+            if [[ "${{ github.event_name }}" != "push" ]]; then
               echo "${IMAGE_NAME}:latest"
             fi
-            echo "${IMAGE_NAME}:${GITHUB_SHA}"
+            echo "${IMAGE_NAME}:${HEAD_SHA}"
             if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
               echo "${IMAGE_NAME}:${GITHUB_REF_NAME}"
             fi
@@ -71,6 +81,6 @@ jobs:
           tags: ${{ steps.image.outputs.tags }}
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ needs.gate.outputs.head_sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
