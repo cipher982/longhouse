@@ -705,11 +705,13 @@ def onboard(
     if not (has_claude or has_codex):
         typer.echo("  Install Claude Code or Codex CLI, then start a Longhouse session")
     typer.echo("")
-    typer.echo("Repair and advanced:")
+    typer.echo("Repair tools (only if you need them later):")
     typer.echo("  longhouse doctor            Diagnose local setup issues")
     typer.echo("  longhouse connect --install Repair onboarding and automatic imports")
     if _has_launchd():
         typer.echo("  longhouse local-health       Check local status from the CLI")
+    typer.echo("")
+    typer.echo("Advanced:")
     typer.echo("  longhouse ship               Import existing sessions once")
     typer.echo("  longhouse status             Show configuration")
     typer.echo("  longhouse serve --stop       Stop server")

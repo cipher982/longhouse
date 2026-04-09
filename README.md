@@ -31,7 +31,7 @@ longhouse claude
 longhouse codex
 ```
 
-If something looks wrong later, start with `longhouse doctor` and repair with `longhouse connect --install`.
+If you need repair later, start with `longhouse doctor`.
 
 The web UI is the easiest place to look around, but the session surface is scriptable too:
 
@@ -66,7 +66,7 @@ longhouse claude
 longhouse codex
 ```
 
-If something looks wrong later, use `longhouse doctor` first, then `longhouse connect --install`.
+Repair tools live one layer down if you need them later: `longhouse doctor`, then `longhouse connect --install`.
 
 Want a safe preview before importing real sessions?
 
@@ -115,7 +115,7 @@ Stable installs use `uv` with the published `longhouse` package, so normal CLI u
 longhouse upgrade
 ```
 
-If something looks wrong later, start with:
+Repair tools live one layer down if you need them later:
 
 ```bash
 longhouse doctor
