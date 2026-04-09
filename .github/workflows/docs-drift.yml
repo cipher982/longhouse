@@ -1,0 +1,45 @@
+name: Documentation Drift Check
+
+on:
+  pull_request:
+    paths:
+      - "server/**"
+      - "engine/**"
+      - "runner/**"
+      - "scripts/install*"
+      - "scripts/onboarding*"
+      - "web/src/pages/docs/**"
+      - ".github/workflows/docs-drift.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  docs-drift:
+    runs-on: ubuntu-latest
+    # Only run on internal PRs (not forks — they don't have secrets)
+    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # need full history for diff
+
+      - name: Fetch base branch
+        run: git fetch origin ${{ github.event.pull_request.base.ref || 'main' }}
+
+      - name: Run docs drift check
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/ci/docs-drift-check.py \
+            --base-ref origin/${{ github.event.pull_request.base.ref || 'main' }}
+
+      # Never fail the build — this is informational only
+      - name: Always pass
+        if: always()
+        run: echo "Docs drift check complete (informational only)"
