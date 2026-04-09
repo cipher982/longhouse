@@ -87,8 +87,7 @@ export function HeroSection({
               always visible. Later, when you want a session to stay reachable after launch, start it
               with <code>longhouse claude</code> or <code>longhouse codex</code>. Use{" "}
               <code>longhouse serve --demo</code> only when you want a safe preview before importing
-              real work. If something looks wrong later, start with <code>longhouse doctor</code> and
-              repair with <code>longhouse connect --install</code>.
+              real work. Repair tools stay one layer down if you need them later.
             </p>
           </div>
 

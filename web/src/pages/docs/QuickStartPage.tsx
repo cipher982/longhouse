@@ -68,8 +68,8 @@ longhouse codex     # Codex CLI with control channel`}
 
       <h2>5. Troubleshooting</h2>
       <p>
-        Most people should not need this on the first run. If something looks
-        wrong:
+        Most people should not need this on the first run. If the timeline or
+        menu bar says something is wrong:
       </p>
       <CodeBlock title="terminal">
         {`longhouse doctor            # diagnose issues

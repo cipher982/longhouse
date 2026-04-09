@@ -471,12 +471,15 @@ print_success() {
         echo "  longhouse wrap --install    Keep typing bare claude/codex through Longhouse"
     fi
     echo ""
-    echo "If something looks wrong later:"
-    echo "  longhouse connect --install  Repair onboarding and automatic imports"
-    echo "  longhouse ship               Import existing sessions once"
+    echo "Repair tools (only if you need them later):"
+    echo "  longhouse doctor            Diagnose local setup issues"
+    echo "  longhouse connect --install Repair onboarding and automatic imports"
     if [[ "$is_macos" == "1" ]]; then
-        echo "  longhouse local-health       Check the same local status from the CLI"
+        echo "  longhouse local-health      Check the same local status from the CLI"
     fi
+    echo ""
+    echo "Advanced:"
+    echo "  longhouse ship              Import existing sessions once"
     echo ""
     echo "Machine surface:"
     echo "  longhouse wall --json       Read active and recent sessions"
