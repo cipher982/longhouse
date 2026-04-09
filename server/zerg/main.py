@@ -14,6 +14,8 @@ _is_test_env = _testing or ("test" in _env) or ("e2e" in _env)
 
 load_dotenv(override=not _is_test_env)
 
+# fmt: off
+# ruff: noqa: E402
 from zerg.config import get_settings
 from zerg.config import resolve_cors_origins
 from zerg.config import validate_public_origin_config
@@ -25,36 +27,66 @@ if _settings.e2e_log_suppress:
 
     silence_info_logs()
 
-# --- TOP: Force silence for E2E or CLI if LOG_LEVEL=WARNING is set ---
-import asyncio
 import logging
-
-# ---------------------------------------------------------------------
-# fmt: off
-# ruff: noqa: E402
-# Standard library
-# fmt: on
-# --------------------------------------------------------------------------
-# LOGGING CONFIGURATION (dynamic, clean, less spammy):
-# --------------------------------------------------------------------------
-#
-# - Default log level: INFO (dev-friendly)
-# - Can be set at runtime with LOG_LEVEL env (e.g. LOG_LEVEL=WARNING for CI)
-# - Explicitly suppresses spammy WebSocket modules to WARNING by default
-#
-# Third-party
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+# Logging configuration
+from zerg.logging_config import configure_logging
+
+configure_logging(_settings.log_level)
+
+logger = logging.getLogger(__name__)
+
+# Static/frontend paths
+if Path("/app").exists() and Path(__file__).resolve().parent.parent == Path("/app"):
+    BASE_DIR = Path("/app")
+else:
+    BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+STATIC_DIR = BASE_DIR / "static"
+AVATARS_DIR = STATIC_DIR / "avatars"
+AVATARS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _get_frontend_dist_path() -> tuple[Path | None, str]:
+    """Locate the frontend dist directory."""
+    try:
+        import importlib.resources
+
+        pkg_dist = importlib.resources.files("zerg").joinpath("_frontend_dist")
+        dist_path = Path(str(pkg_dist))
+        if dist_path.is_dir() and (dist_path / "index.html").exists():
+            return dist_path, "bundled"
+    except (ImportError, TypeError, AttributeError, FileNotFoundError, OSError):
+        pass
+
+    dev_dist = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
+    if dev_dist.is_dir() and (dev_dist / "index.html").exists():
+        return dev_dist, "local"
+
+    docker_dist = Path("/app/web/dist")
+    if docker_dist.is_dir() and (docker_dist / "index.html").exists():
+        return docker_dist, "docker"
+
+    return None, "none"
+
+
+FRONTEND_DIST_DIR, FRONTEND_SOURCE = _get_frontend_dist_path()
+
+# --- Router imports ---
 from zerg.constants import AUTOMATIONS_PREFIX
 from zerg.constants import MODELS_PREFIX
 from zerg.constants import THREADS_PREFIX
-from zerg.database import initialize_database
+
+# Lifespan
+from zerg.lifespan import _enforce_single_tenant_startup  # noqa: F401 — re-exported for tests
+from zerg.lifespan import lifespan
+
+# OpenAPI
 from zerg.openapi_schema import build_api_openapi_schema
 from zerg.openapi_schema import export_openapi_schema
 from zerg.routers.account_connectors import router as account_connectors_router
@@ -80,6 +112,8 @@ from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.fiche_config import router as fiche_config_router
 from zerg.routers.fiches import router as fiches_router
 from zerg.routers.funnel import router as funnel_router
+from zerg.routers.health import router as health_router
+from zerg.routers.health import set_health_app_ref
 from zerg.routers.heartbeat import router as heartbeat_router
 from zerg.routers.insights import machine_router as machine_insights_router
 from zerg.routers.insights import router as insights_router
@@ -114,799 +148,19 @@ from zerg.routers.users import router as users_router
 from zerg.routers.waitlist import router as waitlist_router
 from zerg.routers.websocket import router as websocket_router
 
-# Email trigger polling service (stub for now)
-# Background services ---------------------------------------------------------
-#
-# Long-running polling loops like *SchedulerService*
-# keep the asyncio event-loop alive.  When the backend is imported by *pytest*
-# those tasks cause the test runner to **hang** after the last test finishes
-# unless they are stopped explicitly.  To make the entire test-suite
-# friction-free we skip service start-up when the environment variable
-# ``TESTING`` is truthy (set automatically by `backend/tests/conftest.py`).
-from zerg.services.ops_events import ops_events_bridge  # noqa: E402
-from zerg.services.scheduler_service import scheduler_service  # noqa: E402
-from zerg.websocket.manager import topic_manager  # noqa: E402, F401
-
-_log_level_name = _settings.log_level.upper()
-try:
-    _log_level = getattr(logging, _log_level_name)
-except AttributeError:
-    _log_level = logging.INFO
-else:
-    pass
-
-
-# Custom formatter that displays structured fields from 'extra' dict
-class StructuredFormatter(logging.Formatter):
-    """Formatter that renders structured fields for grep-able telemetry logs.
-
-    For logs with 'extra' dict, formats as:
-        2025-12-15 03:19:33 INFO [FICHE] Starting run thread thread_id=1
-    """
-
-    def format(self, record):
-        # Start with timestamp and level
-        timestamp = self.formatTime(record, "%Y-%m-%d %H:%M:%S")
-        level = f"{record.levelname:7}"
-
-        # Extract tag if present
-        tag = getattr(record, "tag", None)
-        if tag:
-            prefix = f"{level} [{tag:7}]"
-        else:
-            prefix = f"{level}          "  # 10 spaces to align with [TAG:7]
-
-        parts = [
-            timestamp,
-            prefix,
-            record.getMessage(),
-        ]
-
-        # Add structured fields if present (skip standard LogRecord attributes)
-        BUILTIN_ATTRS = {
-            "name",
-            "msg",
-            "args",
-            "created",
-            "filename",
-            "funcName",
-            "levelname",
-            "levelno",
-            "lineno",
-            "module",
-            "msecs",
-            "message",
-            "pathname",
-            "process",
-            "processName",
-            "relativeCreated",
-            "thread",
-            "threadName",
-            "exc_info",
-            "exc_text",
-            "stack_info",
-            "event",
-            "tag",
-        }
-
-        # Collect extra fields for structured output
-        extra_fields = []
-        for key, value in record.__dict__.items():
-            if key not in BUILTIN_ATTRS and not key.startswith("_"):
-                # Format value concisely
-                if isinstance(value, str) and len(value) > 50:
-                    value_str = value[:47] + "..."
-                else:
-                    value_str = str(value)
-                extra_fields.append(f"{key}={value_str}")
-
-        if extra_fields:
-            parts.append(" ".join(extra_fields))
-
-        output = " ".join(parts)
-
-        # Append traceback if present (logger.exception() etc.)
-        if record.exc_info and record.exc_info[1] is not None:
-            output += "\n" + self.formatException(record.exc_info)
-
-        return output
-
-
-# Configure logging with structured formatter
-# Must configure before any loggers are created
-_root_logger = logging.getLogger()
-_root_logger.setLevel(_log_level)
-
-# Remove any existing handlers to avoid duplicates
-for handler in _root_logger.handlers[:]:
-    _root_logger.removeHandler(handler)
-
-# Add our structured formatter handler
-_handler = logging.StreamHandler()
-_handler.setFormatter(StructuredFormatter())
-_root_logger.addHandler(_handler)
-
-# Suppress verbose logs from known-noisy modules (even when LOG_LEVEL=DEBUG)
-#
-# Goal: keep dev logs high-signal. If you need full wire/debug output from these,
-# temporarily set their log levels explicitly in your environment or in a local patch.
-for _noisy_mod in (
-    # Internal chatty modules
-    "zerg.routers.websocket",
-    "zerg.websocket.manager",
-    "zerg.events.event_bus",  # Silence event-by-event publishing in DEBUG
-    "zerg.services.ops_events",  # Silence bridge event noise
-    "zerg.services.fiche_state_recovery",  # Silence "No stuck fiches found" on reload
-    "zerg.services.auto_seed",  # Silence seeding boilerplate after first run
-    "zerg.services.watch_renewal_service",  # Silence background watch renewals
-    "zerg.services.scheduler_service",  # Silence scheduling noise
-    # Third-party libraries that can dump huge payloads
-    "openai",
-    "openai._base_client",
-    "openai._utils",
-    "stainless",
-    "stainless._base_client",
-    # HTTP client debug can be extremely verbose in dev
-    "httpx",
-    "httpcore",
-):
-    logging.getLogger(_noisy_mod).setLevel(logging.WARNING)
-
-# Suppress SSE ping/chunk debug logs (sse-starlette healthchecks)
-logging.getLogger("sse_starlette").setLevel(logging.WARNING)
-
-# Suppress Uvicorn access logs (healthchecks and routine requests)
-logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-# --------------------------------------------------------------------------
-
-# Create the FastAPI app
 # ---------------------------------------------------------------------------
-# FastAPI application instance
+# FastAPI application
 # ---------------------------------------------------------------------------
 
-# Ensure ./static directory exists before mounting.  `StaticFiles` raises at
-# runtime if the path is missing, which would break unit-tests that import the
-# app without running the server process.
-
-# In Docker, we're at /app, so static should be /app/static
-# In local dev, we're at server/zerg, so static should be repo/static
-if Path("/app").exists() and Path(__file__).resolve().parent.parent == Path("/app"):
-    # Docker environment: /app/zerg/main.py -> /app/static
-    BASE_DIR = Path("/app")
-else:
-    # Local environment: server/zerg/main.py -> repo/static
-    BASE_DIR = Path(__file__).resolve().parent.parent.parent  # repo root
-
-STATIC_DIR = BASE_DIR / "static"
-AVATARS_DIR = STATIC_DIR / "avatars"
-
-# Create folders on import so they are there in tests and dev.
-AVATARS_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _get_frontend_dist_path() -> tuple[Path | None, str]:
-    """Locate the frontend dist directory, checking bundled package first, then dev paths.
-
-    Returns:
-        Tuple of (Path to frontend dist directory or None, source label).
-        Source label is one of: "bundled", "local", "docker", "none".
-
-    Resolution order:
-        1. Bundled in package: zerg/_frontend_dist (for pip install deployment)
-        2. Dev repo: ../web/dist (relative to server)
-        3. Docker: /app/web/dist
-    """
-    # 1. Check for bundled assets in installed package
-    try:
-        import importlib.resources
-
-        # For Python 3.9+, use importlib.resources.files()
-        pkg_dist = importlib.resources.files("zerg").joinpath("_frontend_dist")
-        # Convert Traversable to Path - works for filesystem-backed packages
-        # Use str() which is the stable API for Traversable
-        dist_path = Path(str(pkg_dist))
-        if dist_path.is_dir() and (dist_path / "index.html").exists():
-            return dist_path, "bundled"
-    except (ImportError, TypeError, AttributeError, FileNotFoundError, OSError):
-        pass
-
-    # 2. Development mode: relative to server directory
-    # main.py is at server/zerg/main.py, frontend is at web/dist
-    # parent=zerg, parent.parent=server, parent.parent.parent=repo root
-    dev_dist = Path(__file__).resolve().parent.parent.parent / "web" / "dist"
-    if dev_dist.is_dir() and (dev_dist / "index.html").exists():
-        return dev_dist, "local"
-
-    # 3. Docker environment
-    docker_dist = Path("/app/web/dist")
-    if docker_dist.is_dir() and (docker_dist / "index.html").exists():
-        return docker_dist, "docker"
-
-    return None, "none"
-
-
-# Resolve frontend dist path once at import time
-FRONTEND_DIST_DIR, FRONTEND_SOURCE = _get_frontend_dist_path()
-
-# Set up logging early for lifespan handler
-logger = logging.getLogger(__name__)
-
-
-def _enforce_single_tenant_startup(app: FastAPI) -> None:
-    """Validate and bootstrap the single-tenant owner or fail fast."""
-    if not _settings.single_tenant or _settings.testing:
-        return
-
-    from zerg.database import db_session
-    from zerg.services.single_tenant import SingleTenantViolation
-    from zerg.services.single_tenant import bootstrap_owner_user
-    from zerg.services.single_tenant import validate_single_tenant
-    from zerg.services.single_tenant import validate_single_tenant_config
-
-    config_error = validate_single_tenant_config()
-    if config_error:
-        app.state.single_tenant_violation = config_error
-        logger.error("Single-tenant config error: %s", config_error)
-        raise RuntimeError(config_error)
-
-    try:
-        with db_session() as db:
-            validate_single_tenant(db)
-            bootstrap_owner_user(db)
-    except SingleTenantViolation as exc:
-        app.state.single_tenant_violation = str(exc)
-        logger.error(str(exc))
-        raise
-    except Exception as exc:
-        message = f"Bootstrap failed: {exc}"
-        app.state.single_tenant_violation = message
-        logger.error("Single-tenant bootstrap failed: %s", exc)
-        raise RuntimeError(message) from exc
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Handle application startup and shutdown lifecycle."""
-    # Startup phase
-    try:
-        # Create DB tables if they don't exist
-        initialize_database()
-
-        # Configure the single-writer serializer (must happen after DB init)
-        from zerg.database import configure_write_serializer
-
-        configure_write_serializer()
-
-        # SQLite-lite mode is allowed; warn that some PG-only features are reduced.
-        try:
-            from zerg.database import default_engine
-
-            if not _settings.testing and default_engine is not None and default_engine.dialect.name == "sqlite":
-                logger.info(
-                    "SQLite mode: single-writer serializer active. "
-                    "See VISION.md (Architecture Constraints / SQLite-only core) for details."
-                )
-        except Exception as _e:
-            logger.error(str(_e))
-            raise
-        logger.info("Database tables initialized")
-
-        # FTS5 is a hard requirement for session search (SQLite only).
-        try:
-            from sqlalchemy import text
-
-            from zerg.database import default_engine
-
-            if default_engine is not None and default_engine.dialect.name == "sqlite":
-                with default_engine.connect() as conn:
-                    fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
-                    if not fts_row:
-                        raise RuntimeError("events_fts table is missing (FTS5 required).")
-                    # Validate FTS module by executing a no-op MATCH query.
-                    conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
-        except Exception as fts_error:
-            app.state.fts_violation = str(fts_error)
-            logger.error(f"FTS5 readiness check failed: {fts_error}")
-            raise
-
-        # Single-tenant enforcement and owner bootstrap
-        # Must run after DB init but before other services
-        _enforce_single_tenant_startup(app)
-
-        # Prefetch SSO signing keys from control plane (non-fatal)
-        if not _settings.testing:
-            from zerg.services.sso_keys import prefetch_sso_keys
-
-            prefetch_sso_keys()
-
-        # Auto-seed user context and credentials (idempotent)
-        # Loads from scripts/*.local.json or ~/.config/zerg/*.json
-        if not _settings.testing:
-            try:
-                from zerg.services.auto_seed import run_auto_seed
-
-                seed_results = run_auto_seed()
-                logger.info(f"Auto-seed complete: {seed_results}")
-            except Exception as e:
-                logger.warning(f"Auto-seed failed (non-fatal): {e}")
-
-        # Demo mode: warn about missing config that affects user-facing features
-        if _settings.demo_mode and not _settings.testing:
-            if not _settings.discord_webhook_url:
-                logger.warning(
-                    "DISCORD_WEBHOOK_URL not set — waitlist signups will return 503. " "Set this env var to enable waitlist collection."
-                )
-
-        # Demo mode: ensure demo sessions exist (top-up missing sessions).
-        if _settings.demo_mode and not _settings.testing:
-            try:
-                from zerg.database import get_session_factory
-                from zerg.services.demo_seed import seed_missing_demo_sessions
-
-                session_factory = get_session_factory()
-                with session_factory() as db:
-                    seeded_count, failed_count = seed_missing_demo_sessions(db)
-                    if seeded_count > 0:
-                        logger.info("Demo mode: seeded %d demo sessions", seeded_count)
-                    elif failed_count > 0:
-                        logger.warning(
-                            "Demo mode: demo seed had %d failures (see per-session errors above)",
-                            failed_count,
-                        )
-                    else:
-                        logger.info("Demo mode: demo sessions already present, skipping seed")
-            except Exception as e:
-                logger.warning(f"Demo mode auto-seed failed (non-fatal): {e}")
-
-        # Bootstrap the external jobs repo only when one is actually configured.
-        # Builtin-only Longhouse instances should not create or hydrate /data/jobs.
-        if not _settings.testing:
-            try:
-                from zerg.jobs.registry import should_load_manifest_jobs
-
-                if should_load_manifest_jobs():
-                    from zerg.services.jobs_repo import bootstrap_jobs_repo
-                    from zerg.services.jobs_repo import install_jobs_deps
-
-                    jobs_result = bootstrap_jobs_repo(_settings.data_dir)
-                    if jobs_result["errors"]:
-                        logger.warning(f"Jobs repo bootstrap had errors: {jobs_result['errors']}")
-                    elif jobs_result["created"] or jobs_result["initialized_git"]:
-                        logger.info(f"Jobs repo bootstrapped: {jobs_result['jobs_dir']}")
-
-                    # Install job pack dependencies (from /data/jobs/requirements.txt)
-                    deps_result = install_jobs_deps(_settings.data_dir)
-                    if deps_result.get("error"):
-                        logger.warning(f"Job deps install failed (non-fatal): {deps_result['error']}")
-                    elif deps_result.get("installed"):
-                        logger.info("Job dependencies installed from requirements.txt")
-                else:
-                    logger.info("Skipping jobs repo bootstrap — builtin-only mode")
-            except Exception as e:
-                logger.warning(f"Jobs repo bootstrap failed (non-fatal): {e}")
-
-        # Initialize fiche state recovery system (recovers orphaned fiches, runs, jobs)
-        if not _settings.testing:
-            from zerg.services.fiche_state_recovery import initialize_fiche_state_system
-
-            await initialize_fiche_state_system()
-
-        # Start shared async runner
-        from zerg.utils.async_runner import get_shared_runner
-
-        get_shared_runner().start()
-
-        # Start core background services
-        if not _settings.testing:
-            started: list[str] = []
-            failed: list[str] = []
-
-            # Scheduler
-            try:
-                await scheduler_service.start()
-                started.append("scheduler")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"scheduler ({e})")
-                logger.exception("Failed to start scheduler_service")
-
-            # Ops events bridge (SSE/WebSocket bridge)
-            try:
-                ops_events_bridge.start()
-                started.append("ops_events_bridge")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"ops_events_bridge ({e})")
-                logger.exception("Failed to start ops_events_bridge")
-
-            # Watch renewal service for Gmail connectors
-            try:
-                from zerg.services.watch_renewal_service import watch_renewal_service
-
-                await watch_renewal_service.start()
-                started.append("watch_renewal")
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"watch_renewal ({e})")
-                logger.exception("Failed to start watch_renewal_service")
-
-            # Ingest task worker (durable summary + embedding after session ingest)
-            try:
-                from zerg.database import get_session_factory
-                from zerg.services.ingest_task_queue import HOT_INGEST_TASK_TYPES
-                from zerg.services.ingest_task_queue import HOT_WORKER_POLL_SECONDS
-                from zerg.services.ingest_task_queue import reset_stale_running_tasks
-                from zerg.services.ingest_task_queue import run_ingest_task_worker
-
-                _itq_db = get_session_factory()()
-                try:
-                    reset_stale_running_tasks(_itq_db)
-                finally:
-                    _itq_db.close()
-                asyncio.create_task(
-                    run_ingest_task_worker(
-                        poll_seconds=HOT_WORKER_POLL_SECONDS,
-                        worker_name="hot",
-                        include_task_types=HOT_INGEST_TASK_TYPES,
-                    )
-                )
-                asyncio.create_task(
-                    run_ingest_task_worker(
-                        worker_name="cold",
-                        exclude_task_types=HOT_INGEST_TASK_TYPES,
-                    )
-                )
-                started.extend(["ingest_task_worker_hot", "ingest_task_worker_cold"])
-            except Exception as e:  # noqa: BLE001
-                failed.append(f"ingest_task_worker ({e})")
-                logger.exception("Failed to start ingest_task_worker")
-
-            # Job queue (durable job execution)
-            if _settings.job_queue_enabled and not _settings.testing:
-                try:
-                    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-                    from zerg.jobs.commis import enqueue_missed_runs
-                    from zerg.jobs.commis import run_queue_commis
-                    from zerg.jobs.git_sync import GitSyncService
-                    from zerg.jobs.git_sync import run_git_sync_loop
-                    from zerg.jobs.git_sync import set_git_sync_service
-                    from zerg.jobs.git_sync import set_git_sync_task
-                    from zerg.jobs.registry import register_all_jobs
-
-                    def _resolve_repo_config() -> dict | None:
-                        """Resolve repo config: DB first, env var fallback.
-
-                        Returns dict with repo_url, branch, token keys, or None.
-                        """
-                        try:
-                            from zerg.database import db_session
-                            from zerg.models.models import JobRepoConfig
-                            from zerg.utils.crypto import decrypt
-
-                            with db_session() as db:
-                                row = db.query(JobRepoConfig).first()
-                                if row:
-                                    token = decrypt(row.encrypted_token) if row.encrypted_token else None
-                                    # Sanitize URL for logging (strip embedded credentials)
-                                    from urllib.parse import urlparse
-                                    from urllib.parse import urlunparse
-
-                                    _parsed = urlparse(row.repo_url)
-                                    _safe_url = urlunparse(_parsed._replace(netloc=_parsed.netloc.split("@")[-1]))
-                                    logger.info("Using DB repo config: %s (branch=%s)", _safe_url, row.branch)
-                                    return {"repo_url": row.repo_url, "branch": row.branch, "token": token}
-                        except Exception as e:
-                            logger.warning("Failed to query DB repo config: %s", e)
-
-                        # Fallback to env vars
-                        if _settings.jobs_git_repo_url:
-                            return {
-                                "repo_url": _settings.jobs_git_repo_url,
-                                "branch": _settings.jobs_git_branch,
-                                "token": _settings.jobs_git_token,
-                            }
-                        return None
-
-                    repo_config = _resolve_repo_config()
-
-                    if not repo_config:
-                        logger.info("No jobs repo configured — builtin jobs only")
-
-                    # Initialize git sync service if configured
-                    if repo_config:
-                        git_service = GitSyncService(
-                            repo_url=repo_config["repo_url"],
-                            local_path=Path(_settings.jobs_dir),
-                            branch=repo_config["branch"],
-                            token=repo_config.get("token"),
-                        )
-
-                        # Clone repo (blocking - required for git jobs)
-                        await git_service.ensure_cloned()
-                        set_git_sync_service(git_service)
-
-                        # Start background sync loop
-                        if _settings.jobs_refresh_interval_seconds > 0:
-                            sync_task = asyncio.create_task(
-                                run_git_sync_loop(
-                                    git_service,
-                                    _settings.jobs_refresh_interval_seconds,
-                                )
-                            )
-                            set_git_sync_task(sync_task)
-
-                        started.append("git_sync")
-                        logger.info(
-                            "Git sync service initialized: %s",
-                            git_service.current_sha[:8] if git_service.current_sha else "unknown",
-                        )
-
-                    # Create scheduler for job cron triggers
-                    job_scheduler = AsyncIOScheduler()
-
-                    # Register and schedule job modules (use_queue=True enqueues to durable queue)
-                    scheduled_count = await register_all_jobs(scheduler=job_scheduler, use_queue=True)
-
-                    # Count builtin vs manifest jobs for startup clarity
-                    from zerg.jobs.registry import job_registry as _jr
-
-                    all_jobs = _jr.list_jobs()
-                    builtin_count = sum(1 for j in all_jobs if "builtin" in (j.tags or []))
-                    manifest_count = len(all_jobs) - builtin_count
-                    logger.info(
-                        "Scheduled %d jobs (%d builtin, %d from manifest)",
-                        scheduled_count,
-                        builtin_count,
-                        manifest_count,
-                    )
-
-                    # Store job system status for health endpoint
-                    app.state.job_system_status = {
-                        "started": True,
-                        "git_sync": repo_config is not None,
-                        "scheduled_count": scheduled_count,
-                        "builtin_count": builtin_count,
-                        "manifest_count": manifest_count,
-                        "error": None,
-                    }
-
-                    await enqueue_missed_runs()  # Backfill missed runs
-                    job_scheduler.start()  # Start cron triggers
-                    asyncio.create_task(run_queue_commis())  # Background commis loop
-                    started.append("job_queue_commis")
-                    logger.info("Job queue commis started (queue mode)")
-                except Exception as e:  # noqa: BLE001
-                    failed.append(f"job_queue_commis ({e})")
-                    logger.exception("Failed to start job_queue_commis")
-                    app.state.job_system_status = {
-                        "started": False,
-                        "git_sync": False,
-                        "scheduled_count": 0,
-                        "error": str(e),
-                    }
-
-            if failed:
-                logger.warning(
-                    "Background services partial startup: started=%s failed=%s",
-                    started,
-                    failed,
-                )
-            else:
-                logger.info("Background services started: %s", started)
-
-        # Log email config status
-        if not _settings.testing:
-            try:
-                from zerg.shared.email import resolve_email_config
-
-                email_cfg = resolve_email_config()
-                email_configured = all(
-                    (
-                        email_cfg.get("AWS_SES_ACCESS_KEY_ID"),
-                        email_cfg.get("AWS_SES_SECRET_ACCESS_KEY"),
-                        email_cfg.get("FROM_EMAIL"),
-                        email_cfg.get("NOTIFY_EMAIL"),
-                    )
-                )
-                if email_configured:
-                    logger.info(
-                        "Email configured (from=%s to=%s)",
-                        email_cfg.get("FROM_EMAIL"),
-                        email_cfg.get("NOTIFY_EMAIL"),
-                    )
-                else:
-                    logger.warning("Email not configured — job notifications disabled")
-            except Exception:
-                logger.warning("Email not configured — job notifications disabled")
-
-        # Validate summarization pipeline config (warn on misconfiguration, don't crash)
-        if not _settings.testing and not _settings.llm_disabled and not _settings.demo_mode:
-            from zerg.models_config import get_active_models_profile
-            from zerg.models_config import validate_use_case_llm_config
-
-            try:
-                model, provider, key_env = validate_use_case_llm_config("summarization")
-                logger.info(
-                    "Summarization configured: profile=%s model=%s provider=%s key_env=%s",
-                    get_active_models_profile(),
-                    model,
-                    provider.value,
-                    key_env,
-                )
-            except ValueError as exc:
-                logger.warning("Summarization unavailable (missing API key): %s", exc)
-
-        # Start Telegram channel + Oikos bridge (non-fatal if token missing/invalid)
-        if not _settings.testing and _settings.telegram_bot_token:
-            try:
-                from zerg.channels.plugins.telegram import TelegramChannel
-                from zerg.channels.registry import register_channel
-                from zerg.services.telegram_bridge import TelegramBridge
-
-                _tg_channel = TelegramChannel()
-                await _tg_channel.configure(
-                    {
-                        "credentials": {"bot_token": _settings.telegram_bot_token},
-                        "settings": {
-                            "webhook_url": _settings.telegram_webhook_url,
-                            "webhook_secret": _settings.telegram_webhook_secret,
-                            "parse_mode": "html",
-                        },
-                    }
-                )
-                await _tg_channel.start()
-                register_channel(_tg_channel, replace=True)
-                _tg_bridge = TelegramBridge(_tg_channel)
-                _tg_bridge.start()
-                app.state.telegram_channel = _tg_channel
-                app.state.telegram_bridge = _tg_bridge
-                logger.info("Telegram channel started (@%s)", _tg_channel._bot_info.get("username", "unknown"))
-            except Exception:
-                logger.exception("Telegram startup failed (non-fatal) — bot will be unavailable")
-
-        # Mark all runners offline — any that were "online" before the restart
-        # will reconnect via WebSocket and flip back to online automatically.
-        try:
-            from sqlalchemy import update
-
-            from zerg.database import db_session
-            from zerg.models.models import Runner
-
-            with db_session() as db:
-                result = db.execute(update(Runner).where(Runner.status == "online").values(status="offline"))
-                if result.rowcount:
-                    logger.info("Startup: marked %d stale runner(s) offline", result.rowcount)
-        except Exception as e:
-            logger.warning("Startup: failed to reset runner statuses (non-fatal): %s", e)
-
-        # Warm the in-memory presence cache from DB and start periodic flush.
-        try:
-            from zerg.database import db_session
-            from zerg.models.agents import SessionPresence
-            from zerg.services.presence_cache import get_presence_cache
-
-            with db_session() as db:
-                rows = db.query(SessionPresence).all()
-                cache = get_presence_cache()
-                cache.warm_from_db(rows)
-                cache.start_flush_loop()
-                logger.info("Presence cache warmed (%d entries), flush loop started", len(rows))
-        except Exception as e:
-            logger.warning("Startup: presence cache warm failed (non-fatal): %s", e)
-
-        # Start periodic PASSIVE WAL checkpoints (replaces auto-checkpoint).
-        if not _settings.testing:
-            try:
-                from zerg.database import start_wal_checkpoint_loop
-
-                await start_wal_checkpoint_loop()
-                logger.info("WAL checkpoint loop started")
-            except Exception as e:
-                logger.warning("Startup: WAL checkpoint loop failed (non-fatal): %s", e)
-
-        logger.info("Application startup complete")
-    except Exception as e:
-        logger.error(f"Error during startup: {e}")
-        raise
-
-    yield  # Application is running
-
-    # Shutdown phase
-    try:
-        # Stop background services
-        if not _settings.testing:
-            # Stop each service independently so one failure doesn't block others.
-            try:
-                await scheduler_service.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop scheduler_service")
-
-            try:
-                ops_events_bridge.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop ops_events_bridge")
-
-            try:
-                if hasattr(app.state, "telegram_bridge"):
-                    app.state.telegram_bridge.stop()
-                if hasattr(app.state, "telegram_channel"):
-                    await app.state.telegram_channel.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop Telegram channel")
-
-            try:
-                from zerg.services.watch_renewal_service import watch_renewal_service
-
-                await watch_renewal_service.stop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop watch_renewal_service")
-
-            try:
-                from zerg.services.presence_cache import get_presence_cache
-
-                get_presence_cache().stop_flush_loop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop presence cache flush loop")
-
-            try:
-                from zerg.database import stop_wal_checkpoint_loop
-
-                await stop_wal_checkpoint_loop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop WAL checkpoint loop")
-
-            # Close DB pool (job queue)
-            if _settings.job_queue_enabled:
-                try:
-                    from zerg.jobs.ops_db import close_pool
-
-                    await close_pool()
-                except Exception:  # noqa: BLE001
-                    logger.exception("Failed to close DB pool")
-
-            # Shutdown MCP stdio processes (subprocess-based MCP servers)
-            try:
-                from zerg.tools.mcp_adapter import MCPManager
-
-                await MCPManager().shutdown_stdio_processes()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to shutdown MCP stdio processes")
-
-        # Stop shared async runner
-        from zerg.utils.async_runner import get_shared_runner
-
-        get_shared_runner().stop()
-
-        # Shutdown websocket manager
-        from zerg.websocket.manager import topic_manager
-
-        await topic_manager.shutdown()
-
-        # Shutdown LLM audit logger (prevents "Task was destroyed" warnings)
-        try:
-            from zerg.services.llm_audit import audit_logger
-
-            await audit_logger.shutdown()
-        except Exception:  # noqa: BLE001
-            logger.exception("Failed to stop audit_logger")
-
-        logger.info("Background services stopped")
-    except Exception as e:
-        logger.error(f"Error during shutdown: {e}")
-
-
-# Create FastAPI APP with lifespan handler
 app = FastAPI(redirect_slashes=True, lifespan=lifespan)
-
-# API sub-application — owns all /api/* routes.
-# Mounted on the parent `app` at "/api" so the SPA catch-all can never
-# intercept API requests (wrong paths like /auth/accept-token get SPA HTML, not 200 JSON).
 api_app = FastAPI(redirect_slashes=True)
 
+# Set health app reference for readyz/health endpoints that need app.state
+set_health_app_ref(app)
 
-# ========================================================================
-# OPENAPI SCHEMA EXPORT - Phase 1 of Contract Enforcement
-# ========================================================================
+
+# OpenAPI schema export
 def custom_openapi():
-    """Generate and export OpenAPI schema for contract enforcement."""
     if app.openapi_schema:
         return app.openapi_schema
 
@@ -919,19 +173,14 @@ def custom_openapi():
         print(f"⚠️  Could not export OpenAPI schema: {e}")
 
     app.openapi_schema = openapi_schema
-    return app.openapi_schema
+    return openapi_schema
 
 
-# Set the custom OpenAPI generator
 app.openapi = custom_openapi
 
-
-# Add CORS middleware with all necessary headers
-# ------------------------------------------------------------------
-# CORS – if ALLOWED_CORS_ORIGINS is explicitly set, use it (supports testing
-# with auth disabled on production domains). Otherwise fall back to defaults.
-# ------------------------------------------------------------------
-
+# ---------------------------------------------------------------------------
+# Middleware
+# ---------------------------------------------------------------------------
 cors_origins = resolve_cors_origins(_settings)
 if _settings.allowed_cors_origins.strip():
     logger.info(f"CORS configured with explicit origins: {cors_origins}")
@@ -950,137 +199,109 @@ for warning in validate_public_origin_config(_settings, cors_origins):
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
-    allow_credentials=True,  # Required for cookie-based auth (dev login, session cookies)
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
     expose_headers=["*"],
 )
 
-# Demo mode: block all write operations on /api/* (read-only demo)
 if _settings.demo_mode:
     from zerg.middleware.demo_guard import DemoGuardMiddleware
 
     app.add_middleware(DemoGuardMiddleware)
 
-# Mount /static for avatars (and any future assets served by the backend)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-# Prevent browser caching of static frontend assets (JS/CSS/images).
-# StaticFiles doesn't support custom headers, so this middleware injects
-# Cache-Control: no-store on /assets, /frontend-static, /static paths.
 from zerg.middleware.no_cache_static import NoCacheStaticMiddleware
 
 app.add_middleware(NoCacheStaticMiddleware)
 
-# ---------------------------------------------------------------------------
-# RequestTimeoutMiddleware - enforce a max response time on /api/ requests.
-# Added before SafeErrorResponseMiddleware so it sits inside the error layer
-# (safe-error wraps timeout, not the other way around).
-# ---------------------------------------------------------------------------
 from zerg.middleware.request_timeout import RequestTimeoutMiddleware
 
 app.add_middleware(RequestTimeoutMiddleware)
 
-# ---------------------------------------------------------------------------
-# E2E SQLite commis routing - keep HTTP requests on the same per-commis DB
-# as websocket routes that use ``commis=...``.
-# Added before SafeErrorResponseMiddleware so safe-error stays outermost.
-# ---------------------------------------------------------------------------
 from zerg.middleware.test_commis_routing import E2ECommisRoutingMiddleware
 
 app.add_middleware(E2ECommisRoutingMiddleware, enabled=_settings.testing)
 
-# ---------------------------------------------------------------------------
-# SafeErrorResponseMiddleware - MUST be added LAST to be the outermost wrapper.
-# In Starlette, add_middleware() inserts at the START of the list, so the last
-# middleware added becomes the outermost layer that sees requests first and
-# handles exceptions from all inner layers.
-# ---------------------------------------------------------------------------
 from zerg.middleware.safe_error_response import SafeErrorResponseMiddleware
 
 app.add_middleware(SafeErrorResponseMiddleware, cors_origins=cors_origins)
 
-# Include API routers on the api_app sub-application (mounted at /api).
-# Routers that previously used API_PREFIX ("/api") now use no prefix or their
-# relative sub-prefix since the /api mount point handles the top-level prefix.
+# ---------------------------------------------------------------------------
+# API routers
+# ---------------------------------------------------------------------------
 api_app.include_router(fiches_router, prefix=AUTOMATIONS_PREFIX)
-api_app.include_router(automation_mcp_servers_router)  # Canonical automation MCP server routes
+api_app.include_router(automation_mcp_servers_router)
 api_app.include_router(threads_router, prefix=THREADS_PREFIX)
 api_app.include_router(models_router, prefix=MODELS_PREFIX)
 api_app.include_router(websocket_router)
 api_app.include_router(admin_router)
-api_app.include_router(admin_bootstrap_router)  # Bootstrap API for config seeding
+api_app.include_router(admin_bootstrap_router)
 api_app.include_router(pubsub_webhook_router)
-api_app.include_router(channels_webhooks_router)  # Channel plugin webhooks (Telegram, etc.)
+api_app.include_router(channels_webhooks_router)
 api_app.include_router(connectors_router)
 api_app.include_router(conversations_router)
 api_app.include_router(triggers_router)
 api_app.include_router(knowledge_router)
 api_app.include_router(runs_router)
 api_app.include_router(automation_runs_router)
-api_app.include_router(runners_router)  # Runners execution infrastructure
+api_app.include_router(runners_router)
 api_app.include_router(auth_router)
-api_app.include_router(auth_internal_router)  # Internal auth handoff endpoints
-api_app.include_router(oauth_router)  # OAuth for third-party connectors
+api_app.include_router(auth_internal_router)
+api_app.include_router(oauth_router)
 api_app.include_router(users_router)
-api_app.include_router(contacts_router)  # User approved contacts for email/SMS
-api_app.include_router(oikos_router)  # Oikos integration — self-prefixed /oikos
-api_app.include_router(oikos_internal_router)  # Internal endpoints for run continuation
-api_app.include_router(sync_router)  # Conversation sync — self-prefixed /oikos/sync
-api_app.include_router(stream_router)  # Resumable SSE v1 — self-prefixed /stream
+api_app.include_router(contacts_router)
+api_app.include_router(oikos_router)
+api_app.include_router(oikos_internal_router)
+api_app.include_router(sync_router)
+api_app.include_router(stream_router)
 api_app.include_router(system_router)
-api_app.include_router(email_config_router)  # Email config CRUD + test
-api_app.include_router(capabilities_router)  # LLM provider config + enhanced capabilities
+api_app.include_router(email_config_router)
+api_app.include_router(capabilities_router)
 api_app.include_router(ops_router)
-api_app.include_router(ops_beacon_router)  # Public beacon (no auth)
+api_app.include_router(ops_beacon_router)
 api_app.include_router(fiche_config_router)
-api_app.include_router(automation_connectors_router)  # Canonical automation connector credentials
-api_app.include_router(account_connectors_router)  # Account-level connector credentials
-api_app.include_router(funnel_router)  # Funnel tracking
-api_app.include_router(waitlist_router)  # Public waitlist signup
-api_app.include_router(job_settings_router)  # Job secrets + repo config (before jobs_router to avoid /{job_id} catch-all)
-api_app.include_router(jobs_router)  # Scheduled jobs management
-api_app.include_router(traces_router)  # Trace Explorer (admin only)
-api_app.include_router(reliability_router)  # Reliability Dashboard (admin only)
-api_app.include_router(skills_router)  # Skills Platform for workspace-scoped tools
-api_app.include_router(session_chat_router)  # Timeline session drop-in chat
-api_app.include_router(agents_session_chat_router)  # Machine-facing live-send and cloud-branch control
-api_app.include_router(timeline_router)  # Browser-owned timeline/session archive API
+api_app.include_router(automation_connectors_router)
+api_app.include_router(account_connectors_router)
+api_app.include_router(funnel_router)
+api_app.include_router(waitlist_router)
+api_app.include_router(job_settings_router)
+api_app.include_router(jobs_router)
+api_app.include_router(traces_router)
+api_app.include_router(reliability_router)
+api_app.include_router(skills_router)
+api_app.include_router(session_chat_router)
+api_app.include_router(agents_session_chat_router)
+api_app.include_router(timeline_router)
 api_app.include_router(agents_ingest_router)
-api_app.include_router(agents_search_router)  # Before sessions — literal /sessions/semantic must match before /sessions/{id}
+api_app.include_router(agents_search_router)
 api_app.include_router(agents_sessions_router)
 api_app.include_router(agents_backfill_router)
 api_app.include_router(agents_briefings_router)
 api_app.include_router(agents_demo_router)
-api_app.include_router(heartbeat_router)  # Engine daemon heartbeat ingest
-api_app.include_router(presence_router)  # Claude Code hook presence signals
-api_app.include_router(runtime_router)  # Normalized runtime event ingest
-api_app.include_router(device_tokens_router)  # Per-device authentication tokens
-api_app.include_router(insights_router)  # Insights tracking for agent infrastructure
-api_app.include_router(machine_insights_router)  # Machine-auth insight reads for continuity tools
+api_app.include_router(heartbeat_router)
+api_app.include_router(presence_router)
+api_app.include_router(runtime_router)
+api_app.include_router(device_tokens_router)
+api_app.include_router(insights_router)
+api_app.include_router(machine_insights_router)
+api_app.include_router(health_router)
 
-# metrics_router stays on parent app — Prometheus expects /metrics at root
-app.include_router(metrics_router)  # no prefix – Prometheus expects /metrics
+# metrics on parent app (Prometheus expects /metrics at root)
+app.include_router(metrics_router)
 
-# Mount the API sub-app at /api — this gives it full ownership of /api/*.
-# Any request to /api/... is routed to api_app; the parent's SPA catch-all
-# can never intercept API paths.
 app.mount("/api", api_app)
 
 # ---------------------------------------------------------------------------
-
-# Legacy logging setup (kept to avoid breaking existing comment reference)
-# Set up logging
-# Note: logger is now defined earlier for lifespan handler usage
+# Dynamic config.js
+# ---------------------------------------------------------------------------
 
 
-# Dynamic /config.js — replaces static public/config.js with runtime values
 @app.get("/config.js", include_in_schema=False)
 async def serve_config_js():
-    """Serve runtime configuration as JavaScript for the frontend."""
     from fastapi.responses import Response
 
-    # Prefer app_public_url (instance-specific) over public_site_url (marketing site)
     base_url = _settings.app_public_url or _settings.public_site_url or ""
     ws_scheme = "wss" if base_url.startswith("https") else "ws"
     ws_host = ""
@@ -1090,7 +311,6 @@ async def serve_config_js():
         parsed = _urlparse(base_url)
         ws_host = f"{ws_scheme}://{parsed.netloc}"
 
-    # Check LLM availability: env var + DB config
     _llm_avail_bool = _settings.llm_available
     _emb_avail_bool = bool(os.getenv("OPENAI_API_KEY"))
     if not _llm_avail_bool or not _emb_avail_bool:
@@ -1105,7 +325,7 @@ async def serve_config_js():
                 if not _emb_avail_bool:
                     _emb_avail_bool = (_db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "embedding").first()) is not None
         except Exception:
-            pass  # Fall through with env-only check
+            pass
     google_client_id = "" if _settings.control_plane_url else (_settings.google_client_id or "")
     runtime_config = {
         "API_BASE_URL": "/api",
@@ -1127,10 +347,8 @@ async def serve_config_js():
     )
 
 
-# Root endpoint (API info when frontend not bundled, or HTML when it is)
 @app.get("/", include_in_schema=False)
 async def read_root():
-    """Serve frontend index.html or API info message."""
     if FRONTEND_DIST_DIR is not None:
         from fastapi.responses import FileResponse
 
@@ -1145,303 +363,20 @@ async def read_root():
     return {"message": "Longhouse API is running"}
 
 
-@api_app.get("/health/db", operation_id="health_db_check")
-async def health_db():
-    """Database readiness check - verifies critical tables are initialized.
-
-    This endpoint is used by Playwright to wait for the database to be fully
-    initialized before starting tests. It only returns 200 when all critical
-    tables exist.
-    """
-    from sqlalchemy import text
-
-    from zerg.database import default_engine
-
-    # Critical tables that must exist for the app to function
-    required_tables = ["users", "fiches", "threads", "runs", "commis_jobs", "sessions", "events", "events_fts"]
-
-    try:
-        with default_engine.connect() as conn:
-            for table in required_tables:
-                result = conn.execute(text(f"SELECT 1 FROM sqlite_master WHERE type='table' AND name='{table}'"))
-                if not result.fetchone():
-                    return JSONResponse(
-                        status_code=503,
-                        content={"status": "initializing", "missing_table": table},
-                    )
-        return {"status": "ready", "tables_verified": required_tables}
-    except Exception as e:
-        logger.warning(f"Database readiness check failed: {e}")
-        return JSONResponse(
-            status_code=503,
-            content={"status": "error", "detail": "Database connection failed"},
-        )
-
-
-@api_app.get("/livez", operation_id="livez_check_get")
-@api_app.head("/livez", operation_id="livez_check_head", include_in_schema=False)
-async def livez_check():
-    """Liveness probe: process is up and serving requests."""
-    return {"status": "ok"}
-
-
-@api_app.get("/readyz", operation_id="readyz_check_get")
-@api_app.head("/readyz", operation_id="readyz_check_head", include_in_schema=False)
-async def readyz_check():
-    """Readiness probe: returns 503 when core dependencies are unavailable.
-
-    Unlike /health (which always returns 200 for observability), this endpoint
-    returns a non-2xx status code so load balancers and provisioners can gate
-    on it. Used by the Docker HEALTHCHECK and the control-plane wait_for_health.
-
-    Uses a raw SQLite connection with a short timeout so it never blocks behind
-    a long write transaction (the main cause of health-check flapping).
-    """
-    import sqlite3
-
-    from zerg.database import default_engine
-
-    single_tenant_violation = getattr(app.state, "single_tenant_violation", None)
-    if single_tenant_violation:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unhealthy", "reason": single_tenant_violation},
-        )
-
-    if default_engine is None:
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unhealthy", "reason": "database engine not initialized"},
-        )
-
-    # Extract the file path from the engine URL and open a dedicated read-only
-    # connection with a 2s timeout — never blocks behind the WAL writer.
-    db_url = str(default_engine.url)
-    if db_url.startswith("sqlite"):
-        db_path = db_url.replace("sqlite:///", "").replace("sqlite://", "")
-        if not db_path or db_path == ":memory:":
-            return {"status": "ok"}
-        try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
-            try:
-                conn.execute("SELECT 1")
-                row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1").fetchone()
-                if not row:
-                    return JSONResponse(
-                        status_code=503,
-                        content={"status": "unhealthy", "reason": "events_fts table missing (FTS5 required)"},
-                    )
-            finally:
-                conn.close()
-        except Exception as exc:
-            return JSONResponse(
-                status_code=503,
-                content={"status": "unhealthy", "reason": f"database: {exc}"},
-            )
-    else:
-        # Postgres path — use engine as before
-        from sqlalchemy import text
-
-        try:
-            with default_engine.connect() as conn:
-                conn.execute(text("SELECT 1"))
-        except Exception as exc:
-            return JSONResponse(
-                status_code=503,
-                content={"status": "unhealthy", "reason": f"database: {exc}"},
-            )
-
-    return {"status": "ok"}
-
-
-@api_app.get("/health", operation_id="health_check_get")
-@api_app.head("/health", operation_id="health_check_head", include_in_schema=False)
-async def health_check():
-    """Readiness probe: core dependencies are available."""
-    from pathlib import Path
-
-    from sqlalchemy import text
-
-    health_status = {"status": "healthy", "message": "Longhouse API is running"}
-    checks = {}
-
-    # 0. Single-tenant violation check (critical)
-    single_tenant_violation = getattr(app.state, "single_tenant_violation", None)
-    if single_tenant_violation:
-        health_status["status"] = "unhealthy"
-        health_status["message"] = single_tenant_violation
-        checks["single_tenant"] = {"status": "fail", "error": single_tenant_violation}
-
-    # 1. Environment validation
-    try:
-        settings = get_settings()
-        env_issues = []
-
-        if not settings.database_url:
-            env_issues.append("DATABASE_URL missing")
-        if not settings.auth_disabled and (not settings.jwt_secret or len(settings.jwt_secret) < 16):
-            env_issues.append("JWT_SECRET invalid")
-
-        checks["environment"] = {
-            "status": "pass" if not env_issues else "fail",
-            "issues": env_issues,
-            "database_configured": bool(settings.database_url),
-            "auth_enabled": not settings.auth_disabled,
-        }
-    except Exception as e:
-        checks["environment"] = {"status": "fail", "error": str(e)}
-        health_status["status"] = "unhealthy"
-
-    # 1b. LLM capability check (warn, not fail)
-    try:
-        from zerg.database import get_session_factory as _gsf
-        from zerg.routers.capabilities import _resolve_capability_no_user
-
-        _sf = _gsf()
-        with _sf() as _db:
-            text_avail, text_src, _ = _resolve_capability_no_user("text", _db)
-            emb_avail, emb_src, _ = _resolve_capability_no_user("embedding", _db)
-
-        checks["llm"] = {
-            "status": "pass" if text_avail else "warn",
-            "text_available": text_avail,
-            "text_source": text_src,
-            "embeddings_available": emb_avail,
-            "embeddings_source": emb_src,
-        }
-    except Exception as e:
-        checks["llm"] = {"status": "warn", "error": str(e)}
-
-    # 2. Database connectivity
-    try:
-        from zerg.database import default_engine
-
-        with default_engine.connect() as conn:
-            result = conn.execute(text("SELECT 1"))
-            row = result.fetchone()
-            checks["database"] = {
-                "status": "pass" if row and row[0] == 1 else "fail",
-                "connection": "ok",
-                "url": str(default_engine.url).replace(default_engine.url.password or "", "***")
-                if default_engine.url.password
-                else str(default_engine.url),
-            }
-    except Exception as e:
-        checks["database"] = {"status": "fail", "error": str(e)}
-        health_status["status"] = "unhealthy"
-
-    # 3. SQLite FTS5 readiness (required for session search)
-    try:
-        from zerg.database import default_engine
-
-        if default_engine is not None and default_engine.dialect.name == "sqlite":
-            with default_engine.connect() as conn:
-                fts_row = conn.execute(text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='events_fts' LIMIT 1")).fetchone()
-                if not fts_row:
-                    raise RuntimeError("events_fts table is missing (FTS5 required).")
-                conn.execute(text("SELECT rowid FROM events_fts WHERE events_fts MATCH 'fts5' LIMIT 1")).fetchone()
-            checks["fts5"] = {"status": "pass"}
-        else:
-            checks["fts5"] = {"status": "skip", "reason": "non-sqlite"}
-    except Exception as e:
-        checks["fts5"] = {"status": "fail", "error": str(e)}
-        health_status["status"] = "unhealthy"
-
-    # 4. Job system status (warn, not fail)
-    job_status = getattr(app.state, "job_system_status", None)
-    if job_status:
-        checks["jobs"] = {
-            "status": "pass" if job_status.get("started") else "warn",
-            "scheduled_count": job_status.get("scheduled_count", 0),
-            "git_sync": job_status.get("git_sync", False),
-            "error": job_status.get("error"),
-        }
-    else:
-        checks["jobs"] = {"status": "warn", "error": "Job system not initialized"}
-
-    # 5. Email config status (warn, not fail)
-    try:
-        from zerg.shared.email import resolve_email_config
-
-        email_cfg = resolve_email_config()
-        email_configured = bool(
-            all(
-                (
-                    email_cfg.get("AWS_SES_ACCESS_KEY_ID"),
-                    email_cfg.get("AWS_SES_SECRET_ACCESS_KEY"),
-                    email_cfg.get("FROM_EMAIL"),
-                    email_cfg.get("NOTIFY_EMAIL"),
-                )
-            )
-        )
-        checks["email"] = {
-            "status": "pass" if email_configured else "warn",
-            "configured": email_configured,
-            "from_email": email_cfg.get("FROM_EMAIL") if email_configured else None,
-            "notify_email": email_cfg.get("NOTIFY_EMAIL") if email_configured else None,
-        }
-    except Exception as e:
-        checks["email"] = {"status": "warn", "error": str(e)}
-
-    # 6. Migration status
-    migration_log_file = Path("/app/static/migration.log")
-    migration_status = {"log_exists": migration_log_file.exists(), "log_content": None}
-
-    if migration_log_file.exists():
-        try:
-            with open(migration_log_file, "r") as f:
-                migration_status["log_content"] = f.read()
-        except Exception as e:
-            migration_status["log_error"] = str(e)
-
-    checks["migration"] = migration_status
-
-    # 7. Write serializer metrics (informational)
-    try:
-        from zerg.services.write_serializer import get_write_serializer
-
-        ws = get_write_serializer()
-        if ws.is_configured:
-            checks["write_serializer"] = {"status": "pass", **ws.get_metrics()}
-        else:
-            checks["write_serializer"] = {"status": "skip", "reason": "not configured"}
-    except Exception as e:
-        checks["write_serializer"] = {"status": "warn", "error": str(e)}
-
-    health_status["checks"] = checks
-    return health_status
-
-
-# Favicon endpoint is no longer needed since we use static file in the frontend
-# Browsers will go directly to the frontend server for favicon.ico
-
-
-# Redundant reset-database endpoint removed - use /admin/reset-database instead
-
-
 # ---------------------------------------------------------------------------
 # Frontend static serving (MUST be last - catch-all route)
 # ---------------------------------------------------------------------------
-# When running `zerg serve` from a pip-installed package, serve the bundled
-# frontend directly. This catch-all MUST be registered after all API routes.
-# ---------------------------------------------------------------------------
-
 if FRONTEND_DIST_DIR is not None:
-    # Mount frontend assets (JS, CSS, images) at /assets
     _assets_dir = FRONTEND_DIST_DIR / "assets"
     if _assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=str(_assets_dir)), name="frontend_assets")
 
-    # Mount root-level static files (favicon, manifest, etc.)
     app.mount("/frontend-static", StaticFiles(directory=str(FRONTEND_DIST_DIR)), name="frontend_root")
 
-    # Pre-resolve the base path for containment checks
     _frontend_dist_resolved = FRONTEND_DIST_DIR.resolve()
 
-    # Serve index.html for SPA routes (catch-all for non-API paths)
     @app.get("/{path:path}", include_in_schema=False)
     async def serve_spa(path: str):
-        """Serve the SPA index.html for client-side routing."""
         from fastapi.responses import FileResponse
         from fastapi.responses import RedirectResponse
 
@@ -1455,11 +390,9 @@ if FRONTEND_DIST_DIR is not None:
                 )
             return RedirectResponse(url="/")
 
-        # SECURITY: Reject paths with traversal attempts
         if ".." in path or path.startswith("/"):
             return _serve_index()
 
-        # Check for static files
         try:
             static_file = (_frontend_dist_resolved / path).resolve()
             if static_file.is_relative_to(_frontend_dist_resolved) and static_file.is_file():
@@ -1470,7 +403,6 @@ if FRONTEND_DIST_DIR is not None:
         except (ValueError, OSError):
             pass
 
-        # Serve index.html for SPA routing
         return _serve_index()
 
     logger.info(f"Frontend catch-all route registered (FRONTEND_DIST_DIR={FRONTEND_DIST_DIR})")
