@@ -1,4 +1,5 @@
 mod bench;
+mod commands;
 mod codex_app_server_canary;
 mod codex_bridge;
 mod config;
@@ -587,7 +588,7 @@ fn main() -> anyhow::Result<()> {
             dump_events,
             compress,
         } => {
-            cmd_parse(&path, offset, dump_events, compress)?;
+            commands::cmd_parse::cmd_parse(&path, offset, dump_events, compress)?;
         }
         Commands::Bench {
             level,
@@ -597,7 +598,7 @@ fn main() -> anyhow::Result<()> {
             compression,
         } => {
             let algo = parse_compression_algo(&compression)?;
-            cmd_bench(&level, compress, parallel, workers, algo)?;
+            commands::cmd_bench::cmd_bench(&level, compress, parallel, workers, algo)?;
         }
         Commands::Ship {
             url,
@@ -1531,125 +1532,6 @@ async fn cmd_ship_file(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// parse subcommand
-// ---------------------------------------------------------------------------
-
-fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> anyhow::Result<()> {
-    let start = Instant::now();
-
-    let file_size = std::fs::metadata(path)?.len();
-    eprintln!(
-        "Parsing {} ({:.2} MB) from offset {}",
-        path.display(),
-        file_size as f64 / 1_048_576.0,
-        offset
-    );
-
-    let parse_start = Instant::now();
-    let result = pipeline::parser::parse_session_file(path, offset)?;
-    let parse_elapsed = parse_start.elapsed();
-
-    eprintln!(
-        "Parsed {} events, metadata extracted in {:.3}s",
-        result.events.len(),
-        parse_elapsed.as_secs_f64()
-    );
-
-    if let Some(ref meta) = result.metadata.cwd {
-        eprintln!("  cwd: {}", meta);
-    }
-    if let Some(ref branch) = result.metadata.git_branch {
-        eprintln!("  branch: {}", branch);
-    }
-    if let Some(ref started) = result.metadata.started_at {
-        eprintln!("  started: {}", started);
-    }
-    if let Some(ref ended) = result.metadata.ended_at {
-        eprintln!("  ended: {}", ended);
-    }
-
-    if dump_events {
-        for event in &result.events {
-            let json = serde_json::to_string(event)?;
-            println!("{}", json);
-        }
-    }
-
-    if compress {
-        let compress_start = Instant::now();
-        let source_path = path.to_string_lossy();
-        let compressed = pipeline::compressor::build_and_compress_with_source_lines(
-            "test-session-id",
-            &result.events,
-            &result.metadata,
-            &source_path,
-            "claude",
-            Some(&result.source_lines),
-            None,
-            CompressionAlgo::Gzip,
-        )?;
-        let compress_elapsed = compress_start.elapsed();
-
-        // Calculate uncompressed size for ratio
-        let payload = pipeline::compressor::build_payload_with_source_lines(
-            "test-session-id",
-            &result.events,
-            &result.metadata,
-            &source_path,
-            "claude",
-            Some(&result.source_lines),
-            None,
-        );
-        let uncompressed = serde_json::to_vec(&payload)?;
-
-        eprintln!(
-            "Compressed: {:.2} MB JSON → {:.2} MB gzip ({:.1}x ratio) in {:.3}s",
-            uncompressed.len() as f64 / 1_048_576.0,
-            compressed.len() as f64 / 1_048_576.0,
-            uncompressed.len() as f64 / compressed.len() as f64,
-            compress_elapsed.as_secs_f64()
-        );
-    }
-
-    let bytes_processed = file_size - offset;
-    let total_elapsed = start.elapsed();
-    eprintln!(
-        "\nTotal: {:.3}s, {:.1} MB/s, {} events/s",
-        total_elapsed.as_secs_f64(),
-        bytes_processed as f64 / 1_048_576.0 / total_elapsed.as_secs_f64(),
-        (result.events.len() as f64 / total_elapsed.as_secs_f64()) as u64
-    );
-
-    // Machine-readable JSON summary
-    let summary = serde_json::json!({
-        "file": path.display().to_string(),
-        "file_size_bytes": file_size,
-        "offset": offset,
-        "bytes_processed": bytes_processed,
-        "event_count": result.events.len(),
-        "parse_seconds": parse_elapsed.as_secs_f64(),
-        "total_seconds": total_elapsed.as_secs_f64(),
-        "throughput_mb_s": bytes_processed as f64 / 1_048_576.0 / total_elapsed.as_secs_f64(),
-        "events_per_sec": (result.events.len() as f64 / total_elapsed.as_secs_f64()) as u64,
-        "metadata": {
-            "cwd": result.metadata.cwd,
-            "git_branch": result.metadata.git_branch,
-            "started_at": result.metadata.started_at.map(|t| t.to_rfc3339()),
-            "ended_at": result.metadata.ended_at.map(|t| t.to_rfc3339()),
-        }
-    });
-    // When --dump-events is active, stdout is a stream of event JSON lines.
-    // Send the stats summary to stderr so callers can parse events cleanly.
-    if dump_events {
-        eprintln!("{}", serde_json::to_string_pretty(&summary)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(&summary)?);
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1883,86 +1765,4 @@ mod tests {
         assert_eq!(reported_ship_events(0, 2, true, false), 2);
         assert_eq!(reported_ship_events(3, 2, false, true), 5);
     }
-}
-
-// ---------------------------------------------------------------------------
-// bench subcommand
-// ---------------------------------------------------------------------------
-
-fn cmd_bench(
-    level: &str,
-    compress: bool,
-    parallel: bool,
-    workers: usize,
-    algo: CompressionAlgo,
-) -> anyhow::Result<()> {
-    eprintln!("Discovering session files...");
-    let all_files = bench::discover_session_files();
-    eprintln!("Found {} non-empty JSONL files", all_files.len());
-
-    let total_bytes: u64 = all_files
-        .iter()
-        .filter_map(|p| std::fs::metadata(p).ok())
-        .map(|m| m.len())
-        .sum();
-    eprintln!(
-        "Total: {:.2} GB on disk",
-        total_bytes as f64 / 1_073_741_824.0
-    );
-
-    let files: Vec<PathBuf> = match level.to_uppercase().as_str() {
-        "L1" => {
-            // Single largest file
-            all_files.into_iter().take(1).collect()
-        }
-        "L2" => {
-            // 10% sample (top files by size)
-            let count = (all_files.len() + 9) / 10;
-            all_files.into_iter().take(count).collect()
-        }
-        "L3" => {
-            // All files
-            all_files
-        }
-        _ => {
-            anyhow::bail!("Unknown level: {}. Use L1, L2, or L3", level);
-        }
-    };
-
-    let sample_bytes: u64 = files
-        .iter()
-        .filter_map(|p| std::fs::metadata(p).ok())
-        .map(|m| m.len())
-        .sum();
-
-    let num_workers = if workers == 0 {
-        num_cpus::get()
-    } else {
-        workers
-    };
-
-    eprintln!(
-        "\n--- {} benchmark: {} files, {:.2} GB ---",
-        level.to_uppercase(),
-        files.len(),
-        sample_bytes as f64 / 1_073_741_824.0
-    );
-    eprintln!(
-        "Mode: {}, Compress: {}",
-        if parallel {
-            format!("parallel ({} workers)", num_workers)
-        } else {
-            "sequential".to_string()
-        },
-        if compress { "yes" } else { "parse-only" }
-    );
-
-    let result = if parallel {
-        bench::run_benchmark_parallel_with(&files, compress, num_workers, algo)
-    } else {
-        bench::run_benchmark_with(&files, compress, algo)
-    };
-    result.print_summary();
-
-    Ok(())
 }
