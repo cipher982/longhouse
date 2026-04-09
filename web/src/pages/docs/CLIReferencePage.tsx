@@ -66,6 +66,12 @@ longhouse recall "the session where CI was fixed"`}
 longhouse wall --json          # machine-readable`}
       </CodeBlock>
 
+      <h3>longhouse peers</h3>
+      <p>Show connected peers and runner machines available for remote execution.</p>
+      <CodeBlock title="terminal">
+        {`longhouse peers`}
+      </CodeBlock>
+
       <h3>longhouse tail</h3>
       <p>Stream live events from a running session.</p>
       <CodeBlock title="terminal">
@@ -76,7 +82,7 @@ longhouse wall --json          # machine-readable`}
       <p>Send a directed message to a session's inbox.</p>
       <CodeBlock title="terminal">
         {`longhouse message SESSION_ID "Check the failing test"
-longhouse messages --json      # read the inbox`}
+longhouse messages ack MESSAGE_ID  # acknowledge a message`}
       </CodeBlock>
 
       <h3>longhouse continue</h3>
@@ -93,11 +99,29 @@ longhouse sessions events SESSION_ID
 longhouse sessions continue SESSION_ID`}
       </CodeBlock>
 
+      <h2>Configuration</h2>
+
+      <h3>longhouse config show</h3>
+      <p>Display the current configuration and defaults.</p>
+      <CodeBlock title="terminal">{`longhouse config show`}</CodeBlock>
+
+      <h3>longhouse auth</h3>
+      <p>Manage authentication — login, logout, token refresh.</p>
+      <CodeBlock title="terminal">{`longhouse auth`}</CodeBlock>
+
       <h2>Diagnostics</h2>
 
+      <h3>longhouse status</h3>
+      <p>Show server status and connectivity information.</p>
+      <CodeBlock title="terminal">{`longhouse status`}</CodeBlock>
+
       <h3>longhouse doctor</h3>
-      <p>Check for issues with the local installation.</p>
+      <p>Diagnose common issues with the local installation and environment.</p>
       <CodeBlock title="terminal">{`longhouse doctor`}</CodeBlock>
+
+      <h3>longhouse local-health</h3>
+      <p>Detailed local health check. On macOS, the menu bar app shows this in ambient form.</p>
+      <CodeBlock title="terminal">{`longhouse local-health`}</CodeBlock>
 
       <h3>longhouse connect</h3>
       <p>Manage the background session shipping service.</p>
@@ -106,9 +130,27 @@ longhouse sessions continue SESSION_ID`}
 longhouse connect --status      # check shipping status`}
       </CodeBlock>
 
-      <h3>longhouse local-health</h3>
-      <p>Detailed local health check. On macOS, the menu bar app shows this in ambient form.</p>
-      <CodeBlock title="terminal">{`longhouse local-health`}</CodeBlock>
+      <h2>Setup & Maintenance</h2>
+
+      <h3>longhouse onboard</h3>
+      <p>Run first-time setup wizard to configure Longhouse for your machine.</p>
+      <CodeBlock title="terminal">{`longhouse onboard`}</CodeBlock>
+
+      <h3>longhouse migrate</h3>
+      <p>Plan or apply heavy SQLite migrations. Useful after major version updates.</p>
+      <CodeBlock title="terminal">
+        {`longhouse migrate              # show pending migrations
+longhouse migrate --apply       # apply pending migrations
+longhouse migrate --json        # machine-readable output`}
+      </CodeBlock>
+
+      <h3>longhouse version / upgrade</h3>
+      <p>Check or update your Longhouse installation.</p>
+      <CodeBlock title="terminal">
+        {`longhouse version              # show current version
+longhouse version --check       # check for updates
+longhouse upgrade               # upgrade to latest version`}
+      </CodeBlock>
 
       <h2>Global Flags</h2>
       <table>
