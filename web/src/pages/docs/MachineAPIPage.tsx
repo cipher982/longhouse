@@ -33,10 +33,10 @@ export default function MachineAPIPage() {
 
       <h3>List sessions</h3>
       <CodeBlock title="GET /api/agents/sessions">
-        {`curl "http://localhost:8080/api/agents/sessions?q=auth+retry&limit=10"
+        {`curl "http://localhost:8080/api/agents/sessions?query=auth+retry&limit=10"
 
 # Query parameters:
-#   q        - search query
+#   query    - search query
 #   limit    - max results (default 50)
 #   offset   - pagination offset
 #   project  - filter by project name
@@ -64,8 +64,8 @@ export default function MachineAPIPage() {
       <h2>Coordination</h2>
 
       <h3>Wall (active sessions)</h3>
-      <CodeBlock title="GET /api/agents/wall">
-        {`curl http://localhost:8080/api/agents/wall`}
+      <CodeBlock title="GET /api/agents/sessions/wall">
+        {`curl http://localhost:8080/api/agents/sessions/wall`}
       </CodeBlock>
       <p>Returns active and recently active sessions.</p>
 

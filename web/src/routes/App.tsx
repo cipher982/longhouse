@@ -132,24 +132,8 @@ export default function App() {
     </ErrorBoundary>
   );
 
-  const demoRoutes = [
-    // Marketing / public pages
-    {
-      path: "/",
-      element: (
-        <ErrorBoundary>
-          <LandingPage />
-        </ErrorBoundary>
-      ),
-    },
-    {
-      path: "/pricing",
-      element: (
-        <ErrorBoundary>
-          <PricingPage />
-        </ErrorBoundary>
-      ),
-    },
+  // Public reference pages — shared by demo and normal modes
+  const publicInfoRoutes = [
     {
       path: "/docs",
       element: (
@@ -192,6 +176,27 @@ export default function App() {
         </ErrorBoundary>
       ),
     },
+  ];
+
+  const demoRoutes = [
+    // Marketing / public pages
+    {
+      path: "/",
+      element: (
+        <ErrorBoundary>
+          <LandingPage />
+        </ErrorBoundary>
+      ),
+    },
+    {
+      path: "/pricing",
+      element: (
+        <ErrorBoundary>
+          <PricingPage />
+        </ErrorBoundary>
+      ),
+    },
+    ...publicInfoRoutes,
     // Demo timeline — wrapped in Layout with DemoBanner, no AuthGuard
     {
       element: <DemoApp />,
@@ -254,52 +259,6 @@ export default function App() {
           ),
         },
       ];
-
-  // Public reference pages — always available, even on single-tenant instances
-  const publicInfoRoutes = [
-    {
-      path: "/docs",
-      element: (
-        <ErrorBoundary>
-          <DocsLayout />
-        </ErrorBoundary>
-      ),
-      children: [
-        { index: true, element: <DocsOverviewPage /> },
-        { path: "quickstart", element: <DocsQuickStartPage /> },
-        { path: "search", element: <DocsSearchPage /> },
-        { path: "remote-control", element: <DocsRemoteControlPage /> },
-        { path: "cli", element: <DocsCLIReferencePage /> },
-        { path: "api", element: <DocsMachineAPIPage /> },
-        { path: "integrations", element: <DocsIntegrationsPage /> },
-        { path: "configuration", element: <DocsConfigurationPage /> },
-      ],
-    },
-    {
-      path: "/changelog",
-      element: (
-        <ErrorBoundary>
-          <ChangelogPage />
-        </ErrorBoundary>
-      ),
-    },
-    {
-      path: "/privacy",
-      element: (
-        <ErrorBoundary>
-          <PrivacyPage />
-        </ErrorBoundary>
-      ),
-    },
-    {
-      path: "/security",
-      element: (
-        <ErrorBoundary>
-          <SecurityPage />
-        </ErrorBoundary>
-      ),
-    },
-  ];
 
   const routes = useRoutes(
     config.demoMode

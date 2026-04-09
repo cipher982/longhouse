@@ -223,7 +223,24 @@ def main():
 
     # --- LLM analysis ---
     print(f"  Model: {MODEL}")
-    result = call_llm(diff, doc_pages, api_key)
+    try:
+        result = call_llm(diff, doc_pages, api_key)
+    except Exception as e:
+        # LLM failures are real errors — log them loudly but don't block merges
+        msg = f"Docs drift check failed: {e}"
+        print(f"  ERROR: {msg}", file=sys.stderr)
+        comment = (
+            "### Docs Drift Check\n\n"
+            f"**Error:** LLM analysis failed — `{e}`\n\n"
+            "This is a CI infrastructure issue, not a code problem. "
+            "The docs drift check could not run."
+        )
+        if args.dry_run:
+            print("\n--- PR Comment (dry run) ---")
+            print(comment)
+        else:
+            post_pr_comment(comment)
+        sys.exit(1)
 
     # --- Output ---
     findings = result.get("findings", [])

@@ -1152,7 +1152,7 @@ export default function SessionsPage() {
                 <Button
                   variant="primary"
                   size="md"
-                  onClick={() => navigate("/docs#quickstart")}
+                  onClick={() => navigate("/docs/quickstart")}
                 >
                   See import steps
                 </Button>
