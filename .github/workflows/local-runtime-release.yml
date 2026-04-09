@@ -171,6 +171,19 @@ jobs:
           echo "enabled=true" >> "$GITHUB_OUTPUT"
           echo "profile=longhouse-notary" >> "$GITHUB_OUTPUT"
 
+      - name: Re-sign macOS engine binary for stable release
+        if: ${{ matrix.os == 'macos-latest' && steps.release_tier.outputs.tier == 'stable' && steps.macos_signing.outputs.enabled == 'true' }}
+        env:
+          CODESIGN_IDENTITY: ${{ steps.macos_signing.outputs.codesign_identity }}
+        run: |
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --sign "$CODESIGN_IDENTITY" \
+            "binaries/${{ matrix.engine_asset }}"
+          codesign --verify --strict --verbose=2 "binaries/${{ matrix.engine_asset }}"
+
       - name: Package macOS desktop app bundles
         if: ${{ matrix.build_desktop }}
         env:
@@ -188,6 +201,17 @@ jobs:
           AMBIENT_ARCHIVE="binaries/longhouse-local-health-app-darwin-arm64.zip"
 
           mkdir -p "$APP_STAGE_DIR"
+
+          if [[ "$RELEASE_TIER" == "stable" ]]; then
+            if [[ "$SIGNING_MODE" != "developer-id" ]]; then
+              echo "Stable macOS releases require Developer ID signing mode." >&2
+              exit 1
+            fi
+            if [[ "$NOTARY_ENABLED" != "true" || -z "${NOTARY_PROFILE:-}" ]]; then
+              echo "Stable macOS releases require notarization." >&2
+              exit 1
+            fi
+          fi
 
           scripts/release/macos-package-app.sh \
             --binary "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar" \
@@ -211,6 +235,10 @@ jobs:
               --archive "$AMBIENT_ARCHIVE" \
               --keychain-profile "$NOTARY_PROFILE" \
               --keychain "$KEYCHAIN_PATH"
+
+            if [[ "$RELEASE_TIER" == "stable" ]]; then
+              spctl --assess --type execute -vv "$AMBIENT_APP_PATH"
+            fi
 
             NOTARIZATION_STATUS="notarized"
           else
@@ -271,6 +299,24 @@ jobs:
         run: |
           cd binaries
           sha256sum * > local-runtime-checksums.txt
+
+      - name: Assert stable macOS trust metadata
+        if: ${{ startsWith(env.RELEASE_TAG, 'v') }}
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("binaries/local-runtime-macos-packaging.json").read_text())
+          if payload.get("release_tier") != "stable":
+              raise SystemExit(f"Expected stable release tier, got {payload.get('release_tier')!r}")
+          if payload.get("signing_mode") != "developer-id":
+              raise SystemExit(f"Expected developer-id signing, got {payload.get('signing_mode')!r}")
+          if payload.get("notarization_status") != "notarized":
+              raise SystemExit(
+                  f"Expected notarized macOS packaging, got {payload.get('notarization_status')!r}"
+              )
+          PY
 
       - name: Upload runtime assets to release
         run: gh release upload "$RELEASE_TAG" binaries/* --clobber --repo "${{ github.repository }}"
