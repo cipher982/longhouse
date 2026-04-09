@@ -5292,10 +5292,6 @@ export interface paths {
         /**
          * Health Db
          * @description Database readiness check - verifies critical tables are initialized.
-         *
-         *     This endpoint is used by Playwright to wait for the database to be fully
-         *     initialized before starting tests. It only returns 200 when all critical
-         *     tables exist.
          */
         get: operations["health_db_check"];
         put?: never;
@@ -5337,12 +5333,8 @@ export interface paths {
          * Readyz Check
          * @description Readiness probe: returns 503 when core dependencies are unavailable.
          *
-         *     Unlike /health (which always returns 200 for observability), this endpoint
-         *     returns a non-2xx status code so load balancers and provisioners can gate
-         *     on it. Used by the Docker HEALTHCHECK and the control-plane wait_for_health.
-         *
          *     Uses a raw SQLite connection with a short timeout so it never blocks behind
-         *     a long write transaction (the main cause of health-check flapping).
+         *     a long write transaction.
          */
         get: operations["readyz_check_get"];
         put?: never;
