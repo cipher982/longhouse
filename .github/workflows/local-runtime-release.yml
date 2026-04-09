@@ -210,8 +210,7 @@ jobs:
               --app "$AMBIENT_APP_PATH" \
               --archive "$AMBIENT_ARCHIVE" \
               --keychain-profile "$NOTARY_PROFILE" \
-              --keychain "$KEYCHAIN_PATH" \
-              --timeout 30m
+              --keychain "$KEYCHAIN_PATH"
 
             NOTARIZATION_STATUS="notarized"
           else
