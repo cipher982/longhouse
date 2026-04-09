@@ -21,7 +21,8 @@ def test_infer_requested_backend_detects_known_backends():
     assert _infer_requested_backend(_messages("anthropic only")) == "anthropic"
 
 
-def test_apply_dispatch_contract_injects_backend_into_spawn_calls():
+def test_apply_dispatch_contract_injects_backend_into_spawn_calls(monkeypatch):
+    monkeypatch.setenv("JOB_QUEUE_ENABLED", "1")
     tool_calls = [
         {
             "id": "call_1",

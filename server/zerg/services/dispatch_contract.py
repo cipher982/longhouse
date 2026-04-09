@@ -12,6 +12,7 @@ execution harness.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import TYPE_CHECKING
 
@@ -69,8 +70,12 @@ def _apply_dispatch_contract(tool_calls: list[dict] | None, messages: list[BaseM
     - If the user explicitly requested a backend and a spawn_commis call
       omits backend, inject the inferred backend to keep behavior deterministic.
     - Never override an explicit backend already provided by the model.
+    - Skip dispatch contract when JOB_QUEUE_ENABLED is off (commis disabled).
     """
     if not tool_calls:
+        return tool_calls
+
+    if os.getenv("JOB_QUEUE_ENABLED", "").lower() not in ("1", "true", "yes"):
         return tool_calls
 
     requested_backend = _infer_requested_backend(messages)
