@@ -72,6 +72,12 @@ longhouse recall "the session where I fixed the CI pipeline"`}
           Recall matches meaning. Use search when you know the exact term;
           use recall when you remember what happened but not the words.
         </p>
+        <p>
+          <strong>See also:</strong> Use{" "}
+          <code>longhouse wall</code> to see active and recent sessions across
+          all projects — a quick way to find what you or others are working on
+          right now.
+        </p>
       </div>
 
       <h2>Tips</h2>
