@@ -173,10 +173,10 @@ def get_menubar_service_info() -> dict[str, str]:
             info["launch_path"] = launch_path
             if ".app/Contents/MacOS/" in launch_path:
                 info["artifact_path"] = launch_path.split("/Contents/MacOS/", 1)[0]
-                info["runtime_mode"] = "broken-app-bundle"
+                info["runtime_mode"] = "broken-install"
             else:
                 info["artifact_path"] = launch_path
-                info["runtime_mode"] = "legacy-binary-install"
+                info["runtime_mode"] = "broken-install"
     return info
 
 

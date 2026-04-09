@@ -78,11 +78,11 @@ def test_check_shipper_warns_when_ambient_ui_uses_legacy_binary_install(tmp_path
     monkeypatch.setattr(local_health_ui, "get_menubar_service_info", lambda: {
         "status": "running",
         "artifact_path": "/Users/test/.local/bin/longhouse-local-health-menubar",
-        "runtime_mode": "legacy-binary-install",
+        "runtime_mode": "broken-install",
     })
     monkeypatch.setattr("zerg.services.shipper.service.detect_platform", lambda: Platform.MACOS)
 
     results = doctor._check_shipper()
     labels = {r.label: r.status for r in results}
 
-    assert labels["Ambient UI using legacy binary install (/Users/test/.local/bin/longhouse-local-health-menubar)"] == doctor.WARN
+    assert labels["Ambient UI install missing, broken, or unsupported (/Users/test/.local/bin/longhouse-local-health-menubar)"] == doctor.WARN
