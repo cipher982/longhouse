@@ -98,10 +98,12 @@ jobs:
           fi
 
           CERT_PATH="$RUNNER_TEMP/longhouse-release-cert.p12"
+          G2_CERT_PATH="$RUNNER_TEMP/DeveloperIDG2CA.cer"
           KEYCHAIN_PATH="$RUNNER_TEMP/longhouse-release.keychain-db"
           KEYCHAIN_PASSWORD="$(openssl rand -hex 18)"
 
           printf '%s' "$MACOS_SIGNING_CERT_P12_BASE64" | base64 -D -o "$CERT_PATH"
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$G2_CERT_PATH"
 
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
@@ -112,10 +114,23 @@ jobs:
             -T /usr/bin/codesign \
             -T /usr/bin/security \
             -T /usr/bin/productbuild
-          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          security import "$G2_CERT_PATH" -k "$KEYCHAIN_PATH" -f x509 -t cert
+          SEARCH_KEYCHAINS=(
+            "$KEYCHAIN_PATH"
+            "/System/Library/Keychains/SystemRootCertificates.keychain"
+            "/Library/Keychains/System.keychain"
+          )
+          if [[ -f "$HOME/Library/Keychains/login.keychain-db" ]]; then
+            SEARCH_KEYCHAINS+=("$HOME/Library/Keychains/login.keychain-db")
+          fi
+          security list-keychains -d user -s "${SEARCH_KEYCHAINS[@]}"
           security default-keychain -d user -s "$KEYCHAIN_PATH"
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          rm -f "$CERT_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          if ! security find-identity -v -p codesigning | grep -F "$MACOS_SIGNING_IDENTITY" >/dev/null; then
+            echo "Configured signing identity is not available in the signing keychain." >&2
+            exit 1
+          fi
+          rm -f "$CERT_PATH" "$G2_CERT_PATH"
 
           echo "enabled=true" >> "$GITHUB_OUTPUT"
           echo "signing_mode=developer-id" >> "$GITHUB_OUTPUT"
