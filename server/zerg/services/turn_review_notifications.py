@@ -55,7 +55,13 @@ def _build_turn_review_notification_text(*, review: SessionTurnReview, session: 
 
 
 def _review_requires_mobile_attention(review: SessionTurnReview) -> bool:
-    return review.execution_state in _ATTENTION_EXECUTION_STATES
+    if review.owner_id is None:
+        return False
+    if review.execution_state not in _ATTENTION_EXECUTION_STATES:
+        return False
+    if review.status not in {"recorded", "enqueued"}:
+        return False
+    return True
 
 
 async def _send_turn_review_telegram_notification(
