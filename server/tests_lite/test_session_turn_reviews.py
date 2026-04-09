@@ -32,7 +32,7 @@ from zerg.models.user import User
 from zerg.models.work import OikosWakeup
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.session_loop_controller import LoopControllerDecision
-from zerg.services.session_turn_reviews import classify_turn_review_outcome_for_run
+from zerg.services.turn_review_analysis import classify_turn_review_outcome_for_run
 from zerg.services.session_turn_reviews import load_completed_assistant_turn_by_event_id
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 from zerg.services.session_turn_reviews import maybe_record_session_turn_review
@@ -1684,7 +1684,7 @@ async def test_turn_review_assist_sends_telegram_loop_link_once(monkeypatch, tmp
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
     monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
     monkeypatch.setattr(
-        "zerg.services.session_turn_reviews._send_turn_review_push_notification",
+        "zerg.services.turn_review_notifications._send_turn_review_push_notification",
         lambda **_kwargs: False,
     )
     monkeypatch.setattr(
@@ -1747,8 +1747,8 @@ async def test_turn_review_assist_prefers_loop_push_over_telegram(monkeypatch, t
 
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
     monkeypatch.setattr("zerg.services.oikos_service.invoke_oikos", _fake_invoke)
-    monkeypatch.setattr("zerg.services.session_turn_reviews._send_turn_review_push_notification", _fake_push)
-    monkeypatch.setattr("zerg.services.session_turn_reviews._send_turn_review_telegram_notification", _fake_telegram)
+    monkeypatch.setattr("zerg.services.turn_review_notifications._send_turn_review_push_notification", _fake_push)
+    monkeypatch.setattr("zerg.services.turn_review_notifications._send_turn_review_telegram_notification", _fake_telegram)
 
     with SessionLocal() as db:
         _create_user(db, allow_continue=False, telegram_chat_id="1234")
@@ -1784,11 +1784,11 @@ async def test_turn_review_autopilot_does_not_send_mobile_notification(monkeypat
 
     monkeypatch.setattr("zerg.services.session_turn_reviews.evaluate_session_turn_with_llm", _fake_evaluate)
     monkeypatch.setattr(
-        "zerg.services.session_turn_reviews._send_turn_review_push_notification",
+        "zerg.services.turn_review_notifications._send_turn_review_push_notification",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Push should not fire for acted reviews")),
     )
     monkeypatch.setattr(
-        "zerg.services.session_turn_reviews._send_turn_review_telegram_notification",
+        "zerg.services.turn_review_notifications._send_turn_review_telegram_notification",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("Telegram should not fire for acted reviews")),
     )
 
