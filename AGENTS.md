@@ -88,6 +88,13 @@ Run the tier that matches the change. Do not over-test.
 - use per-test SQLite DBs
 - HTTP-level tests override dependencies on `api_app`, not `app`
 
+## Remote CI
+
+- Prefer GitHub Actions on cube ARC for heavy validation, browser jobs, and anything that can wait for remote feedback.
+- ARC lanes for this repo are `cube-fast`, `cube-browser`, `cube-deploy`, and `cube-maint`.
+- ARC is only used by GitHub Actions for `cipher982/longhouse`. Local `make` commands and unpushed branches run on the current machine.
+- Reserve local `make test-ci`, `make test-e2e`, `make test-full`, and long Rust builds for targeted debugging, remote CI outages, or when David explicitly wants a local run.
+
 ## Architecture Essentials
 
 - **API sub-app:** all `/api/*` routes live on `api_app`, not `app`.
@@ -124,6 +131,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 ## High-Signal Gotchas
 
 - `make dev` is interactive.
+- `make test-ci`, `make test-e2e`, `make test-full`, and long `cargo` builds run locally and can saturate the laptop. Prefer the repo's GitHub ARC workflows on cube when possible.
 - Local SQLite dev DB is `~/.longhouse/dev.db` unless `DATABASE_URL` overrides it.
 - `AGENTS.md` is canonical. `CLAUDE.md` is a symlink.
 - Auth is disabled in dev by default (`AUTH_DISABLED=1`).
@@ -138,7 +146,16 @@ If you touch a secondary area, either simplify it toward the core story or expla
 
 ## Pushing Changes
 
-Before push:
+Before merge, prefer the GitHub automation chain on cube over a laptop-local full CI burn.
+
+Default path:
+
+```bash
+git push
+gh run watch -R cipher982/longhouse
+```
+
+Local fallback when remote CI is unavailable, the branch cannot be pushed yet, or David explicitly wants a local simulation:
 
 ```bash
 make test-ci
