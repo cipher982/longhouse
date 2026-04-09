@@ -120,7 +120,7 @@ def test_single_tenant_startup_fails_fast_on_owner_misconfig():
     app = FastAPI()
 
     with (
-        patch("zerg.main._settings", SimpleNamespace(single_tenant=True, testing=False)),
+        patch("zerg.lifespan._settings", SimpleNamespace(single_tenant=True, testing=False)),
         patch("zerg.services.single_tenant.validate_single_tenant_config", return_value="OWNER_EMAIL missing"),
     ):
         with pytest.raises(RuntimeError, match="OWNER_EMAIL missing"):
