@@ -162,7 +162,7 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         assert f"/fiches/{{fiche_id}}/runs" not in paths
         assert f"/fiches/{{fiche_id}}/connectors/" not in paths
         assert f"/fiches/{{fiche_id}}/mcp-servers/" not in paths
-        assert "/conversations" not in paths
+        assert "/conversations" in paths  # Read-only conversation query endpoint
         assert "/conversations/activity" not in paths
         assert "/oikos/conversations" not in paths
         assert "/oikos/conversations/{conversation_id}" not in paths
