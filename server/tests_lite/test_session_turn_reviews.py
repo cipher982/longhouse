@@ -1688,7 +1688,7 @@ async def test_turn_review_assist_sends_telegram_loop_link_once(monkeypatch, tmp
         lambda **_kwargs: False,
     )
     monkeypatch.setattr(
-        "zerg.services.session_turn_reviews.get_settings",
+        "zerg.services.turn_review_notifications.get_settings",
         lambda: SimpleNamespace(app_public_url="https://longhouse.example", public_site_url=None),
     )
     monkeypatch.setattr("zerg.channels.registry.get_registry", lambda: _FakeRegistry())
