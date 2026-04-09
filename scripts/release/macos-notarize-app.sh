@@ -29,7 +29,7 @@ APP_PATH=""
 ARCHIVE_PATH=""
 KEYCHAIN_PROFILE=""
 KEYCHAIN_PATH=""
-WAIT_TIMEOUT="30m"
+WAIT_TIMEOUT="${LONGHOUSE_NOTARY_WAIT_TIMEOUT:-90m}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -121,6 +121,7 @@ PY
 )"
 
 echo "Notary submission ID: ${submission_id}"
+echo "Waiting up to ${WAIT_TIMEOUT} for Apple notarization processing."
 
 WAIT_ARGS=(
   xcrun
