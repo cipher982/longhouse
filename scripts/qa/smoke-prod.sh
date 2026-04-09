@@ -644,6 +644,63 @@ run_email_tool_test() {
     fi
 }
 
+run_gmail_canary() {
+    local cookie_jar="$1"
+    local canary_marker="LH-Canary-$(date +%s)-$$"
+    local timeout_secs="${CANARY_TIMEOUT:-45}"
+
+    # Step 1: Check Gmail connector exists
+    local connectors
+    connectors=$(curl -s -b "$cookie_jar" "$API_URL/api/connectors" 2>/dev/null) || true
+    local gmail_id
+    gmail_id=$(echo "$connectors" | jq -r '.[] | select(.provider=="gmail") | .id' 2>/dev/null | head -1)
+    if [[ -z "$gmail_id" ]]; then
+        warn "Gmail canary: no Gmail connector found (skipped)"
+        return 0
+    fi
+
+    # Step 2: Send canary email via Oikos send_email tool
+    local send_payload
+    send_payload=$(jq -nc \
+        --arg msg "send_email to ${SMOKE_TEST_EMAIL} subject '$canary_marker' text 'Automated canary test. Safe to ignore.'" \
+        --arg id "canary-$canary_marker" \
+        '{message: $msg, message_id: $id}')
+
+    local send_response
+    if [[ -n "$TIMEOUT_CMD" ]]; then
+        send_response=$($TIMEOUT_CMD 60 curl -s -N -X POST "$API_URL/api/oikos/chat" \
+            -b "$cookie_jar" -H "Content-Type: application/json" -d "$send_payload" 2>/dev/null) || true
+    else
+        send_response=$(curl -s -N -X POST "$API_URL/api/oikos/chat" \
+            -b "$cookie_jar" -H "Content-Type: application/json" -d "$send_payload" 2>/dev/null) || true
+    fi
+
+    if ! echo "$send_response" | grep -q "supervisor_tool_completed\|oikos_complete"; then
+        fail "Gmail canary: email send did not complete"
+        return 1
+    fi
+    info "Gmail canary: email sent ($canary_marker), polling for ingest..."
+
+    # Step 3: Poll for ingested conversation
+    local elapsed=0
+    local interval=3
+    while [[ $elapsed -lt $timeout_secs ]]; do
+        local convs
+        convs=$(curl -s -b "$cookie_jar" "$API_URL/api/conversations?kind=email&limit=10" 2>/dev/null) || true
+        if echo "$convs" | jq -e ".[] | select(.title | test(\"$canary_marker\"))" > /dev/null 2>&1; then
+            local conv_id
+            conv_id=$(echo "$convs" | jq -r ".[] | select(.title | test(\"$canary_marker\")) | .id")
+            pass "Gmail canary: conversation $conv_id ingested in ${elapsed}s"
+            return 0
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+
+    fail "Gmail canary: conversation with '$canary_marker' not found after ${timeout_secs}s"
+    return 1
+}
+
 # Parse args
 MODE="default" # quick | default | full
 QUICK=0
@@ -753,6 +810,9 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
 
                 section "Email tool"
                 run_email_tool_test "$COOKIE_JAR"
+
+                section "Gmail canary (end-to-end ingest)"
+                run_test run_gmail_canary "$COOKIE_JAR"
             else
                 info "Full tests skipped (pass --full to enable CRUD/email/infra)"
             fi
