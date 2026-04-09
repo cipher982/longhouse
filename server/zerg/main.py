@@ -558,7 +558,7 @@ async def lifespan(app: FastAPI):
                 logger.exception("Failed to start ingest_task_worker")
 
             # Job queue (durable job execution)
-            if not _settings.testing:
+            if _settings.job_queue_enabled and not _settings.testing:
                 try:
                     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 

@@ -18,7 +18,7 @@ from zerg.tools.builtin.oikos_commis_tools import spawn_commis
 from zerg.tools.builtin.oikos_commis_tools import spawn_commis_async
 from zerg.types.tools import Tool as StructuredTool
 
-TOOLS: List[StructuredTool] = [
+_ALL_COMMIS_TOOLS: List[StructuredTool] = [
     StructuredTool.from_function(
         func=spawn_commis,
         coroutine=spawn_commis_async,
@@ -41,6 +41,10 @@ TOOLS: List[StructuredTool] = [
         description="Cancel a running or queued commis job.",
     ),
 ]
+
+# TOOLS is always populated. The job queue gate in main.py prevents execution
+# when JOB_QUEUE_ENABLED is off; dispatch_contract.py skips normalization.
+TOOLS: List[StructuredTool] = _ALL_COMMIS_TOOLS
 
 # ---------------------------------------------------------------------------
 # Single source of truth for oikos tool names
