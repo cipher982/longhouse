@@ -1,0 +1,48 @@
+"""Agents store service for session and event CRUD operations.
+
+Provides a clean interface for ingesting and querying AI coding sessions
+from any provider (Claude Code, Codex, Gemini, Cursor, Oikos).
+"""
+
+# Re-export all public symbols for backward compatibility
+from .helpers import _infer_continuation_kind_from_ingest
+from .helpers import _infer_continuation_kind_from_session
+from .helpers import _infer_execution_home_from_ingest
+from .helpers import _infer_execution_home_from_session
+from .helpers import _infer_origin_label_from_ingest
+from .helpers import _infer_origin_label_from_session
+from .helpers import _normalize_utc_naive
+from .helpers import _should_replace_managed_local_codex_provider_session_id
+from .models import CompactionBoundary
+from .models import EventIngest
+from .models import IngestResult
+from .models import RewindSignal
+from .models import SessionIngest
+from .models import SessionProjectionItem
+from .models import SessionProjectionPage
+from .models import SourceLineIngest
+from .models import SourceRewindHintIngest
+from .schema import ensure_agents_schema
+from .store import AgentsStore
+
+__all__ = [
+    "AgentsStore",
+    "EventIngest",
+    "SourceLineIngest",
+    "SourceRewindHintIngest",
+    "SessionIngest",
+    "IngestResult",
+    "CompactionBoundary",
+    "RewindSignal",
+    "SessionProjectionItem",
+    "SessionProjectionPage",
+    "ensure_agents_schema",
+    "_normalize_utc_naive",
+    "_infer_execution_home_from_ingest",
+    "_infer_execution_home_from_session",
+    "_should_replace_managed_local_codex_provider_session_id",
+    "_infer_continuation_kind_from_ingest",
+    "_infer_origin_label_from_ingest",
+    "_infer_continuation_kind_from_session",
+    "_infer_origin_label_from_session",
+]
