@@ -33,6 +33,7 @@ from zerg.models.work import OikosWakeup
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.session_loop_controller import LoopControllerDecision
 from zerg.services.turn_review_analysis import classify_turn_review_outcome_for_run
+from zerg.services.turn_review_notifications import _send_turn_review_mobile_notification
 from zerg.services.session_turn_reviews import load_completed_assistant_turn_by_event_id
 from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
 from zerg.services.session_turn_reviews import maybe_record_session_turn_review
@@ -1806,6 +1807,35 @@ async def test_turn_review_autopilot_does_not_send_mobile_notification(monkeypat
         assert review is not None
         assert review.status == "acted"
         assert review.reason == "continue_session"
+
+
+@pytest.mark.asyncio
+async def test_turn_review_mobile_notification_skips_ownerless_reviews(tmp_path):
+    SessionLocal = _make_db(tmp_path, "turn_review_ownerless_notification.db")
+
+    with SessionLocal() as db:
+        review = SimpleNamespace(
+            id=1,
+            owner_id=None,
+            execution_state="needs_human",
+            status="recorded",
+            summary="Needs attention",
+            follow_up_prompt=None,
+        )
+        session = SimpleNamespace(
+            id=uuid4(),
+            summary_title="Test session",
+            project=None,
+            cwd=None,
+        )
+
+        sent = await _send_turn_review_mobile_notification(
+            db=db,
+            review=review,
+            session=session,
+        )
+
+    assert sent is False
 
 
 @pytest.mark.asyncio
