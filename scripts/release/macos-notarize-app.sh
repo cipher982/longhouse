@@ -103,17 +103,24 @@ fi
 submit_output="$("${SUBMIT_ARGS[@]}")"
 echo "$submit_output"
 
-submission_id="$(python3 - <<'PY' <<<"$submit_output"
+submission_id="$(SUBMIT_OUTPUT="$submit_output" python3 - <<'PY'
 import json
+import os
 import sys
 
-payload = json.load(sys.stdin)
+try:
+    payload = json.loads(os.environ["SUBMIT_OUTPUT"])
+except json.JSONDecodeError as exc:
+    raise SystemExit(f"Unable to parse notarytool submit output as JSON: {exc}") from exc
+
 submission_id = payload.get("id")
 if not submission_id:
-    raise SystemExit("Missing submission id from notarytool submit output")
+    raise SystemExit(f"Missing submission id from notarytool submit output: {payload!r}")
 print(submission_id)
 PY
 )"
+
+echo "Notary submission ID: ${submission_id}"
 
 WAIT_ARGS=(
   xcrun
