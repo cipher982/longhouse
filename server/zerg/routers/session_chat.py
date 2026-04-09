@@ -36,7 +36,6 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pydantic import Field
-from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import Session
 
 import zerg.services.live_session_dispatch as live_session_dispatch
@@ -49,7 +48,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.device_token import DeviceToken
 from zerg.models.user import User
 from zerg.services.agents_store import AgentsStore
-from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
 from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAILED
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_COMPLETE
@@ -59,6 +57,17 @@ from zerg.services.managed_local_control import await_managed_local_turn_termina
 from zerg.services.managed_local_control import get_managed_local_control_status_for_phase
 from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
 from zerg.services.managed_local_control import get_managed_local_presence_updated_at
+from zerg.services.managed_local_event_polling import MANAGED_LOCAL_EVENT_TIMEOUT_SECS
+from zerg.services.managed_local_event_polling import MANAGED_LOCAL_POLL_INTERVAL_SECS
+from zerg.services.managed_local_event_polling import await_managed_local_events_task
+from zerg.services.managed_local_event_polling import await_managed_local_terminal_task
+from zerg.services.managed_local_event_polling import await_managed_local_turn_events
+from zerg.services.managed_local_event_polling import fetch_managed_local_events_between_ids
+from zerg.services.managed_local_event_polling import fetch_managed_local_events_since
+from zerg.services.managed_local_event_polling import get_managed_local_latest_event_id
+from zerg.services.managed_local_event_polling import get_managed_local_turn_snapshot_best_effort
+from zerg.services.managed_local_event_polling import hydrate_managed_local_turn_events_from_ledger
+from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
 from zerg.services.managed_local_launcher import ManagedLocalLaunchError
 from zerg.services.managed_local_launcher import ManagedLocalLaunchParams
 from zerg.services.managed_local_launcher import launch_managed_local_session
@@ -66,7 +75,6 @@ from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_SEND_FAIL
 from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT
 from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
 from zerg.services.managed_local_turns import create_managed_local_turn
-from zerg.services.managed_local_turns import get_managed_local_turn_snapshot
 from zerg.services.managed_local_turns import mark_managed_local_turn_failed
 from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
 from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
@@ -107,10 +115,7 @@ SUPPORTED_SESSION_CHAT_BACKENDS = {
     SESSION_CHAT_BACKEND_BEDROCK,
     SESSION_CHAT_BACKEND_ANTHROPIC,
 }
-MANAGED_LOCAL_EVENT_TIMEOUT_SECS = 150.0
 MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS = 300.0
-MANAGED_LOCAL_POLL_INTERVAL_SECS = 0.1
-MANAGED_LOCAL_STABLE_POLLS = 1
 MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 10.0
 MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS = 0.5
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
@@ -923,220 +928,16 @@ async def _acquire_session_lock_or_raise(*, source_session, request_id: str) -> 
     )
 
 
-def _fetch_managed_local_events_since(*, db_bind, session_id: UUID, after_event_id: int) -> list[AgentEvent]:
-    with Session(bind=db_bind) as poll_db:
-        return (
-            poll_db.query(AgentEvent)
-            .filter(AgentEvent.session_id == session_id)
-            .filter(AgentEvent.id > after_event_id)
-            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
-            .all()
-        )
-
-
-def _fetch_managed_local_events_between_ids(
-    *,
-    db_bind,
-    session_id: UUID,
-    start_event_id: int,
-    end_event_id: int,
-) -> list[AgentEvent]:
-    with Session(bind=db_bind) as poll_db:
-        return (
-            poll_db.query(AgentEvent)
-            .filter(AgentEvent.session_id == session_id)
-            .filter(AgentEvent.id >= int(start_event_id))
-            .filter(AgentEvent.id <= int(end_event_id))
-            .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
-            .all()
-        )
-
-
-def _get_managed_local_turn_snapshot_best_effort(
-    *,
-    db_bind,
-    session_id: UUID,
-    request_id: str,
-):
-    try:
-        return get_managed_local_turn_snapshot(
-            db_bind=db_bind,
-            session_id=session_id,
-            request_id=request_id,
-        )
-    except SQLAlchemyTimeoutError:
-        logger.warning(
-            "Managed-local turn ledger snapshot timed out for %s; falling back to direct evidence",
-            session_id,
-        )
-    except Exception:
-        logger.warning(
-            "Managed-local turn ledger snapshot read failed for %s; falling back to direct evidence",
-            session_id,
-            exc_info=True,
-        )
-    return None
-
-
-def _hydrate_managed_local_turn_events_from_ledger(
-    *,
-    db_bind,
-    session_id: UUID,
-    request_id: str,
-    expected_user_message: str,
-) -> tuple[object | None, list[AgentEvent]]:
-    snapshot = _get_managed_local_turn_snapshot_best_effort(
-        db_bind=db_bind,
-        session_id=session_id,
-        request_id=request_id,
-    )
-    if (
-        snapshot is None
-        or snapshot.durable_at is None
-        or snapshot.durable_user_event_id is None
-        or snapshot.durable_assistant_event_id is None
-    ):
-        return snapshot, []
-
-    try:
-        events = _fetch_managed_local_events_between_ids(
-            db_bind=db_bind,
-            session_id=session_id,
-            start_event_id=int(snapshot.durable_user_event_id),
-            end_event_id=int(snapshot.durable_assistant_event_id),
-        )
-    except SQLAlchemyTimeoutError:
-        logger.warning(
-            "Managed-local turn ledger event hydration timed out for %s; falling back to direct evidence",
-            session_id,
-        )
-        return snapshot, []
-    except Exception:
-        logger.warning(
-            "Managed-local turn ledger event hydration failed for %s; falling back to direct evidence",
-            session_id,
-            exc_info=True,
-        )
-        return snapshot, []
-    if expected_user_message and not _managed_local_events_include_expected_turn(
-        events=events,
-        expected_user_message=expected_user_message,
-    ):
-        return snapshot, []
-    return snapshot, events
-
-
-def _get_managed_local_latest_event_id(*, db_bind, session_id: UUID) -> int:
-    with Session(bind=db_bind) as poll_db:
-        latest = AgentsStore(poll_db).get_latest_event_id(session_id)
-        return int(latest or 0)
-
-
-def _managed_local_events_include_expected_turn(*, events: list[AgentEvent], expected_user_message: str) -> bool:
-    saw_expected_user_prompt = False
-
-    for event in events:
-        role = str(getattr(event, "role", "") or "").strip().lower()
-        content_text = str(getattr(event, "content_text", "") or "")
-        tool_name = str(getattr(event, "tool_name", "") or "").strip()
-        if role == "user" and strip_claude_channel_wrapper(content_text) == expected_user_message:
-            saw_expected_user_prompt = True
-            continue
-        if not saw_expected_user_prompt:
-            continue
-        if tool_name:
-            return True
-        if role == "assistant" and content_text.strip():
-            return True
-
-    return False
-
-
-async def _await_managed_local_turn_events(
-    *,
-    db_bind,
-    session_id: UUID,
-    after_event_id: int,
-    expected_user_message: str | None = None,
-    timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
-    poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
-) -> list[AgentEvent]:
-    deadline = time.monotonic() + timeout_secs
-    latest_seen = after_event_id
-    stable_polls = 0
-    saw_pool_timeout = False
-
-    while time.monotonic() < deadline:
-        try:
-            latest_event_id = _get_managed_local_latest_event_id(db_bind=db_bind, session_id=session_id)
-            if latest_event_id > after_event_id:
-                if latest_event_id == latest_seen:
-                    stable_polls += 1
-                else:
-                    latest_seen = latest_event_id
-                    stable_polls = 0
-
-                if stable_polls >= MANAGED_LOCAL_STABLE_POLLS:
-                    events = _fetch_managed_local_events_since(
-                        db_bind=db_bind,
-                        session_id=session_id,
-                        after_event_id=after_event_id,
-                    )
-                    if expected_user_message and not _managed_local_events_include_expected_turn(
-                        events=events,
-                        expected_user_message=expected_user_message,
-                    ):
-                        await asyncio.sleep(poll_interval_secs)
-                        continue
-                    return events
-        except SQLAlchemyTimeoutError:
-            if not saw_pool_timeout:
-                logger.warning(
-                    "Managed-local event poll for %s timed out waiting for a DB connection; retrying",
-                    session_id,
-                )
-                saw_pool_timeout = True
-
-        await asyncio.sleep(poll_interval_secs)
-
-    return []
-
-
-async def _await_managed_local_events_task(
-    events_task: asyncio.Task[list[AgentEvent]],
-    *,
-    timeout_secs: float,
-) -> list[AgentEvent]:
-    if events_task.done():
-        return events_task.result() or []
-    try:
-        return await asyncio.wait_for(asyncio.shield(events_task), timeout=timeout_secs)
-    except asyncio.TimeoutError:
-        return []
-
-
-async def _await_managed_local_terminal_task(
-    terminal_task: asyncio.Task,
-    *,
-    timeout_secs: float,
-):
-    if terminal_task.done():
-        try:
-            return terminal_task.result()
-        except asyncio.CancelledError:
-            return None
-        except Exception:
-            logger.warning("Managed-local terminal waiter failed after durable events", exc_info=True)
-            return None
-    try:
-        return await asyncio.wait_for(asyncio.shield(terminal_task), timeout=timeout_secs)
-    except asyncio.TimeoutError:
-        return None
-    except asyncio.CancelledError:
-        return None
-    except Exception:
-        logger.warning("Managed-local terminal waiter failed after durable events", exc_info=True)
-        return None
+# Aliases for moved functions (kept as private names for internal callers)
+_fetch_managed_local_events_since = fetch_managed_local_events_since
+_fetch_managed_local_events_between_ids = fetch_managed_local_events_between_ids
+_get_managed_local_turn_snapshot_best_effort = get_managed_local_turn_snapshot_best_effort
+_hydrate_managed_local_turn_events_from_ledger = hydrate_managed_local_turn_events_from_ledger
+_get_managed_local_latest_event_id = get_managed_local_latest_event_id
+_managed_local_events_include_expected_turn = managed_local_events_include_expected_turn
+_await_managed_local_turn_events = await_managed_local_turn_events
+_await_managed_local_events_task = await_managed_local_events_task
+_await_managed_local_terminal_task = await_managed_local_terminal_task
 
 
 async def _stream_managed_local_output(
