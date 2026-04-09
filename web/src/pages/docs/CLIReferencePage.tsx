@@ -44,15 +44,7 @@ longhouse codex                # start Codex CLI`}
         {`longhouse ship                 # import all detected sessions`}
       </CodeBlock>
 
-      <h2>Timeline & Search</h2>
-
-      <h3>longhouse search</h3>
-      <p>Full-text search across all indexed sessions.</p>
-      <CodeBlock title="terminal">
-        {`longhouse search "auth retry logic"
-longhouse search "migration" --project myapp
-longhouse search "ECONNREFUSED" --limit 5 --json`}
-      </CodeBlock>
+      <h2>Search & Recall</h2>
 
       <h3>longhouse recall</h3>
       <p>Semantic search — find sessions by meaning, not just keywords.</p>
@@ -60,6 +52,10 @@ longhouse search "ECONNREFUSED" --limit 5 --json`}
         {`longhouse recall "how did I handle rate limiting"
 longhouse recall "the session where CI was fixed"`}
       </CodeBlock>
+      <p>
+        Full-text keyword search is available through the browser timeline and
+        the <code>/api/agents/sessions?query=...</code> API endpoint.
+      </p>
 
       <h2>Session Control</h2>
 
@@ -90,10 +86,11 @@ longhouse messages --json      # read the inbox`}
       </CodeBlock>
 
       <h3>longhouse sessions</h3>
-      <p>Inspect session detail.</p>
+      <p>Inspect session detail and events.</p>
       <CodeBlock title="terminal">
-        {`longhouse sessions list --json
-longhouse sessions get SESSION_ID --json`}
+        {`longhouse sessions get SESSION_ID --json
+longhouse sessions events SESSION_ID
+longhouse sessions continue SESSION_ID`}
       </CodeBlock>
 
       <h2>Diagnostics</h2>

@@ -46,16 +46,9 @@ export default function SearchPage() {
         Codex, Gemini), or project.
       </p>
 
-      <h2>Search from the CLI</h2>
-      <CodeBlock title="terminal">
-        {`longhouse search "retry logic for auth"
-longhouse search "database migration" --project myapp
-longhouse search "ECONNREFUSED" --limit 5`}
-      </CodeBlock>
-
       <h2>Search from the API</h2>
       <CodeBlock title="terminal">
-        {`curl http://localhost:8080/api/agents/sessions?q=retry+logic`}
+        {`curl "http://localhost:8080/api/agents/sessions?query=retry+logic"`}
       </CodeBlock>
       <p>
         The same search index powers the browser, CLI, and API. All three
