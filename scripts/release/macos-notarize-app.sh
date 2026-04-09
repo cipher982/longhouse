@@ -7,7 +7,8 @@ Usage: macos-notarize-app.sh \
   --app <path> \
   --archive <path> \
   --keychain-profile <profile> \
-  [--keychain <path>]
+  [--keychain <path>] \
+  [--timeout <duration>]
 
 Creates a zip archive for a signed .app bundle, submits it to Apple's notary
 service, staples the resulting ticket to the app bundle, then recreates the zip.
@@ -28,6 +29,7 @@ APP_PATH=""
 ARCHIVE_PATH=""
 KEYCHAIN_PROFILE=""
 KEYCHAIN_PATH=""
+WAIT_TIMEOUT="30m"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -49,6 +51,11 @@ while [[ $# -gt 0 ]]; do
     --keychain)
       require_value "$1" "${2:-}"
       KEYCHAIN_PATH="$2"
+      shift 2
+      ;;
+    --timeout)
+      require_value "$1" "${2:-}"
+      WAIT_TIMEOUT="$2"
       shift 2
       ;;
     -h|--help)
@@ -77,21 +84,86 @@ mkdir -p "$(dirname "$ARCHIVE_PATH")"
 rm -f "$ARCHIVE_PATH"
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
 
-NOTARY_ARGS=(
+SUBMIT_ARGS=(
   xcrun
   notarytool
   submit
   "$ARCHIVE_PATH"
   --keychain-profile
   "$KEYCHAIN_PROFILE"
-  --wait
+  --no-wait
+  --output-format
+  json
 )
 
 if [[ -n "$KEYCHAIN_PATH" ]]; then
-  NOTARY_ARGS+=(--keychain "$KEYCHAIN_PATH")
+  SUBMIT_ARGS+=(--keychain "$KEYCHAIN_PATH")
 fi
 
-"${NOTARY_ARGS[@]}"
+submit_output="$("${SUBMIT_ARGS[@]}")"
+echo "$submit_output"
+
+submission_id="$(python3 - <<'PY' <<<"$submit_output"
+import json
+import sys
+
+payload = json.load(sys.stdin)
+submission_id = payload.get("id")
+if not submission_id:
+    raise SystemExit("Missing submission id from notarytool submit output")
+print(submission_id)
+PY
+)"
+
+WAIT_ARGS=(
+  xcrun
+  notarytool
+  wait
+  "$submission_id"
+  --keychain-profile
+  "$KEYCHAIN_PROFILE"
+  --output-format
+  json
+  --timeout
+  "$WAIT_TIMEOUT"
+)
+
+INFO_ARGS=(
+  xcrun
+  notarytool
+  info
+  "$submission_id"
+  --keychain-profile
+  "$KEYCHAIN_PROFILE"
+  --output-format
+  json
+)
+
+LOG_ARGS=(
+  xcrun
+  notarytool
+  log
+  "$submission_id"
+  -
+  --keychain-profile
+  "$KEYCHAIN_PROFILE"
+)
+
+if [[ -n "$KEYCHAIN_PATH" ]]; then
+  WAIT_ARGS+=(--keychain "$KEYCHAIN_PATH")
+  INFO_ARGS+=(--keychain "$KEYCHAIN_PATH")
+  LOG_ARGS+=(--keychain "$KEYCHAIN_PATH")
+fi
+
+if ! wait_output="$("${WAIT_ARGS[@]}" 2>&1)"; then
+  echo "$wait_output" >&2
+  echo "Notarization wait failed or timed out for submission ${submission_id} after ${WAIT_TIMEOUT}." >&2
+  "${INFO_ARGS[@]}" >&2 || true
+  "${LOG_ARGS[@]}" >&2 || true
+  exit 1
+fi
+
+echo "$wait_output"
 xcrun stapler staple -v "$APP_PATH"
 xcrun stapler validate -v "$APP_PATH"
 
