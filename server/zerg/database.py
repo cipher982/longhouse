@@ -358,15 +358,8 @@ def get_write_engine() -> Engine | None:
     return _write_engine
 
 
-def get_db(session_factory: Any = None) -> Iterator[Session]:
-    """Dependency provider for database sessions.
-
-    Args:
-        session_factory: Optional custom session factory
-
-    Yields:
-        SQLAlchemy Session object
-    """
+def _get_db_from_factory(session_factory: Any = None) -> Iterator[Session]:
+    """Internal database-session iterator with optional factory override."""
     factory = session_factory or get_session_factory()
     db = factory()
     try:
@@ -376,6 +369,11 @@ def get_db(session_factory: Any = None) -> Iterator[Session]:
             db.close()
         except Exception:
             pass
+
+
+def get_db() -> Iterator[Session]:
+    """FastAPI dependency provider for database sessions."""
+    yield from _get_db_from_factory()
 
 
 @contextmanager

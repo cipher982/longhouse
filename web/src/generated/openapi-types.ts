@@ -771,6 +771,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/conversations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Conversations */
+        get: operations["list_conversations_conversations_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/triggers/{trigger_id}": {
         parameters: {
             query?: never;
@@ -11026,7 +11043,6 @@ export interface operations {
                 scope?: string;
                 skip?: number;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -11056,9 +11072,7 @@ export interface operations {
     };
     create_automation_automations_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: {
                 "Idempotency-Key"?: string | null;
             };
@@ -11097,7 +11111,6 @@ export interface operations {
                 scope?: string;
                 skip?: number;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -11127,9 +11140,7 @@ export interface operations {
     };
     create_automation_automations__post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: {
                 "Idempotency-Key"?: string | null;
             };
@@ -11169,7 +11180,6 @@ export interface operations {
                 runs_limit?: number;
                 skip?: number;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -11199,9 +11209,7 @@ export interface operations {
     };
     read_automation_automations__automation_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11232,9 +11240,7 @@ export interface operations {
     };
     update_automation_automations__automation_id__put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11269,9 +11275,7 @@ export interface operations {
     };
     delete_automation_automations__automation_id__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11302,7 +11306,6 @@ export interface operations {
         parameters: {
             query?: {
                 include?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -11337,7 +11340,6 @@ export interface operations {
             query?: {
                 skip?: number;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -11369,9 +11371,7 @@ export interface operations {
     };
     create_automation_message_automations__automation_id__messages_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11406,9 +11406,7 @@ export interface operations {
     };
     run_automation_task_automations__automation_id__task_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11439,9 +11437,7 @@ export interface operations {
     };
     list_automation_mcp_servers_automations__automation_id__mcp_servers__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11472,9 +11468,7 @@ export interface operations {
     };
     add_automation_mcp_server_automations__automation_id__mcp_servers__post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11509,9 +11503,7 @@ export interface operations {
     };
     remove_automation_mcp_server_automations__automation_id__mcp_servers__server_name__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11541,9 +11533,7 @@ export interface operations {
     };
     test_automation_mcp_connection_automations__automation_id__mcp_servers_test_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11578,9 +11568,7 @@ export interface operations {
     };
     get_available_automation_tools_automations__automation_id__mcp_servers_available_tools_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -11619,7 +11607,6 @@ export interface operations {
                 title?: string | null;
                 skip?: number;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -11649,9 +11636,7 @@ export interface operations {
     };
     create_thread_threads_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -11690,7 +11675,6 @@ export interface operations {
                 title?: string | null;
                 skip?: number;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -11720,9 +11704,7 @@ export interface operations {
     };
     create_thread_threads__post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -11755,9 +11737,7 @@ export interface operations {
     };
     read_thread_threads__thread_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 thread_id: number;
@@ -11788,9 +11768,7 @@ export interface operations {
     };
     update_thread_threads__thread_id__put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 thread_id: number;
@@ -11825,9 +11803,7 @@ export interface operations {
     };
     delete_thread_threads__thread_id__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 thread_id: number;
@@ -11859,7 +11835,6 @@ export interface operations {
             query?: {
                 skip?: number;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -11891,9 +11866,7 @@ export interface operations {
     };
     create_thread_message_threads__thread_id__messages_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 thread_id: number;
@@ -11928,9 +11901,7 @@ export interface operations {
     };
     start_thread_run_threads__thread_id__runs_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 thread_id: number;
@@ -11961,9 +11932,7 @@ export interface operations {
     };
     get_models_models__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -11979,22 +11948,11 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     get_super_admin_status_admin_super_admin_status_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12010,22 +11968,11 @@ export interface operations {
                     "application/json": components["schemas"]["SuperAdminStatusResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     reset_database_admin_reset_database_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12058,9 +12005,7 @@ export interface operations {
     };
     seed_scenario_data_admin_seed_scenario_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12093,9 +12038,7 @@ export interface operations {
     };
     get_migration_log_admin_migration_log_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12109,24 +12052,13 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
     fix_database_schema_admin_fix_database_schema_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12140,24 +12072,13 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
     };
     debug_db_schema_admin_debug_db_schema_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12173,22 +12094,11 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     configure_test_model_admin_configure_test_model_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12221,9 +12131,7 @@ export interface operations {
     };
     configure_test_session_runtime_admin_test_sessions__session_id__runtime_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -12269,7 +12177,6 @@ export interface operations {
                 offset?: number;
                 /** @description Filter by active status (true/false). Omit for all users. */
                 active?: boolean | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -12302,7 +12209,6 @@ export interface operations {
             query?: {
                 /** @description Period for daily breakdown */
                 period?: "today" | "7d" | "30d";
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -12334,9 +12240,7 @@ export interface operations {
     };
     seed_context_admin_bootstrap_context_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: {
                 authorization?: string | null;
             };
@@ -12371,9 +12275,7 @@ export interface operations {
     };
     seed_runners_admin_bootstrap_runners_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: {
                 authorization?: string | null;
             };
@@ -12408,9 +12310,7 @@ export interface operations {
     };
     seed_credentials_admin_bootstrap_credentials_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: {
                 authorization?: string | null;
             };
@@ -12445,9 +12345,7 @@ export interface operations {
     };
     get_bootstrap_status_admin_bootstrap_status_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: {
                 authorization?: string | null;
             };
@@ -12478,9 +12376,7 @@ export interface operations {
     };
     gmail_pubsub_webhook_email_webhook_google_pubsub_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12496,15 +12392,6 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -12546,8 +12433,63 @@ export interface operations {
     };
     list_connectors_connectors_get: {
         parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    delete_connector_connectors__connector_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connector_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_conversations_conversations_get: {
+        parameters: {
             query?: {
-                session_factory?: unknown;
+                /** @description Filter by conversation kind (e.g. 'email') */
+                kind?: string | null;
+                /** @description Filter by status */
+                status?: string | null;
+                limit?: number;
             };
             header?: never;
             path?: never;
@@ -12577,42 +12519,9 @@ export interface operations {
             };
         };
     };
-    delete_connector_connectors__connector_id__delete: {
-        parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
-            header?: never;
-            path: {
-                connector_id: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     delete_trigger_triggers__trigger_id__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 trigger_id: number;
@@ -12644,7 +12553,6 @@ export interface operations {
             query?: {
                 /** @description Filter triggers by automation ID */
                 automation_id?: number | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -12674,9 +12582,7 @@ export interface operations {
     };
     create_trigger_triggers__post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12709,9 +12615,7 @@ export interface operations {
     };
     fire_trigger_event_triggers__trigger_id__events_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: {
                 authorization?: string | null;
             };
@@ -12753,7 +12657,6 @@ export interface operations {
             query?: {
                 skip?: number;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -12783,9 +12686,7 @@ export interface operations {
     };
     create_source_knowledge_sources_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -12818,9 +12719,7 @@ export interface operations {
     };
     get_source_knowledge_sources__source_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 source_id: number;
@@ -12851,9 +12750,7 @@ export interface operations {
     };
     update_source_knowledge_sources__source_id__put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 source_id: number;
@@ -12888,9 +12785,7 @@ export interface operations {
     };
     delete_source_knowledge_sources__source_id__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 source_id: number;
@@ -12919,9 +12814,7 @@ export interface operations {
     };
     sync_source_knowledge_sources__source_id__sync_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 source_id: number;
@@ -12956,7 +12849,6 @@ export interface operations {
                 source_id?: number | null;
                 skip?: number;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -12986,9 +12878,7 @@ export interface operations {
     };
     get_document_knowledge_documents__document_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 document_id: number;
@@ -13022,7 +12912,6 @@ export interface operations {
             query: {
                 q: string;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -13055,7 +12944,6 @@ export interface operations {
             query?: {
                 page?: number;
                 per_page?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -13085,9 +12973,7 @@ export interface operations {
     };
     list_repo_branches_knowledge_github_repos__owner___repo__branches_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 owner: string;
@@ -13119,9 +13005,7 @@ export interface operations {
     };
     get_run_runs__run_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: number;
@@ -13154,7 +13038,6 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -13240,9 +13123,7 @@ export interface operations {
     };
     create_enroll_token_runners_enroll_token_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13258,22 +13139,11 @@ export interface operations {
                     "application/json": components["schemas"]["EnrollTokenResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     register_runner_runners_register_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13306,9 +13176,7 @@ export interface operations {
     };
     get_runner_status_runners_status_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13324,22 +13192,11 @@ export interface operations {
                     "application/json": components["schemas"]["RunnerStatusResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     list_runners_runners__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13355,22 +13212,11 @@ export interface operations {
                     "application/json": components["schemas"]["RunnerListResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     get_runner_runners__runner_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 runner_id: number;
@@ -13401,9 +13247,7 @@ export interface operations {
     };
     update_runner_runners__runner_id__patch: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 runner_id: number;
@@ -13438,9 +13282,7 @@ export interface operations {
     };
     runner_preflight_runners_preflight_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13476,7 +13318,6 @@ export interface operations {
             query?: {
                 limit?: number;
                 offset?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -13508,9 +13349,7 @@ export interface operations {
     };
     get_runner_doctor_runners__runner_id__doctor_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 runner_id: number;
@@ -13541,9 +13380,7 @@ export interface operations {
     };
     revoke_runner_runners__runner_id__revoke_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 runner_id: number;
@@ -13574,9 +13411,7 @@ export interface operations {
     };
     rotate_runner_secret_runners__runner_id__rotate_secret_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 runner_id: number;
@@ -13607,9 +13442,7 @@ export interface operations {
     };
     dev_login_auth_dev_login_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13625,22 +13458,11 @@ export interface operations {
                     "application/json": components["schemas"]["TokenOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     google_sign_in_auth_google_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13675,9 +13497,7 @@ export interface operations {
     };
     verify_session_auth_verify_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13691,22 +13511,11 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     auth_status_auth_status_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13722,22 +13531,11 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     logout_auth_logout_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13751,22 +13549,11 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     refresh_session_auth_refresh_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13780,15 +13567,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TokenOut"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -13815,9 +13593,7 @@ export interface operations {
     };
     password_login_auth_password_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13850,9 +13626,7 @@ export interface operations {
     };
     cli_login_auth_cli_login_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13890,7 +13664,6 @@ export interface operations {
             query: {
                 token: string;
                 return_to?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -13920,9 +13693,7 @@ export interface operations {
     };
     accept_token_auth_accept_token_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13957,9 +13728,7 @@ export interface operations {
     };
     start_hosted_gmail_connect_auth_google_gmail_start_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -13975,22 +13744,11 @@ export interface operations {
                     "application/json": components["schemas"]["HostedGmailConnectStartResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     connect_gmail_auth_google_gmail_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14025,9 +13783,7 @@ export interface operations {
     };
     hosted_gmail_connect_handoff_internal_auth_google_gmail_handoff_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14060,9 +13816,7 @@ export interface operations {
     };
     github_authorize_oauth_github_authorize_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14078,15 +13832,6 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     github_callback_oauth_github_callback_get: {
@@ -14096,7 +13841,6 @@ export interface operations {
                 state: string;
                 error?: string | null;
                 error_description?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -14126,9 +13870,7 @@ export interface operations {
     };
     read_current_user_users_me_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14144,22 +13886,11 @@ export interface operations {
                     "application/json": components["schemas"]["UserOut"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     update_current_user_users_me_put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14195,7 +13926,6 @@ export interface operations {
             query?: {
                 /** @description Time period for usage stats */
                 period?: "today" | "7d" | "30d";
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -14225,9 +13955,7 @@ export interface operations {
     };
     upload_current_user_avatar_users_me_avatar_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14260,9 +13988,7 @@ export interface operations {
     };
     get_user_context_users_me_context_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14278,22 +14004,11 @@ export interface operations {
                     "application/json": components["schemas"]["ContextResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     replace_user_context_users_me_context_put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14326,9 +14041,7 @@ export interface operations {
     };
     update_user_context_users_me_context_patch: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14361,9 +14074,7 @@ export interface operations {
     };
     list_email_contacts_user_contacts_email_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14379,22 +14090,11 @@ export interface operations {
                     "application/json": components["schemas"]["EmailContactOut"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     create_email_contact_user_contacts_email_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14427,9 +14127,7 @@ export interface operations {
     };
     update_email_contact_user_contacts_email__contact_id__put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 contact_id: number;
@@ -14464,9 +14162,7 @@ export interface operations {
     };
     delete_email_contact_user_contacts_email__contact_id__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 contact_id: number;
@@ -14495,9 +14191,7 @@ export interface operations {
     };
     list_phone_contacts_user_contacts_phone_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14513,22 +14207,11 @@ export interface operations {
                     "application/json": components["schemas"]["PhoneContactOut"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     create_phone_contact_user_contacts_phone_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -14561,9 +14244,7 @@ export interface operations {
     };
     update_phone_contact_user_contacts_phone__contact_id__put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 contact_id: number;
@@ -14598,9 +14279,7 @@ export interface operations {
     };
     delete_phone_contact_user_contacts_phone__contact_id__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 contact_id: number;
@@ -14632,7 +14311,6 @@ export interface operations {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -14667,7 +14345,6 @@ export interface operations {
     oikos_run_cancel_oikos_run__run_id__cancel_post: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -14704,7 +14381,6 @@ export interface operations {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -14735,7 +14411,6 @@ export interface operations {
     get_oikos_thread_oikos_thread_get: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -14768,7 +14443,6 @@ export interface operations {
     clear_oikos_thread_oikos_thread_delete: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -14799,7 +14473,6 @@ export interface operations {
     oikos_update_preferences_oikos_preferences_patch: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -14838,7 +14511,6 @@ export interface operations {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -14873,7 +14545,6 @@ export interface operations {
                 offset?: number;
                 surface_id?: string;
                 view?: string;
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -14906,7 +14577,6 @@ export interface operations {
     oikos_clear_history_oikos_history_delete: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -14937,7 +14607,6 @@ export interface operations {
     list_oikos_tasks_oikos_tasks_get: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -14972,7 +14641,6 @@ export interface operations {
             query?: {
                 limit?: number;
                 automation_id?: number | null;
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15009,7 +14677,6 @@ export interface operations {
                 status?: string | null;
                 trigger_type?: string | null;
                 session_id?: string | null;
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15045,7 +14712,6 @@ export interface operations {
                 limit?: number;
                 session_id?: string | null;
                 status?: string | null;
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15079,7 +14745,6 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15115,7 +14780,6 @@ export interface operations {
                 limit?: number;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -15146,7 +14810,6 @@ export interface operations {
     get_loop_inbox_action_card_by_card_id_oikos_loop_inbox_cards__card_id__get: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15181,7 +14844,6 @@ export interface operations {
     get_loop_inbox_action_card_for_session_oikos_loop_inbox__session_id__get: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15216,7 +14878,6 @@ export interface operations {
     act_on_loop_inbox_item_oikos_loop_inbox_cards__card_id__actions_post: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15257,7 +14918,6 @@ export interface operations {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -15288,7 +14948,6 @@ export interface operations {
     register_loop_push_subscription_oikos_push_subscriptions_post: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15325,7 +14984,6 @@ export interface operations {
     delete_loop_push_subscription_oikos_push_subscriptions_delete: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15360,7 +15018,6 @@ export interface operations {
     get_active_run_oikos_runs_active_get: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15393,7 +15050,6 @@ export interface operations {
     get_run_status_oikos_runs__run_id__get: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15430,7 +15086,6 @@ export interface operations {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -15465,7 +15120,6 @@ export interface operations {
             query?: {
                 event_type?: string | null;
                 limit?: number;
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15500,7 +15154,6 @@ export interface operations {
     get_run_timeline_oikos_runs__run_id__timeline_get: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15534,9 +15187,7 @@ export interface operations {
     };
     resume_run_oikos_internal_runs__run_id__resume_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: number;
@@ -15574,7 +15225,6 @@ export interface operations {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -15611,7 +15261,6 @@ export interface operations {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -15648,7 +15297,6 @@ export interface operations {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -15685,7 +15333,6 @@ export interface operations {
             query?: {
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -15715,9 +15362,7 @@ export interface operations {
     };
     resume_run_internal_runs__run_id__resume_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 run_id: number;
@@ -15753,7 +15398,6 @@ export interface operations {
     push_sync_operations_oikos_sync_push_post: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15792,7 +15436,6 @@ export interface operations {
             query?: {
                 /** @description Cursor position to pull from */
                 cursor?: number;
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -15829,7 +15472,6 @@ export interface operations {
                 include_tokens?: boolean;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -15949,9 +15591,7 @@ export interface operations {
     };
     email_status_system_email_status_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -15967,22 +15607,11 @@ export interface operations {
                     "application/json": components["schemas"]["EmailStatusResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     save_email_config_system_email_config_put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16017,9 +15646,7 @@ export interface operations {
     };
     delete_email_config_system_email_config_delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16037,22 +15664,11 @@ export interface operations {
                     };
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     test_email_system_email_test_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16085,9 +15701,7 @@ export interface operations {
     };
     llm_capabilities_capabilities_llm_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16103,22 +15717,11 @@ export interface operations {
                     "application/json": components["schemas"]["CapabilitiesResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     list_llm_providers_llm_providers_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16134,22 +15737,11 @@ export interface operations {
                     "application/json": components["schemas"]["LlmProviderInfo"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     upsert_llm_provider_llm_providers__capability__put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 capability: string;
@@ -16186,9 +15778,7 @@ export interface operations {
     };
     delete_llm_provider_llm_providers__capability__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 capability: string;
@@ -16217,9 +15807,7 @@ export interface operations {
     };
     test_llm_provider_llm_providers__capability__test_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 capability: string;
@@ -16254,9 +15842,7 @@ export interface operations {
     };
     get_frontend_errors_ops_errors_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16272,22 +15858,12 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     get_summary_ops_summary_get: {
         parameters: {
             query?: {
                 window?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -16320,7 +15896,6 @@ export interface operations {
             query: {
                 metric: string;
                 window?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -16354,7 +15929,6 @@ export interface operations {
                 kind?: string;
                 window?: string;
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -16384,9 +15958,7 @@ export interface operations {
     };
     read_container_policy_config_container_policy_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16402,22 +15974,11 @@ export interface operations {
                     "application/json": components["schemas"]["ContainerPolicyResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     list_automation_connectors_automations__automation_id__connectors__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -16448,9 +16009,7 @@ export interface operations {
     };
     configure_automation_connector_automations__automation_id__connectors__post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -16485,9 +16044,7 @@ export interface operations {
     };
     test_automation_credentials_before_save_automations__automation_id__connectors_test_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 automation_id: number;
@@ -16522,9 +16079,7 @@ export interface operations {
     };
     test_configured_automation_connector_automations__automation_id__connectors__connector_type__test_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 connector_type: string;
@@ -16556,9 +16111,7 @@ export interface operations {
     };
     delete_automation_connector_automations__automation_id__connectors__connector_type__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 connector_type: string;
@@ -16588,9 +16141,7 @@ export interface operations {
     };
     list_account_connectors_account_connectors__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16606,22 +16157,11 @@ export interface operations {
                     "application/json": components["schemas"]["AccountConnectorStatusResponse"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     configure_account_connector_account_connectors__post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16654,9 +16194,7 @@ export interface operations {
     };
     test_credentials_before_save_account_connectors_test_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16689,9 +16227,7 @@ export interface operations {
     };
     test_configured_connector_account_connectors__connector_type__test_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 connector_type: string;
@@ -16722,9 +16258,7 @@ export interface operations {
     };
     delete_account_connector_account_connectors__connector_type__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 connector_type: string;
@@ -16888,9 +16422,7 @@ export interface operations {
     };
     list_job_secrets_jobs_secrets_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -16906,22 +16438,11 @@ export interface operations {
                     "application/json": components["schemas"]["JobSecretListItem"][];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     upsert_job_secret_jobs_secrets__key__put: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 key: string;
@@ -16958,9 +16479,7 @@ export interface operations {
     };
     delete_job_secret_jobs_secrets__key__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 key: string;
@@ -16989,9 +16508,7 @@ export interface operations {
     };
     get_job_secrets_status_jobs__job_id__secrets_status_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 job_id: string;
@@ -17022,9 +16539,7 @@ export interface operations {
     };
     get_repo_config_jobs_repo_config_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17040,22 +16555,11 @@ export interface operations {
                     "application/json": components["schemas"]["JobRepoConfigResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     set_repo_config_jobs_repo_config_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17090,9 +16594,7 @@ export interface operations {
     };
     delete_repo_config_jobs_repo_config_delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17106,22 +16608,11 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     verify_repo_config_jobs_repo_verify_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17154,9 +16645,7 @@ export interface operations {
     };
     trigger_repo_sync_jobs_settings_sync_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17174,22 +16663,11 @@ export interface operations {
                     };
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     get_jobs_repo_status_jobs_repo_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17205,22 +16683,11 @@ export interface operations {
                     "application/json": components["schemas"]["JobsRepoStatusResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     init_jobs_repo_jobs_repo_init_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17236,22 +16703,11 @@ export interface operations {
                     "application/json": components["schemas"]["JobsRepoInitResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     sync_jobs_repo_jobs_repo_sync_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17267,15 +16723,6 @@ export interface operations {
                     "application/json": components["schemas"]["JobsRepoSyncResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     get_recent_job_runs_jobs_runs_recent_get: {
@@ -17283,7 +16730,6 @@ export interface operations {
             query?: {
                 /** @description Max results to return */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17313,9 +16759,7 @@ export interface operations {
     };
     get_last_job_runs_jobs_runs_last_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17331,22 +16775,12 @@ export interface operations {
                     "application/json": components["schemas"]["JobLastRunResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     list_jobs_jobs__get: {
         parameters: {
             query?: {
                 enabled_only?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17376,9 +16810,7 @@ export interface operations {
     };
     get_job_jobs__job_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 job_id: string;
@@ -17414,7 +16846,6 @@ export interface operations {
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -17446,9 +16877,7 @@ export interface operations {
     };
     run_job_jobs__job_id__run_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 job_id: string;
@@ -17482,7 +16911,6 @@ export interface operations {
             query?: {
                 /** @description Bypass secret checks */
                 force?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -17514,9 +16942,7 @@ export interface operations {
     };
     disable_job_jobs__job_id__disable_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 job_id: string;
@@ -17549,7 +16975,6 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17584,7 +17009,6 @@ export interface operations {
                 limit?: number;
                 /** @description Number of traces to skip */
                 offset?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17619,7 +17043,6 @@ export interface operations {
                 level?: "summary" | "full" | "errors";
                 /** @description Maximum events to return */
                 max_events?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -17651,9 +17074,7 @@ export interface operations {
     };
     system_health_reliability_system_health_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17669,15 +17090,6 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     error_analysis_reliability_errors_get: {
@@ -17687,7 +17099,6 @@ export interface operations {
                 hours?: number;
                 /** @description Maximum errors to return */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17720,7 +17131,6 @@ export interface operations {
             query?: {
                 /** @description Time window in hours */
                 hours?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17757,7 +17167,6 @@ export interface operations {
                 source?: string | null;
                 /** @description Maximum incidents to return */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17790,7 +17199,6 @@ export interface operations {
             query?: {
                 /** @description Threshold in minutes */
                 threshold_mins?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17820,9 +17228,7 @@ export interface operations {
     };
     runner_status_reliability_runners_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17838,15 +17244,6 @@ export interface operations {
                     "application/json": unknown;
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     list_skills_skills_get: {
@@ -17858,7 +17255,6 @@ export interface operations {
                 source?: string | null;
                 /** @description Only return eligible skills */
                 eligible_only?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17888,9 +17284,7 @@ export interface operations {
     };
     create_skill_skills_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -17925,7 +17319,6 @@ export interface operations {
         parameters: {
             query?: {
                 workspace_path?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17959,7 +17352,6 @@ export interface operations {
                 workspace_path?: string | null;
                 /** @description Comma-separated skill names/patterns to include */
                 allowed?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -17991,7 +17383,6 @@ export interface operations {
         parameters: {
             query?: {
                 workspace_path?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -18023,9 +17414,7 @@ export interface operations {
     };
     delete_skill_skills__skill_name__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 skill_name: string;
@@ -18058,9 +17447,7 @@ export interface operations {
     };
     update_skill_skills__skill_name__patch: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 skill_name: string;
@@ -18097,7 +17484,6 @@ export interface operations {
         parameters: {
             query?: {
                 workspace_path?: string | null;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -18130,7 +17516,6 @@ export interface operations {
     branch_session_in_cloud_sessions__session_id__branch_cloud_post: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -18169,7 +17554,6 @@ export interface operations {
     send_to_live_session_sessions__session_id__send_live_post: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -18208,7 +17592,6 @@ export interface operations {
     launch_managed_local_sessions_managed_local_post: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -18244,9 +17627,7 @@ export interface operations {
     };
     launch_managed_local_this_device_sessions_managed_local_this_device_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -18280,7 +17661,6 @@ export interface operations {
     get_session_lock_status_sessions__session_id__lock_get: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -18315,7 +17695,6 @@ export interface operations {
     force_release_lock_sessions__session_id__lock_delete: {
         parameters: {
             query?: {
-                session_factory?: unknown;
                 /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
                 token?: string | null;
             };
@@ -18351,9 +17730,7 @@ export interface operations {
     };
     branch_session_in_cloud_agents_agents_sessions__session_id__branch_cloud_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -18388,9 +17765,7 @@ export interface operations {
     };
     send_to_live_session_agents_agents_sessions__session_id__send_live_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -18430,7 +17805,6 @@ export interface operations {
                 project: string;
                 /** @description Max sessions to include */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -18475,7 +17849,6 @@ export interface operations {
                 limit?: number;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -18518,7 +17891,6 @@ export interface operations {
                 context_turns?: number;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -18575,7 +17947,6 @@ export interface operations {
                 mode?: string | null;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -18634,7 +18005,6 @@ export interface operations {
                 context_mode?: string;
                 /** @description When true, subscribe without immediately replaying the already-fresh default timeline snapshot. */
                 skip_initial_replay?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -18685,7 +18055,6 @@ export interface operations {
                 offset?: number;
                 /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
                 hide_autonomous?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -18718,7 +18087,6 @@ export interface operations {
             query?: {
                 /** @description Number of messages to return */
                 last_n?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -18753,7 +18121,6 @@ export interface operations {
             query?: {
                 /** @description Days to look back for distinct values */
                 days_back?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -18786,7 +18153,6 @@ export interface operations {
             query?: {
                 /** @description Delete existing demo sessions before seeding fresh demo data */
                 replace?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -18816,9 +18182,7 @@ export interface operations {
     };
     set_timeline_session_action_timeline_sessions__session_id__action_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -18853,9 +18217,7 @@ export interface operations {
     };
     set_timeline_session_loop_mode_timeline_sessions__session_id__loop_mode_patch: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -18890,9 +18252,7 @@ export interface operations {
     };
     get_timeline_session_timeline_sessions__session_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -18923,9 +18283,7 @@ export interface operations {
     };
     get_timeline_session_thread_timeline_sessions__session_id__thread_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -18971,7 +18329,6 @@ export interface operations {
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19012,7 +18369,6 @@ export interface operations {
                 limit?: number;
                 /** @description Offset within the stitched projection */
                 offset?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19049,7 +18405,6 @@ export interface operations {
                 branch_mode?: string;
                 /** @description Max projected items */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19084,7 +18439,6 @@ export interface operations {
             query?: {
                 /** @description Branch projection mode for export: head|all */
                 branch_mode?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19119,7 +18473,6 @@ export interface operations {
             query?: {
                 /** @description When true, wait for first change before emitting workspace_changed. */
                 skip_initial?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19151,9 +18504,7 @@ export interface operations {
     };
     ingest_session_agents_ingest_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -19167,15 +18518,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["IngestResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -19197,7 +18539,6 @@ export interface operations {
                 limit?: number;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -19240,7 +18581,6 @@ export interface operations {
                 context_turns?: number;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -19297,7 +18637,6 @@ export interface operations {
                 mode?: string | null;
                 /** @description Context projection mode: forensic|active_context */
                 context_mode?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -19348,7 +18687,6 @@ export interface operations {
                 offset?: number;
                 /** @description Hide autonomous sessions (Task sub-agents and sessions with no user messages) */
                 hide_autonomous?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -19387,7 +18725,6 @@ export interface operations {
                 days?: number;
                 /** @description Max results */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -19420,7 +18757,6 @@ export interface operations {
             query?: {
                 /** @description Number of recent events to return */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19465,7 +18801,6 @@ export interface operations {
                 limit?: number;
                 /** @description Days to look back */
                 days_back?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -19498,7 +18833,6 @@ export interface operations {
             query?: {
                 /** @description Number of messages to return */
                 last_n?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19533,7 +18867,6 @@ export interface operations {
             query?: {
                 /** @description Days to look back for distinct values */
                 days_back?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -19563,9 +18896,7 @@ export interface operations {
     };
     set_session_action_agents_sessions__session_id__action_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -19600,9 +18931,7 @@ export interface operations {
     };
     set_session_loop_mode_agents_sessions__session_id__loop_mode_patch: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -19637,9 +18966,7 @@ export interface operations {
     };
     get_session_agents_sessions__session_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -19670,9 +18997,7 @@ export interface operations {
     };
     get_session_thread_agents_sessions__session_id__thread_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 session_id: string;
@@ -19718,7 +19043,6 @@ export interface operations {
                 limit?: number;
                 /** @description Offset for pagination */
                 offset?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19759,7 +19083,6 @@ export interface operations {
                 limit?: number;
                 /** @description Offset within the stitched projection */
                 offset?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19796,7 +19119,6 @@ export interface operations {
                 branch_mode?: string;
                 /** @description Max projected items */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19831,7 +19153,6 @@ export interface operations {
             query?: {
                 /** @description Branch projection mode for export: head|all */
                 branch_mode?: string;
-                session_factory?: unknown;
             };
             header?: never;
             path: {
@@ -19872,7 +19193,6 @@ export interface operations {
                 unacknowledged_only?: boolean;
                 /** @description Max results */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -19904,9 +19224,7 @@ export interface operations {
     };
     create_message_agents_messages_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -19941,9 +19259,7 @@ export interface operations {
     };
     acknowledge_message_agents_messages__message_id__ack_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 message_id: number;
@@ -19980,9 +19296,7 @@ export interface operations {
     };
     backfill_progress_agents_backfill_summaries_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -19998,15 +19312,6 @@ export interface operations {
                     "application/json": components["schemas"]["BackfillProgressResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     backfill_summaries_agents_backfill_summaries_post: {
@@ -20018,7 +19323,6 @@ export interface operations {
                 project?: string | null;
                 /** @description Re-summarize sessions that already have summaries */
                 force?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -20048,9 +19352,7 @@ export interface operations {
     };
     backfill_embeddings_progress_agents_backfill_embeddings_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20066,15 +19368,6 @@ export interface operations {
                     "application/json": components["schemas"]["BackfillEmbeddingsProgressResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     backfill_embeddings_agents_backfill_embeddings_post: {
@@ -20086,7 +19379,6 @@ export interface operations {
                 project?: string | null;
                 /** @description Re-embed sessions that already have embeddings */
                 force?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -20116,9 +19408,7 @@ export interface operations {
     };
     get_ingest_health_agents_ingest_health_get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20134,15 +19424,6 @@ export interface operations {
                     "application/json": components["schemas"]["IngestHealthResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     get_usage_stats_agents_usage_stats_get: {
@@ -20150,7 +19431,6 @@ export interface operations {
             query?: {
                 /** @description Days to look back (max 365) */
                 days?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -20185,7 +19465,6 @@ export interface operations {
                 project: string;
                 /** @description Max sessions to include */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -20215,9 +19494,7 @@ export interface operations {
     };
     trigger_reflection_agents_reflect_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20255,7 +19532,6 @@ export interface operations {
                 project?: string | null;
                 /** @description Max results */
                 limit?: number;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -20288,7 +19564,6 @@ export interface operations {
             query?: {
                 /** @description Delete existing demo sessions before seeding fresh demo data */
                 replace?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -20318,9 +19593,7 @@ export interface operations {
     };
     reset_demo_sessions_agents_demo_delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20336,22 +19609,11 @@ export interface operations {
                     "application/json": components["schemas"]["DemoSeedResponse"];
                 };
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
         };
     };
     cleanup_test_sessions_agents_test_cleanup_delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20384,9 +19646,7 @@ export interface operations {
     };
     ingest_heartbeat_agents_heartbeat_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20417,9 +19677,7 @@ export interface operations {
     };
     upsert_presence_agents_presence_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20450,9 +19708,7 @@ export interface operations {
     };
     ingest_runtime_event_batch_agents_runtime_events_batch_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20487,7 +19743,6 @@ export interface operations {
         parameters: {
             query?: {
                 include_revoked?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -20517,9 +19772,7 @@ export interface operations {
     };
     create_device_token_devices_tokens_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20552,9 +19805,7 @@ export interface operations {
     };
     get_device_token_devices_tokens__token_id__get: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 token_id: string;
@@ -20585,9 +19836,7 @@ export interface operations {
     };
     revoke_device_token_devices_tokens__token_id__delete: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 token_id: string;
@@ -20629,7 +19878,6 @@ export interface operations {
                 include_system?: boolean;
                 /** @description Include archived insights */
                 include_archived?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -20659,9 +19907,7 @@ export interface operations {
     };
     create_insight_insights_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -20694,9 +19940,7 @@ export interface operations {
     };
     archive_insight_insights__insight_id__archive_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 insight_id: string;
@@ -20727,9 +19971,7 @@ export interface operations {
     };
     unarchive_insight_insights__insight_id__unarchive_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path: {
                 insight_id: string;
@@ -20773,7 +20015,6 @@ export interface operations {
                 include_system?: boolean;
                 /** @description Include archived insights */
                 include_archived?: boolean;
-                session_factory?: unknown;
             };
             header?: never;
             path?: never;
@@ -20803,9 +20044,7 @@ export interface operations {
     };
     create_machine_insight_agents_insights_post: {
         parameters: {
-            query?: {
-                session_factory?: unknown;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
