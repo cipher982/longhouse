@@ -49,10 +49,10 @@ def test_build_session_capabilities_infers_cloud_takeover_from_saved_branch_cont
     assert capabilities.execution_home.value == "cloud_takeover"
     assert capabilities.managed_transport is None
     assert capabilities.live_control_available is False
-    assert capabilities.cloud_branch_available is True
+    assert capabilities.cloud_branch_available is False  # frozen for launch
     assert capabilities.host_reattach_available is False
     assert capabilities.reply_to_live_session_available is False
-    assert capabilities.home_label == "Moved to cloud"
+    assert capabilities.home_label is None  # cloud labels hidden for launch
 
 
 def test_build_session_capabilities_marks_native_managed_local_session():
@@ -87,7 +87,7 @@ def test_build_session_capabilities_drops_legacy_tmux_sessions_out_of_live_contr
     assert capabilities.live_control_available is False
     assert capabilities.host_reattach_available is False
     assert capabilities.reply_to_live_session_available is False
-    assert capabilities.cloud_branch_available is True
+    assert capabilities.cloud_branch_available is False  # frozen for launch
 
 
 @pytest.mark.asyncio

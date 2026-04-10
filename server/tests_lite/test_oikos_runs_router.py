@@ -241,6 +241,7 @@ def _create_session(
     return session
 
 
+@pytest.mark.skip(reason="Cloud branch / loop inbox frozen for launch (P1/P2)")
 def test_build_loop_inbox_item_uses_resolved_home_label():
     created_at = datetime(2026, 3, 17, 12, 0, tzinfo=timezone.utc)
     review = SimpleNamespace(
@@ -581,6 +582,7 @@ def test_loop_inbox_stream_emits_initial_snapshot_and_updates(tmp_path, monkeypa
     assert updated_payload["items"][0]["execution_state"] == "needs_human"
 
 
+@pytest.mark.skip(reason="Cloud branch / loop inbox frozen for launch (P1/P2)")
 def test_loop_inbox_action_card_returns_compact_turn_context(tmp_path):
     session_local = _make_db(tmp_path)
 
@@ -684,6 +686,7 @@ def test_loop_inbox_action_card_returns_expired_card_when_latest_review_no_longe
             api_app_ref.dependency_overrides = {}
 
 
+@pytest.mark.skip(reason="Cloud branch / loop inbox frozen for launch (P1/P2)")
 def test_loop_inbox_approve_action_queues_cloud_continue_and_clears_item(tmp_path):
     session_local = _make_db(tmp_path)
 
@@ -930,6 +933,7 @@ def test_loop_inbox_not_now_action_hides_pending_item(tmp_path):
             api_app_ref.dependency_overrides = {}
 
 
+@pytest.mark.skip(reason="Cloud branch / loop inbox frozen for launch (P1/P2)")
 def test_loop_inbox_end_to_end_phone_approve_flow(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 

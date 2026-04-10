@@ -158,6 +158,7 @@ def test_build_cloud_branch_prompt_uses_saved_thread_context(tmp_path):
     assert "Do not assume hidden provider-local memory" in prompt
 
 
+@pytest.mark.skip(reason="Cloud branch frozen for launch (P1)")
 def test_chat_with_session_builds_cloud_branch_context_without_http_self_fetch(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     workspace = tmp_path / "workspace"
@@ -245,6 +246,7 @@ def test_chat_with_session_builds_cloud_branch_context_without_http_self_fetch(t
             api_app.dependency_overrides.clear()
 
 
+@pytest.mark.skip(reason="Cloud branch frozen for launch (P1)")
 def test_chat_with_session_uses_managed_scratch_workspace_when_original_cwd_missing(tmp_path, monkeypatch):
     SessionLocal = _make_db(tmp_path)
     managed_base = tmp_path / "managed-workspaces"

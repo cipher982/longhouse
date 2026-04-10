@@ -5,7 +5,7 @@ import type { AgentSession, AgentSessionProjectionItem, SessionCapabilities } fr
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
-    cloud_branch_available: true,
+    cloud_branch_available: false,
     host_reattach_available: false,
     reply_to_live_session_available: false,
     ...overrides,
@@ -140,7 +140,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.notice?.title).toMatch(/Codex session needs host attach/i);
   });
 
-  it("lets managed-local Claude sessions start a browser cloud branch when the live control channel is gone", () => {
+  it("shows reattach when a managed-local Claude session loses its live control channel", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "claude",
@@ -151,37 +151,28 @@ describe("getSessionInteractionCapabilities", () => {
           source_runner_name: null,
         },
         capabilities: makeCapabilities({
-          cloud_branch_available: true,
+          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
       isViewingHead: true,
     });
 
-    expect(capabilities.mode).toBe("promote");
-    expect(capabilities.canChatFromBrowser).toBe(true);
-    expect(capabilities.capabilityLabel).toBe("Cloud branch");
-    expect(capabilities.capabilitySummary).toBe("Start a cloud branch from this session.");
-    expect(capabilities.title).toBe("Start Cloud Branch");
-    expect(capabilities.description).toContain("starts a new cloud branch from this session in Longhouse");
-    expect(capabilities.submitLabel).toBe("Start Cloud Branch");
-    expect(capabilities.composerDisabledReason).toBeNull();
-    expect(capabilities.primaryActionLabel).toBe("Open branch dock");
+    expect(capabilities.mode).toBe("managed_local_unavailable");
+    expect(capabilities.canChatFromBrowser).toBe(false);
+    expect(capabilities.capabilityLabel).toBe("Reattach on host");
   });
 
-  it("treats a synced Claude transcript on the head as promotable to a cloud branch", () => {
+  it("treats a synced Claude transcript as search-only", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession(),
       isViewingHead: true,
     });
 
-    expect(capabilities.mode).toBe("promote");
-    expect(capabilities.canChatFromBrowser).toBe(true);
-    expect(capabilities.capabilityLabel).toBe("Cloud branch");
-    expect(capabilities.capabilitySummary).toBe("Start a cloud branch from this session.");
-    expect(capabilities.title).toBe("Start Cloud Branch");
-    expect(capabilities.submitLabel).toBe("Start Cloud Branch");
-    expect(capabilities.primaryActionLabel).toBe("Open branch dock");
+    expect(capabilities.mode).toBe("unsupported");
+    expect(capabilities.canChatFromBrowser).toBe(false);
+    expect(capabilities.capabilityLabel).toBe("Search only");
+    expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 
   it("treats unsupported providers as searchable context only", () => {
@@ -196,8 +187,8 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
-    expect(capabilities.capabilityLabel).toBe("History only");
-    expect(capabilities.composerDisabledReason).toMatch(/cloud branching is not available/i);
+    expect(capabilities.capabilityLabel).toBe("Search only");
+    expect(capabilities.composerDisabledReason).toMatch(/fully searchable/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 });

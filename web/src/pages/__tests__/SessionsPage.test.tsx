@@ -383,9 +383,9 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     const capability = await screen.findByTestId("session-card-capability");
-    expect(capability).toHaveTextContent("History only");
+    expect(capability).toHaveTextContent("Search only");
     expect(capability).toHaveTextContent(
-      "Search and inspect this Codex session here; cloud branching is not available from this session yet.",
+      "Search and inspect this Codex session here.",
     );
   });
 

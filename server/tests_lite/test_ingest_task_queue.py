@@ -1043,6 +1043,7 @@ async def test_turn_loop_task_reviews_completed_turn_even_when_session_is_paused
     invoke_oikos.assert_awaited_once()
 
 
+@pytest.mark.skip(reason="Cloud branch / autopilot frozen for launch (P1/P2)")
 @pytest.mark.asyncio
 async def test_turn_loop_task_autopilot_enqueues_same_session_resume_job(tmp_path, monkeypatch):
     """Autopilot sessions enqueue a bounded same-session continue job from turn_loop."""

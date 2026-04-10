@@ -85,21 +85,11 @@ export function SessionContextPane({
       ? "Stored session preference for what Oikos may do after each completed assistant turn."
       : canDriveManagedLocalFromBrowser
         ? "Loop Mode changes review posture only. Keep driving the live session from Longhouse below or by reattaching on the host machine."
-        : interaction.canChatFromBrowser
-          ? "Loop Mode changes review posture only. Start or keep the cloud branch from Longhouse below, or reattach on the host machine when available."
-          : isManagedLocalCodex
-            ? "For live Codex sessions, Loop Mode changes review posture only. Keep driving the live session from the host terminal."
+        : isManagedLocalCodex
+          ? "For live Codex sessions, Loop Mode changes review posture only. Keep driving the live session from the host terminal."
           : "Loop Mode changes review posture only. Keep driving the live session from the host terminal.";
   const primaryActionDescription = interaction.canChatFromBrowser
-    ? interaction.mode === "managed_local"
-      ? "Open the dock below and send the next prompt into the live session."
-      : interaction.mode === "head"
-        ? "Open the dock below and keep working in this cloud branch from Longhouse."
-        : interaction.mode === "promote"
-          ? "Open the dock below and start a cloud branch from this session."
-          : interaction.mode === "branch"
-            ? "Open the dock below and start a cloud branch from this point."
-            : "Open the dock below and continue from this session in the browser."
+    ? "Open the dock below and send the next prompt into the live session."
     : interaction.composerDisabledReason ?? interaction.notice?.body ?? interaction.capabilitySummary;
 
   return (

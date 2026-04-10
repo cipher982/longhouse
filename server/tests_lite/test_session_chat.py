@@ -118,6 +118,7 @@ def test_managed_local_launch_response_requires_managed_transport():
         session_chat._managed_local_launch_response(result)
 
 
+@pytest.mark.skip(reason="Cloud branch frozen for launch (P1)")
 def test_fake_cloud_continuation_persists_turn_for_follow_up_requests(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     project = "resume-send-test"
@@ -268,6 +269,7 @@ def test_managed_local_claude_live_send_requires_live_control(tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+@pytest.mark.skip(reason="Cloud branch frozen for launch (P1)")
 def test_managed_local_claude_cloud_chat_can_continue_when_live_control_is_gone(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     source_session_id = uuid4()
@@ -520,6 +522,7 @@ def test_synced_codex_session_cloud_chat_is_not_available(tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+@pytest.mark.skip(reason="Cloud branch frozen for launch (P1)")
 def test_agents_continue_route_supports_fake_cloud_continuation(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     project = "agents-continue-test"
@@ -792,6 +795,7 @@ def test_agents_branch_cloud_route_rejects_other_device(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+@pytest.mark.skip(reason="Cloud branch frozen for launch (P1)")
 def test_agents_continue_route_allows_auth_disabled_without_device_token(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
     project = "agents-continue-auth-disabled"
