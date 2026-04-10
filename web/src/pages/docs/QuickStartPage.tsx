@@ -31,10 +31,9 @@ export default function QuickStartPage() {
       </p>
 
       <h2>2. Open Longhouse</h2>
-      <CodeBlock title="terminal">{`longhouse serve`}</CodeBlock>
       <p>
-        Open <code>http://localhost:8080</code>. Your data stays in a SQLite
-        database on your machine at <code>~/.longhouse/longhouse.db</code>.
+        Guided onboarding starts Longhouse for you. Open <code>http://localhost:8080</code>. Your
+        data stays in a SQLite database on your machine at <code>~/.longhouse/longhouse.db</code>.
       </p>
 
       <h2>3. Find one prior session</h2>
