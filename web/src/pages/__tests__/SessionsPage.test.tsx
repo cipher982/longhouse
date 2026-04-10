@@ -201,7 +201,6 @@ function renderSessionsPage(initialEntry = "/timeline", queryClient = createQuer
               </>
             }
           />
-          <Route path="/briefings" element={<div>Briefings</div>} />
           <Route
             path="/runners"
             element={

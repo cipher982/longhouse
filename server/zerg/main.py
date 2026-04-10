@@ -93,7 +93,6 @@ from zerg.routers.account_connectors import router as account_connectors_router
 from zerg.routers.admin import router as admin_router
 from zerg.routers.admin_bootstrap import router as admin_bootstrap_router
 from zerg.routers.agents_backfill import router as agents_backfill_router
-from zerg.routers.agents_briefings import router as agents_briefings_router
 from zerg.routers.agents_demo import router as agents_demo_router
 from zerg.routers.agents_ingest import router as agents_ingest_router
 from zerg.routers.agents_search import router as agents_search_router
@@ -115,8 +114,6 @@ from zerg.routers.funnel import router as funnel_router
 from zerg.routers.health import router as health_router
 from zerg.routers.health import set_health_app_ref
 from zerg.routers.heartbeat import router as heartbeat_router
-from zerg.routers.insights import machine_router as machine_insights_router
-from zerg.routers.insights import router as insights_router
 from zerg.routers.job_settings import router as job_settings_router
 from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
@@ -278,14 +275,11 @@ api_app.include_router(agents_ingest_router)
 api_app.include_router(agents_search_router)
 api_app.include_router(agents_sessions_router)
 api_app.include_router(agents_backfill_router)
-api_app.include_router(agents_briefings_router)
 api_app.include_router(agents_demo_router)
 api_app.include_router(heartbeat_router)
 api_app.include_router(presence_router)
 api_app.include_router(runtime_router)
 api_app.include_router(device_tokens_router)
-api_app.include_router(insights_router)
-api_app.include_router(machine_insights_router)
 api_app.include_router(health_router)
 
 # metrics on parent app (Prometheus expects /metrics at root)
