@@ -44,6 +44,45 @@ struct LonghouseMenuBarCoreTests {
         #expect(config.quitAfterSeconds == 2.5)
         #expect(config.refreshIntervalSeconds == 5)
         #expect(config.healthCommand == "python -m zerg.cli.main local-health --json")
+        #expect(config.showStatusWindowOnLaunch == false)
+    }
+
+    @Test
+    func defaultsDirectLaunchToLiveStatusWindow() throws {
+        let config = try HarnessRuntimeConfig.parse(arguments: [])
+
+        #expect(config.refreshIntervalSeconds == HarnessRuntimeConfig.defaultRefreshIntervalSeconds)
+        #expect(config.showStatusWindowOnLaunch == true)
+    }
+
+    @Test
+    func resolvesLonghouseURLFromSnapshotWhenUIURLMissing() throws {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            launchReadiness: LaunchReadinessSnapshot(
+                state: "ready",
+                headline: nil,
+                reasons: nil,
+                suggestedActions: nil,
+                storedURL: "https://david010.longhouse.ai",
+                machineName: nil,
+                serviceMachineName: nil,
+                runner: nil
+            )
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+
+        #expect(sink.resolveLonghouseURL(snapshot: snapshot)?.absoluteString == "https://david010.longhouse.ai")
     }
 
     @Test

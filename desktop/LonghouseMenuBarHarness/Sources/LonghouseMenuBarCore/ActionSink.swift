@@ -20,6 +20,8 @@ public protocol HealthActionSink {
 }
 
 public struct SpyHealthActionSink: HealthActionSink {
+    public static let defaultLonghouseURL = "http://127.0.0.1:8080"
+
     public let logURL: URL?
     public let uiURL: URL?
     public let effectMode: HarnessEffectMode
@@ -49,8 +51,8 @@ public struct SpyHealthActionSink: HealthActionSink {
         case .repairInstall:
             runDetachedShell("longhouse connect --install")
         case .openLonghouse:
-            if let uiURL {
-                NSWorkspace.shared.open(uiURL)
+            if let resolvedURL = resolveLonghouseURL(snapshot: snapshot) {
+                NSWorkspace.shared.open(resolvedURL)
             }
         case .openLogs:
             if let logPath = snapshot.service?.logPath {
@@ -67,6 +69,17 @@ public struct SpyHealthActionSink: HealthActionSink {
         case .refresh:
             break
         }
+    }
+
+    func resolveLonghouseURL(snapshot: HealthSnapshot) -> URL? {
+        if let uiURL {
+            return uiURL
+        }
+        if let storedURL = snapshot.launchReadiness?.storedURL,
+           let parsedURL = URL(string: storedURL) {
+            return parsedURL
+        }
+        return URL(string: Self.defaultLonghouseURL)
     }
 
     private func append(record: ActionRecord) {
