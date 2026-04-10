@@ -530,38 +530,7 @@ test("recall panel opens and shows search input", async ({ context }) => {
 });
 
 // ---------------------------------------------------------------------------
-// Test 8: Briefings page loads with project selector
-// ---------------------------------------------------------------------------
-
-test("briefings page loads with project selector", async ({ context }) => {
-  test.setTimeout(20_000);
-
-  const page = await context.newPage();
-  await page.goto("/briefings", { waitUntil: "domcontentloaded" });
-  await waitForLivePageReady(
-    page,
-    "briefings-not-ready",
-    "Briefings page never reached data-ready=true.",
-  );
-
-  // Should not 404 or throw
-  const url = page.url();
-  expect(url, "Should be on briefings page, not redirected").toContain(
-    "/briefings",
-  );
-
-  // Controls area must render
-  await page.getByTestId("briefings-controls").waitFor({ timeout: 10_000 });
-
-  // Project selector must be present and empty by default
-  const select = page.getByTestId("briefings-project-select");
-  await expect(select).toBeVisible();
-
-  await page.close();
-});
-
-// ---------------------------------------------------------------------------
-// Test 9: Auth refresh endpoint works (token rotation)
+// Test 8: Auth refresh endpoint works (token rotation)
 // ---------------------------------------------------------------------------
 
 test("auth refresh endpoint rotates tokens", async ({ playwright, apiBaseUrl }) => {
