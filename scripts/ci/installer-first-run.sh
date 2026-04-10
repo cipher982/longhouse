@@ -15,6 +15,8 @@ TEST_SHELL="${INSTALLER_TEST_SHELL:-${SHELL:-/bin/bash}}"
 WORK_HOME=""
 INSTALLER_TMP=""
 ORIGINAL_PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
+ENABLE_MENUBAR_SMOKE="${INSTALLER_TEST_MENUBAR:-0}"
+REBUILD_FRONTEND="${INSTALLER_TEST_REBUILD_FRONTEND:-0}"
 
 usage() {
   cat <<'USAGE'
@@ -31,6 +33,8 @@ Options:
   --expected-upgrade-version <version>
                               Expected installed version after upgrade
   --shell <path>              Shell to simulate for PATH/profile checks (default: $SHELL)
+  --menubar                   Enable macOS ambient menu bar smoke (heavy; explicit opt-in)
+  --rebuild-frontend          Force a fresh web/dist build for local package installs
   --port <port>               Fixed port for onboarding/demo server
   --demo-port <port>          Fixed port for demo server (default: random free port)
   --home <path>               Reuse an existing temp HOME (skip mktemp)
@@ -71,6 +75,26 @@ cargo_build_release() {
   fi
 
   fail "Rust toolchain unavailable for cargo build --release"
+}
+
+ensure_frontend_dist() {
+  if [[ "$REBUILD_FRONTEND" != "1" && -f "$ROOT_DIR/web/dist/index.html" ]]; then
+    log "♻️  Reusing existing web/dist for installer validation..."
+    return 0
+  fi
+
+  require_cmd bun
+  if [[ "$REBUILD_FRONTEND" == "1" ]]; then
+    log "🏗️  Rebuilding frontend dist for installer validation..."
+  else
+    log "🏗️  Building frontend dist for installer validation..."
+  fi
+  (
+    cd "$ROOT_DIR"
+    bun install --frozen-lockfile --silent
+    cd web
+    bun run build
+  )
 }
 
 build_local_health_app_bundle() {
@@ -351,6 +375,14 @@ while [[ $# -gt 0 ]]; do
       TEST_SHELL="${2:-}"
       shift 2
       ;;
+    --menubar)
+      ENABLE_MENUBAR_SMOKE=1
+      shift
+      ;;
+    --rebuild-frontend)
+      REBUILD_FRONTEND=1
+      shift
+      ;;
     --port)
       PORT="${2:-}"
       shift 2
@@ -412,14 +444,7 @@ if [[ -z "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" ]]; then
 fi
 
 if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" && -d "$PACKAGE_SOURCE" ]]; then
-  require_cmd bun
-  log "🏗️  Building frontend dist for local package install..."
-  (
-    cd "$ROOT_DIR"
-    bun install --frozen-lockfile --silent
-    cd web
-    bun run build
-  )
+  ensure_frontend_dist
 
   if [[ ! -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
     log "🦀 Building local engine binary for installer validation..."
@@ -454,6 +479,8 @@ log "  shell: $TEST_SHELL"
 log "  home: $HOME"
 log "  onboarding port: $PORT"
 log "  demo port: $DEMO_PORT"
+log "  menubar smoke: $ENABLE_MENUBAR_SMOKE"
+log "  frontend rebuild: $REBUILD_FRONTEND"
 
 EXPECT_SERVICE_INSTALL=0
 
@@ -473,12 +500,12 @@ if [[ "$INSTALLER_MODE" == "local" ]]; then
   env_vars+=("LONGHOUSE_ENGINE_SOURCE=$ROOT_DIR/engine/target/release/longhouse-engine")
 fi
 
-ENABLE_MENUBAR_SMOKE="${INSTALLER_TEST_MENUBAR:-}"
-if [[ -z "$ENABLE_MENUBAR_SMOKE" && "$(uname -s)" == "Darwin" && -z "${CI:-}" ]]; then
-  ENABLE_MENUBAR_SMOKE=1
+if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(uname -s)" != "Darwin" ]]; then
+  fail "--menubar smoke is only supported on macOS"
 fi
 
 if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(uname -s)" == "Darwin" ]]; then
+  log "⚠️  macOS ambient smoke enabled. This is the heavy local path; prefer GitHub Actions unless you are debugging menu bar install behavior."
   APP_BUNDLE_STAGE_DIR="$HOME/.longhouse-app-build"
   LONGHOUSE_APP_BUNDLE="$(build_local_health_app_bundle "$APP_BUNDLE_STAGE_DIR")"
   export LONGHOUSE_LOCAL_HEALTH_APP_SOURCE="$LONGHOUSE_APP_BUNDLE"

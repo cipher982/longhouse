@@ -132,6 +132,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 
 - `make dev` is interactive.
 - `make test-ci`, `make test-e2e`, `make test-full`, and long `cargo` builds run locally and can saturate the laptop. Prefer the repo's GitHub ARC workflows on cube when possible.
+- `scripts/ci/installer-first-run.sh` stays light locally by default; use `make test-install-first-run-fresh` only when you need a rebuilt frontend, and treat `--menubar` / `make test-install-macos-ambient` as the heavy macOS path. Prefer GitHub Actions unless menu bar install debugging is the point.
 - Local SQLite dev DB is `~/.longhouse/dev.db` unless `DATABASE_URL` overrides it.
 - `AGENTS.md` is canonical. `CLAUDE.md` is a symlink.
 - Auth is disabled in dev by default (`AUTH_DISABLED=1`).

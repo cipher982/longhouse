@@ -407,11 +407,14 @@ test-install: ## Test Longhouse installer + first-run onboarding smoke
 	@echo "✅ Syntax OK"
 	@$(MAKE) test-install-first-run
 
-test-install-first-run: ## Run disposable first-run installer smoke in a temp HOME
+test-install-first-run: ## Run disposable first-run installer smoke in a temp HOME (light local path)
 	@./scripts/ci/installer-first-run.sh
 
-test-install-macos-ambient: ## Run local macOS installer smoke with ambient menu bar enabled
-	@INSTALLER_TEST_MENUBAR=1 ./scripts/ci/installer-first-run.sh --shell /bin/zsh
+test-install-first-run-fresh: ## Run disposable first-run installer smoke and force a fresh frontend build
+	@./scripts/ci/installer-first-run.sh --rebuild-frontend
+
+test-install-macos-ambient: ## Run explicit local macOS installer smoke with ambient menu bar enabled (heavy)
+	@./scripts/ci/installer-first-run.sh --shell /bin/zsh --menubar
 
 test-runtime-packaging-macos: ## Build/sign/zip the canonical Longhouse.app bundle locally on macOS
 	@./scripts/qa/test-local-runtime-packaging.sh
