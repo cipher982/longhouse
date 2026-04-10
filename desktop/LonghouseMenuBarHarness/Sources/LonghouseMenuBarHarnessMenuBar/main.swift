@@ -2,13 +2,29 @@ import AppKit
 import LonghouseMenuBarCore
 import SwiftUI
 
+@MainActor
+private enum HarnessMenuBarLaunchState {
+    static var showStatusWindowOnLaunch = false
+    static var statusWindowController: StatusWindowController?
+}
+
+@MainActor
 private final class HarnessMenuBarAppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApplication.shared.setActivationPolicy(.accessory)
+        if HarnessMenuBarLaunchState.showStatusWindowOnLaunch {
+            HarnessMenuBarLaunchState.statusWindowController?.showWindow()
+        }
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        HarnessMenuBarLaunchState.statusWindowController?.showWindow()
+        return true
     }
 }
 
 @main
+@MainActor
 struct LonghouseMenuBarHarnessMenuBarApp: App {
     @NSApplicationDelegateAdaptor(HarnessMenuBarAppDelegate.self) private var appDelegate
     @StateObject private var store: SnapshotStore
@@ -29,6 +45,12 @@ struct LonghouseMenuBarHarnessMenuBarApp: App {
         self.actionSink = SpyHealthActionSink(logURL: parsed.actionLogURL, uiURL: parsed.uiURL, effectMode: parsed.effectMode)
         let snapshotStore = SnapshotStore(source: parsed.source)
         _store = StateObject(wrappedValue: snapshotStore)
+        HarnessMenuBarLaunchState.statusWindowController = StatusWindowController(
+            store: snapshotStore,
+            actionSink: actionSink,
+            refreshIntervalSeconds: parsed.refreshIntervalSeconds
+        )
+        HarnessMenuBarLaunchState.showStatusWindowOnLaunch = parsed.showStatusWindowOnLaunch
         HarnessAutomationCoordinator.schedule(
             store: snapshotStore,
             actionSink: actionSink,

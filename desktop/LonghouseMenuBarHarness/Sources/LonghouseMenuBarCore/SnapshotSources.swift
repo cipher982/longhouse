@@ -70,6 +70,8 @@ public enum HealthSnapshotDecoder {
 }
 
 public struct HarnessRuntimeConfig {
+    public static let defaultRefreshIntervalSeconds: TimeInterval = 10
+
     public let outputURL: URL?
     public let source: any HealthSnapshotSource
     public let actionLogURL: URL?
@@ -79,6 +81,7 @@ public struct HarnessRuntimeConfig {
     public let quitAfterSeconds: TimeInterval?
     public let refreshIntervalSeconds: TimeInterval?
     public let healthCommand: String?
+    public let showStatusWindowOnLaunch: Bool
 
     public init(
         outputURL: URL?,
@@ -89,7 +92,8 @@ public struct HarnessRuntimeConfig {
         exerciseActions: [HarnessAction],
         quitAfterSeconds: TimeInterval?,
         refreshIntervalSeconds: TimeInterval?,
-        healthCommand: String?
+        healthCommand: String?,
+        showStatusWindowOnLaunch: Bool
     ) {
         self.outputURL = outputURL
         self.source = source
@@ -100,6 +104,7 @@ public struct HarnessRuntimeConfig {
         self.quitAfterSeconds = quitAfterSeconds
         self.refreshIntervalSeconds = refreshIntervalSeconds
         self.healthCommand = healthCommand
+        self.showStatusWindowOnLaunch = showStatusWindowOnLaunch
     }
 
     public static func parse(arguments: [String]) throws -> HarnessRuntimeConfig {
@@ -113,6 +118,7 @@ public struct HarnessRuntimeConfig {
         var quitAfterSeconds: TimeInterval?
         var refreshIntervalSeconds: TimeInterval?
         var healthCommand: String?
+        var explicitLiveMode = false
 
         var index = 0
         while index < arguments.count {
@@ -173,6 +179,7 @@ public struct HarnessRuntimeConfig {
                 quitAfterSeconds = parsed
             case "--live":
                 useLive = true
+                explicitLiveMode = true
             case "--refresh-seconds":
                 index += 1
                 guard index < arguments.count, let parsed = TimeInterval(arguments[index]) else {
@@ -196,6 +203,14 @@ public struct HarnessRuntimeConfig {
             index += 1
         }
 
+        let showStatusWindowOnLaunch = inputURL == nil && !explicitLiveMode
+        if inputURL == nil && !useLive {
+            useLive = true
+        }
+        if useLive && refreshIntervalSeconds == nil {
+            refreshIntervalSeconds = HarnessRuntimeConfig.defaultRefreshIntervalSeconds
+        }
+
         let source: any HealthSnapshotSource
         if let inputURL {
             source = FixtureHealthSnapshotSource(fileURL: inputURL)
@@ -215,7 +230,8 @@ public struct HarnessRuntimeConfig {
             exerciseActions: exerciseActions,
             quitAfterSeconds: quitAfterSeconds,
             refreshIntervalSeconds: refreshIntervalSeconds,
-            healthCommand: healthCommand
+            healthCommand: healthCommand,
+            showStatusWindowOnLaunch: showStatusWindowOnLaunch
         )
     }
 }
