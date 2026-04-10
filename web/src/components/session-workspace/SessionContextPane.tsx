@@ -2,7 +2,6 @@ import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
-import type { SessionTurnReview } from "../../services/api/sessions";
 import {
   formatContinuationStamp,
   formatDuration,
@@ -14,7 +13,6 @@ import {
   truncatePath,
 } from "../../lib/sessionWorkspace";
 import { LoopModeSelector } from "./LoopModeSelector";
-import { TurnReviewCard } from "./TurnReviewCard";
 import { ContinuationsList } from "./ContinuationsList";
 
 interface SessionContextPaneProps {
@@ -32,9 +30,6 @@ interface SessionContextPaneProps {
   } | null;
   loopModePending?: boolean;
   onLoopModeChange?: (nextMode: SessionLoopMode) => void;
-  latestTurnReview?: SessionTurnReview | null;
-  turnReviewLoading?: boolean;
-  turnReviewUnavailable?: boolean;
 }
 
 function MetaRow({ label, value }: { label: string; value: string }) {
@@ -58,9 +53,6 @@ export function SessionContextPane({
   continuationNotice = null,
   loopModePending = false,
   onLoopModeChange,
-  latestTurnReview = null,
-  turnReviewLoading = false,
-  turnReviewUnavailable = false,
 }: SessionContextPaneProps) {
   const interaction = getSessionInteractionCapabilities({
     session,
@@ -203,12 +195,6 @@ export function SessionContextPane({
         onChange={onLoopModeChange}
       />
 
-      {/* Turn review */}
-      <TurnReviewCard
-        review={latestTurnReview}
-        loading={turnReviewLoading}
-        unavailable={turnReviewUnavailable}
-      />
 
       {/* Continuation notice */}
       {continuationNotice ? (

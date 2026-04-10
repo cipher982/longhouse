@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueryClient } from "@tanstack/react-query";
 import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "react-hot-toast";
 import { Button, EmptyState, Spinner } from "../components/ui";
@@ -23,7 +23,6 @@ import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useReadinessFlag } from "../lib/readiness-contract";
-import { fetchSessionTurnTelemetry, type SessionTurnReview } from "../services/api/sessions";
 import { setSessionAction } from "../services/api/agents";
 import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
@@ -111,18 +110,6 @@ function SessionDetailWorkspaceRoute({
     screenshotReady: workspaceReady,
   });
 
-  const turnTelemetryQuery = useQuery({
-    queryKey: ["session-turn-telemetry", session?.id],
-    queryFn: () => fetchSessionTurnTelemetry(session?.id as string),
-    enabled: Boolean(session?.id) && workspaceReady && documentVisible,
-    retry: false,
-    refetchOnWindowFocus: false,
-    staleTime: 60_000,
-  });
-
-  const latestTurnReview: SessionTurnReview | null = turnTelemetryQuery.data?.[0] ?? null;
-  const turnReviewLoading = Boolean(session?.id) && turnTelemetryQuery.isLoading;
-  const turnReviewUnavailable = Boolean(session?.id) && turnTelemetryQuery.isError;
 
   if (sessionLoading) {
     return (
@@ -196,9 +183,6 @@ function SessionDetailWorkspaceRoute({
             continuationNotice={interaction.notice}
             loopModePending={loopModePending}
             onLoopModeChange={handleLoopModeChange}
-            latestTurnReview={latestTurnReview}
-            turnReviewLoading={turnReviewLoading}
-            turnReviewUnavailable={turnReviewUnavailable}
           />
         }
         main={

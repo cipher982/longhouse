@@ -833,76 +833,9 @@ def test_sessions_continue_command_prints_managed_local_acceptance(monkeypatch):
     ]
 
 
-def test_sessions_continue_command_streams_cloud_output(monkeypatch):
-    runner = CliRunner()
-    fake_client = _FakeClient(
-        get_response=_FakeResponse(
-            status_code=200,
-            json_data={
-                "id": "22222222-2222-2222-2222-222222222222",
-                "execution_home": "cloud",
-                "source_runner_id": None,
-                "capabilities": {
-                    "live_control_available": False,
-                },
-            },
-        ),
-        stream_response=_FakeResponse(
-            status_code=200,
-            headers={"content-type": "text/event-stream"},
-            stream_lines=[
-                "event: assistant_delta",
-                'data: {"text":"hello"}',
-                "",
-                "event: assistant_delta",
-                'data: {"text":" world"}',
-                "",
-                "event: done",
-                'data: {"exit_code":0,"persisted_events":2}',
-                "",
-            ],
-        )
-    )
 
-    monkeypatch.setattr(sessions_cli, "get_zerg_url", lambda _config_dir: "https://longhouse.test")
-    monkeypatch.setattr(sessions_cli, "load_token", lambda _config_dir: "zdt_test_token")
-    monkeypatch.setattr(sessions_cli.httpx, "Client", lambda timeout: fake_client)
-    monkeypatch.setenv("LONGHOUSE_MANAGED_SESSION_ID", "11111111-1111-1111-1111-111111111111")
-
-    result = runner.invoke(
-        app,
-        [
-            "continue",
-            "22222222-2222-2222-2222-222222222222",
-            "stream the answer",
-        ],
-    )
-
-    assert result.exit_code == 0, result.output
-    assert "hello world" in result.output
-    assert fake_client.calls == [
-        {
-            "method": "GET",
-            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222",
-            "headers": {
-                "X-Agents-Token": "zdt_test_token",
-                "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",
-            },
-            "params": None,
-        },
-        {
-            "method": "POST",
-            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/branch-cloud",
-            "headers": {
-                "X-Agents-Token": "zdt_test_token",
-                "X-Longhouse-Session-Id": "11111111-1111-1111-1111-111111111111",
-            },
-            "json": {"message": "stream the answer"},
-        }
-    ]
-
-
-def test_sessions_continue_command_does_not_guess_live_send_from_raw_fields(monkeypatch):
+def test_sessions_continue_always_uses_send_live(monkeypatch):
+    """Even without a capabilities dict, continue always routes to send-live."""
     runner = CliRunner()
     fake_client = _FakeClient(
         get_response=_FakeResponse(
@@ -915,12 +848,13 @@ def test_sessions_continue_command_does_not_guess_live_send_from_raw_fields(monk
         ),
         stream_response=_FakeResponse(
             status_code=200,
-            headers={"content-type": "text/event-stream"},
-            stream_lines=[
-                "event: done",
-                'data: {"exit_code":0,"persisted_events":1}',
-                "",
-            ],
+            headers={"content-type": "application/json"},
+            json_data={
+                "accepted": True,
+                "session_id": "22222222-2222-2222-2222-222222222222",
+                "request_id": "req-1",
+                "dispatch_ms": 8.0,
+            },
         ),
     )
 
@@ -939,6 +873,7 @@ def test_sessions_continue_command_does_not_guess_live_send_from_raw_fields(monk
     )
 
     assert result.exit_code == 0, result.output
+    assert "Accepted by session 22222222-2222-2222-2222-222222222222" in result.output
     assert fake_client.calls == [
         {
             "method": "GET",
@@ -948,7 +883,7 @@ def test_sessions_continue_command_does_not_guess_live_send_from_raw_fields(monk
         },
         {
             "method": "POST",
-            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/branch-cloud",
+            "url": "https://longhouse.test/api/agents/sessions/22222222-2222-2222-2222-222222222222/send-live",
             "headers": {"X-Agents-Token": "zdt_test_token"},
             "json": {"message": "follow up without explicit capabilities"},
         },
