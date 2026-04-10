@@ -67,6 +67,14 @@ def _has_launchd() -> bool:
     return sys.platform == "darwin"
 
 
+def _allow_service_install_in_ci() -> bool:
+    """Allow explicit service-manager install in CI when requested."""
+    raw = os.getenv("LONGHOUSE_INSTALL_SERVICES_IN_CI")
+    if not raw:
+        return False
+    return raw.strip().lower() not in {"0", "false", "no"}
+
+
 def _check_server_health(host: str = "127.0.0.1", port: int = 8080, timeout: float = 2.0) -> bool:
     """Check if server is responding to health checks."""
     try:
@@ -525,7 +533,8 @@ def onboard(
         typer.echo("  Skipping session import setup (--no-shipper)")
     else:
         # Check for service manager
-        has_service_manager = not os.getenv("CI") and (_has_launchd() or _has_systemd())
+        ci_service_install = _allow_service_install_in_ci()
+        has_service_manager = (_has_launchd() or _has_systemd()) and (not os.getenv("CI") or ci_service_install)
 
         if has_service_manager:
             if quick or typer.confirm("Finish automatic imports now?", default=True):
@@ -539,7 +548,7 @@ def onboard(
                         "--machine-name",
                         socket.gethostname(),
                     ]
-                    if sys.platform == "darwin" and _has_gui() and not os.getenv("CI"):
+                    if sys.platform == "darwin" and _has_gui() and (not os.getenv("CI") or ci_service_install):
                         connect_args.append("--menubar")
                     else:
                         connect_args.append("--no-menubar")

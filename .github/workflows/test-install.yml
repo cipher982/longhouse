@@ -1,39 +1,15 @@
 name: Installer Validation Ring
 
 on:
-  push:
-    paths:
-      - 'desktop/**'
-      - 'server/**'
-      - 'web/**'
-      - 'config/**'
-      - 'bun.lock'
-      - 'scripts/install.sh'
-      - 'scripts/ci/installer-first-run.sh'
-      - 'scripts/qa/test-local-runtime-packaging.sh'
-      - 'scripts/qa/test-cli-upgrade.sh'
-      - 'scripts/release/**'
-      - 'Makefile'
-      - '.github/workflows/local-runtime-release.yml'
-      - '.github/workflows/test-install.yml'
-  pull_request:
-    paths:
-      - 'desktop/**'
-      - 'server/**'
-      - 'web/**'
-      - 'config/**'
-      - 'bun.lock'
-      - 'scripts/install.sh'
-      - 'scripts/ci/installer-first-run.sh'
-      - 'scripts/qa/test-local-runtime-packaging.sh'
-      - 'scripts/qa/test-cli-upgrade.sh'
-      - 'scripts/release/**'
-      - 'Makefile'
-      - '.github/workflows/local-runtime-release.yml'
-      - '.github/workflows/test-install.yml'
+  push: {}
+  pull_request: {}
   schedule:
     - cron: '11 9 * * *'
   workflow_dispatch: {}
+
+concurrency:
+  group: installer-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   runtime-packaging-macos:
@@ -64,15 +40,13 @@ jobs:
         include:
           - os: ubuntu-latest
             shell_path: /bin/bash
-          - os: ubuntu-22.04
-            shell_path: /bin/bash
+            menubar_smoke: '0'
           - os: macos-latest
             shell_path: /bin/zsh
-          - os: macos-15
-            shell_path: /bin/zsh
+            menubar_smoke: '1'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
-    name: "installer-first-run--${{ matrix.os }}"
+    name: "installer-happy-path--${{ matrix.os }}"
 
     steps:
       - uses: actions/checkout@v6
@@ -99,6 +73,8 @@ jobs:
           bun-version: '1.2.20'
 
       - name: Run disposable installer smoke
+        env:
+          INSTALLER_TEST_MENUBAR: ${{ matrix.menubar_smoke }}
         run: |
           chmod +x scripts/ci/installer-first-run.sh
           ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}"

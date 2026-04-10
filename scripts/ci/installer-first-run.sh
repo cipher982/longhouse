@@ -417,6 +417,8 @@ log "  home: $HOME"
 log "  onboarding port: $PORT"
 log "  demo port: $DEMO_PORT"
 
+EXPECT_SERVICE_INSTALL=0
+
 env_vars=(
   "HOME=$HOME"
   "PATH=$ORIGINAL_PATH"
@@ -443,8 +445,11 @@ if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(uname -s)" == "Darwin" ]]; then
   LONGHOUSE_APP_BUNDLE="$(build_local_health_app_bundle "$APP_BUNDLE_STAGE_DIR")"
   export LONGHOUSE_LOCAL_HEALTH_APP_SOURCE="$LONGHOUSE_APP_BUNDLE"
   export LONGHOUSE_INSTALL_MENUBAR=1
+  export LONGHOUSE_INSTALL_SERVICES_IN_CI=1
   env_vars+=("LONGHOUSE_LOCAL_HEALTH_APP_SOURCE=$LONGHOUSE_APP_BUNDLE")
   env_vars+=("LONGHOUSE_INSTALL_MENUBAR=1")
+  env_vars+=("LONGHOUSE_INSTALL_SERVICES_IN_CI=1")
+  EXPECT_SERVICE_INSTALL=1
 fi
 
 log "📦 Running installer..."
@@ -503,20 +508,21 @@ fi
 rm -f "$ONBOARD_LOG"
 
 log "🔌 Verifying local runtime install..."
-if [[ -n "${CI:-}" ]]; then
-  log "ℹ️  Skipping service-manager status assertion in CI."
-else
+if [[ "$EXPECT_SERVICE_INSTALL" -eq 1 || -z "${CI:-}" ]]; then
   CONNECT_STATUS_LOG="$(mktemp -t longhouse-connect-status.XXXXXX.log)"
   longhouse connect --status | tee "$CONNECT_STATUS_LOG"
   if ! grep -q "Status: running" "$CONNECT_STATUS_LOG"; then
     fail "connect --status did not report a running engine service"
   fi
-  if [[ "$ENABLE_MENUBAR_SMOKE" == "1" ]]; then
-    if [[ "$(grep -c 'Status: running' "$CONNECT_STATUS_LOG")" -lt 2 ]]; then
-      fail "connect --status did not report a running ambient menu bar service"
-    fi
+  if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(grep -c 'Status: running' "$CONNECT_STATUS_LOG")" -lt 2 ]]; then
+    fail "connect --status did not report a running ambient menu bar service"
   fi
   rm -f "$CONNECT_STATUS_LOG"
+  if [[ "$EXPECT_SERVICE_INSTALL" -eq 1 && ! -d "$HOME/Applications/Longhouse.app" ]]; then
+    fail "Longhouse.app was not installed into ~/Applications"
+  fi
+elif [[ -n "${CI:-}" ]]; then
+  log "ℹ️  Skipping service-manager status assertion in CI."
 fi
 
 LOCAL_HEALTH_JSON="$(mktemp -t longhouse-local-health.XXXXXX.json)"

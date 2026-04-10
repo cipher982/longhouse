@@ -156,6 +156,41 @@ def test_onboard_quick_in_ci_skips_service_manager_install(monkeypatch, tmp_path
     assert not any(call[:2] == ["longhouse", "connect"] for call in subprocess_calls)
 
 
+def test_onboard_quick_in_ci_can_install_services_when_explicitly_enabled(monkeypatch, tmp_path):
+    runner = CliRunner()
+    subprocess_calls: list[list[str]] = []
+
+    monkeypatch.setenv("CI", "1")
+    monkeypatch.setenv("LONGHOUSE_INSTALL_SERVICES_IN_CI", "1")
+    monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
+    monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
+    monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)
+    monkeypatch.setattr(onboard_cli, "_is_server_running", lambda: (False, None))
+    monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(onboard_cli, "_emit_test_event", lambda api_url: True)
+    monkeypatch.setattr(onboard_cli, "_has_gui", lambda: True)
+    monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
+    monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
+    monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+
+    def _fake_run(args: list[str], **kwargs):
+        subprocess_calls.append(args)
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(onboard_cli.subprocess, "run", _fake_run)
+
+    result = runner.invoke(app, ["onboard", "--quick"])
+
+    assert result.exit_code == 0, result.output
+    assert "[OK] Automatic imports are set up" in result.output
+    assert any(
+        call[:4] == ["longhouse", "connect", "--install", "--url"]
+        and "--machine-name" in call
+        and "--menubar" in call
+        for call in subprocess_calls
+    )
+
+
 def test_onboard_interactive_stays_focused_on_explicit_launch_paths(monkeypatch, tmp_path):
     runner = CliRunner()
 
