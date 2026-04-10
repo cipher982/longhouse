@@ -120,8 +120,7 @@ class AgentSession(AgentsBase):
     source_runner_name = Column(String(255), nullable=True)
     managed_session_name = Column(String(255), nullable=True)
     loop_mode = Column(String(20), nullable=False, server_default=text(f"'{SessionLoopMode.MANUAL.value}'"))
-    # App-level reference to the per-session loop-controller thread.
-    # This intentionally avoids a cross-metadata SQL FK to the main Thread table.
+    # legacy — loop controller removed, column kept for DB compat
     loop_thread_id = Column(Integer, nullable=True, index=True)
 
     # Reflection tracking — stamped when session has been analyzed by reflection service
@@ -389,7 +388,7 @@ class SessionEmbedding(AgentsBase):
 
 
 class SessionTurnReview(AgentsBase):
-    """Deterministic turn-end loop review for one completed assistant turn."""
+    """Legacy — turn-review pipeline removed. Model kept for DB compat."""
 
     __tablename__ = "session_turn_reviews"
 

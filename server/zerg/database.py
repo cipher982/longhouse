@@ -127,7 +127,6 @@ Base = declarative_base(metadata=_metadata)
 # Import all models at module level to ensure they are registered with Base
 try:
     from zerg.models.agents import SessionEmbedding  # noqa: F401
-    from zerg.models.loop_push_subscription import LoopPushSubscription  # noqa: F401
     from zerg.models.models import Connector  # noqa: F401
     from zerg.models.models import Conversation  # noqa: F401
     from zerg.models.models import ConversationBinding  # noqa: F401
@@ -646,7 +645,7 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("session_presence table migration skipped (table may not exist yet)", exc_info=True)
 
-    # session_turn_reviews table migrations
+    # session_turn_reviews table migrations (legacy — turn-review pipeline removed)
     try:
         with engine.connect() as conn:
             columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turn_reviews)"))}
