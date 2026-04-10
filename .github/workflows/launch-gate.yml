@@ -74,10 +74,10 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Run disposable installer smoke (with browser verification)
+      - name: Run disposable installer smoke (wheel build + browser verification)
         run: |
           chmod +x scripts/ci/installer-first-run.sh
-          ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}" --e2e-browser
+          ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}" --wheel --e2e-browser
 
       - name: Upload browser verification artifacts
         if: failure()

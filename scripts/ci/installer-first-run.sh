@@ -18,6 +18,7 @@ ORIGINAL_PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
 ENABLE_MENUBAR_SMOKE="${INSTALLER_TEST_MENUBAR:-0}"
 REBUILD_FRONTEND="${INSTALLER_TEST_REBUILD_FRONTEND:-0}"
 ENABLE_E2E_BROWSER="${INSTALLER_TEST_E2E_BROWSER:-0}"
+BUILD_WHEEL="${INSTALLER_TEST_WHEEL:-0}"
 
 usage() {
   cat <<'USAGE'
@@ -37,6 +38,7 @@ Options:
   --menubar                   Enable macOS ambient menu bar smoke (heavy; explicit opt-in)
   --rebuild-frontend          Force a fresh web/dist build for local package installs
   --e2e-browser               Run Playwright browser verification after demo seed
+  --wheel                     Build a wheel from server/ and install from it (tests real package)
   --port <port>               Fixed port for onboarding/demo server
   --demo-port <port>          Fixed port for demo server (default: random free port)
   --home <path>               Reuse an existing temp HOME (skip mktemp)
@@ -194,8 +196,8 @@ connect_status_value() {
   local output="$2"
 
   awk -v target="$target" '
-    /^Service: / { section = "service"; next }
-    /^Ambient UI: / { section = "ambient"; next }
+    /^(Service|Machine Agent): / { section = "service"; next }
+    /^(Ambient UI|Desktop App): / { section = "ambient"; next }
     /^Status: / && section == target { print $2; exit }
   ' <<< "$output"
 }
@@ -389,6 +391,10 @@ while [[ $# -gt 0 ]]; do
       ENABLE_E2E_BROWSER=1
       shift
       ;;
+    --wheel)
+      BUILD_WHEEL=1
+      shift
+      ;;
     --port)
       PORT="${2:-}"
       shift 2
@@ -449,15 +455,44 @@ if [[ -z "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" ]]; then
   PACKAGE_SOURCE="$ROOT_DIR/server"
 fi
 
-if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" && -d "$PACKAGE_SOURCE" ]]; then
+if [[ "$BUILD_WHEEL" == "1" && "$INSTALLER_MODE" == "local" ]]; then
+  # Build a wheel from server/ — tests the same artifact real users get from PyPI.
+  # Frontend must be built first so it gets bundled into the wheel.
   ensure_frontend_dist
 
+  require_cmd uv
+  log "📦 Building wheel from server/ ..."
+  (
+    cd "$ROOT_DIR/server"
+    rm -rf dist
+    uv build --wheel --quiet
+  )
+  WHEEL_PATH="$(ls -1 "$ROOT_DIR/server/dist"/longhouse-*.whl 2>/dev/null | head -1)"
+  if [[ -z "$WHEEL_PATH" || ! -f "$WHEEL_PATH" ]]; then
+    fail "Wheel build produced no output in server/dist/"
+  fi
+  log "📦 Built wheel: $(basename "$WHEEL_PATH")"
+  PACKAGE_SOURCE="$WHEEL_PATH"
+fi
+
+if [[ -n "$PACKAGE_SOURCE" && "$INSTALLER_MODE" == "local" && -d "$PACKAGE_SOURCE" ]]; then
+  # Directory source: build frontend for bundling at install time.
+  ensure_frontend_dist
+fi
+
+# Build engine binary if in local mode and it doesn't already exist.
+# The engine is independent of the package source (wheel or directory).
+if [[ "$INSTALLER_MODE" == "local" ]]; then
   if [[ ! -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
-    log "🦀 Building local engine binary for installer validation..."
-    (
-      cd "$ROOT_DIR/engine"
-      cargo_build_release
-    )
+    if command -v cargo >/dev/null 2>&1 || command -v rustup >/dev/null 2>&1; then
+      log "🦀 Building local engine binary for installer validation..."
+      (
+        cd "$ROOT_DIR/engine"
+        cargo_build_release
+      )
+    else
+      log "ℹ️  Rust toolchain not available — skipping engine build"
+    fi
   else
     log "🦀 Reusing existing local engine binary for installer validation..."
   fi
@@ -488,6 +523,7 @@ log "  demo port: $DEMO_PORT"
 log "  menubar smoke: $ENABLE_MENUBAR_SMOKE"
 log "  frontend rebuild: $REBUILD_FRONTEND"
 log "  e2e browser: $ENABLE_E2E_BROWSER"
+log "  wheel install: $BUILD_WHEEL"
 
 EXPECT_SERVICE_INSTALL=0
 
@@ -502,7 +538,7 @@ if [[ -n "$PACKAGE_SOURCE" ]]; then
   env_vars+=("LONGHOUSE_PKG_SOURCE=$PACKAGE_SOURCE")
 fi
 
-if [[ "$INSTALLER_MODE" == "local" ]]; then
+if [[ "$INSTALLER_MODE" == "local" && -x "$ROOT_DIR/engine/target/release/longhouse-engine" ]]; then
   export LONGHOUSE_ENGINE_SOURCE="$ROOT_DIR/engine/target/release/longhouse-engine"
   env_vars+=("LONGHOUSE_ENGINE_SOURCE=$ROOT_DIR/engine/target/release/longhouse-engine")
 fi
