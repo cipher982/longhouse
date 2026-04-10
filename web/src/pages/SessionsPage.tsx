@@ -1006,13 +1006,6 @@ export default function SessionsPage() {
       >
         {runnerActionLabel}
       </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={() => navigate("/briefings")}
-      >
-        Briefings
-      </Button>
     </div>
   );
 

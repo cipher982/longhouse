@@ -26,7 +26,7 @@ const cards: SurfaceCard[] = [
     code: `curl -X POST \\
   -H "X-Agents-Token: $LONGHOUSE_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{"text":"Check that test"}' \\
+  -d '{"message":"Check that test"}' \\
   "$LONGHOUSE_URL/api/agents/sessions/$SESSION_ID/send-live"`,
   },
 ];

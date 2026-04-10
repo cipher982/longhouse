@@ -302,60 +302,6 @@ async def test_reconcile_does_not_open_incident_for_on_demand_runner(tmp_path: P
         db.close()
 
 
-async def test_reconcile_enqueues_one_oikos_wakeup_for_prolonged_offline_runner(tmp_path: Path):
-    db = _make_db(tmp_path)
-    try:
-        now = utc_now_naive()
-        user = User(email="owner@test.local", role="ADMIN")
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-        runner = Runner(
-            owner_id=user.id,
-            name="clifford",
-            auth_secret_hash="hash",
-            capabilities=["exec.full"],
-            status="offline",
-            last_seen_at=now - timedelta(hours=1),
-            runner_metadata={"install_mode": "server", "capabilities": ["exec.full"], "heartbeat_interval_ms": 30000},
-        )
-        db.add(runner)
-        db.commit()
-        db.refresh(runner)
-
-        incident = RunnerHealthIncident(
-            owner_id=user.id,
-            runner_id=runner.id,
-            incident_type="offline",
-            status=OPEN_INCIDENT_STATUS,
-            reason_code="stale_heartbeat",
-            summary="Offline. Last heartbeat 3600s ago.",
-            opened_at=now - timedelta(minutes=31),
-            last_observed_at=now - timedelta(minutes=1),
-            context={},
-        )
-        db.add(incident)
-        db.commit()
-
-        with (
-            patch(
-                "zerg.services.runner_health_reconciler.get_runner_connection_manager",
-                return_value=SimpleNamespace(is_online=lambda owner_id, runner_id: False),
-            ),
-            patch("zerg.services.runner_health_reconciler._send_telegram_alert", AsyncMock(return_value=False)),
-            patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=False),
-        ):
-            result_first = await reconcile_runner_health(db, now=now)
-            result_second = await reconcile_runner_health(db, now=now + timedelta(minutes=1))
-
-        db.refresh(incident)
-
-        # Oikos wakeups removed - test now only verifies incident tracking
-        # No wakeup-related assertions since that functionality is removed
-    finally:
-        db.close()
-
 
 async def test_reconcile_resolves_open_incident_when_runner_returns_online(tmp_path: Path):
     db = _make_db(tmp_path)

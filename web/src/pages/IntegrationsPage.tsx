@@ -153,7 +153,7 @@ export default function IntegrationsPage() {
               <div className="connector-group">
                 <h3>LLM Providers</h3>
                 <p className="section-description">
-                  Configure API keys for AI chat. At least one provider is required for Oikos to work.
+                  Configure API keys for AI features. At least one provider is required for session continuation.
                 </p>
                 <div className="connector-cards">
                   {llmProviders.map((connector) => (

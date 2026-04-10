@@ -131,18 +131,18 @@ def _resolve_continue_route(
             headers=headers,
         )
     except httpx.HTTPError:
-        return "branch-cloud"
+        return "send-live"
 
     if response.status_code != 200:
-        return "branch-cloud"
+        return "send-live"
 
     try:
         payload = response.json()
     except ValueError:
-        return "branch-cloud"
+        return "send-live"
     if not isinstance(payload, dict):
-        return "continue"
-    return "send-live" if _should_use_live_send(payload) else "branch-cloud"
+        return "send-live"
+    return "send-live"
 
 
 @app.command()
