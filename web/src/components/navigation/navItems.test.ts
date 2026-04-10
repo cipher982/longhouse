@@ -13,11 +13,10 @@ describe("getNavItems", () => {
     configState.demoMode = false;
   });
 
-  it("includes loop in the authenticated app navigation", async () => {
+  it("includes core items in the authenticated app navigation", async () => {
     const { getNavItems } = await import("./navItems");
     expect(getNavItems(null)).toEqual([
       { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
-      { label: "Loop", href: "/loop", testId: "global-loop-tab" },
       { label: "Oikos", href: "/chat", testId: "global-chat-tab" },
     ]);
   });
@@ -26,7 +25,6 @@ describe("getNavItems", () => {
     const { getNavItems } = await import("./navItems");
     expect(getNavItems("ADMIN").map((item) => item.href)).toEqual([
       "/timeline",
-      "/loop",
       "/chat",
       "/admin",
     ]);
