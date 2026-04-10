@@ -1,7 +1,7 @@
 {
   "name": "@longhouse/monorepo",
   "version": "1.0.0",
-  "description": "Longhouse: AI agent orchestration platform with Oikos voice/text UI",
+  "description": "Longhouse: mission control for CLI agent sessions",
   "private": true,
   "packageManager": "bun@1.2.20",
   "workspaces": [

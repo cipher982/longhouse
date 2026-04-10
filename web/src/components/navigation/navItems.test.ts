@@ -17,7 +17,7 @@ describe("getNavItems", () => {
     const { getNavItems } = await import("./navItems");
     expect(getNavItems(null)).toEqual([
       { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
-      { label: "Oikos", href: "/chat", testId: "global-chat-tab" },
+      { label: "Chat", href: "/chat", testId: "global-chat-tab" },
     ]);
   });
 

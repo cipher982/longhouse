@@ -163,6 +163,7 @@ def test_onboard_quick_in_ci_can_install_services_when_explicitly_enabled(monkey
 
     monkeypatch.setenv("CI", "1")
     monkeypatch.setenv("LONGHOUSE_INSTALL_SERVICES_IN_CI", "1")
+    monkeypatch.setattr(onboard_cli.sys, "platform", "darwin")
     monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
     monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
     monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)

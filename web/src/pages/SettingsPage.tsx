@@ -38,7 +38,7 @@ interface SettingsFormState {
 const TOOL_DEFINITIONS = [
   { id: "whoop", name: "WHOOP Health Data", desc: "Get WHOOP health metrics and recovery data" },
   { id: "obsidian", name: "Obsidian Notes", desc: "Search and read notes from your Obsidian vault" },
-  { id: "oikos", name: "Oikos", desc: "Delegate complex multi-step tasks to Oikos" },
+  { id: "oikos", name: "Chat Assistant", desc: "Delegate complex multi-step tasks to the chat assistant" },
 ];
 
 function buildToolsState(tools?: UserContext["tools"]): Record<string, boolean> {
@@ -363,11 +363,11 @@ function SettingsForm({
 
         <Card>
           <Card.Header>
-            <h3 className="settings-section-title ui-section-title">Oikos Tools</h3>
+            <h3 className="settings-section-title ui-section-title">Chat Tools</h3>
           </Card.Header>
           <Card.Body>
             <p className="section-description">
-              Enable or disable tools that Oikos can use to help you
+              Enable or disable tools that the chat assistant can use to help you
             </p>
 
             <div className="tools-list">

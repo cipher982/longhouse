@@ -82,7 +82,7 @@ def _print_branch_stream(response: httpx.Response) -> int:
             if saw_text:
                 typer.echo("")
                 saw_text = False
-            typer.secho(str(payload.get("error") or raw_data or "Cloud branch failed"), fg=typer.colors.RED)
+            typer.secho(str(payload.get("error") or raw_data or "Request failed"), fg=typer.colors.RED)
             exit_code = 1
         elif event_name == "done":
             if saw_text:
@@ -386,7 +386,7 @@ def continue_session(
         help="Claude config directory (default: ~/.claude).",
     ),
 ) -> None:
-    """Continue live work or start a cloud branch through the canonical machine-facing route."""
+    """Continue live work through the canonical machine-facing route."""
     config_dir = Path(claude_dir) if claude_dir else None
     base_url, resolved_token = _load_api_credentials(url=url, token=token, config_dir=config_dir)
     resolved_session_id = parse_uuid_or_exit(session_id, label="session_id")

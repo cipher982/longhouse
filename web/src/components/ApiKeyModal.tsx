@@ -39,7 +39,7 @@ export function ApiKeyModal({
 
         <div className="modal-content">
           <p className="api-key-modal__description">
-            To chat with Oikos, you need to configure an LLM API key.
+            To use the chat assistant, you need to configure an LLM API key.
           </p>
 
           <div className="api-key-modal__options">

@@ -384,7 +384,7 @@ export default function TraceExplorerPage() {
     <PageShell size="wide" className="trace-explorer-container">
       <SectionHeader
         title="Trace Explorer"
-        description="Debug Oikos runs, cloud sessions, and LLM calls with unified trace timelines."
+        description="Debug chat runs, session continuations, and LLM calls with unified trace timelines."
       />
 
       {selectedTraceId ? (
@@ -400,7 +400,7 @@ export default function TraceExplorerPage() {
             ) : error ? (
               <EmptyState variant="error" title="Error" description={String(error)} />
             ) : !data || data.traces.length === 0 ? (
-              <EmptyState title="No traces found" description="Traces will appear here once Oikos runs or cloud sessions start running." />
+              <EmptyState title="No traces found" description="Traces will appear here once chat runs or session continuations start running." />
             ) : (
               <>
                 <Table>
