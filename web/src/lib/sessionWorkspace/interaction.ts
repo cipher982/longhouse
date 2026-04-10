@@ -18,7 +18,6 @@ export function getSessionInteractionCapabilities({
   }
   const {
     live_control_available: liveControlAvailable,
-    cloud_branch_available: cloudBranchAvailable,
     host_reattach_available: hostReattachAvailable,
   } = session.capabilities;
   const isManagedLocalSession = liveControlAvailable || hostReattachAvailable;
@@ -28,15 +27,9 @@ export function getSessionInteractionCapabilities({
 
   const mode: SessionInteractionMode = liveControlAvailable
     ? "managed_local"
-    : cloudBranchAvailable
-      ? !isViewingHead
-        ? "branch"
-        : session.continuation_kind === "cloud"
-          ? "head"
-          : "promote"
-      : hostReattachAvailable
-        ? "managed_local_unavailable"
-        : "unsupported";
+    : hostReattachAvailable
+      ? "managed_local_unavailable"
+      : "unsupported";
 
   const submitLabel =
     mode === "managed_local"
@@ -109,9 +102,8 @@ export function getSessionInteractionCapabilities({
     isManagedLocalSession,
     isManagedLocalCodex,
     liveControlAvailable,
-    cloudBranchAvailable,
     hostReattachAvailable,
-    canChatFromBrowser: liveControlAvailable || cloudBranchAvailable,
+    canChatFromBrowser: liveControlAvailable,
     capabilityLabel,
     capabilityVariant,
     capabilitySummary,

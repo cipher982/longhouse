@@ -21,15 +21,13 @@ const cards: SurfaceCard[] = [
     code: "longhouse message TARGET_ID \"Inspect the failing test\"\nlonghouse messages --json",
   },
   {
-    title: "Continue from the API",
-    description: "Start a cloud branch from terminal or call the session API directly.",
-    code: `curl -N \\
-  -X POST \\
+    title: "Control live sessions",
+    description: "Send live messages to running sessions from terminal or API.",
+    code: `curl -X POST \\
   -H "X-Agents-Token: $LONGHOUSE_TOKEN" \\
-  -H "X-Longhouse-Session-Id: $CURRENT_SESSION_ID" \\
   -H "Content-Type: application/json" \\
-  -d '{"message":"Start a cloud branch from this thread and keep going."}' \\
-  "$LONGHOUSE_URL/api/agents/sessions/$SESSION_ID/branch-cloud"`,
+  -d '{"text":"Check that test"}' \\
+  "$LONGHOUSE_URL/api/agents/sessions/$SESSION_ID/send-live"`,
   },
 ];
 

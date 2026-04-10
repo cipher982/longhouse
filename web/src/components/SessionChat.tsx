@@ -1,5 +1,5 @@
 /**
- * SessionChat - Live-send and cloud-branch dock for timeline sessions.
+ * SessionChat - Live-send dock for timeline sessions.
  *
  * Features:
  * - Streaming assistant response via SSE
@@ -74,7 +74,7 @@ interface SessionChatProps {
   requireClickForFirstSend?: boolean;
   keyboardHintText?: string;
   /** Managed-local sessions use explicit live-send with fast JSON ack. */
-  chatMode?: "cloud_branch" | "managed_local";
+  chatMode?: "managed_local";
   composerDisabledReason?: string | null;
 }
 
@@ -112,7 +112,7 @@ export function SessionChat({
   submitLabel = "Send",
   requireClickForFirstSend = false,
   keyboardHintText,
-  chatMode = "cloud_branch",
+  chatMode,
   composerDisabledReason = null,
 }: SessionChatProps) {
   const isDock = layout === "dock";
@@ -356,91 +356,6 @@ export function SessionChat({
     [queryClient, session.id, refreshCurrentSessionWorkspace],
   );
 
-  const handleCloudBranchSend = useCallback(
-    async (message: string) => {
-      const assistantId = `assistant-${Date.now()}`;
-      setMessages((prev) => [
-        ...prev,
-        { id: assistantId, role: "assistant", content: "", timestamp: new Date(), isStreaming: true },
-      ]);
-
-      setIsSubmitting(true);
-      setIsStreaming(true);
-      abortControllerRef.current = new AbortController();
-
-      try {
-        const response = await fetchWithRefresh(buildUrl(`/sessions/${session.id}/branch-cloud`), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message }),
-          credentials: "include",
-          signal: abortControllerRef.current.signal,
-        });
-
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          if (response.status === 409) {
-            const lockData = errorData?.detail?.lock_info;
-            queryClient.setQueryData<SessionLockInfo | null>(["session-lock", session.id], {
-              locked: true,
-              holder: lockData?.holder,
-              time_remaining_seconds: lockData?.time_remaining_seconds,
-              fork_available: lockData?.fork_available,
-            });
-            throw new Error("Session is currently in use by another request");
-          }
-          throw new Error(errorData?.detail || `Request failed: ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error("No response body");
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        const processEvent = ({ eventType, data }: { eventType: string; data: string }) => {
-          try {
-            const parsed = JSON.parse(data);
-            handleSSEEvent(eventType, parsed, assistantId);
-          } catch {
-            // Ignore parse errors
-          }
-        };
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer = consumeSessionChatSseBuffer(
-            buffer,
-            decoder.decode(value, { stream: true }),
-            processEvent,
-          );
-        }
-        buffer = consumeSessionChatSseBuffer(buffer, decoder.decode(), processEvent);
-        flushSessionChatSseBuffer(buffer, processEvent);
-      } catch (e) {
-        if (e instanceof Error && e.name === "AbortError") {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId ? { ...m, content: m.content + "\n\n[Cancelled]", isStreaming: false } : m,
-            ),
-          );
-        } else {
-          setError(e instanceof Error ? e.message : "Unknown error");
-          setMessages((prev) => prev.filter((m) => m.id !== assistantId || m.content.length > 0));
-        }
-      } finally {
-        setIsSubmitting(false);
-        setIsStreaming(false);
-        abortControllerRef.current = null;
-        setMessages((prev) =>
-          prev.map((m) => (m.id === assistantId ? { ...m, isStreaming: false } : m)),
-        );
-      }
-    },
-    [handleSSEEvent, queryClient, session.id],
-  );
-
   const handleSend = useCallback(
     async (e: FormEvent) => {
       e.preventDefault();
@@ -452,20 +367,9 @@ export function SessionChat({
       setError(null);
       setBlockedKeyboardSubmit(false);
 
-      if (!isManagedLocal) {
-        setMessages((prev) => [
-          ...prev,
-          { id: `user-${Date.now()}`, role: "user", content: message, timestamp: new Date() },
-        ]);
-      }
-
-      if (isManagedLocal) {
-        await handleManagedLocalSend(message);
-      } else {
-        await handleCloudBranchSend(message);
-      }
+      await handleManagedLocalSend(message);
     },
-    [draft, isSubmitting, isManagedLocal, handleManagedLocalSend, handleCloudBranchSend, isComposerDisabled],
+    [draft, isSubmitting, handleManagedLocalSend, isComposerDisabled],
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -617,7 +521,7 @@ export function SessionChat({
                 {hintText
                   || (isManagedLocal
                     ? `Longhouse will send your next prompt into the live ${session.provider} session.`
-                    : "Earlier synced turns stay visible here. Your first message starts a new cloud branch from that context.")}
+                    : "Earlier synced turns stay visible here. Your first message continues from that context.")}
               </p>
             </div>
           ) : (
@@ -634,7 +538,7 @@ export function SessionChat({
       >
         {blockedKeyboardSubmit ? (
           <div className="session-chat-confirmation" data-testid="session-chat-explicit-submit-hint">
-            {keyboardHintText || `Click "${submitLabel}" to confirm the first cloud message.`}
+            {keyboardHintText || `Click "${submitLabel}" to confirm.`}
           </div>
         ) : isDock ? null : (
           <div className="session-chat-confirmation session-chat-confirmation--spacer" aria-hidden="true" />

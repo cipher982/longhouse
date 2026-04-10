@@ -8,7 +8,6 @@ import type { SessionTurnReview } from "../../../services/api/oikos";
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
-    cloud_branch_available: false,
     host_reattach_available: false,
     reply_to_live_session_available: false,
     ...overrides,
@@ -148,7 +147,6 @@ describe("SessionContextPane", () => {
           source_runner_name: null,
         },
         capabilities: makeCapabilities({
-          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
@@ -177,7 +175,6 @@ describe("SessionContextPane", () => {
         },
         capabilities: makeCapabilities({
           live_control_available: true,
-          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         }),
@@ -198,9 +195,7 @@ describe("SessionContextPane", () => {
     renderPane({
       session: makeSession({
         provider: "gemini",
-        capabilities: makeCapabilities({
-          cloud_branch_available: false,
-        }),
+        capabilities: makeCapabilities(),
       }),
     });
 
@@ -228,7 +223,6 @@ describe("SessionContextPane", () => {
             "zsh -lc 'cd /tmp/workspace; exec claude --dangerously-skip-permissions --session-id provider-123 --dangerously-load-development-channels server:longhouse-channel'",
         },
         capabilities: makeCapabilities({
-          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
@@ -254,7 +248,6 @@ describe("SessionContextPane", () => {
         },
         capabilities: makeCapabilities({
           live_control_available: true,
-          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         }),
@@ -281,7 +274,6 @@ describe("SessionContextPane", () => {
             "zsh -lc 'cd /tmp/workspace; exec claude --dangerously-skip-permissions --session-id provider-123 --dangerously-load-development-channels server:longhouse-channel'",
         },
         capabilities: makeCapabilities({
-          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
@@ -307,7 +299,6 @@ describe("SessionContextPane", () => {
         },
         capabilities: makeCapabilities({
           live_control_available: true,
-          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         }),

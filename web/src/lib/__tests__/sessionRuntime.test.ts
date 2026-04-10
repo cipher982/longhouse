@@ -37,7 +37,6 @@ describe("resolveSessionRuntimeState", () => {
       makeSession({
         capabilities: {
           live_control_available: false,
-          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: false,
         },

@@ -5,7 +5,7 @@
  * - Left: session context and branch lineage
  * - Center: event timeline transcript
  * - Right: inspector for the selected event
- * - Bottom dock: inline live-session / cloud-branch composer
+ * - Bottom dock: inline live-session composer and session control
  */
 
 import { useCallback, useMemo, useState } from "react";
@@ -261,7 +261,7 @@ function SessionDetailWorkspaceRoute({
                 introEyebrow="Session control"
                 introTitle={interaction.title}
                 introDescription={interaction.description}
-                chatMode={interaction.mode === "managed_local" ? "managed_local" : "cloud_branch"}
+                chatMode={interaction.mode === "managed_local" ? "managed_local" : undefined}
                 composerPlaceholder={interaction.placeholder}
                 composerDisabledReason={interaction.composerDisabledReason}
                 submitLabel={interaction.submitLabel}

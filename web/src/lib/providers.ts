@@ -15,7 +15,6 @@ export type LaunchProviderSupport = {
   statusLabel: string;
   archiveVisibility: "live";
   cloudSessionStart: "live";
-  directWebBranching: "live" | "later";
   hooksSupport: "live" | "none";
   telemetryQuality: "rich" | "structured" | "basic";
 };
@@ -24,11 +23,10 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   claude: {
     id: "claude",
     marketingName: "Claude Code",
-    cardDescription: "Import, search, and direct cloud branching",
+    cardDescription: "Import, search, and live control",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
-    directWebBranching: "live",
     hooksSupport: "live",
     telemetryQuality: "rich",
   },
@@ -39,18 +37,16 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
-    directWebBranching: "later",
     hooksSupport: "none",
     telemetryQuality: "structured",
   },
   gemini: {
     id: "gemini",
     marketingName: "Gemini CLI",
-    cardDescription: "Import and search today; direct cloud branching later",
+    cardDescription: "Import and search today",
     statusLabel: "Live now",
     archiveVisibility: "live",
     cloudSessionStart: "live",
-    directWebBranching: "later",
     hooksSupport: "none",
     telemetryQuality: "basic",
   },
@@ -106,9 +102,4 @@ export function getLaunchProviderSupportList(): LaunchProviderSupport[] {
     LAUNCH_PROVIDER_SUPPORT.codex,
     LAUNCH_PROVIDER_SUPPORT.gemini,
   ];
-}
-
-/** Whether a provider supports direct web branching from synced session context. */
-export function supportsDirectWebBranching(provider: string): boolean {
-  return getLaunchProviderSupport(provider)?.directWebBranching === "live";
 }

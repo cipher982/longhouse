@@ -13,7 +13,6 @@ class SessionCapabilityFlags:
     execution_home: SessionExecutionHome
     managed_transport: ManagedSessionTransport | None
     live_control_available: bool
-    cloud_branch_available: bool
     host_reattach_available: bool
     reply_to_live_session_available: bool
     home_label: str | None
@@ -63,15 +62,6 @@ def supports_live_control(session: AgentSession | None) -> bool:
     )
 
 
-def supports_cloud_branch(session: AgentSession | None) -> bool:
-    """Cloud branching is frozen for launch. Always returns False.
-
-    The underlying code paths remain intact for potential post-launch
-    re-enablement, but the capability gate is off.
-    """
-    return False
-
-
 def supports_host_reattach(session: AgentSession | None) -> bool:
     if session is None:
         return False
@@ -86,7 +76,6 @@ def build_session_capabilities(session: AgentSession | None) -> SessionCapabilit
         execution_home=execution_home,
         managed_transport=managed_transport,
         live_control_available=live_control_available,
-        cloud_branch_available=supports_cloud_branch(session),
         host_reattach_available=supports_host_reattach(session),
         reply_to_live_session_available=live_control_available,
         home_label=_execution_home_label(execution_home),

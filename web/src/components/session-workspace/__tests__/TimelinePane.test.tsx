@@ -8,8 +8,8 @@ const seamItem: TimelineItem = {
   seam: {
     key: "seam:session-cloud:2026-03-19T16:45:00Z",
     sessionId: "session-cloud",
-    label: "Cloud branch begins",
-    description: "Synced Cinder history above. New cloud-branch messages below.",
+    label: "Continuation begins",
+    description: "Synced Cinder history above. New continuation messages below.",
     timestamp: "2026-03-19T16:45:00Z",
   },
 };
@@ -50,8 +50,8 @@ describe("TimelinePane", () => {
     );
 
     expect(screen.getByTestId("session-timeline-seam")).toBeInTheDocument();
-    expect(screen.getByText("Cloud branch begins")).toBeInTheDocument();
-    expect(screen.getByText("Synced Cinder history above. New cloud-branch messages below.")).toBeInTheDocument();
+    expect(screen.getByText("Continuation begins")).toBeInTheDocument();
+    expect(screen.getByText("Synced Cinder history above. New continuation messages below.")).toBeInTheDocument();
     expect(screen.getByText("Paris")).toBeInTheDocument();
   });
 });

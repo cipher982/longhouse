@@ -34,27 +34,6 @@ def _make_session(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
-
-
-def test_build_session_capabilities_infers_cloud_takeover_from_saved_branch_context():
-    session = _make_session(
-        execution_home="legacy",
-        continuation_kind="cloud",
-        origin_label="Cloud",
-        environment="cloud",
-    )
-
-    capabilities = build_session_capabilities(session)
-
-    assert capabilities.execution_home.value == "cloud_takeover"
-    assert capabilities.managed_transport is None
-    assert capabilities.live_control_available is False
-    assert capabilities.cloud_branch_available is False  # frozen for launch
-    assert capabilities.host_reattach_available is False
-    assert capabilities.reply_to_live_session_available is False
-    assert capabilities.home_label is None  # cloud labels hidden for launch
-
-
 def test_build_session_capabilities_marks_native_managed_local_session():
     session = _make_session(
         execution_home="managed_local",
@@ -68,7 +47,6 @@ def test_build_session_capabilities_marks_native_managed_local_session():
     assert capabilities.managed_transport is not None
     assert capabilities.managed_transport.value == "claude_channel_bridge"
     assert capabilities.live_control_available is True
-    assert capabilities.cloud_branch_available is False
     assert capabilities.host_reattach_available is True
     assert capabilities.reply_to_live_session_available is True
     assert capabilities.home_label == "On this Mac"
@@ -87,7 +65,6 @@ def test_build_session_capabilities_drops_legacy_tmux_sessions_out_of_live_contr
     assert capabilities.live_control_available is False
     assert capabilities.host_reattach_available is False
     assert capabilities.reply_to_live_session_available is False
-    assert capabilities.cloud_branch_available is False  # frozen for launch
 
 
 @pytest.mark.asyncio

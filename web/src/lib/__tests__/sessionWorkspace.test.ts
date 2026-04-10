@@ -5,7 +5,6 @@ import type { AgentSession, AgentSessionProjectionItem, SessionCapabilities } fr
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
-    cloud_branch_available: false,
     host_reattach_available: false,
     reply_to_live_session_available: false,
     ...overrides,
@@ -100,7 +99,6 @@ describe("getSessionInteractionCapabilities", () => {
         },
         capabilities: makeCapabilities({
           live_control_available: true,
-          cloud_branch_available: false,
           host_reattach_available: true,
           reply_to_live_session_available: true,
         }),
@@ -126,7 +124,6 @@ describe("getSessionInteractionCapabilities", () => {
           source_runner_name: null,
         },
         capabilities: makeCapabilities({
-          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
@@ -151,7 +148,6 @@ describe("getSessionInteractionCapabilities", () => {
           source_runner_name: null,
         },
         capabilities: makeCapabilities({
-          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
@@ -179,9 +175,7 @@ describe("getSessionInteractionCapabilities", () => {
     const capabilities = getSessionInteractionCapabilities({
       session: makeSession({
         provider: "gemini",
-        capabilities: makeCapabilities({
-          cloud_branch_available: false,
-        }),
+        capabilities: makeCapabilities(),
       }),
     });
 

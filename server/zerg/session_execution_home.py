@@ -13,7 +13,7 @@ class SessionExecutionHome(str, Enum):
     LEGACY = "legacy"
     MANAGED_LOCAL = "managed_local"
     MANAGED_HOSTED = "managed_hosted"
-    CLOUD_TAKEOVER = "cloud_takeover"
+    CLOUD_TAKEOVER = "cloud_takeover"  # legacy — no new sessions use this
 
 
 class ManagedSessionTransport(str, Enum):
