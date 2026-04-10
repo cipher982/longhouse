@@ -192,199 +192,6 @@ test_http_auth() {
     fi
 }
 
-# Test chat sends message and gets AI response
-test_chat() {
-    local name="$1"
-    local cookie_jar="$2"
-    local message="${3:-Reply with the single word OK.}"
-    local timeout_secs="${4:-30}"
-    local expected_regex="${5:-}"
-
-    local msg_id
-    msg_id="$(new_message_id)"
-
-    # Send chat request, capture SSE stream with timeout
-    local response
-    if [[ -n "$TIMEOUT_CMD" ]]; then
-        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -N -X POST "$API_URL/api/oikos/chat" \
-            -b "$cookie_jar" \
-            -H "Content-Type: application/json" \
-            -d "{\"message\": \"$message\", \"message_id\": \"$msg_id\"}" 2>/dev/null) || true
-    else
-        warn "timeout command not found - chat test may hang (install: brew install coreutils)"
-        response=$(curl -s -N -X POST "$API_URL/api/oikos/chat" \
-            -b "$cookie_jar" \
-            -H "Content-Type: application/json" \
-            -d "{\"message\": \"$message\", \"message_id\": \"$msg_id\"}" 2>/dev/null) || true
-    fi
-
-    # Check for completion event (oikos_complete preferred, supervisor_complete legacy)
-    local complete_event=""
-    if echo "$response" | grep -q "event: oikos_complete"; then
-        complete_event="oikos_complete"
-    elif echo "$response" | grep -q "event: supervisor_complete"; then
-        complete_event="supervisor_complete"
-    else
-        fail "$name (no completion event)"
-        return 1
-    fi
-
-    # Extract the data line after completion event
-    local complete_data
-    complete_data=$(echo "$response" | grep -A1 "event: $complete_event" | grep "^data:" | head -1 | sed 's/^data: //')
-
-    if [[ -z "$complete_data" ]]; then
-        fail "$name (no data in $complete_event)"
-        return 1
-    fi
-
-    # Check status is success
-    local status
-    status=$(echo "$complete_data" | jq -r '.payload.status // "unknown"' 2>/dev/null)
-    if [[ "$status" != "success" ]]; then
-        fail "$name (status: $status)"
-        return 1
-    fi
-
-    # Check result is non-empty
-    local result
-    result=$(echo "$complete_data" | jq -r '.payload.result // ""' 2>/dev/null)
-    if [[ -z "$result" ]]; then
-        fail "$name (empty result)"
-        return 1
-    fi
-
-    if [[ -n "$expected_regex" ]]; then
-        if ! echo "$result" | grep -E -i -q "$expected_regex"; then
-            fail "$name (unexpected response)"
-            return 1
-        fi
-    fi
-
-    # Show truncated response
-    local preview="${result:0:50}"
-    [[ ${#result} -gt 50 ]] && preview="${preview}..."
-    pass "$name (\"$preview\")"
-    return 0
-}
-
-# Test voice transcribe + TTS (SSE voice path uses these endpoints)
-test_voice() {
-    local name="$1"
-    local cookie_jar="$2"
-    local timeout_secs="${3:-30}"
-
-    local msg_id
-    msg_id="$(new_message_id)"
-
-    # Create minimal valid WAV file (44-byte header + 1600 bytes of silence = 100ms at 8kHz 16-bit mono)
-    local wav_file
-    wav_file=$(mktemp).wav
-    # WAV header (44 bytes) - 8kHz, 16-bit, mono, 1600 samples
-    printf 'RIFF' > "$wav_file"
-    printf '\x24\x08\x00\x00' >> "$wav_file"  # file size - 8
-    printf 'WAVE' >> "$wav_file"
-    printf 'fmt ' >> "$wav_file"
-    printf '\x10\x00\x00\x00' >> "$wav_file"  # fmt chunk size (16)
-    printf '\x01\x00' >> "$wav_file"          # PCM format
-    printf '\x01\x00' >> "$wav_file"          # 1 channel
-    printf '\x40\x1f\x00\x00' >> "$wav_file"  # 8000 Hz sample rate
-    printf '\x80\x3e\x00\x00' >> "$wav_file"  # byte rate (8000 * 2)
-    printf '\x02\x00' >> "$wav_file"          # block align
-    printf '\x10\x00' >> "$wav_file"          # 16 bits per sample
-    printf 'data' >> "$wav_file"
-    printf '\x40\x06\x00\x00' >> "$wav_file"  # data size (1600)
-    # Silence data (1600 bytes of zeros)
-    dd if=/dev/zero bs=1600 count=1 >> "$wav_file" 2>/dev/null
-
-    # Transcribe request
-    local response
-    if [[ -n "$TIMEOUT_CMD" ]]; then
-        response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/oikos/voice/transcribe" \
-            -b "$cookie_jar" \
-            -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
-            -F "message_id=$msg_id" 2>/dev/null) || true
-    else
-        response=$(curl -s -X POST "$API_URL/api/oikos/voice/transcribe" \
-            -b "$cookie_jar" \
-            -F "audio=@${wav_file};type=audio/wav;filename=sample.wav" \
-            -F "message_id=$msg_id" 2>/dev/null) || true
-    fi
-
-    rm -f "$wav_file"
-
-    if [[ -z "$response" ]]; then
-        fail "$name (no response / timeout)"
-        return 1
-    fi
-
-    # Check message_id passthrough (should work even on error)
-    local returned_msg_id
-    returned_msg_id=$(echo "$response" | jq -r '.message_id // empty' 2>/dev/null)
-    if [[ "$returned_msg_id" != "$msg_id" ]]; then
-        fail "$name (message_id mismatch: expected $msg_id, got $returned_msg_id)"
-        return 1
-    fi
-
-    # Check status - silence may produce "error" status with empty transcription
-    local status
-    status=$(echo "$response" | jq -r '.status // empty' 2>/dev/null)
-    local error_msg
-    error_msg=$(echo "$response" | jq -r '.error // empty' 2>/dev/null)
-
-    local transcript=""
-    if [[ "$status" == "success" ]]; then
-        transcript=$(echo "$response" | jq -r '.transcript // empty' 2>/dev/null)
-        if [[ -z "$transcript" ]]; then
-            fail "$name (empty transcript)"
-            return 1
-        fi
-    elif [[ "$error_msg" == "Empty transcription result" ]] || [[ "$error_msg" == "Audio too short" ]]; then
-        # Expected error with silence - proceed to TTS test
-        transcript="Hello from smoke test"
-    else
-        fail "$name (transcribe status=$status, error=$error_msg)"
-        return 1
-    fi
-
-    # TTS request (independent of transcription success)
-    local tts_payload
-    tts_payload=$(jq -nc --arg text "$transcript" --arg msg_id "$msg_id" '{text:$text, message_id:$msg_id}')
-    local tts_response
-    if [[ -n "$TIMEOUT_CMD" ]]; then
-        tts_response=$($TIMEOUT_CMD "$timeout_secs" curl -s -X POST "$API_URL/api/oikos/voice/tts" \
-            -b "$cookie_jar" \
-            -H "Content-Type: application/json" \
-            -d "$tts_payload" 2>/dev/null) || true
-    else
-        tts_response=$(curl -s -X POST "$API_URL/api/oikos/voice/tts" \
-            -b "$cookie_jar" \
-            -H "Content-Type: application/json" \
-            -d "$tts_payload" 2>/dev/null) || true
-    fi
-
-    if [[ -z "$tts_response" ]]; then
-        fail "$name (no TTS response / timeout)"
-        return 1
-    fi
-
-    local tts_status
-    tts_status=$(echo "$tts_response" | jq -r '.status // empty' 2>/dev/null)
-    local tts_audio
-    tts_audio=$(echo "$tts_response" | jq -r '.tts.audio_base64 // empty' 2>/dev/null)
-    if [[ "$tts_status" != "success" ]] || [[ -z "$tts_audio" ]]; then
-        local tts_error
-        tts_error=$(echo "$tts_response" | jq -r '.error // .tts.error // "unknown"' 2>/dev/null)
-        fail "$name (tts status=$tts_status, error=$tts_error)"
-        return 1
-    fi
-
-    local preview="${transcript:0:30}"
-    [[ ${#transcript} -gt 30 ]] && preview="${preview}..."
-    pass "$name (transcribe+tts ok: \"${preview}\")"
-    return 0
-}
-
 # Test JSON field
 test_json() {
     local name="$1"
@@ -534,14 +341,11 @@ run_cors_checks() {
     fi
 
     run_test test_cors "Auth endpoint" "$API_URL/api/auth/google" "$FRONTEND_URL"
-    run_test test_cors "Oikos endpoint" "$API_URL/api/oikos/chat" "$FRONTEND_URL"
 }
 
 run_auth_gate_checks() {
     run_test test_http "Auth verify (no session)" "$API_URL/api/auth/verify" "401"
     run_test test_http "Users/me (no auth)" "$API_URL/api/users/me" "401"
-    run_test test_http "Oikos bootstrap (no auth)" "$API_URL/api/oikos/bootstrap" "401"
-    run_test test_http "Oikos history (no auth)" "$API_URL/api/oikos/history" "401"
     run_test test_http "Email contacts (no auth)" "$API_URL/api/user/contacts/email" "401"
     run_test test_http "Phone contacts (no auth)" "$API_URL/api/user/contacts/phone" "401"
 }
@@ -783,9 +587,6 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
 
         if lh_hosted_authenticate_cookie_jar "$INSTANCE_SUBDOMAIN" "$COOKIE_JAR"; then
             pass "Hosted login token accepted"
-            run_test test_http_auth "Oikos bootstrap (authed)" "$API_URL/api/oikos/bootstrap" "200" "$COOKIE_JAR"
-            run_test test_http_auth "Oikos history (authed)" "$API_URL/api/oikos/history" "200" "$COOKIE_JAR"
-            run_test test_http_auth "Oikos runs (authed)" "$API_URL/api/oikos/runs?limit=1" "200" "$COOKIE_JAR"
             run_test test_http_auth "User profile (authed)" "$API_URL/api/users/me" "200" "$COOKIE_JAR"
             # Browser-auth smoke must stay on the browser-owned timeline API.
             run_test test_http_auth "Timeline sessions (authed)" "$API_URL$BROWSER_TIMELINE_SESSIONS_PATH" "200" "$COOKIE_JAR"
@@ -795,10 +596,7 @@ if [[ "$INSTANCE_AUTH_ENABLED" == "true" ]]; then
                 if [[ "$llm_available" != "true" ]]; then
                     warn "LLM unavailable (llm_available=$llm_available) - skipping LLM tests"
                 else
-                    section "LLM"
-                    run_test test_chat "Basic chat (2+2)" "$COOKIE_JAR" "What is 2+2? Reply with just the number." 30 '(^|[^0-9])4($|[^0-9])'
-                    run_test test_chat "Basic chat (France capital)" "$COOKIE_JAR" "What is the capital of France? Reply with just the city." 30 '(^|[^A-Za-z])Paris($|[^A-Za-z])'
-                    run_test test_voice "Voice transcribe + TTS" "$COOKIE_JAR" 45
+                    info "LLM available but Oikos chat removed — no chat smoke tests"
                 fi
             else
                 info "LLM test skipped (--no-llm)"
