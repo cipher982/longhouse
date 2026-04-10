@@ -26,9 +26,6 @@
 @import url("./modal.css");
 @import url("./chat.css");
 
-/* Oikos chat (now part of main app) */
-@import url("../oikos/styles/index.css") layer(components);
-
 /* Pages */
 @import url("./profile-admin.css");
 @import url("./admin-ops.css");

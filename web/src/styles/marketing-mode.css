@@ -24,8 +24,7 @@
 
   /* Boost background gradient */
   body.marketing-mode .chat-view-container,
-  body.marketing-mode .chat-main,
-  body.marketing-mode .oikos-chat-view {
+  body.marketing-mode .chat-main {
     background: linear-gradient(
       145deg,
       #0a0f1e 0%,
