@@ -1,13 +1,14 @@
 # Distribution And Update Loop
 
 Status: Active Buildout
-Last updated: 2026-04-08
+Last updated: 2026-04-10
 
 ## Goal
 
-Make Longhouse installation, upgrade, and release behavior explicit across three different surfaces:
+Make Longhouse installation, upgrade, and release behavior explicit across four different surfaces:
 
 - hosted deploys on `zerg`
+- the human-facing macOS app lane
 - the user-installed `longhouse` CLI package
 - the separately installed runner binary/service
 
@@ -15,20 +16,20 @@ The product should never imply that a hosted deploy updates the local CLI, and t
 
 ## Vision
 
-Longhouse should have one obvious zero-to-one local install story:
+Longhouse should have one obvious install story per audience, not one transport forever:
 
-1. run the shell installer
-2. finish guided onboarding
-3. end up with one local runtime, not a bag of separate steps
+1. macOS humans open `Longhouse.app`
+2. agents, Linux users, and power users use the CLI installer lanes
+3. both end up with one coherent local runtime, not a bag of separate steps
 
 For local users, "Longhouse installed" means:
 
 - the `longhouse` CLI is on PATH
 - the engine binary exists locally
-- `connect --install` can lay down the engine service and hooks without extra artifact hunts
-- macOS users can also get the ambient local-health menu bar from the same runtime lane
+- `connect --install` can repair the engine service and hooks without extra artifact hunts
+- macOS users also have a real `Longhouse.app` product surface, not just a helper binary on disk
 
-Homebrew remains a possible secondary channel later. It is not the primary product story now.
+The launch product decision for macOS lives in `docs/specs/macos-launch-product-shape.md`.
 
 ## Current State
 
@@ -88,20 +89,34 @@ This is a different release and update lane from the main `longhouse` CLI packag
 - The package manager that installed the CLI remains the source of truth for upgrades.
 - Longhouse should record enough local install metadata to recommend the correct upgrade command later.
 - Upgrades that affect local hooks or background services must explicitly call out the repair step instead of assuming the package update handled everything.
-- The shell installer is the primary acquisition path until there is a fully bundled desktop app.
-- `longhouse connect --install` is the canonical local-runtime install verb after the CLI is present.
+- `Longhouse.app` must not be a dead end on macOS.
+- `longhouse connect --install` is the canonical local-runtime repair/install verb after the CLI is present.
 - The local runtime must ship as explicit versioned artifacts; the installer may not assume repo-local builds.
-- On macOS, the ambient menu bar helper belongs to the same local-runtime lane as the engine service, not a separate product path.
+- On macOS, the ambient menu bar helper belongs to the same local-runtime lane as the engine service and app bundle, not a separate product path.
+- All acquisition channels must converge on the same runtime state and install metadata.
 
 ## Install Source Policy
 
-### Stable MVP
+### Stable CLI MVP
 
 - Canonical package source: PyPI
 - Canonical package manager path: `uv tool install longhouse`
 - Bootstrap convenience path: `curl -fsSL https://get.longhouse.ai/install.sh | bash`
 
-The shell installer remains the thin bootstrap wrapper around the same package story users will use later for upgrades.
+The shell installer remains the thin bootstrap wrapper around the same package story users will use later for upgrades. Keep this path first-class for agents, Linux users, automation, and power users even after the macOS app path becomes the human default.
+
+### Target macOS human lane
+
+Canonical product shape:
+
+- notarized `Longhouse.app`
+- direct download packaging around the app bundle
+
+Behavior contract:
+
+- opening the app directly must show setup, status, repair, or Longhouse in the browser
+- the app may stay quiet in the menu bar after setup
+- the app should delegate runtime repair to the same CLI/runtime seams instead of inventing a second installer stack
 
 ### Canonical local runtime
 
@@ -116,11 +131,11 @@ That command is responsible for:
 - installing provider hooks
 - installing the ambient macOS `Longhouse.app` helper when enabled
 
-This keeps the local runtime install surface singular even if the shell installer, onboarding flow, and future bundled app all call into it.
+This keeps the local runtime install surface singular even if the shell installer, onboarding flow, app bundle, and future Homebrew lane all call into it.
 
 ### Deferred
 
-- Homebrew tap
+- Homebrew Cask
 - preview channel
 - signed release manifest with min-supported versions
 - fully automatic runner and engine update coordination
@@ -192,7 +207,7 @@ Helper scripts for the attended Apple setup flow:
 - `scripts/release/macos-build-developer-id-p12.sh`
 - `scripts/release/macos-set-github-trust-secrets.sh`
 
-The shell installer should not know asset naming rules itself forever. The long-term goal is that the CLI/runtime layer owns artifact resolution while the shell script stays thin.
+The shell installer should not know asset naming rules itself forever. The long-term goal is that the CLI/runtime layer owns artifact resolution while the shell script stays thin, and the macOS app path should reuse the same runtime layer instead of forking its own artifact logic.
 
 ## Local Install Metadata
 
@@ -319,6 +334,7 @@ The smoke harness should support:
 - Linux VM matrix for systemd behavior
 - macOS VM/runner validation for launchd behavior
 - Docker-based smoke for purely CLI/package flows where launchd/systemd are not required
+- app-first macOS validation on GitHub runners
 
 Docker is acceptable for narrow package-install/update checks, but temp-home host execution should stay the main fast loop because Longhouse also needs real shell/profile/hook behavior.
 
@@ -334,19 +350,24 @@ Implement now:
 - released engine binaries and macOS menu bar binaries
 - `connect --install` as the singular local-runtime repair/install seam
 - installer/onboarding language that describes one runtime, not a second hidden step
+- app-first macOS validation that proves `Longhouse.app` is a usable entry point
 
 ## Success Criteria
 
-- New users have one obvious acquisition path: the shell installer.
+- New users have one obvious acquisition path for their audience:
+  - `Longhouse.app` for macOS humans
+  - shell or `uv` for CLI-first and agent installs
 - Onboarding plus `connect --install` produce one coherent local runtime instead of separate manual engine/menu-bar steps.
-- The ambient macOS menu bar is installed from the same runtime lane as the engine service.
+- Clicking `Longhouse.app` is not a dead end.
+- The ambient macOS menu bar is installed from the same runtime lane as the engine service and app bundle.
 - The local installer smoke validates the real runtime path in a disposable `HOME`.
+- GitHub Actions validates both the CLI-first and app-first happy paths.
 - Future pivot to a bundled macOS app remains a control-adapter swap, not a rewrite of health classification or UI state contracts.
 
 Do not implement yet:
 
 - silent auto-update on startup
-- Homebrew distribution
+- Homebrew Cask distribution
 - npm distribution
 - multi-channel update policy
 - release manifest service

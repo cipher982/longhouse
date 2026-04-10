@@ -16,6 +16,7 @@ This is the north-star document. It is intentionally short. If a proposal confli
 
 - `README.md` for the install and demo loop
 - `docs/specs/agents-machine-surface.md` for the canonical machine-facing contract
+- `docs/specs/macos-launch-product-shape.md` for the macOS launch-product decision
 - `docs/specs/prelaunch-simplification-cut-plan.md` for the launch-pruning order
 
 ## Naming
@@ -53,6 +54,23 @@ That means the product should make these truths obvious:
 - durability comes from launch placement, not magic migration
 - continuing work somewhere else is an explicit handoff, branch, or new launch target, not a hidden teleport
 
+## Acquisition Model
+
+Longhouse launches as one product with multiple acquisition channels:
+
+- macOS humans should learn `Longhouse.app`
+- agents, headless users, and power users should keep the CLI paths
+- hosted remains a later convenience path, not the core truth
+
+All of those channels must converge on the same local runtime story:
+
+- one local server
+- one machine-facing control path
+- one explicit health and repair surface
+- one install metadata record that tells Longhouse how it got there
+
+The product should never make users understand shell bootstrap, launchd, or helper binaries just to answer "is Longhouse installed and healthy here?"
+
 ## Product Invariants
 
 1. **One session, one execution owner.**
@@ -61,11 +79,11 @@ That means the product should make these truths obvious:
 2. **Capability over type.**
    Every item in the timeline is a session. Some have live control, some need host reattach, some are search-only. Do not invent separate species of session in the product story.
 
-3. **CLI and HTTP first.**
-   The machine-facing contract matters more than any wrapper. The browser and Oikos sit on top of the same primitives.
+3. **Machine contract first.**
+   The canonical boundary is the machine-facing contract. CLI, HTTP, the browser, and native desktop wrappers all sit on top of the same primitives.
 
-4. **The web UI is the bundled human view.**
-   Timeline, session detail, and Oikos are part of the product, but the browser is not the system boundary.
+4. **Human surfaces are bundled views, not the boundary.**
+   The browser and native local app are part of the product, but neither should become a separate source of truth.
 
 5. **MCP is an adapter, not the platform boundary.**
    Useful capabilities must make sense without requiring MCP.
@@ -90,6 +108,7 @@ That means the product should make these truths obvious:
 - coordination primitives such as wall, peers, tail, message, and continue
 - runner-backed execution on user-owned machines
 - a bundled human UI over the same machine contract
+- a quiet native macOS app that can stay ambient and still open a clear status or repair path on demand
 
 ## What Longhouse Is Not
 

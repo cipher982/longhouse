@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: local machine surface
-Updated: 2026-04-08
+Updated: 2026-04-10
 
 ## Goal
 
@@ -12,9 +12,10 @@ Keep Longhouse's hot path brutally simple:
 - the Rust engine owns batching, retry, and remote shipping
 - users get an explicit local health surface when shipping is degraded
 
-This document defines the local health plane that sits beside the transport plane. It also defines the modular seam that lets Longhouse ship a lightweight CLI-first MVP now and pivot to a proper macOS menu bar app with app-owned helper management later without rethinking the whole product.
+This document defines the local health plane that sits beside the transport plane. It also defines the modular seam that lets Longhouse keep the CLI and machine surface stable while the macOS product grows from a launchd-managed ambient helper into a proper app-owned local product.
 
 Packaging and release mechanics for that surface live in `docs/specs/distribution-update-loop.md`.
+The macOS product decision lives in `docs/specs/macos-launch-product-shape.md`.
 
 ## Vision
 
@@ -349,12 +350,14 @@ Deliverables:
 
 Goal:
 
-- keep the current launchd-managed runtime path, but package the ambient surface as a real `Longhouse.app`
+- keep the current launchd-managed runtime path, but package the ambient surface as a real `Longhouse.app` that a human can launch directly
 
 Deliverables:
 
 - `Longhouse.app` installs into `~/Applications`
-- launchd launches the app's inner executable for the ambient menu bar surface
+- direct app launch shows a status or repair window instead of failing silently
+- relaunching the app after background install still produces a visible status path
+- launchd launches the app's inner executable for the ambient menu bar surface when Longhouse is running quietly in the background
 - `longhouse local-health menubar` prefers the installed app bundle
 - the window-host binary remains a debug/developer surface, not the primary installed artifact
 
@@ -444,6 +447,8 @@ desktop/LonghouseMenuBarHarness/
 
 The short-term product path should stay thin:
 
+- `Longhouse.app`
+  - native macOS entry point for setup, status, repair, and ambient presence
 - `longhouse local-health`
   - current textual summary / JSON contract
 - `longhouse local-health window`
