@@ -63,8 +63,6 @@ from .models import SourceRewindHintIngest
 
 logger = logging.getLogger(__name__)
 
-_CONTINUATION_KIND_CLOUD = "cloud"
-
 
 class AgentsStore:
     """Service for storing and querying agent sessions."""
@@ -382,30 +380,6 @@ class AgentsStore:
         self.db.add(session)
         self.db.flush()
         return session
-
-    def ensure_cloud_continuation_target(self, session_id: UUID) -> tuple[AgentSession, bool]:
-        session = self.get_session(session_id)
-        if session is None:
-            raise ValueError(f"Session {session_id} not found")
-
-        self._coerce_session_lineage_defaults(session)
-        head = self.get_thread_head(session)
-        if head is None:
-            head = session
-
-        if session.id == head.id and session.continuation_kind == _CONTINUATION_KIND_CLOUD:
-            return session, False
-
-        target = self.create_continuation_session(
-            session.id,
-            continuation_kind=_CONTINUATION_KIND_CLOUD,
-            origin_label="Cloud",
-            environment="Cloud",
-            device_id="zerg-commis-cloud",
-            provider_session_id=session.provider_session_id,
-            branched_from_event_id=self.get_latest_event_id(session.id),
-        )
-        return target, True
 
     def _fts_available(self) -> bool:
         """Return True if FTS5 index exists for agent events (SQLite only)."""

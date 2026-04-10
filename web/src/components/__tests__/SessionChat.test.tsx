@@ -37,36 +37,6 @@ function jsonResponse(body: unknown, status: number = 200): Response {
   });
 }
 
-function sseResponse(events: Array<{ event: string; data: unknown }>): Response {
-  const encoder = new TextEncoder();
-  const payload = events
-    .map(({ event, data }) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
-    .join("");
-
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(payload));
-        controller.close();
-      },
-    }),
-    {
-      status: 200,
-      headers: { "Content-Type": "text/event-stream" },
-    },
-  );
-}
-
-function mockSessionFetches(pathSuffix: string, response: Response) {
-  fetchWithRefreshMock.mockImplementation((url: string) => {
-    if (url.endsWith(pathSuffix)) {
-      return Promise.resolve(response);
-    }
-
-    return Promise.reject(new Error(`Unexpected request: ${url}`));
-  });
-}
-
 function getRequestCallCount(pathSuffix: string) {
   return fetchWithRefreshMock.mock.calls.filter(([url]) => String(url).endsWith(pathSuffix)).length;
 }
@@ -179,233 +149,18 @@ describe("SessionChat", () => {
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
   });
 
-  it("uses explicit cloud-branch empty-state copy instead of resume wording", () => {
+  it("shows empty-state copy instead of resume wording", () => {
     renderSessionChat({
       layout: "panel",
     });
 
     expect(screen.getByText("Start a conversation with this session.")).toBeInTheDocument();
     expect(
-      screen.getByText("Earlier synced turns stay visible here. Your first message starts a new cloud branch from that context."),
+      screen.getByText("Earlier synced turns stay visible here. Your first message continues from that context."),
     ).toBeInTheDocument();
     expect(screen.queryByText(/--resume/i)).not.toBeInTheDocument();
   });
 
-  it("navigates only after persisted continuation events land", async () => {
-    const user = userEvent.setup();
-    const onSessionChanged = vi.fn();
-
-    mockSessionFetches(
-      "/branch-cloud",
-      sseResponse([
-        {
-          event: "assistant_delta",
-          data: { text: "Saved reply", accumulated: "Saved reply" },
-        },
-        {
-          event: "done",
-          data: {
-            session_id: "sess-2",
-            shipped_session_id: "sess-2",
-            created_branch: true,
-            persisted_events: 4,
-            sync_status: "complete",
-            control_status: "completed",
-            exit_code: 0,
-            total_text_length: 10,
-            timestamp: "2026-03-19T16:46:17Z",
-          },
-        },
-      ]),
-    );
-
-    renderSessionChat({ onSessionChanged });
-
-    await user.type(screen.getByRole("textbox"), "Continue in cloud");
-    await user.click(screen.getByRole("button", { name: /send/i }));
-
-    expect(getLastRequestBody("/branch-cloud")).toEqual({
-      message: "Continue in cloud",
-    });
-    await waitFor(() => expect(onSessionChanged).toHaveBeenCalledWith("sess-2", true));
-    expect(screen.queryByText(/could not save the cloud branch transcript/i)).not.toBeInTheDocument();
-  });
-
-  it("keeps a non-error placeholder while managed-local transcript sync is pending", async () => {
-    const user = userEvent.setup();
-    const onSessionChanged = vi.fn();
-
-    mockSessionFetches(
-      "/branch-cloud",
-      sseResponse([
-        {
-          event: "done",
-          data: {
-            session_id: "sess-2",
-            shipped_session_id: "sess-2",
-            created_branch: true,
-            persisted_events: 0,
-            sync_status: "pending",
-            control_status: "completed",
-            exit_code: 0,
-            total_text_length: 0,
-            timestamp: "2026-03-24T12:00:00Z",
-          },
-        },
-      ]),
-    );
-
-    renderSessionChat({ onSessionChanged });
-
-    await user.type(screen.getByRole("textbox"), "Continue in cloud");
-    await user.click(screen.getByRole("button", { name: /send/i }));
-
-    expect(await screen.findByText("Completed locally. Transcript syncing...")).toBeInTheDocument();
-    expect(screen.queryByText(/could not save the cloud branch transcript/i)).not.toBeInTheDocument();
-    expect(onSessionChanged).not.toHaveBeenCalled();
-  });
-
-  it("keeps the inline response visible when persistence fails", async () => {
-    const user = userEvent.setup();
-    const onSessionChanged = vi.fn();
-
-    mockSessionFetches(
-      "/branch-cloud",
-      sseResponse([
-        {
-          event: "assistant_delta",
-          data: { text: "Saved nowhere", accumulated: "Saved nowhere" },
-        },
-        {
-          event: "done",
-          data: {
-            session_id: "sess-2",
-            shipped_session_id: null,
-            created_branch: true,
-            persisted_events: 0,
-            sync_status: "failed",
-            control_status: "completed",
-            persistence_error:
-              "Response completed, but Longhouse could not save the cloud branch transcript to the timeline.",
-            exit_code: 0,
-            total_text_length: 12,
-            timestamp: "2026-03-19T16:46:17Z",
-          },
-        },
-      ]),
-    );
-
-    renderSessionChat({ onSessionChanged });
-
-    await user.type(screen.getByRole("textbox"), "Continue in cloud");
-    await user.click(screen.getByRole("button", { name: /send/i }));
-
-    expect(await screen.findByText("Saved nowhere")).toBeInTheDocument();
-    expect(await screen.findByText(/could not save the cloud branch transcript/i)).toBeInTheDocument();
-    expect(onSessionChanged).not.toHaveBeenCalled();
-  });
-
-  it("does not clear the dock scratchpad until same-session persistence completes", async () => {
-    const user = userEvent.setup();
-    const onSessionChanged = vi.fn();
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
-    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-
-    mockSessionFetches(
-      "/branch-cloud",
-      sseResponse([
-        {
-          event: "done",
-          data: {
-            session_id: "sess-1",
-            shipped_session_id: "sess-1",
-            created_branch: false,
-            persisted_events: 0,
-            sync_status: "pending",
-            control_status: "completed",
-            exit_code: 0,
-            total_text_length: 0,
-            timestamp: "2026-03-24T12:05:00Z",
-          },
-        },
-      ]),
-    );
-
-    renderSessionChat({ onSessionChanged }, { queryClient });
-
-    await user.type(screen.getByRole("textbox"), "tesT: whats 2+2");
-    await user.click(screen.getByRole("button", { name: /send/i }));
-
-    expect(
-      await screen.findByText("Completed locally. Transcript syncing..."),
-    ).toBeInTheDocument();
-    expect(screen.getByText("tesT: whats 2+2")).toBeInTheDocument();
-    expect(invalidateSpy).not.toHaveBeenCalled();
-    expect(onSessionChanged).not.toHaveBeenCalled();
-  });
-
-  it("refreshes the transcript and clears the dock scratchpad after same-session persistence", async () => {
-    const user = userEvent.setup();
-    const onSessionChanged = vi.fn();
-    const queryClient = new QueryClient({
-      defaultOptions: {
-        queries: { retry: false },
-      },
-    });
-    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
-
-    mockSessionFetches(
-      "/branch-cloud",
-      sseResponse([
-        {
-          event: "assistant_delta",
-          data: { text: "4", accumulated: "4" },
-        },
-        {
-          event: "done",
-          data: {
-            session_id: "sess-1",
-            shipped_session_id: "sess-1",
-            created_branch: false,
-            persisted_events: 4,
-            sync_status: "complete",
-            control_status: "completed",
-            exit_code: 0,
-            total_text_length: 1,
-            timestamp: "2026-03-19T16:46:17Z",
-          },
-        },
-      ]),
-    );
-
-    renderSessionChat({ onSessionChanged }, { queryClient });
-
-    await user.type(screen.getByRole("textbox"), "tesT: whats 2+2");
-    await user.click(screen.getByRole("button", { name: /send/i }));
-
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(8));
-    await waitFor(() => {
-      expect(screen.queryByText("tesT: whats 2+2")).not.toBeInTheDocument();
-      expect(screen.queryByText("4")).not.toBeInTheDocument();
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["session-lock", "sess-1"] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session", "sess-1"] });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-thread", "sess-1"] });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["agent-session-projection-infinite", "sess-1"],
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-events", "sess-1"] });
-    expect(invalidateSpy).toHaveBeenCalledWith({
-      queryKey: ["agent-session-events-infinite", "sess-1"],
-    });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-sessions"] });
-    expect(onSessionChanged).not.toHaveBeenCalled();
-  });
 
   it("blocks duplicate input until a managed-local ack arrives, then refreshes all workspace caches", async () => {
     const user = userEvent.setup();
@@ -477,48 +232,33 @@ describe("SessionChat", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["agent-session-workspace", "sess-1"] });
   });
 
-  it("requires an explicit click for the first branching message", async () => {
+  it("requires an explicit click for the first message when configured", async () => {
     const user = userEvent.setup();
+    const deferred = createDeferredResponse();
 
-    mockSessionFetches(
-      "/branch-cloud",
-      sseResponse([
-        {
-          event: "assistant_delta",
-          data: { text: "Saved reply", accumulated: "Saved reply" },
-        },
-        {
-          event: "done",
-          data: {
-            session_id: "sess-2",
-            shipped_session_id: "sess-2",
-            created_branch: true,
-            persisted_events: 4,
-            sync_status: "complete",
-            control_status: "completed",
-            exit_code: 0,
-            total_text_length: 10,
-            timestamp: "2026-03-19T16:46:17Z",
-          },
-        },
-      ]),
-    );
-
-    renderSessionChat({
-      requireClickForFirstSend: true,
-      keyboardHintText: "Click send to start the branch.",
+    fetchWithRefreshMock.mockImplementation((url: string) => {
+      if (url.endsWith("/send-live")) {
+        return deferred.promise;
+      }
+      return Promise.reject(new Error(`Unexpected request: ${url}`));
     });
 
-    await user.type(screen.getByRole("textbox"), "Continue in cloud");
+    renderSessionChat({
+      chatMode: "managed_local",
+      requireClickForFirstSend: true,
+      keyboardHintText: "Click send to confirm.",
+    });
+
+    await user.type(screen.getByRole("textbox"), "Continue locally");
     await user.keyboard("{Enter}");
 
     expect(screen.getByTestId("session-chat-explicit-submit-hint")).toHaveTextContent(
-      "Click send to start the branch.",
+      "Click send to confirm.",
     );
-    expect(getRequestCallCount("/branch-cloud")).toBe(0);
+    expect(getRequestCallCount("/send-live")).toBe(0);
 
     await user.click(screen.getByRole("button", { name: /send/i }));
 
-    await waitFor(() => expect(getRequestCallCount("/branch-cloud")).toBe(1));
+    await waitFor(() => expect(getRequestCallCount("/send-live")).toBe(1));
   });
 });

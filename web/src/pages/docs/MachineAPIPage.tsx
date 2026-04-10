@@ -194,14 +194,6 @@ export default function MachineAPIPage() {
         {`curl -X POST http://localhost:8080/api/agents/messages/MESSAGE_ID/ack`}
       </CodeBlock>
 
-      <h3>Continue a session (cloud branch)</h3>
-      <CodeBlock title="POST /api/agents/sessions/:id/branch-cloud">
-        {`curl -X POST http://localhost:8080/api/agents/sessions/SESSION_ID/branch-cloud \\
-  -H "X-Agents-Token: YOUR_DEVICE_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"prompt": "Continue where this left off"}'`}
-      </CodeBlock>
-
       <h3>Send live message to active session</h3>
       <CodeBlock title="POST /api/agents/sessions/:id/send-live">
         {`curl -X POST http://localhost:8080/api/agents/sessions/SESSION_ID/send-live \\

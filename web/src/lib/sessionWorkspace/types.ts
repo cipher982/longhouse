@@ -80,7 +80,6 @@ export type SessionInteractionCapabilities = {
   isManagedLocalSession: boolean;
   isManagedLocalCodex: boolean;
   liveControlAvailable: boolean;
-  cloudBranchAvailable: boolean;
   hostReattachAvailable: boolean;
   canChatFromBrowser: boolean;
   capabilityLabel: string;

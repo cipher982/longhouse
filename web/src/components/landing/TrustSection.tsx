@@ -28,7 +28,7 @@ const faqs: FAQ[] = [
   },
   {
     question: "What AI coding agents do you support?",
-    answer: "Claude Code currently has the strongest cloud-branch path, hooks, and telemetry. Codex CLI and Gemini CLI already land in the same timeline and machine surface today, but direct cloud branching is not supported there yet. OpenCode and Cursor are coming soon."
+    answer: "Claude Code currently has the strongest hooks, telemetry, and live control. Codex CLI and Gemini CLI already land in the same timeline and machine surface today. OpenCode and Cursor are coming soon."
   }
 ];
 

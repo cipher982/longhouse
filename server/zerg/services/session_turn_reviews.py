@@ -29,7 +29,6 @@ from zerg.services.managed_local_turns import run_best_effort_managed_local_turn
 from zerg.services.oikos_operator_policy import OikosOperatorPolicy
 from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.presence_cache import get_presence_cache
-from zerg.services.session_capabilities import supports_cloud_branch
 from zerg.services.session_capabilities import supports_host_reattach
 from zerg.services.session_capabilities import supports_live_control
 from zerg.services.session_loop_controller import build_loop_controller_payload
@@ -158,17 +157,11 @@ def supports_live_turn_review_continue(session: AgentSession | None) -> bool:
 
 
 def supports_cloud_turn_review_branch(session: AgentSession | None) -> bool:
-    if supports_host_reattach(session):
-        return False
-    return supports_cloud_branch(session)
+    return False
 
 
 def _cloud_branch_backend_for_session(session: AgentSession) -> str | None:
-    if not supports_cloud_turn_review_branch(session):
-        return None
-    # Claude resume on the hosted commis path uses hatch's Claude-compatible
-    # runtime via the z.ai-backed wrapper.
-    return "zai"
+    return None
 
 
 def _load_recent_dialog_messages(

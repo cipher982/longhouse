@@ -436,54 +436,6 @@ def test_managed_local_dispatch_requires_verified_turn_start(monkeypatch, tmp_pa
             assert data["error_code"] == "verification_timeout"
         finally:
             api_app_ref.dependency_overrides = {}
-
-
-def test_managed_local_dispatch_does_not_create_cloud_continuation(monkeypatch, tmp_path):
-    """Managed-local chat must not create cloud branch sessions."""
-    session_local = _make_db(tmp_path)
-
-    with session_local() as db:
-        user, runner = _seed_user_and_runner(db)
-        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
-        client, api_app_ref = _make_client(db, user)
-
-        async def fake_send_text(
-            *,
-            db,
-            owner_id,
-            session,
-            text,
-            commis_id=None,
-            timeout_secs=15,
-            verify_turn_started=False,
-            verification_timeout_secs=None,
-        ):
-            return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
-
-        def fail_cloud_target(*_args, **_kwargs):
-            raise AssertionError("managed_local should not create cloud branches")
-
-        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
-        monkeypatch.setattr(
-            session_chat.AgentsStore,
-            "ensure_cloud_continuation_target",
-            fail_cloud_target,
-        )
-
-        try:
-            response = client.post(
-                f"/api/sessions/{source_session.id}/send-live",
-                json={"message": "continue"},
-            )
-            # If this passes, cloud branching was never attempted
-            assert response.status_code == 200
-            assert response.json()["accepted"] is True
-        finally:
-            asyncio.run(session_lock_manager.release(str(source_session.id)))
-            api_app_ref.dependency_overrides = {}
-
-
 def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path):
     """Successful managed-local dispatch should keep the thread lock until terminal state."""
     session_local = _make_db(tmp_path)

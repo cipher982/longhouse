@@ -59,7 +59,6 @@ const { useTimelineSessionStream: mockUseTimelineSessionStream } = timelineStrea
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
-    cloud_branch_available: false,
     host_reattach_available: false,
     reply_to_live_session_available: false,
     ...overrides,

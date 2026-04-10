@@ -33,8 +33,8 @@ export function IntegrationsSection() {
         <p className="landing-section-label">What Works Today</p>
         <h2 className="landing-section-title">Claude is strongest today.</h2>
         <p className="landing-section-subtitle">
-          Import and search already work across providers. Direct cloud branching is still Claude-first at
-          launch.
+          Import, search, and live control already work across providers. Claude has the deepest
+          integration at launch.
         </p>
 
         <div className="landing-providers-grid">
@@ -57,12 +57,12 @@ export function IntegrationsSection() {
         </div>
 
         <p className="landing-providers-tagline">
-          All providers land in the same timeline today. Direct cloud branching is still Claude-first.
+          All providers land in the same timeline today. Claude has the richest hooks and live control.
         </p>
 
         <p className="landing-providers-tagline landing-providers-tagline--subtle">
           Claude currently has the richest hooks and telemetry. Codex and Gemini are already useful in the
-          timeline and CLI/API surface, but direct web branching is still Claude-first.
+          timeline and CLI/API surface.
         </p>
       </div>
     </section>
