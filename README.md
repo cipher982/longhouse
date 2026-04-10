@@ -228,10 +228,6 @@ longhouse message ...         # Send a durable directed session message
 longhouse recall              # Search and find sessions
 longhouse sessions get ...    # Get session details
 longhouse sessions events ... # Get session events
-longhouse sessions continue ...  # Continue a session
-longhouse continue ...        # Continue a session from the machine surface
-longhouse messages            # Read the durable inbox
-longhouse messages ack ...    # Acknowledge a delivered message
 longhouse auth                # Manage authentication
 longhouse config show         # Show effective configuration
 longhouse status              # Show local runtime status and health
