@@ -4,7 +4,7 @@ Commands:
 - serve: Start the Longhouse server with uvicorn
 - serve --daemon: Start as background daemon
 - serve --stop: Stop running daemon
-- status: Show current server configuration and lite_mode status
+- status: Show local Longhouse health (one-line summary or --verbose detail)
 """
 
 from __future__ import annotations
@@ -469,129 +469,123 @@ def serve(
     )
 
 
+_SEVERITY_COLOR = {
+    "green": typer.colors.GREEN,
+    "yellow": typer.colors.YELLOW,
+    "red": typer.colors.RED,
+    "gray": typer.colors.BRIGHT_BLACK,
+}
+
+_SEVERITY_SYMBOL = {
+    "green": "●",
+    "yellow": "▲",
+    "red": "✖",
+    "gray": "○",
+}
+
+
 @app.command()
 def status(
-    db: Optional[str] = typer.Option(
-        None,
-        "--db",
-        "-d",
-        help="Database URL to check (uses defaults if not set)",
-    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show full detail"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable JSON"),
 ) -> None:
-    """Show Longhouse configuration and status.
+    """Show local Longhouse health.
 
-    Displays the current database configuration, lite_mode status,
-    and other relevant settings without starting the server.
-
-    Shows the *effective* configuration that `longhouse serve` would use,
-    including defaults applied for lite mode.
+    One-line summary by default. Use --verbose for detail or --json for scripts.
+    Exit code 0 = healthy or uninstalled, 1 = needs attention.
     """
-    # Apply the same defaults as serve would
-    if db:
-        os.environ["DATABASE_URL"] = db
-    _apply_lite_mode_defaults()
+    import json as json_mod
 
-    # Now import settings with defaults applied
-    # Use a minimal validation approach - catch errors but don't skip validation
-    try:
-        from zerg.config import get_settings
+    from zerg.services.local_health import collect_local_health
 
-        settings = get_settings()
-    except RuntimeError as e:
-        # Show what's missing without crashing
-        typer.secho("Configuration Issues:", fg=typer.colors.RED)
-        typer.echo(f"  {e}")
+    health = collect_local_health()
+
+    if json_output:
+        typer.echo(json_mod.dumps(health, indent=2))
+        if health["health_state"] in ("broken", "degraded"):
+            raise typer.Exit(code=1)
+        return
+
+    severity = health["severity"]
+    state = health["health_state"]
+    headline = health["headline"]
+    color = _SEVERITY_COLOR.get(severity, typer.colors.WHITE)
+    symbol = _SEVERITY_SYMBOL.get(severity, "?")
+
+    # Target URL for context
+    launch = health.get("launch_readiness") or {}
+    target_url = launch.get("stored_url")
+    machine_name = launch.get("machine_name")
+    suffix_parts = []
+    if machine_name:
+        suffix_parts.append(machine_name)
+    if target_url:
+        suffix_parts.append(f"→ {target_url}")
+    suffix = f"  ({', '.join(suffix_parts)})" if suffix_parts else ""
+
+    typer.secho(f"{symbol} {headline}{suffix}", fg=color)
+
+    if verbose:
         typer.echo("")
-        typer.echo("Run 'longhouse serve' to auto-configure defaults,")
-        typer.echo("or set the missing environment variables.")
-        raise typer.Exit(code=1)
-    except Exception as e:
-        typer.secho(f"Configuration error: {e}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
 
-    # Database info
-    db_url = settings.database_url or "(not set)"
-    is_sqlite = settings.db_is_sqlite
-    lite_mode = settings.lite_mode
+        # Service
+        service = health.get("service") or {}
+        service_status = service.get("status", "unknown")
+        typer.echo(f"  Engine service: {service_status}")
+        if service.get("service_file"):
+            typer.echo(f"  Service file:   {service['service_file']}")
 
-    typer.echo("Longhouse Configuration (effective)")
-    typer.echo("=" * 40)
-    typer.echo("")
-
-    # Database
-    typer.echo("Database:")
-    typer.echo(f"  URL: {_mask_db_url(db_url)}")
-    if is_sqlite:
-        typer.secho("  Mode: lite (SQLite)", fg=typer.colors.CYAN)
-    else:
-        typer.secho("  Mode: full (Postgres)", fg=typer.colors.GREEN)
-
-    # Check if DB file exists (SQLite only)
-    if is_sqlite and db_url.startswith("sqlite:///"):
-        db_path = Path(db_url.replace("sqlite:///", ""))
-        if db_path.exists():
-            size_mb = db_path.stat().st_size / (1024 * 1024)
-            typer.echo(f"  File: {db_path} ({size_mb:.2f} MB)")
+        # Engine status
+        engine = health.get("engine_status") or {}
+        if engine.get("exists"):
+            age = engine.get("age_seconds")
+            age_str = f"{age}s ago" if age is not None else "unknown"
+            typer.echo(f"  Engine status:  {engine['path']} ({age_str})")
+            payload = engine.get("payload") or {}
+            if payload.get("spool_pending_count"):
+                typer.echo(f"  Spool pending:  {payload['spool_pending_count']}")
+            if payload.get("spool_dead_count"):
+                typer.secho(f"  Spool dead:     {payload['spool_dead_count']}", fg=typer.colors.RED)
+            if payload.get("consecutive_ship_failures"):
+                typer.secho(f"  Ship failures:  {payload['consecutive_ship_failures']}", fg=typer.colors.YELLOW)
         else:
-            typer.echo(f"  File: {db_path} (will be created)")
+            typer.echo(f"  Engine status:  not found ({engine.get('path', '~/.claude/engine-status.json')})")
 
-    typer.echo("")
+        # Outbox
+        outbox = health.get("outbox") or {}
+        count = outbox.get("file_count", 0)
+        if count > 0:
+            oldest = outbox.get("oldest_age_seconds")
+            oldest_str = f", oldest {oldest}s" if oldest is not None else ""
+            typer.echo(f"  Outbox:         {count} files{oldest_str}")
 
-    # Features
-    typer.echo("Features:")
-    typer.echo(f"  Auth: {'disabled' if settings.auth_disabled else 'enabled'}")
-    typer.echo(f"  Single tenant: {'yes' if settings.single_tenant else 'no'}")
-    typer.echo(f"  LLM available: {'yes' if settings.llm_available else 'no (set OPENROUTER_API_KEY or OPENAI_API_KEY)'}")
-    typer.echo(f"  Job queue: {'enabled' if settings.job_queue_enabled else 'disabled'}")
+        # Runner
+        runner = launch.get("runner") or {}
+        if runner.get("exists"):
+            runner_name = runner.get("runner_name") or "(unnamed)"
+            typer.echo(f"  Runner:         {runner_name} ({runner.get('path')})")
 
-    typer.echo("")
+        # Reasons and actions
+        reasons = health.get("reasons") or []
+        actions = health.get("suggested_actions") or []
+        if reasons:
+            typer.echo("")
+            typer.echo("  Issues:")
+            for reason in reasons:
+                typer.echo(f"    - {reason}")
+        if actions:
+            typer.echo("")
+            typer.echo("  Suggested:")
+            for action in actions:
+                typer.echo(f"    {action}")
 
-    # Secrets status (don't show values)
-    typer.echo("Secrets:")
-    fernet_set = bool(settings.fernet_secret)
-    jwt_set = settings.jwt_secret not in ("", "dev-secret")
-    typer.echo(f"  FERNET_SECRET: {'set' if fernet_set else 'not set'}")
-    typer.echo(f"  JWT_SECRET: {'set' if jwt_set else 'using default (dev only)'}")
+    elif state in ("broken", "degraded"):
+        actions = health.get("suggested_actions") or []
+        if actions:
+            typer.echo(f"  → {actions[0]}")
 
-    typer.echo("")
-
-    # Paths (only show if they exist to avoid side effects)
-    typer.echo("Paths:")
-    longhouse_home = _get_longhouse_home()
-    typer.echo(f"  Config: {longhouse_home}")
-    typer.echo(f"  Workspace: {settings.oikos_workspace_path}")
-
-    typer.echo("")
-
-    # Frontend status
-    typer.echo("Frontend:")
-    try:
-        from zerg.main import FRONTEND_DIST_DIR
-        from zerg.main import FRONTEND_SOURCE
-
-        if FRONTEND_DIST_DIR is not None:
-            if FRONTEND_SOURCE == "bundled":
-                typer.secho("  Source: bundled (pip install)", fg=typer.colors.GREEN)
-            elif FRONTEND_SOURCE == "docker":
-                typer.secho("  Source: docker", fg=typer.colors.GREEN)
-            else:
-                typer.secho("  Source: local (development)", fg=typer.colors.CYAN)
-            typer.echo(f"  Path: {FRONTEND_DIST_DIR}")
-        else:
-            typer.secho("  Source: not found", fg=typer.colors.YELLOW)
-            typer.echo("  (Build frontend or install from pip)")
-    except ImportError:
-        typer.secho("  Source: unknown (import error)", fg=typer.colors.YELLOW)
-
-    typer.echo("")
-
-    # SQLite limitations in lite mode
-    if lite_mode:
-        typer.echo("Lite Mode Limitations:")
-        typer.echo("  - Single-process only (no FOR UPDATE SKIP LOCKED)")
-        typer.echo("  - Memory checkpoints (state lost on restart)")
-        typer.echo("  - No parallel job claiming")
-        typer.secho("  Run with Postgres for full functionality", fg=typer.colors.YELLOW)
+    if state in ("broken", "degraded"):
+        raise typer.Exit(code=1)
 
 
 # Export for main.py
