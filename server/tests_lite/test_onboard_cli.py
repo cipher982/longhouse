@@ -159,6 +159,7 @@ def test_onboard_quick_in_ci_skips_service_manager_install(monkeypatch, tmp_path
 def test_onboard_quick_in_ci_can_install_services_when_explicitly_enabled(monkeypatch, tmp_path):
     runner = CliRunner()
     subprocess_calls: list[list[str]] = []
+    open_calls: list[str] = []
 
     monkeypatch.setenv("CI", "1")
     monkeypatch.setenv("LONGHOUSE_INSTALL_SERVICES_IN_CI", "1")
@@ -172,6 +173,7 @@ def test_onboard_quick_in_ci_can_install_services_when_explicitly_enabled(monkey
     monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli.webbrowser, "open", lambda url: open_calls.append(url) or True)
 
     def _fake_run(args: list[str], **kwargs):
         subprocess_calls.append(args)
@@ -189,6 +191,7 @@ def test_onboard_quick_in_ci_can_install_services_when_explicitly_enabled(monkey
         and "--menubar" in call
         for call in subprocess_calls
     )
+    assert open_calls == ["http://127.0.0.1:8080"]
 
 
 def test_onboard_interactive_stays_focused_on_explicit_launch_paths(monkeypatch, tmp_path):
