@@ -27,6 +27,33 @@ Skills-Dir: .agents/skills
 - **Design for cold restarts.** Durable state and reconstructable context beat giant hot threads.
 - **Work on `main`.** Make atomic commits. Do not stash unrelated work.
 
+## System Map
+
+Use these nouns consistently. Do not say just "the daemon" without clarifying which one.
+
+- **Control Plane**: hosted-only signup, billing, and provisioning. Never part of the self-hosted local install.
+- **Runtime Host**: the main Longhouse backend product runtime: FastAPI API, bundled web UI, and database-backed state. In self-host mode this is what `longhouse serve` runs. In hosted mode we run it for the user.
+- **Machine Agent**: the Rust engine (`longhouse-engine`). It drains local hook outbox files, ships events, retries spool, writes `~/.claude/engine-status.json`, and emits heartbeats. It is the shipping path.
+- **Desktop App**: macOS `Longhouse.app`. Native local status/setup/repair/menu bar surface. It is not the Runtime Host and not the Machine Agent.
+- **Runner**: optional WebSocket command executor for remote execution on user-owned machines.
+- **CLI / Package Layer**: the current delivery and orchestration layer. PyPI `longhouse` installs the CLI plus Runtime Host entrypoint and manages Machine Agent/Desktop App installation. Treat this as first-class for agents and power users, but not the desired human product boundary.
+
+## Install Matrix
+
+- **Self-hosted single-machine Mac**: install one Longhouse product that currently resolves to `Runtime Host + Machine Agent + Desktop App`.
+- **Hosted paid plan**: our infra runs `Control Plane + Runtime Host`; the user machine should only need `Machine Agent + Desktop App`.
+- **Agent/headless/power-user installs**: `uv`, PyPI, and shell bootstrap remain supported and should converge on the same runtime state as the app-first path.
+- **Mac human happy path**: `Longhouse.app`.
+- **Agent happy path**: `uv tool install longhouse`, PyPI, or `curl | bash`.
+- **Canonical repair seam**: `longhouse connect --install`.
+
+Boundary rules:
+
+- The Runtime Host is optional on the user's machine only in the hosted plan.
+- The Machine Agent is a separate component from the Runtime Host even when one installer lays both down.
+- The Desktop App must never become a dead wrapper around hidden CLI assumptions.
+- Refactors should simplify toward one runtime story per audience, not add more install modes.
+
 ## Communication
 
 - Treat David as the PM and speak like the lead dev.
@@ -44,6 +71,8 @@ Skills-Dir: .agents/skills
 ## Read Next
 
 - `VISION.md`
+- `docs/specs/macos-launch-product-shape.md`
+- `docs/specs/distribution-update-loop.md`
 - `docs/specs/agents-machine-surface.md`
 - `docs/specs/prelaunch-simplification-cut-plan.md`
 - `README.md`
