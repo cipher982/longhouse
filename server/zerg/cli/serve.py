@@ -355,10 +355,14 @@ def serve(
         if demo_fresh and demo_db_path.exists():
             demo_db_path.unlink()
 
+        # Set DATABASE_URL before _build_demo_db so that any module-level
+        # engine initialisation triggered by the import chain picks up the
+        # demo database, not the default longhouse.db.
+        os.environ["DATABASE_URL"] = f"sqlite:///{demo_db_path}"
+
         if not demo_db_path.exists():
             typer.echo("Building demo database with sample data...")
             _build_demo_db(demo_db_path)
-        os.environ["DATABASE_URL"] = f"sqlite:///{demo_db_path}"
         typer.secho("Demo mode: using sample data", fg=typer.colors.CYAN)
         typer.echo("")
     elif db:

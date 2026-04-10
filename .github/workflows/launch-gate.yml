@@ -74,10 +74,18 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Run disposable installer smoke
+      - name: Run disposable installer smoke (with browser verification)
         run: |
           chmod +x scripts/ci/installer-first-run.sh
-          ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}"
+          ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}" --e2e-browser
+
+      - name: Upload browser verification artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer-browser-verify-${{ matrix.os }}
+          if-no-files-found: ignore
+          path: /tmp/installer-browser-verify-failure.png
 
   onboarding-funnel:
     runs-on: ubuntu-latest

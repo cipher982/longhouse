@@ -17,6 +17,7 @@ INSTALLER_TMP=""
 ORIGINAL_PATH="${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}"
 ENABLE_MENUBAR_SMOKE="${INSTALLER_TEST_MENUBAR:-0}"
 REBUILD_FRONTEND="${INSTALLER_TEST_REBUILD_FRONTEND:-0}"
+ENABLE_E2E_BROWSER="${INSTALLER_TEST_E2E_BROWSER:-0}"
 
 usage() {
   cat <<'USAGE'
@@ -35,6 +36,7 @@ Options:
   --shell <path>              Shell to simulate for PATH/profile checks (default: $SHELL)
   --menubar                   Enable macOS ambient menu bar smoke (heavy; explicit opt-in)
   --rebuild-frontend          Force a fresh web/dist build for local package installs
+  --e2e-browser               Run Playwright browser verification after demo seed
   --port <port>               Fixed port for onboarding/demo server
   --demo-port <port>          Fixed port for demo server (default: random free port)
   --home <path>               Reuse an existing temp HOME (skip mktemp)
@@ -383,6 +385,10 @@ while [[ $# -gt 0 ]]; do
       REBUILD_FRONTEND=1
       shift
       ;;
+    --e2e-browser)
+      ENABLE_E2E_BROWSER=1
+      shift
+      ;;
     --port)
       PORT="${2:-}"
       shift 2
@@ -481,6 +487,7 @@ log "  onboarding port: $PORT"
 log "  demo port: $DEMO_PORT"
 log "  menubar smoke: $ENABLE_MENUBAR_SMOKE"
 log "  frontend rebuild: $REBUILD_FRONTEND"
+log "  e2e browser: $ENABLE_E2E_BROWSER"
 
 EXPECT_SERVICE_INSTALL=0
 
@@ -620,7 +627,11 @@ if ! wait_for_down "http://127.0.0.1:${RUNTIME_PORT}/api/readyz" "Onboarded loca
 fi
 
 log "🎭 Starting demo server..."
-longhouse serve --demo-fresh --host 127.0.0.1 --port "$DEMO_PORT" --daemon
+if [[ "$ENABLE_E2E_BROWSER" == "1" ]]; then
+  AUTH_DISABLED=1 longhouse serve --demo-fresh --host 127.0.0.1 --port "$DEMO_PORT" --daemon
+else
+  longhouse serve --demo-fresh --host 127.0.0.1 --port "$DEMO_PORT" --daemon
+fi
 
 if ! wait_for_health "http://127.0.0.1:${DEMO_PORT}/api/readyz" "Demo server"; then
   fail "Demo server did not become ready"
@@ -656,6 +667,20 @@ if sessions is None:
     raise SystemExit("sessions payload missing 'sessions'")
 PY
 rm -f "$SESSIONS_JSON"
+
+if [[ "$ENABLE_E2E_BROWSER" == "1" ]]; then
+  log "🎭 Running browser E2E verification..."
+  if ! command -v bunx >/dev/null 2>&1; then
+    fail "bunx not found — required for --e2e-browser"
+  fi
+  if ! (cd "$ROOT_DIR/e2e" && bunx playwright install --with-deps chromium 2>/dev/null); then
+    fail "Failed to install Playwright chromium"
+  fi
+  if ! (cd "$ROOT_DIR" && bunx tsx e2e/scripts/verify-installer-browser.ts --url "http://127.0.0.1:${DEMO_PORT}"); then
+    fail "Browser verification failed: timeline did not render demo sessions"
+  fi
+  log "✅ Browser E2E verification passed"
+fi
 
 log "🛑 Stopping demo server..."
 longhouse serve --stop
