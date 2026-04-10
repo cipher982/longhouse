@@ -8,7 +8,7 @@ A session stays the same object either way. Longhouse in the launch path changes
 
 Works on your laptop. Shines on a machine that stays on.
 
-Self-host free on the machine where work should live, or use hosted beta later when you want the convenience path. Claude is the strongest continuation path today; Codex and Gemini are searchable and inspectable today.
+Self-host free on the machine where work should live, or use hosted beta later when you want us to run the Longhouse runtime for you. Claude is the strongest continuation path today; Codex and Gemini are searchable and inspectable today.
 
 ## Demo
 
@@ -21,7 +21,7 @@ Video walkthrough coming soon. In the meantime, the first run is simple:
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-The installer runs guided onboarding, starts Longhouse locally, and on macOS installs the menu bar app for local status. Open `http://localhost:8080` and find one prior session.
+The installer runs guided onboarding, starts the local Longhouse runtime, sets up the background machine agent when supported, and on macOS installs `Longhouse.app` for local status. Open `http://localhost:8080` and find one prior session.
 
 When you want control after launch:
 
@@ -54,8 +54,8 @@ curl -fsSL https://get.longhouse.ai/install.sh | bash
 
 Open `http://localhost:8080`.
 
-The installer installs the `longhouse` CLI, runs `longhouse onboard` automatically, and on macOS adds Longhouse to your menu bar.
-The menu bar app is the local health surface on macOS.
+The installer installs the `longhouse` CLI/runtime package, runs `longhouse onboard` automatically, starts the local runtime, and sets up the background machine agent for automatic imports when supported.
+On macOS it also installs `Longhouse.app`, which lives in the menu bar for local status and repair.
 
 When you want a control-ready session, start it explicitly through Longhouse:
 
@@ -79,11 +79,11 @@ longhouse serve --demo
 3. Find one prior session in the timeline.
 4. Start `longhouse claude` or `longhouse codex` when you want control after launch.
 
-On macOS, Longhouse also lives in your menu bar.
+On macOS, `Longhouse.app` also lives in your menu bar.
 
 ### Hosted beta (later)
 
-Sign up at https://longhouse.ai when you want the convenience path. Hosted beta is "we run the box" for you; the free first-run path is still the self-hosted installer above, and it is the recommended way to understand the product loop first.
+Sign up at https://longhouse.ai when you want the convenience path. Hosted beta means Longhouse runs the runtime for you; the free first-run path is still the self-hosted installer above, and it is the recommended way to understand the product loop first.
 
 ## Features
 
@@ -104,7 +104,7 @@ Sign up at https://longhouse.ai when you want the convenience path. Hosted beta 
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-The installer installs the `longhouse` CLI, runs guided onboarding so Longhouse is ready to open right away, and on macOS adds the Longhouse menu bar app. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
+The installer installs the `longhouse` CLI/runtime package, runs guided onboarding so the local runtime is ready to open right away, sets up the background machine agent for automatic imports when supported, and on macOS installs `Longhouse.app`. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
 
 Stable installs use `uv` with the published `longhouse` package, so normal CLI upgrades stay on the same path:
 
@@ -127,8 +127,10 @@ uv tool install longhouse
 longhouse onboard
 ```
 
+This installs the same CLI/runtime package. `longhouse onboard` then starts the local runtime and sets up the background machine agent on supported systems.
+
 ### 2. Hosted beta (later)
-Get started at https://longhouse.ai when you want the hosted convenience path. Keep the self-hosted installer as the primary free wedge for first use, demos, and durable machine setups.
+Get started at https://longhouse.ai when you want the hosted convenience path. Hosted Longhouse runs the runtime for you; keep the self-hosted installer as the primary free wedge for first use, demos, and durable machine setups.
 
 ### 3. Advanced / contributor paths
 
@@ -213,11 +215,11 @@ PY
 ## Commands
 
 ```bash
-longhouse serve      # Start the server
+longhouse serve      # Start the local runtime
 longhouse serve --demo        # Start with sample data
 longhouse serve --demo-fresh  # Rebuild demo data on start
-longhouse connect             # Run the shipper/watch process in foreground
-longhouse connect --install   # Install hooks + background engine service
+longhouse connect             # Run the machine agent in foreground
+longhouse connect --install   # Install hooks + background machine agent
 longhouse ship                # One-time import pass
 longhouse wall --json         # Read raw coordination signals
 longhouse peers --json        # Find nearby live peer sessions
@@ -232,7 +234,7 @@ longhouse messages            # Read the durable inbox
 longhouse messages ack ...    # Acknowledge a delivered message
 longhouse auth                # Manage authentication
 longhouse config show         # Show effective configuration
-longhouse status              # Show server status and health
+longhouse status              # Show local runtime status and health
 longhouse version --check     # Check whether a CLI update is available
 longhouse upgrade             # Upgrade the installed CLI
 longhouse doctor              # Self-diagnosis
@@ -266,7 +268,7 @@ Run `longhouse doctor` to verify everything is working.
 
 ### Claude Code not found when installing hooks
 
-Claude Code must be installed separately. `longhouse connect --install` will set up shipping hooks for Claude Code and Codex when those CLIs are present.
+Claude Code must be installed separately. `longhouse connect --install` will install the machine agent and CLI hooks for Claude Code and Codex when those CLIs are present.
 
 ```bash
 # Check if claude is reachable
@@ -276,7 +278,7 @@ which claude
 export PATH="/path/to/claude/bin:$PATH"
 ```
 
-### Server won't start (port in use)
+### Local runtime won't start (port in use)
 
 ```bash
 # Find what's using the port
@@ -289,7 +291,7 @@ longhouse serve --port 8081
 ### Hooks not firing / sessions not shipping
 
 ```bash
-# Check shipper status
+# Check machine-agent status
 longhouse connect --status
 
 # Check doctor for full diagnosis
@@ -299,7 +301,7 @@ longhouse doctor
 longhouse ship --verbose
 ```
 
-`longhouse connect --install` sets up shipping and hooks only. It does not modify your normal global Claude/Codex MCP tool menus.
+`longhouse connect --install` sets up the machine agent and CLI hooks only. It does not modify your normal global Claude/Codex MCP tool menus.
 
 ### Reinstalling or upgrading
 

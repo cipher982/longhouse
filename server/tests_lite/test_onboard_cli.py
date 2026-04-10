@@ -110,8 +110,8 @@ def test_onboard_quick_without_cli_seeds_demo_sessions(monkeypatch, tmp_path):
 
     assert result.exit_code == 0, result.output
     assert "No supported AI CLI found" in result.output
-    assert "You can still set up the server now and connect a CLI later." in result.output
-    assert "[OK] Automatic imports are set up" in result.output
+    assert "You can still set up the local runtime now and connect a CLI later." in result.output
+    assert "[OK] Machine agent installed for automatic imports" in result.output
     assert "No supported CLI found yet, so Longhouse skipped the initial import." in result.output
     assert "Seeding demo sessions..." in result.output
     assert "[OK] Seeded 7 demo sessions" in result.output
@@ -150,7 +150,7 @@ def test_onboard_quick_in_ci_skips_service_manager_install(monkeypatch, tmp_path
     result = runner.invoke(app, ["onboard", "--quick"])
 
     assert result.exit_code == 0, result.output
-    assert "[--] Automatic background imports are not available in this environment" in result.output
+    assert "[--] Background machine-agent install is not available in this environment" in result.output
     assert "Use: longhouse connect" in result.output
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
     assert not any(call[:2] == ["longhouse", "connect"] for call in subprocess_calls)
@@ -182,7 +182,7 @@ def test_onboard_quick_in_ci_can_install_services_when_explicitly_enabled(monkey
     result = runner.invoke(app, ["onboard", "--quick"])
 
     assert result.exit_code == 0, result.output
-    assert "[OK] Automatic imports are set up" in result.output
+    assert "[OK] Machine agent installed for automatic imports" in result.output
     assert any(
         call[:4] == ["longhouse", "connect", "--install", "--url"]
         and "--machine-name" in call

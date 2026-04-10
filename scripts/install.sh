@@ -463,7 +463,7 @@ print_success() {
     echo ""
     if [[ "$ONBOARD_RESULT" == "completed" ]]; then
         echo "First run:"
-        echo "  1. Open http://localhost:8080 (the installer already started Longhouse)"
+        echo "  1. Open http://localhost:8080 (the installer already started the Longhouse local runtime)"
         echo "  2. Find one prior session in the timeline"
     else
         echo "Next:"
@@ -481,9 +481,9 @@ print_success() {
         echo ""
         echo "macOS:"
         if [[ "$ONBOARD_RESULT" == "completed" ]]; then
-            echo "  Look for Longhouse in the menu bar for local status."
+            echo "  Look for Longhouse.app in the menu bar for local machine status."
         else
-            echo "  The menu bar app is installed during onboarding."
+            echo "  Longhouse.app is installed during onboarding."
         fi
     fi
     if [[ "$has_launcher_cli" == "1" ]]; then
@@ -494,9 +494,9 @@ print_success() {
     echo ""
     echo "Repair tools (only if you need them later):"
     echo "  longhouse doctor            Diagnose local setup issues"
-    echo "  longhouse connect --install Repair onboarding and automatic imports"
+    echo "  longhouse connect --install Repair the machine agent, desktop app, and automatic imports"
     if [[ "$is_macos" == "1" ]]; then
-        echo "  longhouse local-health      Check the same local status from the CLI"
+        echo "  longhouse local-health      Check the same local machine status from the CLI"
     fi
     echo ""
     echo "Advanced:"

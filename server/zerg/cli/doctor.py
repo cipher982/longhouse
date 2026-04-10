@@ -211,7 +211,7 @@ def _check_install(*, check_updates: bool = False) -> list[CheckResult]:
 
 
 def _check_server() -> list[CheckResult]:
-    """Server checks: reachable, database, auth."""
+    """Local runtime checks: reachable, database, auth."""
     results: list[CheckResult] = []
 
     # Determine configured URL
@@ -229,7 +229,7 @@ def _check_server() -> list[CheckResult]:
         with httpx.Client(timeout=5) as client:
             resp = client.get(f"{url}/api/health")
             if resp.status_code == 200:
-                results.append(CheckResult(PASS, f"Server reachable at {url}"))
+                results.append(CheckResult(PASS, f"Local runtime reachable at {url}"))
 
                 # Parse health response for database status
                 try:
@@ -242,9 +242,9 @@ def _check_server() -> list[CheckResult]:
                 except Exception:
                     pass
             else:
-                results.append(CheckResult(WARN, f"Server at {url} returned HTTP {resp.status_code}"))
+                results.append(CheckResult(WARN, f"Local runtime at {url} returned HTTP {resp.status_code}"))
     except Exception:
-        results.append(CheckResult(FAIL, f"Server not reachable at {url}", "Start with: longhouse serve"))
+        results.append(CheckResult(FAIL, f"Local runtime not reachable at {url}", "Start with: longhouse serve"))
 
     # Database file (SQLite)
     longhouse_home = _get_longhouse_home()
@@ -296,7 +296,7 @@ def _check_server() -> list[CheckResult]:
 
 
 def _check_shipper() -> list[CheckResult]:
-    """Engine checks: Claude sessions, device token, engine log, service."""
+    """Machine-agent checks: Claude sessions, device token, engine log, service."""
     results: list[CheckResult] = []
     claude_dir = _get_claude_dir()
 
@@ -381,12 +381,12 @@ def _check_shipper() -> list[CheckResult]:
                 if has_longhouse_stop:
                     break
         if has_longhouse_stop:
-            results.append(CheckResult(PASS, "Claude Stop hook includes Longhouse shipper"))
+            results.append(CheckResult(PASS, "Claude Stop hook includes the Longhouse machine agent"))
         else:
             results.append(
                 CheckResult(
                     WARN,
-                    "Claude Stop hook missing Longhouse shipper",
+                    "Claude Stop hook missing the Longhouse machine agent",
                     "Run: longhouse connect --install",
                 )
             )
@@ -421,11 +421,11 @@ def _check_shipper() -> list[CheckResult]:
 
         status = get_service_status()
         if status == "running":
-            results.append(CheckResult(PASS, "Engine service running"))
+            results.append(CheckResult(PASS, "Machine agent service running"))
         elif status == "stopped":
-            results.append(CheckResult(WARN, "Engine service stopped", "Start with: longhouse connect --install"))
+            results.append(CheckResult(WARN, "Machine agent service stopped", "Start with: longhouse connect --install"))
         else:
-            results.append(CheckResult(WARN, "Engine service not installed", "Install with: longhouse connect --install"))
+            results.append(CheckResult(WARN, "Machine agent service not installed", "Install with: longhouse connect --install"))
     except Exception:
         # Service check not available on this platform
         pass
@@ -439,21 +439,21 @@ def _check_shipper() -> list[CheckResult]:
             ambient = get_menubar_service_info()
             ambient_status = ambient.get("status")
             if ambient_status == "running":
-                results.append(CheckResult(PASS, "Ambient UI running"))
+                results.append(CheckResult(PASS, "Desktop App running"))
             elif ambient_status == "stopped":
-                results.append(CheckResult(WARN, "Ambient UI stopped", "Run: longhouse connect --install"))
+                results.append(CheckResult(WARN, "Desktop App stopped", "Run: longhouse connect --install"))
             else:
-                results.append(CheckResult(WARN, "Ambient UI not installed", "Run: longhouse connect --install"))
+                results.append(CheckResult(WARN, "Desktop App not installed", "Run: longhouse connect --install"))
 
             runtime_mode = ambient.get("runtime_mode")
             artifact_path = ambient.get("artifact_path")
             if runtime_mode == "app-bundle":
-                label = "Ambient UI installed as Longhouse.app"
+                label = "Desktop App installed as Longhouse.app"
                 if artifact_path:
                     label = f"{label} ({artifact_path})"
                 results.append(CheckResult(PASS, label))
             elif runtime_mode == "broken-install":
-                label = "Ambient UI install missing, broken, or unsupported"
+                label = "Desktop App install missing, broken, or unsupported"
                 if artifact_path:
                     label = f"{label} ({artifact_path})"
                 results.append(CheckResult(WARN, label, "Run: longhouse connect --install"))
@@ -548,7 +548,7 @@ def doctor(
 ) -> None:
     """Run self-diagnosis checks on your Longhouse installation.
 
-    Checks environment, server health, shipper status, and configuration.
+    Checks environment, local runtime health, machine-agent status, and configuration.
     Run after install or upgrade to verify everything is working.
 
     Examples:
@@ -559,8 +559,8 @@ def doctor(
     sections: list[tuple[str, list[CheckResult]]] = [
         ("Environment", _check_environment()),
         ("Install", _check_install(check_updates=check_updates)),
-        ("Server", _check_server()),
-        ("Shipper", _check_shipper()),
+        ("Local Runtime", _check_server()),
+        ("Machine Agent", _check_shipper()),
         ("Config", _check_config()),
     ]
 
