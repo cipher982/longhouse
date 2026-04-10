@@ -722,7 +722,7 @@ def onboard(
     typer.echo("")
     typer.echo("Advanced:")
     typer.echo("  longhouse ship               Import existing sessions once")
-    typer.echo("  longhouse status             Show configuration")
+    typer.echo("  longhouse status             Show local health")
     typer.echo("  longhouse serve --stop       Stop local runtime")
     typer.echo("")
 
