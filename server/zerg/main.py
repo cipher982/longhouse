@@ -114,8 +114,6 @@ from zerg.routers.funnel import router as funnel_router
 from zerg.routers.health import router as health_router
 from zerg.routers.health import set_health_app_ref
 from zerg.routers.heartbeat import router as heartbeat_router
-from zerg.routers.job_settings import router as job_settings_router
-from zerg.routers.jobs import router as jobs_router
 from zerg.routers.knowledge import router as knowledge_router
 from zerg.routers.mcp_servers import router as automation_mcp_servers_router
 from zerg.routers.metrics import router as metrics_router
@@ -263,8 +261,6 @@ api_app.include_router(automation_connectors_router)
 api_app.include_router(account_connectors_router)
 api_app.include_router(funnel_router)
 api_app.include_router(waitlist_router)
-api_app.include_router(job_settings_router)
-api_app.include_router(jobs_router)
 api_app.include_router(traces_router)
 api_app.include_router(reliability_router)
 api_app.include_router(skills_router)
