@@ -162,7 +162,7 @@ def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
     connect._handle_status()
 
     output = capsys.readouterr().out
-    assert "Ambient UI: com.longhouse.local-health-menubar" in output
+    assert "Desktop App: com.longhouse.local-health-menubar" in output
     assert "App: /Users/test/Applications/Longhouse.app" in output
     assert "Launch: /Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse" in output
 

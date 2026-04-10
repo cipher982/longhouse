@@ -441,7 +441,7 @@ def connect(
     install: bool = typer.Option(
         False,
         "--install",
-        help="Install shipper as a background service + Claude Code hooks",
+        help="Install the background machine agent + Claude Code hooks",
     ),
     hooks_only: bool = typer.Option(
         False,
@@ -450,12 +450,12 @@ def connect(
     uninstall: bool = typer.Option(
         False,
         "--uninstall",
-        help="Stop and remove the background service",
+        help="Stop and remove the background machine agent",
     ),
     status: bool = typer.Option(
         False,
         "--status",
-        help="Check the status of the background service",
+        help="Check the status of the background machine agent",
     ),
     machine_name: str = typer.Option(
         None,
@@ -466,19 +466,19 @@ def connect(
     menubar: bool = typer.Option(
         default_install_menubar(),
         "--menubar/--no-menubar",
-        help="Install the ambient macOS local-health menu bar when available.",
+        help="Install Longhouse.app in the macOS menu bar when available.",
     ),
 ) -> None:
-    """Continuous: watch and ship sessions to Longhouse via Rust engine.
+    """Continuous: run the machine agent to watch and ship sessions via the Rust engine.
 
     Runtime behavior:
     - Uses OS file watching for near-real-time sync.
     - Runs a periodic fallback scan (default: 300s, configurable via --interval).
 
     Service management:
-        --install    Install background service + Claude Code hooks
-        --uninstall  Stop and remove the background service
-        --status     Check the status of the background service
+        --install    Install the background machine agent + Claude Code hooks
+        --uninstall  Stop and remove the background machine agent
+        --status     Check the status of the background machine agent
 
     Run 'longhouse auth' first to authenticate with Longhouse.
     """
@@ -743,7 +743,7 @@ def _handle_status() -> None:
     status = info["status"]
 
     typer.echo(f"Platform: {info['platform']}")
-    typer.echo(f"Service: {info.get('service_name', 'N/A')}")
+    typer.echo(f"Machine Agent: {info.get('service_name', 'N/A')}")
 
     if status == "running":
         typer.secho("Status: running", fg=typer.colors.GREEN)
@@ -759,7 +759,7 @@ def _handle_status() -> None:
     if detect_platform() == Platform.MACOS:
         menubar = get_menubar_service_info()
         typer.echo("")
-        typer.echo(f"Ambient UI: {menubar.get('service_name', 'N/A')}")
+        typer.echo(f"Desktop App: {menubar.get('service_name', 'N/A')}")
         menubar_status = menubar["status"]
         if menubar_status == "running":
             typer.secho("Status: running", fg=typer.colors.GREEN)
@@ -779,7 +779,7 @@ def _handle_status() -> None:
                 typer.echo(f"Launch: {launch_path}")
             if runtime_mode == "broken-install":
                 typer.secho(
-                    "Runtime: ambient install is missing, broken, or unsupported (run: longhouse connect --install)",
+                    "Desktop App runtime: install is missing, broken, or unsupported (run: longhouse connect --install)",
                     fg=typer.colors.YELLOW,
                 )
 
@@ -831,7 +831,7 @@ def _handle_install(
     save_machine_name(resolved_name, config_dir)
     typer.secho(f"  Machine: {resolved_name}", fg=typer.colors.CYAN)
 
-    typer.echo("Ensuring local engine runtime is available...")
+    typer.echo("Ensuring machine-agent engine runtime is available...")
     try:
         engine_runtime = ensure_runtime_binary(RuntimeComponent.ENGINE)
     except RuntimeError as e:
@@ -842,7 +842,7 @@ def _handle_install(
     else:
         typer.secho(f"  [OK] Engine binary ready at {engine_runtime.path}", fg=typer.colors.GREEN)
 
-    typer.echo("Installing engine service...")
+    typer.echo("Installing machine agent...")
     typer.echo(f"  URL: {url}")
 
     try:
@@ -854,7 +854,7 @@ def _handle_install(
         )
         typer.echo("")
         typer.secho(f"[OK] {result['message']}", fg=typer.colors.GREEN)
-        typer.echo(f"  Service: {result.get('service', 'N/A')}")
+        typer.echo(f"  Machine Agent: {result.get('service', 'N/A')}")
         typer.echo(f"  Config: {result.get('plist_path') or result.get('unit_path', 'N/A')}")
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
@@ -862,7 +862,7 @@ def _handle_install(
 
     # Also install Claude Code + Codex hooks
     typer.echo("")
-    typer.echo("Installing hooks (Claude Code + Codex)...")
+    typer.echo("Installing CLI hooks (Claude Code + Codex)...")
     try:
         actions = install_hooks(url=url, token=token, claude_dir=claude_dir)
         for action in actions:
@@ -872,7 +872,7 @@ def _handle_install(
 
     if menubar:
         typer.echo("")
-        typer.echo("Installing ambient local-health menu bar...")
+        typer.echo("Installing Longhouse.app for macOS menu bar status...")
         try:
             menubar_result = install_menubar_service(
                 ui_url=url,
@@ -892,4 +892,4 @@ def _handle_install(
 
     typer.echo("")
     typer.echo("To check status: longhouse connect --status")
-    typer.echo("To stop service: longhouse connect --uninstall")
+    typer.echo("To stop machine agent: longhouse connect --uninstall")
