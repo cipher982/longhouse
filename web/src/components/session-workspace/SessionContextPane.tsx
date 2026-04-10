@@ -74,7 +74,7 @@ export function SessionContextPane({
   const attachRunnerLabel = sessionControl?.source_runner_name?.trim() || "this machine";
   const loopModeCaption =
     !interaction.isManagedLocalSession
-      ? "Stored session preference for what Oikos may do after each completed assistant turn."
+      ? "Stored session preference for what the assistant may do after each completed turn."
       : canDriveManagedLocalFromBrowser
         ? "Loop Mode changes review posture only. Keep driving the live session from Longhouse below or by reattaching on the host machine."
         : isManagedLocalCodex

@@ -418,7 +418,7 @@ export default function SwarmOpsPage() {
         {runs.length === 0 ? (
           <EmptyState
             title="No runs yet"
-            description="Kick off a cloud run with Oikos and it will show up here for triage."
+            description="Kick off a run and it will show up here for triage."
           />
         ) : (
           <div className="swarm-ops-layout">

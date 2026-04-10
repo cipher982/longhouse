@@ -242,7 +242,7 @@ def llm_capabilities(
             available=text_avail,
             source=None,  # Don't leak source in public endpoint
             provider_name=None,
-            features=["summaries", "reflection", "daily digest", "oikos chat"],
+            features=["summaries", "reflection", "daily digest", "chat"],
         ),
         embedding=CapabilityStatus(
             available=emb_avail,

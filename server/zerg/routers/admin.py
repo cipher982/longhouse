@@ -626,7 +626,7 @@ async def configure_test_model(
         logger.info(f"Configured oikos fiche {fiche.id} to use model: {request.model}")
 
         return {
-            "message": f"Oikos fiche configured to use {request.model}",
+            "message": f"Chat fiche configured to use {request.model}",
             "fiche_id": fiche.id,
             "model": request.model,
         }

@@ -62,21 +62,21 @@ test.describe('Unified Frontend Navigation', () => {
     await expect(page.locator('[data-testid="create-automation-btn"]')).toBeVisible();
   });
 
-  test('Oikos tab is visible from automations', async ({ page }) => {
+  test('Chat tab is visible from automations', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/automations`, { waitUntil: 'domcontentloaded' });
 
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
 
-    const oikosTab = page.locator('.nav-tab:has-text("Oikos")');
+    const oikosTab = page.locator('.nav-tab:has-text("Chat")');
     await expect(oikosTab).toBeVisible();
   });
 
-  test('Oikos tab navigates from automations to chat', async ({ page }) => {
+  test('Chat tab navigates from automations to chat', async ({ page }) => {
     await page.goto(`${UNIFIED_URL}/automations`, { waitUntil: 'domcontentloaded' });
 
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
 
-    await page.click('.nav-tab:has-text("Oikos")');
+    await page.click('.nav-tab:has-text("Chat")');
 
     await expect(page.locator('.text-input-container')).toBeVisible({ timeout: 15000 });
     await expect(page).toHaveURL(/\/chat/);

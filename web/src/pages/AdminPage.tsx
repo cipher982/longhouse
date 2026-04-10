@@ -1068,7 +1068,7 @@ function AdminPage() {
                       <span className="admin-devtool-title">Trace Explorer</span>
                     </div>
                     <p className="admin-devtool-desc">
-                      Debug Oikos runs, cloud sessions, and LLM calls with unified trace timelines.
+                      Debug chat runs, session continuations, and LLM calls with unified trace timelines.
                     </p>
                   </div>
                 </Link>
