@@ -8,10 +8,15 @@ Usage: macos-notarize-app.sh \
   --archive <path> \
   --keychain-profile <profile> \
   [--keychain <path>] \
+  [--submission-id <id>] \
+  [--submission-id-file <path>] \
+  [--submit-only] \
   [--timeout <duration>]
 
 Creates a zip archive for a signed .app bundle, submits it to Apple's notary
-service, staples the resulting ticket to the app bundle, then recreates the zip.
+service, then optionally waits for acceptance, staples the resulting ticket to
+the app bundle, and recreates the zip. Use --submit-only to submit without
+waiting, or --submission-id to wait on an existing submission.
 EOF
 }
 
@@ -29,6 +34,9 @@ APP_PATH=""
 ARCHIVE_PATH=""
 KEYCHAIN_PROFILE=""
 KEYCHAIN_PATH=""
+SUBMISSION_ID=""
+SUBMISSION_ID_FILE=""
+SUBMIT_ONLY=0
 WAIT_TIMEOUT="${LONGHOUSE_NOTARY_WAIT_TIMEOUT:-90m}"
 STATUS_POLL_INTERVAL_SECONDS="${LONGHOUSE_NOTARY_POLL_INTERVAL_SECONDS:-60}"
 
@@ -54,6 +62,20 @@ while [[ $# -gt 0 ]]; do
       KEYCHAIN_PATH="$2"
       shift 2
       ;;
+    --submission-id)
+      require_value "$1" "${2:-}"
+      SUBMISSION_ID="$2"
+      shift 2
+      ;;
+    --submission-id-file)
+      require_value "$1" "${2:-}"
+      SUBMISSION_ID_FILE="$2"
+      shift 2
+      ;;
+    --submit-only)
+      SUBMIT_ONLY=1
+      shift
+      ;;
     --timeout)
       require_value "$1" "${2:-}"
       WAIT_TIMEOUT="$2"
@@ -76,35 +98,43 @@ if [[ -z "$APP_PATH" || -z "$ARCHIVE_PATH" || -z "$KEYCHAIN_PROFILE" ]]; then
   exit 1
 fi
 
+if [[ -n "$SUBMISSION_ID" && "$SUBMIT_ONLY" -eq 1 ]]; then
+  echo "--submission-id cannot be combined with --submit-only" >&2
+  exit 1
+fi
+
 if [[ ! -d "$APP_PATH" ]]; then
   echo "App bundle not found: $APP_PATH" >&2
   exit 1
 fi
 
-mkdir -p "$(dirname "$ARCHIVE_PATH")"
-rm -f "$ARCHIVE_PATH"
-ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
-
-SUBMIT_ARGS=(
-  xcrun
-  notarytool
-  submit
-  "$ARCHIVE_PATH"
-  --keychain-profile
-  "$KEYCHAIN_PROFILE"
-  --no-wait
-  --output-format
-  json
-)
-
-if [[ -n "$KEYCHAIN_PATH" ]]; then
-  SUBMIT_ARGS+=(--keychain "$KEYCHAIN_PATH")
+if [[ -z "$SUBMISSION_ID" ]]; then
+  mkdir -p "$(dirname "$ARCHIVE_PATH")"
+  rm -f "$ARCHIVE_PATH"
+  ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
 fi
 
-submit_output="$("${SUBMIT_ARGS[@]}")"
-echo "$submit_output"
+if [[ -z "$SUBMISSION_ID" ]]; then
+  SUBMIT_ARGS=(
+    xcrun
+    notarytool
+    submit
+    "$ARCHIVE_PATH"
+    --keychain-profile
+    "$KEYCHAIN_PROFILE"
+    --no-wait
+    --output-format
+    json
+  )
 
-submission_id="$(SUBMIT_OUTPUT="$submit_output" python3 - <<'PY'
+  if [[ -n "$KEYCHAIN_PATH" ]]; then
+    SUBMIT_ARGS+=(--keychain "$KEYCHAIN_PATH")
+  fi
+
+  submit_output="$("${SUBMIT_ARGS[@]}")"
+  echo "$submit_output"
+
+  submission_id="$(SUBMIT_OUTPUT="$submit_output" python3 - <<'PY'
 import json
 import os
 import sys
@@ -120,8 +150,22 @@ if not submission_id:
 print(submission_id)
 PY
 )"
+else
+  submission_id="$SUBMISSION_ID"
+fi
+
+if [[ -n "$SUBMISSION_ID_FILE" ]]; then
+  mkdir -p "$(dirname "$SUBMISSION_ID_FILE")"
+  printf '%s\n' "$submission_id" > "$SUBMISSION_ID_FILE"
+fi
 
 echo "Notary submission ID: ${submission_id}"
+
+if [[ "$SUBMIT_ONLY" -eq 1 ]]; then
+  echo "Submitted without waiting for notarization."
+  exit 0
+fi
+
 echo "Waiting up to ${WAIT_TIMEOUT} for Apple notarization processing."
 
 INFO_ARGS=(

@@ -9,6 +9,11 @@ on:
         description: "Existing git tag to publish from (for example v0.1.6)"
         required: true
         type: string
+      notary_wait_timeout:
+        description: "How long to wait for Apple notarization before failing (for example 330m)"
+        required: false
+        default: "330m"
+        type: string
 
 permissions:
   contents: write
@@ -16,22 +21,17 @@ permissions:
   id-token: write
 
 jobs:
-  build:
+  build-engine:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            engine_asset: longhouse-engine-darwin-arm64
-            build_desktop: true
           - os: ubuntu-latest
             engine_asset: longhouse-engine-linux-x64
-            build_desktop: false
           - os: ubuntu-24.04-arm
             engine_asset: longhouse-engine-linux-arm64
-            build_desktop: false
 
     runs-on: ${{ matrix.os }}
 
@@ -39,7 +39,39 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.release.tag_name || inputs.tag_name }}
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build engine binary
+        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
+
+      - name: Collect engine binary
+        run: |
+          mkdir -p binaries
+          cp engine/target/release/longhouse-engine "binaries/${{ matrix.engine_asset }}"
+          chmod +x "binaries/${{ matrix.engine_asset }}"
+
+      - name: Upload runtime artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-${{ matrix.engine_asset }}
+          path: binaries/${{ matrix.engine_asset }}
+          retention-days: 7
+
+  build-macos:
+    runs-on: macos-latest
+    timeout-minutes: 360
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      LONGHOUSE_NOTARY_WAIT_TIMEOUT: ${{ inputs.notary_wait_timeout || '330m' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Classify release tier
         id: release_tier
@@ -61,15 +93,10 @@ jobs:
       - name: Collect engine binary
         run: |
           mkdir -p binaries
-          cp engine/target/release/longhouse-engine "binaries/${{ matrix.engine_asset }}"
-          chmod +x "binaries/${{ matrix.engine_asset }}"
-
-      - name: Ad-hoc sign macOS engine binary
-        if: ${{ matrix.os == 'macos-latest' }}
-        run: codesign -s - "binaries/${{ matrix.engine_asset }}"
+          cp engine/target/release/longhouse-engine binaries/longhouse-engine-darwin-arm64
+          chmod +x binaries/longhouse-engine-darwin-arm64
 
       - name: Build macOS ambient app payload
-        if: ${{ matrix.build_desktop }}
         run: |
           swift build --package-path desktop/LonghouseMenuBarHarness -c release --product LonghouseMenuBarHarnessMenuBar
           BIN_DIR="$(swift build --package-path desktop/LonghouseMenuBarHarness -c release --show-bin-path)"
@@ -77,7 +104,6 @@ jobs:
           chmod +x "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
 
       - name: Configure macOS signing keychain
-        if: ${{ matrix.build_desktop }}
         id: macos_signing
         env:
           RELEASE_TAG: ${{ env.RELEASE_TAG }}
@@ -138,7 +164,6 @@ jobs:
           echo "keychain_path=$KEYCHAIN_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Configure notarytool profile
-        if: ${{ matrix.build_desktop }}
         id: macos_notary
         env:
           RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
@@ -172,7 +197,7 @@ jobs:
           echo "profile=longhouse-notary" >> "$GITHUB_OUTPUT"
 
       - name: Re-sign macOS engine binary for stable release
-        if: ${{ matrix.os == 'macos-latest' && steps.release_tier.outputs.tier == 'stable' && steps.macos_signing.outputs.enabled == 'true' }}
+        if: ${{ steps.release_tier.outputs.tier == 'stable' && steps.macos_signing.outputs.enabled == 'true' }}
         env:
           CODESIGN_IDENTITY: ${{ steps.macos_signing.outputs.codesign_identity }}
         run: |
@@ -181,41 +206,21 @@ jobs:
             --options runtime \
             --timestamp \
             --sign "$CODESIGN_IDENTITY" \
-            "binaries/${{ matrix.engine_asset }}"
-          codesign --verify --strict --verbose=2 "binaries/${{ matrix.engine_asset }}"
+            binaries/longhouse-engine-darwin-arm64
+          codesign --verify --strict --verbose=2 binaries/longhouse-engine-darwin-arm64
 
-      - name: Package macOS desktop app bundles
-        if: ${{ matrix.build_desktop }}
+      - name: Package macOS desktop app bundle
         env:
-          RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
-          SIGNING_MODE: ${{ steps.macos_signing.outputs.signing_mode }}
-          CODESIGN_IDENTITY: ${{ steps.macos_signing.outputs.codesign_identity }}
-          NOTARY_ENABLED: ${{ steps.macos_notary.outputs.enabled }}
-          NOTARY_PROFILE: ${{ steps.macos_notary.outputs.profile }}
-          KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
         run: |
           VERSION="${RELEASE_TAG#v}"
           APP_STAGE_DIR="$RUNNER_TEMP/macos-app-bundles"
-          AMBIENT_APP_NAME="Longhouse"
-          AMBIENT_APP_PATH="$APP_STAGE_DIR/${AMBIENT_APP_NAME}.app"
-          AMBIENT_ARCHIVE="binaries/longhouse-local-health-app-darwin-arm64.zip"
 
           mkdir -p "$APP_STAGE_DIR"
 
-          if [[ "$RELEASE_TIER" == "stable" ]]; then
-            if [[ "$SIGNING_MODE" != "developer-id" ]]; then
-              echo "Stable macOS releases require Developer ID signing mode." >&2
-              exit 1
-            fi
-            if [[ "$NOTARY_ENABLED" != "true" || -z "${NOTARY_PROFILE:-}" ]]; then
-              echo "Stable macOS releases require notarization." >&2
-              exit 1
-            fi
-          fi
-
           scripts/release/macos-package-app.sh \
             --binary "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar" \
-            --app-name "$AMBIENT_APP_NAME" \
+            --app-name Longhouse \
             --exec-name Longhouse \
             --bundle-id ai.longhouse.app \
             --version "$VERSION" \
@@ -224,62 +229,176 @@ jobs:
             --icon-png web/public/favicon-512.png \
             --lsuielement true
 
+      - name: Sign macOS desktop app bundle
+        env:
+          RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
+          SIGNING_MODE: ${{ steps.macos_signing.outputs.signing_mode }}
+          CODESIGN_IDENTITY: ${{ steps.macos_signing.outputs.codesign_identity }}
+        run: |
+          if [[ "$RELEASE_TIER" == "stable" && "$SIGNING_MODE" != "developer-id" ]]; then
+            echo "Stable macOS releases require Developer ID signing mode." >&2
+            exit 1
+          fi
+
           scripts/release/macos-sign-app.sh \
-            --app "$AMBIENT_APP_PATH" \
+            --app "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
             --identity "$CODESIGN_IDENTITY" \
             --mode "$SIGNING_MODE"
 
-          if [[ "$NOTARY_ENABLED" == "true" ]]; then
-            scripts/release/macos-notarize-app.sh \
-              --app "$AMBIENT_APP_PATH" \
-              --archive "$AMBIENT_ARCHIVE" \
-              --keychain-profile "$NOTARY_PROFILE" \
-              --keychain "$KEYCHAIN_PATH"
+      - name: Initialize macOS packaging manifest
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          RELEASE_TIER: ${{ steps.release_tier.outputs.tier }}
+          SIGNING_MODE: ${{ steps.macos_signing.outputs.signing_mode }}
+          NOTARY_ENABLED: ${{ steps.macos_notary.outputs.enabled }}
+          NOTARY_PROFILE: ${{ steps.macos_notary.outputs.profile }}
+          LONGHOUSE_NOTARY_WAIT_TIMEOUT: ${{ env.LONGHOUSE_NOTARY_WAIT_TIMEOUT }}
+        run: |
+          VERSION="${RELEASE_TAG#v}"
+          AMBIENT_APP_PATH="$RUNNER_TEMP/macos-app-bundles/Longhouse.app"
+          AMBIENT_ARCHIVE="binaries/longhouse-local-health-app-darwin-arm64.zip"
 
-            if [[ "$RELEASE_TIER" == "stable" ]]; then
-              spctl --assess --type execute -vv "$AMBIENT_APP_PATH"
-            fi
-
-            NOTARIZATION_STATUS="notarized"
-          else
-            ditto -c -k --sequesterRsrc --keepParent "$AMBIENT_APP_PATH" "$AMBIENT_ARCHIVE"
-            NOTARIZATION_STATUS="not-configured"
+          if [[ "$RELEASE_TIER" == "stable" && ( "$NOTARY_ENABLED" != "true" || -z "${NOTARY_PROFILE:-}" ) ]]; then
+            echo "Stable macOS releases require notarization." >&2
+            exit 1
           fi
 
-          cat > binaries/local-runtime-macos-packaging.json <<EOF
-          {
-            "schema_version": 1,
-            "release_tag": "${RELEASE_TAG}",
-            "release_tier": "${RELEASE_TIER}",
-            "version": "${VERSION}",
-            "signing_mode": "${SIGNING_MODE}",
-            "notarization_status": "${NOTARIZATION_STATUS}",
-            "artifacts": [
-              {
-                "component": "local-health-app",
-                "bundle_id": "ai.longhouse.app",
-                "app_name": "${AMBIENT_APP_NAME}",
-                "archive": "$(basename "$AMBIENT_ARCHIVE")"
-              }
-            ]
+          NOTARIZATION_STATUS="not-configured"
+          if [[ "$NOTARY_ENABLED" == "true" ]]; then
+            NOTARIZATION_STATUS="awaiting-submission"
+          else
+            ditto -c -k --sequesterRsrc --keepParent "$AMBIENT_APP_PATH" "$AMBIENT_ARCHIVE"
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = {
+              "schema_version": 2,
+              "release_tag": os.environ["RELEASE_TAG"],
+              "release_tier": os.environ["RELEASE_TIER"],
+              "version": os.environ["RELEASE_TAG"].removeprefix("v"),
+              "signing_mode": os.environ["SIGNING_MODE"],
+              "notarization_status": os.environ["NOTARIZATION_STATUS"],
+              "notary_wait_timeout": os.environ["LONGHOUSE_NOTARY_WAIT_TIMEOUT"],
+              "notarization_submission_id": None,
+              "artifacts": [
+                  {
+                      "component": "local-health-app",
+                      "bundle_id": "ai.longhouse.app",
+                      "app_name": "Longhouse",
+                      "archive": "longhouse-local-health-app-darwin-arm64.zip",
+                  }
+              ],
           }
-          EOF
+          Path("binaries/local-runtime-macos-packaging.json").write_text(
+              json.dumps(payload, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+        shell: bash
+
+      - name: Submit macOS app for notarization
+        if: ${{ steps.macos_notary.outputs.enabled == 'true' }}
+        env:
+          KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
+          NOTARY_PROFILE: ${{ steps.macos_notary.outputs.profile }}
+        run: |
+          SUBMISSION_FILE="$RUNNER_TEMP/local-runtime-macos-notary-submission.txt"
+          scripts/release/macos-notarize-app.sh \
+            --app "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
+            --archive binaries/longhouse-local-health-app-darwin-arm64.zip \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --submission-id-file "$SUBMISSION_FILE" \
+            --submit-only
+
+          SUBMISSION_ID="$(cat "$SUBMISSION_FILE")"
+          SUBMISSION_ID="$SUBMISSION_ID" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest_path = Path("binaries/local-runtime-macos-packaging.json")
+          payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+          payload["notarization_status"] = "submitted"
+          payload["notarization_submission_id"] = os.environ["SUBMISSION_ID"]
+          manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Wait for Apple notarization and staple app
+        if: ${{ steps.macos_notary.outputs.enabled == 'true' }}
+        env:
+          KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
+          NOTARY_PROFILE: ${{ steps.macos_notary.outputs.profile }}
+        run: |
+          SUBMISSION_ID="$(cat "$RUNNER_TEMP/local-runtime-macos-notary-submission.txt")"
+          scripts/release/macos-notarize-app.sh \
+            --app "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
+            --archive binaries/longhouse-local-health-app-darwin-arm64.zip \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --submission-id "$SUBMISSION_ID"
+
+      - name: Mark macOS notarization complete
+        if: ${{ success() && steps.macos_notary.outputs.enabled == 'true' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest_path = Path("binaries/local-runtime-macos-packaging.json")
+          payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+          payload["notarization_status"] = "notarized"
+          manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Mark macOS notarization pending
+        if: ${{ failure() && steps.macos_notary.outputs.enabled == 'true' }}
+        run: |
+          if [[ ! -f binaries/local-runtime-macos-packaging.json ]]; then
+            exit 0
+          fi
+
+          SUBMISSION_ID=""
+          if [[ -f "$RUNNER_TEMP/local-runtime-macos-notary-submission.txt" ]]; then
+            SUBMISSION_ID="$(cat "$RUNNER_TEMP/local-runtime-macos-notary-submission.txt")"
+          fi
+
+          SUBMISSION_ID="$SUBMISSION_ID" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest_path = Path("binaries/local-runtime-macos-packaging.json")
+          payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+          payload["notarization_status"] = "pending-apple"
+          if os.environ["SUBMISSION_ID"]:
+              payload["notarization_submission_id"] = os.environ["SUBMISSION_ID"]
+          manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
 
       - name: Remove temporary signing keychain
-        if: ${{ always() && matrix.build_desktop && steps.macos_signing.outputs.enabled == 'true' }}
+        if: ${{ always() && steps.macos_signing.outputs.enabled == 'true' }}
         env:
           KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
         run: security delete-keychain "$KEYCHAIN_PATH" || true
 
       - name: Upload runtime artifacts
+        if: ${{ always() }}
         uses: actions/upload-artifact@v6
         with:
-          name: runtime-${{ matrix.os }}
+          name: runtime-macos
+          if-no-files-found: ignore
           path: binaries/*
-          retention-days: 1
+          retention-days: 7
 
   release:
-    needs: build
+    needs:
+      - build-engine
+      - build-macos
     runs-on: ubuntu-latest
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}

@@ -153,6 +153,7 @@ Release policy:
 - stable macOS releases must be Developer ID signed and notarized
 - stable releases must fail in CI if the trust path is unavailable
 - smoke releases may still use ad-hoc signing and skip notarization
+- the CI lane should submit notarization before the long wait, so a slow Apple queue leaves recoverable artifacts plus `pending-apple` metadata instead of discarding the built app
 
 Required GitHub secrets for stable macOS releases:
 
