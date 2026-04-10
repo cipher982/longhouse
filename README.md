@@ -46,91 +46,72 @@ longhouse serve --demo
 
 ## Get Started
 
-### Self-host free
+### Try it out (laptop)
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-Open `http://localhost:8080`.
+Open `http://localhost:8080`. This runs both the Machine Agent and the Runtime Host on your laptop — good for trying the product, but it stops when your laptop sleeps.
 
-The installer installs the `longhouse` CLI/runtime package, runs `longhouse onboard` automatically, starts the local runtime, and sets up the background machine agent for automatic imports when supported.
-On macOS it also installs `Longhouse.app`, which lives in the menu bar for local status and repair.
+On macOS the installer also adds `Longhouse.app` to your menu bar.
 
-When you want a control-ready session, start it explicitly through Longhouse:
+### Self-host for durability (always-on machine)
+
+For durable session storage, run the Runtime Host on an always-on box (VPS, homelab, Mac mini) and point your laptop's Machine Agent at it:
+
+```bash
+# On your always-on box:
+curl -fsSL https://get.longhouse.ai/install.sh | bash
+
+# On your dev machine(s), point the agent at the server:
+longhouse onboard  # choose "remote" or "existing server"
+```
+
+### Start control-ready sessions
 
 ```bash
 longhouse claude
 longhouse codex
 ```
 
-Repair tools live one layer down if you need them later: `longhouse doctor`, then `longhouse connect --install`.
-
-Want a safe preview before importing real sessions?
-
-```bash
-longhouse serve --demo
-```
-
-### Canonical proof journey
-
-1. Install Longhouse.
-2. Open Longhouse at `http://localhost:8080`.
-3. Find one prior session in the timeline.
-4. Start `longhouse claude` or `longhouse codex` when you want control after launch.
-
-On macOS, `Longhouse.app` also lives in your menu bar.
-
 ### Hosted beta (later)
 
-Sign up at https://longhouse.ai when you want the convenience path. Hosted beta means Longhouse runs the runtime for you; the free first-run path is still the self-hosted installer above, and it is the recommended way to understand the product loop first.
+Sign up at https://longhouse.ai when you want the convenience path — we run the Runtime Host for you, your dev machines only need the Machine Agent.
 
 ## Features
 
 - **Find existing sessions fast**: Import and search old Claude, Codex, and Gemini work immediately
 - **Control after launch**: Start through Longhouse to keep a live control path or host reattach path available later
-- **Capability over type**: Launch path changes control affordances, not what a session is
-- **Session kernel**: The technical model is a durable session object, not a dead transcript
 - **One timeline**: Claude Code, Codex CLI, and Gemini CLI sessions in one place
 - **Search + recall**: Find messages, tool calls, file edits, and session metadata fast
-- **Claude continuation**: Claude Code is the strongest launch-ready continuation path today
-- **Agent-first coordination**: Read the wall, tail sessions, find peers, send directed session messages, and manage inbox state by CLI or API
-- **Hosted or self-hosted**: Self-host free now or use hosted beta later without changing the core loop
+- **Agent-first coordination**: Read the wall, tail sessions, find peers, and send directed session messages by CLI or API
+- **Self-hosted or hosted**: Self-host free on an always-on machine, or use hosted beta later
 
 ## Install Options
 
-### 0. Self-host with the installer (recommended)
+### Shell installer (recommended)
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-The installer installs the `longhouse` CLI/runtime package, runs guided onboarding so the local runtime is ready to open right away, sets up the background machine agent for automatic imports when supported, and on macOS installs `Longhouse.app`. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
+Installs the `longhouse` CLI, runs onboarding, sets up the Machine Agent, and on macOS adds `Longhouse.app`. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard.
 
-Stable installs use `uv` with the published `longhouse` package, so normal CLI upgrades stay on the same path:
-
-```bash
-longhouse upgrade
-```
-
-Repair tools live one layer down if you need them later:
-
-```bash
-longhouse doctor
-longhouse connect --install
-```
-
-Use `connect --install` if onboarding was skipped or imports need repair. Use `ship` later as an advanced one-time import. Use `serve --demo` only when you want a safe preview before importing real work.
-
-### 1. Self-host with `uv`
+### With `uv`
 ```bash
 uv tool install longhouse
 longhouse onboard
 ```
 
-This installs the same CLI/runtime package. `longhouse onboard` then starts the local runtime and sets up the background machine agent on supported systems.
+### Repair and upgrade
 
-### 2. Hosted beta (later)
-Get started at https://longhouse.ai when you want the hosted convenience path. Hosted Longhouse runs the runtime for you; keep the self-hosted installer as the primary free wedge for first use, demos, and durable machine setups.
+```bash
+longhouse doctor              # Self-diagnosis
+longhouse upgrade             # Upgrade the installed CLI
+longhouse connect --install   # Repair hooks and machine agent
+```
+
+Use `serve --demo` for a safe preview before importing real work.
 
 ### 3. Advanced / contributor paths
 
