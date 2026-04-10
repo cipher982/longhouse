@@ -32,8 +32,11 @@ exc_type = None
 exc_val = None
 exc_tb = None
 
-# FastAPI route handlers (called by framework, not directly)
-oikos_run_cancel = None
+# Protocol/interface method parameters (required by signature, not used in abstract/null impls)
+tool_args_preview = None
+tool_args = None
+result_preview = None
+activity = None
 
 # WriteSerializer public API (execute_sync used for startup-time writes)
 execute_sync = None

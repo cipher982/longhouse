@@ -1,5 +1,5 @@
 import { Badge } from "../ui";
-import type { SessionTurnReview } from "../../services/api/oikos";
+import type { SessionTurnReview } from "../../services/api/sessions";
 import { formatFullDate } from "../../lib/sessionWorkspace";
 
 const TURN_DECISION_META: Record<string, { label: string; variant: "neutral" | "warning" | "success" }> = {
@@ -43,7 +43,7 @@ export function TurnReviewCard({ review, loading = false, unavailable = false }:
   const decisionMeta = review
     ? TURN_DECISION_META[review.decision] ?? { label: review.decision, variant: "neutral" as const }
     : null;
-  const executionMeta = review
+  const executionMeta = review && review.executionState
     ? EXECUTION_STATE_META[review.executionState] ?? { label: review.executionState, variant: "neutral" as const }
     : null;
   const recommendedAction = formatRecommendedAction(review?.recommendedAction ?? null);

@@ -4,7 +4,6 @@
 from .agents import AgentEvent
 from .agents import AgentsBase
 from .agents import AgentSession
-from .agents import SessionTurnReview
 from .connector import Connector
 from .conversation import Conversation
 from .conversation import ConversationBinding
@@ -12,7 +11,6 @@ from .conversation import ConversationMessage
 from .device_token import DeviceToken
 from .fiche import Fiche
 from .fiche import FicheMessage
-from .loop_push_subscription import LoopPushSubscription
 
 # Re-export remaining models from models.py
 from .models import AccountConnectorCredential
@@ -52,12 +50,10 @@ __all__ = [
     "AgentSession",
     "AgentEvent",
     "AgentsBase",
-    "SessionTurnReview",
     # Core models (split into separate files)
     "DeviceToken",
     "Fiche",
     "FicheMessage",
-    "LoopPushSubscription",
     "Run",
     "RunEvent",
     "CommisBarrierJob",

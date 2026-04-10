@@ -3,7 +3,6 @@
 This package provides:
 - EventBus: Central pub/sub for system events
 - EventEmitter: Protocol for tool event emission with baked-in identity
-- OikosEmitter: Concrete emitter that always emits correct event types
 - get_emitter/set_emitter: Contextvar-based emitter transport
 """
 
@@ -15,7 +14,6 @@ from .event_bus import EventBus
 from .event_bus import EventType
 from .event_bus import event_bus
 from .null_emitter import NullEmitter
-from .oikos_emitter import OikosEmitter
 
 __all__ = [
     # Event bus
@@ -25,7 +23,6 @@ __all__ = [
     # Emitter protocol and implementations
     "EventEmitter",
     "CommisEmitter",
-    "OikosEmitter",
     "NullEmitter",
     "ToolCall",
     # Emitter context management

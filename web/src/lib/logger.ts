@@ -1,4 +1,4 @@
-// Centralized logging configuration for Oikos PWA
+// Centralized logging configuration
 // Reduces console spam while maintaining debugging capabilities
 
 export interface LogConfig {
@@ -142,5 +142,5 @@ class Logger {
 export const logger = new Logger();
 
 if (typeof globalThis !== 'undefined') {
-  (globalThis as Record<string, unknown>).oikosLogger = logger;
+  (globalThis as Record<string, unknown>).logger = logger;
 }

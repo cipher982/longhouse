@@ -35,10 +35,7 @@ from datetime import timezone
 
 from sqlalchemy import case
 
-from zerg.database import get_session_factory
 from zerg.models.agents import SessionTask
-from zerg.services.session_turn_reviews import maybe_process_session_turn_loop
-from zerg.services.session_turn_reviews import turn_loop_retry_needed
 from zerg.services.write_serializer import get_write_serializer
 
 logger = logging.getLogger(__name__)
@@ -48,13 +45,12 @@ HOT_WORKER_POLL_SECONDS = 0.5
 CLAIM_LIMIT = 1
 STALE_RUNNING_MINUTES = 30
 TASK_TIMEOUT_SECONDS: dict[str, float] = {
-    "turn_loop": 60.0,
     "summary": 180.0,
     "embedding": 30.0,
 }
 RETRY_LATER_BASE_SECONDS = 2.0
 RETRY_LATER_MAX_SECONDS = 16.0
-HOT_INGEST_TASK_TYPES: tuple[str, ...] = ("turn_loop",)
+HOT_INGEST_TASK_TYPES: tuple[str, ...] = ()
 _hot_worker_event: asyncio.Event | None = None
 _hot_worker_loop: asyncio.AbstractEventLoop | None = None
 
@@ -69,8 +65,8 @@ class RetryTaskLater(Exception):
 
 
 def enqueue_ingest_tasks(db, session_id: str) -> None:
-    """Insert summary + embedding + turn-loop tasks for session (deduped, caller commits)."""
-    for task_type in ("summary", "embedding", "turn_loop"):
+    """Insert summary + embedding tasks for session (deduped, caller commits)."""
+    for task_type in ("summary", "embedding"):
         _enqueue_if_not_active(db, session_id, task_type)
 
 
@@ -287,7 +283,6 @@ def _claim_pending(
 ) -> list[tuple[str, str, str]]:
     """Mark pending tasks as running; return (id, session_id, task_type) tuples."""
     priority = case(
-        (SessionTask.task_type == "turn_loop", 0),
         (SessionTask.task_type == "summary", 1),
         else_=2,
     )
@@ -362,38 +357,6 @@ async def _run_task_impl(task_id: str, session_id: str, task_type: str) -> None:
         from zerg.services.session_summaries import generate_embeddings_impl
 
         await generate_embeddings_impl(session_id)
-        return
-    if task_type == "turn_loop":
-
-        def _get_task_timing_fields():
-            factory = get_session_factory()
-            db = factory()
-            try:
-                task = db.query(SessionTask).filter(SessionTask.id == task_id).first()
-                if task is None:
-                    return None, None
-                return getattr(task, "created_at", None), getattr(task, "updated_at", None)
-            finally:
-                db.close()
-
-        freshness_ref, claimed_at = await asyncio.to_thread(_get_task_timing_fields)
-        factory = get_session_factory()
-        db = factory()
-        try:
-            review = await maybe_process_session_turn_loop(
-                db=db,
-                session_id=session_id,
-                freshness_reference_at=freshness_ref,
-                turn_loop_claimed_at=claimed_at,
-            )
-            if review is None and turn_loop_retry_needed(
-                db=db,
-                session_id=session_id,
-                freshness_reference_at=freshness_ref,
-            ):
-                raise RetryTaskLater("waiting for active session presence to settle before creating turn review")
-        finally:
-            db.close()
         return
     logger.warning("Unknown task_type %r for session %s", task_type, session_id)
 

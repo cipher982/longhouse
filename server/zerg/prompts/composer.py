@@ -9,7 +9,6 @@ from zerg.database import get_db
 from zerg.prompts.templates import BASE_COMMIS_PROMPT
 from zerg.prompts.templates import BASE_OIKOS_ASSISTANT_PROMPT
 from zerg.prompts.templates import BASE_OIKOS_PROMPT
-from zerg.services.oikos_operator_policy import policy_from_user_context
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_health import assess_runner_health
 
@@ -158,20 +157,8 @@ then use runner_exec for command execution."""
 
 def format_operator_mode(ctx: dict) -> str:
     """Format effective proactive-operator policy for prompt injection."""
-    policy = policy_from_user_context(ctx)
-    enabled = "enabled" if policy.enabled else "disabled"
-    return "\n".join(
-        [
-            f"- Operator mode is currently **{enabled}**.",
-            (
-                "- Hard gates: "
-                f"`shadow_mode={str(policy.shadow_mode).lower()}`, "
-                f"`allow_continue={str(policy.allow_continue).lower()}`, "
-                f"`allow_notify={str(policy.allow_notify).lower()}`, "
-                f"`allow_small_repairs={str(policy.allow_small_repairs).lower()}`"
-            ),
-        ]
-    )
+    # Oikos operator mode removed
+    return "- Operator mode is disabled."
 
 
 def build_commis_prompt(user) -> str:

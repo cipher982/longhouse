@@ -14,7 +14,7 @@ import {
 } from "../services/api";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { ConnectionStatus, useWebSocket, type WebSocketMessage } from "../lib/useWebSocket";
-import { DEFAULT_TEXT_MODEL } from "../oikos/core/model-config";
+import { DEFAULT_TEXT_MODEL } from "../lib/model-config";
 import { useAuth } from "../lib/auth";
 import { PlusIcon } from "../components/icons";
 import AutomationSettingsDrawer from "../components/automation-settings/AutomationSettingsDrawer";

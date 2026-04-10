@@ -2,7 +2,7 @@ import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
-import type { SessionTurnReview } from "../../services/api/oikos";
+import type { SessionTurnReview } from "../../services/api/sessions";
 import {
   formatContinuationStamp,
   formatDuration,
