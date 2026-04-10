@@ -512,7 +512,7 @@ run_cross_service_checks() {
         for js_path in $js_urls; do
             local js_content
             js_content=$(curl -s "${PUBLIC_DEMO_URL}${js_path}" 2>/dev/null || true)
-            if echo "$js_content" | grep -q "control.longhouse.ai"; then
+            if grep -q "control.longhouse.ai" <<< "$js_content"; then
                 found_cp=1
                 break
             fi
