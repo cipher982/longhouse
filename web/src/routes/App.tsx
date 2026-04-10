@@ -31,8 +31,6 @@ import TraceExplorerPage from "../pages/TraceExplorerPage";
 import ReliabilityPage from "../pages/ReliabilityPage";
 import SessionsPage from "../pages/SessionsPage";
 import SessionDetailPage from "../pages/SessionDetailPage";
-import { BriefingsPage } from "../pages/BriefingsPage";
-import { InsightsPage } from "../pages/InsightsPage";
 import DemoBanner from "../components/DemoBanner";
 import { Spinner } from "../components/ui";
 import { AuthGuard } from "../lib/auth";
@@ -483,22 +481,6 @@ export default function App() {
                 element: (
                   <ErrorBoundary>
                     <SessionDetailPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/briefings",
-                element: (
-                  <ErrorBoundary>
-                    <BriefingsPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/insights",
-                element: (
-                  <ErrorBoundary>
-                    <InsightsPage />
                   </ErrorBoundary>
                 ),
               },

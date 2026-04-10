@@ -786,28 +786,6 @@ export async function seedDemoSessions(options?: {
  * Set user-driven bucket state for a session (park/snooze/archive/resume).
  */
 // ---------------------------------------------------------------------------
-// Briefing
-// ---------------------------------------------------------------------------
-
-export interface BriefingResponse {
-  project: string;
-  session_count: number;
-  briefing: string | null;
-}
-
-/**
- * Fetch a project briefing — recent session summaries + curated insights.
- * Requires embeddings to be configured; returns null briefing if unavailable.
- */
-export async function fetchAgentBriefing(
-  project: string,
-  limit: number = 5,
-): Promise<BriefingResponse> {
-  const params = new URLSearchParams({ project, limit: String(limit) });
-  return request<BriefingResponse>(`${TIMELINE_API_PREFIX}/briefing?${params}`);
-}
-
-// ---------------------------------------------------------------------------
 // Session actions
 // ---------------------------------------------------------------------------
 

@@ -32,13 +32,11 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import require_single_tenant
 from zerg.dependencies.browser_auth import get_current_browser_user
 from zerg.models.agents import AgentSession
-from zerg.routers import agents_briefings as _briefings_router
 from zerg.routers import agents_demo as _demo_router
 from zerg.routers import agents_search as _search_router
 from zerg.routers import agents_sessions as _sessions_router
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_runtime import load_runtime_state_map
-from zerg.services.session_views import BriefingResponse
 from zerg.services.session_views import DemoSeedResponse
 from zerg.services.session_views import EventsListResponse
 from zerg.services.session_views import FiltersResponse
@@ -414,15 +412,6 @@ async def _wait_for_timeline_change() -> None:
         await ws.wait_for_change(timeout=TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
     else:
         await asyncio.sleep(TIMELINE_STREAM_CHANGE_WAIT_SECONDS)
-
-
-@router.get("/briefing", response_model=BriefingResponse)
-async def get_timeline_briefing(
-    project: str = Query(..., description="Project name to get briefing for"),
-    limit: int = Query(5, ge=1, le=20, description="Max sessions to include"),
-    db: Session = Depends(get_db),
-):
-    return await _briefings_router.get_briefing(project=project, limit=limit, db=db, _auth=None, _single=None)
 
 
 @router.get("/sessions/semantic", response_model=SemanticSearchResponse)
