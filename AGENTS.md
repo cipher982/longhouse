@@ -38,21 +38,25 @@ Use these nouns consistently. Do not say just "the daemon" without clarifying wh
 - **Runner**: optional WebSocket command executor for remote execution on user-owned machines.
 - **CLI / Package Layer**: the current delivery and orchestration layer. PyPI `longhouse` installs the CLI plus Runtime Host entrypoint and manages Machine Agent/Desktop App installation. Treat this as first-class for agents and power users, but not the desired human product boundary.
 
-## Install Matrix
+## Install Topology
 
-- **Self-hosted single-machine Mac**: install one Longhouse product that currently resolves to `Runtime Host + Machine Agent + Desktop App`.
-- **Hosted paid plan**: our infra runs `Control Plane + Runtime Host`; the user machine should only need `Machine Agent + Desktop App`.
-- **Agent/headless/power-user installs**: `uv`, PyPI, and shell bootstrap remain supported and should converge on the same runtime state as the app-first path.
+The Machine Agent runs where work happens. The Runtime Host runs where durability should live.
+
+- **Trying it out**: Machine Agent + Runtime Host both on a laptop. Works, but stops when the laptop sleeps. Good for first use and demos.
+- **Self-hosted durable**: Machine Agent on dev machines. Runtime Host on an always-on box (VPS, homelab, Mac mini). The recommended setup for power users.
+- **Hosted paid plan**: Machine Agent on dev machines. We run Control Plane + Runtime Host.
+
+Install channels:
+
 - **Mac human happy path**: `Longhouse.app`.
-- **Agent happy path**: `uv tool install longhouse`, PyPI, or `curl | bash`.
+- **Agent/headless/power-user**: `uv tool install longhouse`, PyPI, or `curl | bash`.
 - **Canonical repair seam**: `longhouse connect --install`.
 
 Boundary rules:
 
-- The Runtime Host is optional on the user's machine only in the hosted plan.
-- The Machine Agent is a separate component from the Runtime Host even when one installer lays both down.
-- The Desktop App must never become a dead wrapper around hidden CLI assumptions.
-- Refactors should simplify toward one runtime story per audience, not add more install modes.
+- The Machine Agent is always on the user's dev machine(s).
+- The Runtime Host is on the user's always-on box (self-hosted) or our infra (hosted). On a laptop it is trial-mode only.
+- The Desktop App is the macOS status surface. It must never become a dead wrapper around hidden CLI assumptions.
 
 ## Communication
 
@@ -144,16 +148,19 @@ Treat these as the launch-critical surfaces:
 - timeline, session detail, search, and recall
 - machine-facing coordination primitives
 - managed-local remote execution and control
-- runner-backed execution on user-owned machines
 - Oikos only where it helps users drive that same loop faster
 
-Treat these as secondary or speculative unless the user explicitly asks:
+Treat these as support tier (functional but not launch-critical):
 
-- seamless cloud takeover or cloud-branch product stories
-- proactive operator mode
-- inbox, email, and conversation surfaces
+- runner-backed execution on user-owned machines
+- Oikos proactive operator behavior
+
+Treat these as frozen for launch:
+
+- cloud-branch / cloud-takeover product stories (capability gate is off)
+- loop inbox, turn reviews, and email surfaces (hidden from nav)
 - jobs as a user-facing product surface
-- duplicate browser-only views that do not strengthen the core session loop
+- briefings and insights as standalone pages
 
 If you touch a secondary area, either simplify it toward the core story or explain why it still survives launch.
 

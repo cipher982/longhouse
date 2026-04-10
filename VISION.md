@@ -45,29 +45,29 @@ Use Longhouse in product copy. Keep Zerg internal.
 
 The launch story should fit in one paragraph:
 
-Install Longhouse on the machine where work should live. Import existing sessions or start new ones through Longhouse. Find old work fast, inspect the raw session, and steer live work later from the web UI, CLI, or HTTP. If you want unattended durability, use an always-on machine.
+Install the Longhouse agent on each machine where you run coding sessions. Point it at an always-on box where your Longhouse server lives — a VPS, homelab, or Mac mini. Import existing sessions or start new ones through Longhouse. Find old work fast, inspect the raw session, and steer live work later from the web UI, CLI, or HTTP.
 
 That means the product should make these truths obvious:
 
-- a laptop session is still useful, but it stops being available when the laptop sleeps
-- that is not a system failure
-- durability comes from launch placement, not magic migration
-- continuing work somewhere else is an explicit handoff, branch, or new launch target, not a hidden teleport
+- the Machine Agent runs where work happens (your laptop, your dev box)
+- the Runtime Host runs where durability should live (an always-on machine or hosted)
+- a laptop can run both for trying it out, but it stops when the laptop sleeps — that is not a system failure
+- durability comes from where you put the server, not magic migration
 
 ## Acquisition Model
 
-Longhouse launches as one product with multiple acquisition channels:
+Longhouse launches as one product with two components and multiple acquisition channels:
 
 - macOS humans should learn `Longhouse.app`
 - agents, headless users, and power users should keep the CLI paths
-- hosted remains a later convenience path, not the core truth
+- hosted is a later convenience path — we run the server for you
 
-All of those channels must converge on the same local runtime story:
+All channels converge on the same topology:
 
-- one local server
+- one Machine Agent per dev machine, shipping sessions
+- one Runtime Host where durability lives
 - one machine-facing control path
-- one explicit health and repair surface
-- one install metadata record that tells Longhouse how it got there
+- one health and repair surface
 
 The product should never make users understand shell bootstrap, launchd, or helper binaries just to answer "is Longhouse installed and healthy here?"
 
@@ -129,7 +129,6 @@ Longhouse is not:
 - timeline, search, session detail, and recall
 - canonical `/api/agents/*` machine surface plus CLI parity
 - managed-local launch and remote control on user-owned machines
-- runner support where it strengthens that loop
 - clear capability states for sessions:
   - live control
   - host reattach
@@ -139,16 +138,16 @@ Longhouse is not:
 
 - Oikos as a lightweight receptionist and coordinator
 - demo data and local onboarding that get users to value fast
+- runner-backed execution on user-owned machines
 
-### Not required for launch
+### Frozen for launch
 
-- seamless cloud takeover
-- broad hosted self-serve
-- full continuation parity across every provider
+- cloud-branch / cloud-takeover (capability gate is off, code remains)
+- loop inbox, turn reviews, and email surfaces (hidden from nav)
+- jobs as a user-facing product surface
+- briefings and insights as standalone pages
 - proactive operator mode
-- inbox, email, and conversation surfaces
-- jobs as a primary product surface
-- secondary UI surfaces that duplicate the timeline/control story
+- broad hosted self-serve
 
 ## Architecture Constraints
 
