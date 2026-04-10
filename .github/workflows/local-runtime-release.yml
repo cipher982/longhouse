@@ -270,7 +270,7 @@ jobs:
             ditto -c -k --sequesterRsrc --keepParent "$AMBIENT_APP_PATH" "$AMBIENT_ARCHIVE"
           fi
 
-          python3 - <<'PY'
+          NOTARIZATION_STATUS="$NOTARIZATION_STATUS" python3 - <<'PY'
           import json
           import os
           from pathlib import Path
