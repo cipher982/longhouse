@@ -8,7 +8,7 @@ import type { SessionTurnReview } from "../../../services/api/oikos";
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
     live_control_available: false,
-    cloud_branch_available: true,
+    cloud_branch_available: false,
     host_reattach_available: false,
     reply_to_live_session_available: false,
     ...overrides,
@@ -208,14 +208,14 @@ describe("SessionContextPane", () => {
     expect(button).toBeDisabled();
     expect(button).toHaveAttribute(
       "title",
-      "This Gemini session is still fully searchable here, but cloud branching is not available from this session yet.",
+      "This Gemini session is fully searchable here.",
     );
     expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
-      "Search and inspect this Gemini session here; cloud branching is not available from this session yet.",
+      "Search and inspect this Gemini session here.",
     );
   });
 
-  it("keeps browser cloud branching available when a managed-local Claude session loses its live control channel", () => {
+  it("shows reattach when a managed-local Claude session loses its live control channel", () => {
     renderPane({
       session: makeSession({
         provider: "claude",
@@ -228,20 +228,15 @@ describe("SessionContextPane", () => {
             "zsh -lc 'cd /tmp/workspace; exec claude --dangerously-skip-permissions --session-id provider-123 --dangerously-load-development-channels server:longhouse-channel'",
         },
         capabilities: makeCapabilities({
-          cloud_branch_available: true,
+          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
     });
 
-    const button = screen.getByRole("button", { name: "Open branch dock" });
-    expect(button).toBeEnabled();
-    expect(screen.getByText("Open the dock below and start a cloud branch from this session.")).toBeInTheDocument();
-    expect(
-      screen.getByText(/Start or keep the cloud branch from Longhouse below, or reattach on the host machine when available/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Reattach on host")).toBeInTheDocument();
     expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
-      "Start a cloud branch from this session.",
+      "This live Claude session is visible here, but you need the host terminal to keep driving it.",
     );
     expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach on the host machine");
   });
@@ -286,6 +281,7 @@ describe("SessionContextPane", () => {
             "zsh -lc 'cd /tmp/workspace; exec claude --dangerously-skip-permissions --session-id provider-123 --dangerously-load-development-channels server:longhouse-channel'",
         },
         capabilities: makeCapabilities({
+          cloud_branch_available: false,
           host_reattach_available: true,
         }),
       }),
@@ -295,9 +291,7 @@ describe("SessionContextPane", () => {
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
       "claude --dangerously-skip-permissions --session-id provider-123",
     );
-    expect(
-      screen.getByText(/Start or keep the cloud branch from Longhouse below, or reattach on the host machine when available/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Reattach on host")).toBeInTheDocument();
   });
 
   it("clarifies the live-session contract for managed-local Codex", () => {

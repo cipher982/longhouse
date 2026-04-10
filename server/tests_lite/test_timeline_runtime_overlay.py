@@ -227,7 +227,7 @@ def test_sessions_list_exposes_home_label_from_existing_session_metadata(tmp_pat
         assert rows["legacy-local"]["id"] == str(legacy.id)
         assert rows["legacy-local"]["home_label"] is None
         assert rows["cloud-branch"]["id"] == str(cloud.id)
-        assert rows["cloud-branch"]["home_label"] == "Moved to cloud"
+        assert rows["cloud-branch"]["home_label"] is None  # cloud labels hidden for launch
 
 
 def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):

@@ -12,11 +12,8 @@ export function getExecutionHomeLabel(home: SessionExecutionHome | null | undefi
     case "managed_local":
       return "Live control";
     case "managed_hosted":
-      return "Hosted";
     case "cloud_takeover":
-      return "Cloud";
     case "legacy":
-      return "Legacy";
     default:
       return null;
   }

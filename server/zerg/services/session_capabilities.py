@@ -31,10 +31,6 @@ def _coerce_managed_transport(value: str | None) -> ManagedSessionTransport | No
 def _execution_home_label(execution_home: SessionExecutionHome) -> str | None:
     if execution_home == SessionExecutionHome.MANAGED_LOCAL:
         return "On this Mac"
-    if execution_home == SessionExecutionHome.MANAGED_HOSTED:
-        return "Hosted"
-    if execution_home == SessionExecutionHome.CLOUD_TAKEOVER:
-        return "Moved to cloud"
     return None
 
 
@@ -68,12 +64,12 @@ def supports_live_control(session: AgentSession | None) -> bool:
 
 
 def supports_cloud_branch(session: AgentSession | None) -> bool:
-    if session is None:
-        return False
-    if supports_live_control(session):
-        return False
-    provider = str(getattr(session, "provider", "") or "").strip().lower()
-    return provider == "claude"
+    """Cloud branching is frozen for launch. Always returns False.
+
+    The underlying code paths remain intact for potential post-launch
+    re-enablement, but the capability gate is off.
+    """
+    return False
 
 
 def supports_host_reattach(session: AgentSession | None) -> bool:

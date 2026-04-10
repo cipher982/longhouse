@@ -237,7 +237,7 @@ describe("SessionDetailPage", () => {
     expect(screen.getByText("Output")).toBeInTheDocument();
   });
 
-  it("keeps the dock visible for searchable-only sessions and explains why cloud branching is disabled", () => {
+  it("keeps the dock visible for searchable-only sessions and explains the search-only state", () => {
     const session = makeSession({
       provider: "gemini",
       home_label: null,
@@ -304,10 +304,10 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "This Gemini session is still fully searchable here, but cloud branching is not available from this session yet.",
+      "This Gemini session is fully searchable here.",
     );
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
-      "Cloud branching unavailable for Gemini",
+      "Gemini session — search only",
     );
   });
 });

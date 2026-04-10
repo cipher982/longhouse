@@ -146,6 +146,7 @@ def _create_runner(db, *, owner_id: int, name: str = "cinder") -> Runner:
     return runner
 
 
+@pytest.mark.skip(reason="Cloud branch / turn review frozen for launch (P1/P2)")
 @pytest.mark.asyncio
 async def test_turn_review_autopilot_enqueues_cloud_continue_job(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_autopilot_enqueue.db")
@@ -1766,6 +1767,7 @@ async def test_turn_review_assist_prefers_loop_push_over_telegram(monkeypatch, t
         assert push_calls == [int(review.id)]
 
 
+@pytest.mark.skip(reason="Cloud branch / turn review frozen for launch (P1/P2)")
 @pytest.mark.asyncio
 async def test_turn_review_autopilot_does_not_send_mobile_notification(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path, "turn_review_autopilot_no_mobile_notification.db")
