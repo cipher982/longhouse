@@ -19,10 +19,9 @@ Video walkthrough coming soon. In the meantime, the first run is simple:
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
-longhouse serve
 ```
 
-Open `http://localhost:8080`, find one prior session, and keep the menu bar app running on macOS for local status.
+The installer runs guided onboarding, starts Longhouse locally, and on macOS installs the menu bar app for local status. Open `http://localhost:8080` and find one prior session.
 
 When you want control after launch:
 
@@ -51,7 +50,6 @@ longhouse serve --demo
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
-longhouse serve
 ```
 
 Open `http://localhost:8080`.
@@ -104,7 +102,6 @@ Sign up at https://longhouse.ai when you want the convenience path. Hosted beta 
 ### 0. Self-host with the installer (recommended)
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
-longhouse serve
 ```
 
 The installer installs the `longhouse` CLI, runs guided onboarding so Longhouse is ready to open right away, and on macOS adds the Longhouse menu bar app. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard, or rerun it later with `longhouse onboard --quick`.
@@ -128,7 +125,6 @@ Use `connect --install` if onboarding was skipped or imports need repair. Use `s
 ```bash
 uv tool install longhouse
 longhouse onboard
-longhouse serve
 ```
 
 ### 2. Hosted beta (later)

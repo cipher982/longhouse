@@ -14,6 +14,7 @@ set -euo pipefail
 
 # Track if PATH was updated (for final message)
 PATH_UPDATED=0
+ONBOARD_RESULT="not-run"
 
 # Colors for output
 RED='\033[0;31m'
@@ -395,6 +396,7 @@ verify_fresh_shell_path() {
 run_onboard() {
     if [[ "${LONGHOUSE_NO_WIZARD:-}" == "1" ]]; then
         info "Skipping onboarding wizard (LONGHOUSE_NO_WIZARD=1)"
+        ONBOARD_RESULT="skipped"
         return 0
     fi
 
@@ -403,6 +405,7 @@ run_onboard() {
 
     if ! has_command longhouse; then
         warn "longhouse command not found, skipping wizard"
+        ONBOARD_RESULT="skipped"
         return 0
     fi
 
@@ -410,24 +413,33 @@ run_onboard() {
     # Try to reconnect to the real terminal via /dev/tty.
     if [[ -t 0 ]]; then
         # Interactive terminal available directly
-        longhouse onboard || {
+        if longhouse onboard; then
+            ONBOARD_RESULT="completed"
+        else
             warn "Onboarding wizard exited with error"
             warn "You can run it again with: longhouse onboard"
-        }
+            ONBOARD_RESULT="failed"
+        fi
     elif : < /dev/tty 2>/dev/null; then
         # Stdin is pipe but TTY is accessible - redirect from /dev/tty
         info "Reconnecting to terminal for interactive setup..."
-        longhouse onboard < /dev/tty || {
+        if longhouse onboard < /dev/tty; then
+            ONBOARD_RESULT="completed"
+        else
             warn "Onboarding wizard exited with error"
             warn "You can run it again with: longhouse onboard"
-        }
+            ONBOARD_RESULT="failed"
+        fi
     else
         # No TTY available (Docker, CI, headless) - use non-interactive mode
         info "No TTY available, using QuickStart defaults"
-        longhouse onboard --quick || {
+        if longhouse onboard --quick; then
+            ONBOARD_RESULT="completed"
+        else
             warn "Onboarding wizard exited with error"
             warn "You can run it again with: longhouse onboard"
-        }
+            ONBOARD_RESULT="failed"
+        fi
     fi
 }
 
@@ -449,10 +461,15 @@ print_success() {
     echo "============================================"
     echo -e "${NC}"
     echo ""
-    echo "First run:"
-    echo "  1. Start Longhouse"
-    echo "     longhouse serve"
-    echo "  2. Open http://localhost:8080 and find one prior session"
+    if [[ "$ONBOARD_RESULT" == "completed" ]]; then
+        echo "First run:"
+        echo "  1. Open http://localhost:8080 (the installer already started Longhouse)"
+        echo "  2. Find one prior session in the timeline"
+    else
+        echo "Next:"
+        echo "  1. Run longhouse onboard"
+        echo "  2. Open http://localhost:8080 and find one prior session"
+    fi
     if has_command claude; then
       echo "  3. When you want control after launch"
       echo "     longhouse claude"
@@ -463,7 +480,11 @@ print_success() {
     if [[ "$is_macos" == "1" ]]; then
         echo ""
         echo "macOS:"
-        echo "  Look for Longhouse in the menu bar for local status."
+        if [[ "$ONBOARD_RESULT" == "completed" ]]; then
+            echo "  Look for Longhouse in the menu bar for local status."
+        else
+            echo "  The menu bar app is installed during onboarding."
+        fi
     fi
     if [[ "$has_launcher_cli" == "1" ]]; then
         echo ""

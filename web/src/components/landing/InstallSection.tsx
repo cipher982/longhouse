@@ -52,9 +52,9 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
       <div className="install-header">
         <h3>Get started fast</h3>
         <p>
-          One install command. Guided onboarding gets you to the first useful moment: open Longhouse,
-          find one prior session, and start using the timeline. On macOS, Longhouse also adds a menu
-          bar app.
+          One install command. Guided onboarding starts Longhouse, gets you to the first useful
+          moment, and leaves the local runtime in place. On macOS, Longhouse also adds a menu bar
+          app.
         </p>
       </div>
 
@@ -106,10 +106,10 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
       )}
 
       <p className="install-note">
-        Open Longhouse, find one prior session, then go back to work. When you want control after
-        launch, start with <code>longhouse claude</code> or <code>longhouse codex</code>. On macOS,
-        keep Longhouse in the menu bar for live local status. Repair tools stay one layer down if
-        you need them later.
+        Run the installer, open Longhouse, find one prior session, then go back to work. When you
+        want control after launch, start with <code>longhouse claude</code> or{" "}
+        <code>longhouse codex</code>. On macOS, keep Longhouse in the menu bar for live local
+        status. Repair tools stay one layer down if you need them later.
       </p>
 
       <div className="install-proof">
