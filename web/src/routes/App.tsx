@@ -16,7 +16,6 @@ import ChangelogPage from "../pages/ChangelogPage";
 import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
 import AutomationsPage from "../pages/AutomationsPage";
-import JobsPage from "../pages/JobsPage";
 import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
@@ -24,7 +23,6 @@ import ContactsPage from "../pages/ContactsPage";
 import DevicesPage from "../pages/DevicesPage";
 import KnowledgeSourcesPage from "../pages/KnowledgeSourcesPage";
 import AdminPage from "../pages/AdminPage";
-import JobSecretsPage from "../pages/JobSecretsPage";
 import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
 import TraceExplorerPage from "../pages/TraceExplorerPage";
@@ -317,14 +315,6 @@ export default function App() {
                 element: <Navigate to="/automations" replace />,
               },
               {
-                path: "/jobs",
-                element: (
-                  <ErrorBoundary>
-                    <JobsPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
                 path: "/forum",
                 element: (
                   <ErrorBoundary>
@@ -397,14 +387,6 @@ export default function App() {
                 element: (
                   <ErrorBoundary>
                     <DevicesPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/settings/secrets",
-                element: (
-                  <ErrorBoundary>
-                    <JobSecretsPage />
                   </ErrorBoundary>
                 ),
               },
