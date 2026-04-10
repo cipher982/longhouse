@@ -163,6 +163,44 @@ wait_for_down() {
   return 1
 }
 
+connect_status_value() {
+  local target="$1"
+  local output="$2"
+
+  awk -v target="$target" '
+    /^Service: / { section = "service"; next }
+    /^Ambient UI: / { section = "ambient"; next }
+    /^Status: / && section == target { print $2; exit }
+  ' <<< "$output"
+}
+
+wait_for_connect_services() {
+  local expect_ambient="${1:-0}"
+  local attempts="${2:-30}"
+  local delay_secs="${3:-2}"
+  local output=""
+  local engine_status=""
+  local ambient_status=""
+
+  for _ in $(seq 1 "$attempts"); do
+    output="$(longhouse connect --status)"
+    engine_status="$(connect_status_value service "$output")"
+    ambient_status="$(connect_status_value ambient "$output")"
+
+    if [[ "$engine_status" == "running" ]]; then
+      if [[ "$expect_ambient" != "1" || "$ambient_status" == "running" ]]; then
+        printf '%s\n' "$output"
+        return 0
+      fi
+    fi
+
+    sleep "$delay_secs"
+  done
+
+  printf '%s\n' "$output"
+  return 1
+}
+
 validate_doctor_json() {
   local path="$1"
   python3 - "$path" <<'PY'
@@ -509,15 +547,11 @@ rm -f "$ONBOARD_LOG"
 
 log "🔌 Verifying local runtime install..."
 if [[ "$EXPECT_SERVICE_INSTALL" -eq 1 || -z "${CI:-}" ]]; then
-  CONNECT_STATUS_LOG="$(mktemp -t longhouse-connect-status.XXXXXX.log)"
-  longhouse connect --status | tee "$CONNECT_STATUS_LOG"
-  if ! grep -q "Status: running" "$CONNECT_STATUS_LOG"; then
-    fail "connect --status did not report a running engine service"
+  if ! CONNECT_STATUS_OUTPUT="$(wait_for_connect_services "$ENABLE_MENUBAR_SMOKE")"; then
+    printf '%s\n' "$CONNECT_STATUS_OUTPUT"
+    fail "connect --status did not settle to the expected running services"
   fi
-  if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(grep -c 'Status: running' "$CONNECT_STATUS_LOG")" -lt 2 ]]; then
-    fail "connect --status did not report a running ambient menu bar service"
-  fi
-  rm -f "$CONNECT_STATUS_LOG"
+  printf '%s\n' "$CONNECT_STATUS_OUTPUT"
   if [[ "$EXPECT_SERVICE_INSTALL" -eq 1 && ! -d "$HOME/Applications/Longhouse.app" ]]; then
     fail "Longhouse.app was not installed into ~/Applications"
   fi
