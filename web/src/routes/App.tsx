@@ -35,8 +35,6 @@ import { AuthGuard } from "../lib/auth";
 
 // Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
 const ChatPage = lazy(() => import("../pages/ChatPage"));
-const LoopInboxPage = lazy(() => import("../pages/LoopInboxPage"));
-const OikosChatPage = lazy(() => import("../pages/OikosChatPage"));
 const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
 import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
@@ -80,14 +78,6 @@ function DemoApp() {
   );
 }
 
-function AuthenticatedLoopApp() {
-  return (
-    <AuthGuard clientId={config.googleClientId}>
-      <Outlet />
-    </AuthGuard>
-  );
-}
-
 function LandingAliasRedirect() {
   const location = useLocation();
   return <Navigate to={{ pathname: "/", search: location.search }} replace />;
@@ -119,14 +109,6 @@ function LegacyForumRedirect() {
 export default function App() {
   // Performance monitoring
   usePerformanceMonitoring("App", { includeBundleSizeWarning: true });
-
-  const loopInboxElement = (
-    <ErrorBoundary>
-      <Suspense fallback={<PageLoader />}>
-        <LoopInboxPage />
-      </Suspense>
-    </ErrorBoundary>
-  );
 
   // Public reference pages — shared by demo and normal modes
   const publicInfoRoutes = [
@@ -262,23 +244,6 @@ export default function App() {
       : [
           ...marketingRoutes,
           ...publicInfoRoutes,
-          {
-            element: <AuthenticatedLoopApp />,
-            children: [
-              {
-                path: "/loop",
-                element: loopInboxElement,
-              },
-              {
-                path: "/loop/card/:cardId",
-                element: loopInboxElement,
-              },
-              {
-                path: "/loop/:sessionId",
-                element: loopInboxElement,
-              },
-            ],
-          },
           // Authenticated routes - nested under a single AuthenticatedApp wrapper
           {
             element: <AuthenticatedApp />,
@@ -292,16 +257,6 @@ export default function App() {
                     },
                   ]
                 : []),
-{
-                path: "/chat",
-                element: (
-                  <ErrorBoundary>
-                    <Suspense fallback={<PageLoader />}>
-                      <OikosChatPage />
-                    </Suspense>
-                  </ErrorBoundary>
-                ),
-              },
               {
                 path: "/automations",
                 element: (

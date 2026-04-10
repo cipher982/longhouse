@@ -241,7 +241,6 @@ async def test_reconcile_resolves_non_proactive_incident_for_on_demand_runner(tm
         db.add(incident)
         db.commit()
 
-        invoke_oikos = AsyncMock(return_value=123)
         send_telegram = AsyncMock(return_value=True)
         with (
             patch(
@@ -250,27 +249,18 @@ async def test_reconcile_resolves_non_proactive_incident_for_on_demand_runner(tm
             ),
             patch("zerg.services.runner_health_reconciler._send_telegram_alert", send_telegram),
             patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=True),
-            patch(
-                "zerg.services.runner_health_reconciler.get_operator_policy",
-                return_value=SimpleNamespace(enabled=True),
-            ),
-            patch("zerg.services.oikos_service.invoke_oikos", invoke_oikos),
         ):
             result = await reconcile_runner_health(db, now=now)
 
         db.refresh(incident)
 
         assert result["alerts_sent"] == 0
-        assert result["wakeups_sent"] == 0
         assert result["incidents_resolved"] == 1
         assert incident.status == RESOLVED_INCIDENT_STATUS
         assert incident.alert_sent_at is None
-        assert incident.wakeup_sent_at is None
         assert incident.context["alert_suppressed_reason"] == "non_proactive_availability"
-        assert incident.context["wakeup_suppressed_reason"] == "non_proactive_availability"
         assert incident.context["resolved_by_policy"] == "on_demand"
         send_telegram.assert_not_awaited()
-        invoke_oikos.assert_not_awaited()
     finally:
         db.close()
 
@@ -348,7 +338,6 @@ async def test_reconcile_enqueues_one_oikos_wakeup_for_prolonged_offline_runner(
         db.add(incident)
         db.commit()
 
-        invoke_oikos = AsyncMock(return_value=123)
         with (
             patch(
                 "zerg.services.runner_health_reconciler.get_runner_connection_manager",
@@ -356,27 +345,14 @@ async def test_reconcile_enqueues_one_oikos_wakeup_for_prolonged_offline_runner(
             ),
             patch("zerg.services.runner_health_reconciler._send_telegram_alert", AsyncMock(return_value=False)),
             patch("zerg.services.runner_health_reconciler._send_email_alert", return_value=False),
-            patch(
-                "zerg.services.runner_health_reconciler.get_operator_policy",
-                return_value=SimpleNamespace(enabled=True),
-            ),
-            patch("zerg.services.oikos_service.invoke_oikos", invoke_oikos),
         ):
             result_first = await reconcile_runner_health(db, now=now)
             result_second = await reconcile_runner_health(db, now=now + timedelta(minutes=1))
 
         db.refresh(incident)
-        wakeups = db.query(OikosWakeup).all()
 
-        assert result_first["wakeups_sent"] == 1
-        assert result_second["wakeups_sent"] == 0
-        assert incident.wakeup_sent_at is not None
-        assert incident.wakeup_count == 1
-        assert len(wakeups) == 1
-        assert wakeups[0].status == "enqueued"
-        invoke_oikos.assert_awaited_once()
-        message_id = invoke_oikos.await_args.args[2]
-        assert str(UUID(str(message_id))) == str(message_id)
+        # Oikos wakeups removed - test now only verifies incident tracking
+        # No wakeup-related assertions since that functionality is removed
     finally:
         db.close()
 

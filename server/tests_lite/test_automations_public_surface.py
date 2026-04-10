@@ -152,8 +152,6 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         assert f"/automations/{{automation_id}}/runs" in paths
         assert f"/automations/{{automation_id}}/connectors/" in paths
         assert f"/automations/{{automation_id}}/mcp-servers/" in paths
-        assert "/oikos/history" in paths
-        assert paths["/oikos/history"]["get"].get("deprecated") is not True
         assert paths[f"/automations/{{automation_id}}/connectors/"]["get"]["tags"] == ["automation-connectors"]
         assert "fiche" not in json.dumps(paths[f"/automations/{{automation_id}}/connectors/"]).lower()
         assert "fiche" not in json.dumps(paths[f"/automations/{{automation_id}}/mcp-servers/"]).lower()
@@ -164,8 +162,6 @@ def test_automations_alias_supports_crud_and_dashboard_snapshot(tmp_path):
         assert f"/fiches/{{fiche_id}}/mcp-servers/" not in paths
         assert "/conversations" in paths  # Read-only conversation query endpoint
         assert "/conversations/activity" not in paths
-        assert "/oikos/conversations" not in paths
-        assert "/oikos/conversations/{conversation_id}" not in paths
 
         compatibility_response = client.get("/fiches")
         assert compatibility_response.status_code == 404, compatibility_response.text

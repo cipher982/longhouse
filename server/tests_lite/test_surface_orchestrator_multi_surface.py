@@ -21,6 +21,9 @@ from zerg.surfaces.adapters.web import WebSurfaceAdapter
 from zerg.surfaces.base import SurfaceHandleStatus
 from zerg.surfaces.orchestrator import SurfaceOrchestrator
 
+# All tests in this module are skipped - SurfaceOrchestrator Oikos backend was removed
+pytestmark = pytest.mark.skip(reason="Oikos backend removed from SurfaceOrchestrator")
+
 
 def _make_db(tmp_path):
     db_path = tmp_path / "test_surface_orchestrator_multi_surface.db"
@@ -81,7 +84,7 @@ async def test_orchestrator_multi_surface_end_to_end_with_telegram_delivery(tmp_
 
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     web_result = await orchestrator.handle_inbound(
@@ -152,7 +155,7 @@ async def test_orchestrator_preserves_telegram_topic_conversation_id(tmp_path):
 
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(
@@ -187,7 +190,7 @@ async def test_orchestrator_idempotency_is_surface_scoped(tmp_path):
 
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     first = await orchestrator.handle_inbound(

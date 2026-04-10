@@ -10,11 +10,9 @@ from zerg.prompts.composer import format_integrations
 from zerg.prompts.composer import format_server_names
 from zerg.prompts.composer import format_servers
 from zerg.prompts.composer import format_user_context
-from zerg.prompts.oikos_prompt import get_oikos_prompt
 
 __all__ = [
     # Legacy (deprecated)
-    "get_oikos_prompt",
     "get_commis_prompt",
     # New context-aware builders
     "build_oikos_prompt",

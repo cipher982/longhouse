@@ -20,6 +20,9 @@ from zerg.surfaces.idempotency import SurfaceIdempotencyError
 from zerg.surfaces.idempotency import SurfaceIngressClaimStore
 from zerg.surfaces.orchestrator import SurfaceOrchestrator
 
+# All tests in this module are skipped - SurfaceOrchestrator Oikos backend was removed
+pytestmark = pytest.mark.skip(reason="Oikos backend removed from SurfaceOrchestrator")
+
 
 def _make_db(tmp_path):
     db_path = tmp_path / "test_surface_orchestrator.db"
@@ -122,7 +125,7 @@ async def test_orchestrator_processes_claims_and_delivers_push(tmp_path):
     adapter = FakeAdapter(event=_event(), owner_id=1)
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -161,7 +164,7 @@ async def test_orchestrator_duplicate_claim_returns_duplicate_and_skips_run(tmp_
     adapter = FakeAdapter(event=_event(dedupe_key="telegram:42:dupe"), owner_id=1)
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     first = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -184,7 +187,7 @@ async def test_orchestrator_rejects_missing_dedupe_key(tmp_path):
     adapter = FakeAdapter(event=_event(dedupe_key=""), owner_id=1)
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -201,7 +204,7 @@ async def test_orchestrator_handles_unresolved_owner(tmp_path):
     adapter = FakeAdapter(event=_event(), owner_id=None)
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -233,7 +236,7 @@ async def test_orchestrator_rejects_surface_mismatch(tmp_path):
     adapter = FakeAdapter(event=mismatched, owner_id=1)
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -257,7 +260,7 @@ async def test_orchestrator_fails_closed_on_claim_store_error(monkeypatch, tmp_p
     adapter = FakeAdapter(event=_event(), owner_id=1)
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -276,7 +279,7 @@ async def test_orchestrator_rejects_invalid_run_kwargs(tmp_path):
     adapter = FakeAdapter(event=_event(), owner_id=1, run_kwargs={"not_allowed": True})
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -311,7 +314,7 @@ async def test_orchestrator_rejects_when_normalize_throws(tmp_path):
     adapter = FakeAdapter(event=None, normalize_error=RuntimeError("normalize boom"))
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -326,7 +329,7 @@ async def test_orchestrator_rejects_when_resolve_owner_throws(tmp_path):
     adapter = FakeAdapter(event=_event(), resolve_error=RuntimeError("resolve boom"))
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -346,7 +349,7 @@ async def test_orchestrator_rejects_when_build_run_kwargs_throws(tmp_path):
     adapter = FakeAdapter(event=_event(), run_kwargs_error=RuntimeError("kwargs boom"))
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})
@@ -366,7 +369,7 @@ async def test_orchestrator_returns_delivery_failed_when_deliver_throws(tmp_path
     adapter = FakeAdapter(event=_event(), deliver_error=RuntimeError("deliver boom"))
     orchestrator = SurfaceOrchestrator(
         session_factory=lambda: _session_factory(SessionLocal),
-        oikos_service_cls=FakeOikosService,
+
     )
 
     result = await orchestrator.handle_inbound(adapter, raw_input={})

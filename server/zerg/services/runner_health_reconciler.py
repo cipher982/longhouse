@@ -7,14 +7,12 @@ import os
 from datetime import datetime
 from datetime import timedelta
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy.orm import Session
 
 from zerg.models.models import Runner
 from zerg.models.models import RunnerHealthIncident
 from zerg.models.user import User
-from zerg.services.oikos_operator_policy import get_operator_policy
 from zerg.services.runner_connection_manager import get_runner_connection_manager
 from zerg.services.runner_health import RunnerHealthAssessment
 from zerg.services.runner_health import assess_runner_health
@@ -29,7 +27,6 @@ OFFLINE_INCIDENT_TYPE = "offline"
 OPEN_INCIDENT_STATUS = "open"
 RESOLVED_INCIDENT_STATUS = "resolved"
 ALERT_AFTER = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_ALERT_AFTER_MINUTES", "5")))
-WAKEUP_AFTER = timedelta(minutes=int(os.getenv("RUNNER_OFFLINE_WAKEUP_AFTER_MINUTES", "30")))
 NON_PROACTIVE_SUPPRESSED_REASON = "non_proactive_availability"
 
 
@@ -305,132 +302,6 @@ async def _maybe_send_external_alert(
     return True
 
 
-def _build_oikos_wakeup_message(
-    *,
-    runner: Runner,
-    health: RunnerHealthAssessment,
-    incident: RunnerHealthIncident,
-    now: datetime,
-) -> str:
-    offline_for = _format_duration(now - incident.opened_at)
-    return "\n".join(
-        [
-            f'System/operator wakeup: runner "{runner.name}" has been offline for {offline_for}.',
-            "",
-            "Trigger: runner_offline",
-            f"Reason code: {health.status_reason}",
-            f"Longhouse summary: {health.status_summary}",
-            "",
-            ("Inspect the runner situation, decide whether the user needs attention, and explain the " "likely repair path clearly."),
-            (
-                "Use runner_list to inspect the fleet and suggest restarting the runner service or "
-                "re-running the repair command if needed."
-            ),
-        ]
-    )
-
-
-async def _maybe_enqueue_oikos_wakeup(
-    db: Session,
-    *,
-    incident: RunnerHealthIncident,
-    runner: Runner,
-    health: RunnerHealthAssessment,
-    now: datetime,
-) -> bool:
-    if incident.wakeup_sent_at is not None:
-        return False
-    allowed, suppressed_reason = _external_attention_allowed(health)
-    if not allowed:
-        context = dict(incident.context or {})
-        if context.get("wakeup_suppressed_reason") != suppressed_reason:
-            context.update(
-                {
-                    "wakeup_suppressed_at": now.isoformat(),
-                    "wakeup_suppressed_reason": suppressed_reason,
-                }
-            )
-            incident.context = context
-            db.flush()
-        return False
-    if now - incident.opened_at < WAKEUP_AFTER:
-        return False
-
-    context = dict(incident.context or {})
-    if not get_operator_policy(db, runner.owner_id).enabled:
-        if "wakeup_suppressed_at" not in context:
-            context.update(
-                {
-                    "wakeup_suppressed_at": now.isoformat(),
-                    "wakeup_suppressed_reason": "operator_mode_disabled",
-                }
-            )
-            incident.context = context
-            db.flush()
-        return False
-
-    from zerg.services.oikos_service import invoke_oikos
-    from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_ENQUEUED
-    from zerg.services.oikos_wakeup_ledger import WAKEUP_STATUS_FAILED
-    from zerg.services.oikos_wakeup_ledger import append_wakeup
-    from zerg.surfaces.adapters.operator import OperatorSurfaceAdapter
-
-    conversation_id = f"operator:runner:{runner.id}"
-    wakeup_key = f"runner_offline:{incident.id}"
-    wakeup_payload = {
-        "trigger_type": "runner_offline",
-        "conversation_id": conversation_id,
-        "runner_id": runner.id,
-        "runner_name": runner.name,
-        "incident_id": incident.id,
-    }
-    try:
-        run_id = await invoke_oikos(
-            runner.owner_id,
-            _build_oikos_wakeup_message(runner=runner, health=health, incident=incident, now=now),
-            str(uuid4()),
-            source="operator",
-            surface_adapter=OperatorSurfaceAdapter(owner_id=runner.owner_id, conversation_id=conversation_id),
-            surface_payload=wakeup_payload,
-        )
-        append_wakeup(
-            db,
-            owner_id=runner.owner_id,
-            source="runner_health",
-            trigger_type="runner_offline",
-            status=WAKEUP_STATUS_ENQUEUED,
-            conversation_id=conversation_id,
-            wakeup_key=wakeup_key,
-            run_id=run_id,
-            payload=wakeup_payload,
-        )
-    except Exception:
-        append_wakeup(
-            db,
-            owner_id=runner.owner_id,
-            source="runner_health",
-            trigger_type="runner_offline",
-            status=WAKEUP_STATUS_FAILED,
-            reason="invoke_failed",
-            conversation_id=conversation_id,
-            wakeup_key=wakeup_key,
-            payload=wakeup_payload,
-        )
-        raise
-
-    incident.wakeup_sent_at = now
-    incident.wakeup_count = int(incident.wakeup_count or 0) + 1
-    context.update(
-        {
-            "wakeup_sent_at": now.isoformat(),
-            "wakeup_key": wakeup_key,
-        }
-    )
-    incident.context = context
-    db.flush()
-    return True
-
-
 async def reconcile_runner_health(
     db: Session,
     *,
@@ -447,7 +318,6 @@ async def reconcile_runner_health(
         "incidents_opened": 0,
         "incidents_resolved": 0,
         "alerts_sent": 0,
-        "wakeups_sent": 0,
         "errors": 0,
         "checked_at": now.isoformat(),
     }
@@ -496,16 +366,6 @@ async def reconcile_runner_health(
                     now=now,
                 ):
                     result["alerts_sent"] += 1
-                db.commit()
-
-                if owner is not None and await _maybe_enqueue_oikos_wakeup(
-                    db,
-                    incident=incident,
-                    runner=runner,
-                    health=health,
-                    now=now,
-                ):
-                    result["wakeups_sent"] += 1
                 db.commit()
                 continue
             elif incident is not None:

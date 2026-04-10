@@ -23,7 +23,7 @@ import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { useReadinessFlag } from "../lib/readiness-contract";
-import { fetchSessionTurnTelemetry, type SessionTurnReview } from "../services/api/oikos";
+import { fetchSessionTurnTelemetry, type SessionTurnReview } from "../services/api/sessions";
 import { setSessionAction } from "../services/api/agents";
 import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
@@ -120,7 +120,7 @@ function SessionDetailWorkspaceRoute({
     staleTime: 60_000,
   });
 
-  const latestTurnReview: SessionTurnReview | null = turnTelemetryQuery.data?.latestReview ?? null;
+  const latestTurnReview: SessionTurnReview | null = turnTelemetryQuery.data?.[0] ?? null;
   const turnReviewLoading = Boolean(session?.id) && turnTelemetryQuery.isLoading;
   const turnReviewUnavailable = Boolean(session?.id) && turnTelemetryQuery.isError;
 

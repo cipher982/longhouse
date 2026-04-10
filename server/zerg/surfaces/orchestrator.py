@@ -1,9 +1,8 @@
-"""Shared ingress orchestrator for Oikos surface adapters."""
+"""Shared ingress orchestrator for surface adapters (Oikos removed)."""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
 from typing import Any
 from typing import Callable
 
@@ -13,9 +12,6 @@ from zerg.surfaces.base import SurfaceHandleResult
 from zerg.surfaces.base import SurfaceHandleStatus
 from zerg.surfaces.idempotency import SurfaceIdempotencyError
 from zerg.surfaces.idempotency import SurfaceIngressClaimStore
-
-if TYPE_CHECKING:
-    from zerg.services.oikos_service import OikosService
 
 logger = logging.getLogger(__name__)
 
@@ -33,21 +29,14 @@ _ALLOWED_RUN_KWARGS = {
 
 
 class SurfaceOrchestrator:
-    """Normalize + dedupe + run Oikos for inbound surface events."""
+    """Normalize + dedupe for inbound surface events (Oikos backend removed)."""
 
     def __init__(
         self,
         *,
         session_factory: Callable[[], Any] = db_session,
-        oikos_service_cls: type["OikosService"] | None = None,
     ) -> None:
         self._session_factory = session_factory
-        if oikos_service_cls is None:
-            from zerg.services.oikos_service import OikosService
-
-            self._oikos_service_cls: type[Any] = OikosService
-        else:
-            self._oikos_service_cls = oikos_service_cls
 
     async def handle_inbound(self, adapter: SurfaceAdapter, raw_input: Any) -> SurfaceHandleResult:
         try:
@@ -168,64 +157,16 @@ class SurfaceOrchestrator:
                     message=f"invalid run kwargs: {', '.join(invalid)}",
                 )
 
-            service = self._oikos_service_cls(db)
-            try:
-                result = await service.run_oikos(
-                    owner_id=owner_id,
-                    task=event.text,
-                    source_surface_id=event.surface_id,
-                    source_conversation_id=event.conversation_id,
-                    source_message_id=event.source_message_id,
-                    source_event_id=event.source_event_id,
-                    source_idempotency_key=event.dedupe_key,
-                    **run_kwargs,
-                )
-            except Exception as exc:  # noqa: BLE001
-                logger.exception(
-                    "SurfaceOrchestrator: run_oikos failed for %s key %s",
-                    event.surface_id,
-                    event.dedupe_key,
-                )
-                return SurfaceHandleResult(
-                    status=SurfaceHandleStatus.REJECTED,
-                    surface_id=event.surface_id,
-                    owner_id=owner_id,
-                    dedupe_key=event.dedupe_key,
-                    message=f"run_oikos failed: {exc}",
-                )
-
-            if adapter.mode == "push":
-                run_id = getattr(result, "run_id", None)
-                thread_id = getattr(result, "thread_id", None)
-                run_status = getattr(result, "status", None)
-                response_text = getattr(result, "result", None)
-                text = response_text or "Done."
-                try:
-                    await adapter.deliver(owner_id=owner_id, text=text, event=event)
-                except Exception:  # noqa: BLE001
-                    logger.exception(
-                        "SurfaceOrchestrator: delivery failed for %s key %s",
-                        event.surface_id,
-                        event.dedupe_key,
-                    )
-                    return SurfaceHandleResult(
-                        status=SurfaceHandleStatus.DELIVERY_FAILED,
-                        surface_id=event.surface_id,
-                        owner_id=owner_id,
-                        dedupe_key=event.dedupe_key,
-                        run_id=run_id,
-                        thread_id=thread_id,
-                        run_status=run_status,
-                        response_text=response_text,
-                    )
-
+            # Oikos backend removed - surface orchestration is now a no-op
+            logger.warning(
+                "SurfaceOrchestrator: Oikos backend removed. Event from %s key %s ignored.",
+                event.surface_id,
+                event.dedupe_key,
+            )
             return SurfaceHandleResult(
-                status=SurfaceHandleStatus.PROCESSED,
+                status=SurfaceHandleStatus.REJECTED,
                 surface_id=event.surface_id,
                 owner_id=owner_id,
                 dedupe_key=event.dedupe_key,
-                run_id=getattr(result, "run_id", None),
-                thread_id=getattr(result, "thread_id", None),
-                run_status=getattr(result, "status", None),
-                response_text=getattr(result, "result", None),
+                message="Oikos backend removed",
             )

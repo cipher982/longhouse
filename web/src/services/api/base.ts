@@ -1,6 +1,6 @@
 import { config } from "../../lib/config";
 import { fetchWithRefresh } from "../../lib/auth-refresh";
-import { logger } from "../../oikos/core/logger";
+import { logger } from "../../lib/logger";
 
 export class ApiError extends Error {
   readonly status: number;
