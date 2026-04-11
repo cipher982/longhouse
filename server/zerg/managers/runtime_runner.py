@@ -122,11 +122,11 @@ class RuntimeRunner:  # noqa: D401
         run_id: int | None = None,
         trace_id: str | None = None,
     ) -> Any:
-        """Set up contexts, run oikos loop, capture usage. Returns OikosResult."""
+        """Set up contexts, run the runtime loop, capture usage."""
         from zerg.callbacks.token_stream import reset_current_thread_id
         from zerg.connectors.context import reset_credential_resolver
-        from zerg.services.oikos_react_engine import reset_llm_usage
-        from zerg.services.oikos_react_engine import run_oikos_loop
+        from zerg.services.runtime_react import reset_llm_usage
+        from zerg.services.runtime_react import run_runtime_react_loop
 
         credential_resolver = CredentialResolver(
             fiche_id=self.agent.id,
@@ -140,19 +140,17 @@ class RuntimeRunner:  # noqa: D401
             tools = self._resolve_tools(db, agent_row, skill_integration)
             reset_llm_usage()
 
-            # Resolve run_id/trace_id from oikos context if not provided
+            # Resolve run_id/trace_id from surviving commis context if not provided
             if run_id is None or trace_id is None:
                 from zerg.context import get_commis_context
-                from zerg.services.oikos_context import get_oikos_context
 
-                sup_ctx = get_oikos_context()
                 commis_ctx = get_commis_context()
                 if run_id is None:
-                    run_id = sup_ctx.run_id if sup_ctx else None
+                    run_id = commis_ctx.run_id if commis_ctx else None
                 if trace_id is None:
-                    trace_id = sup_ctx.trace_id if sup_ctx else (commis_ctx.trace_id if commis_ctx else None)
+                    trace_id = commis_ctx.trace_id if commis_ctx else None
 
-            result = await run_oikos_loop(
+            result = await run_runtime_react_loop(
                 messages=messages,
                 fiche_row=self.agent,
                 tools=tools,
