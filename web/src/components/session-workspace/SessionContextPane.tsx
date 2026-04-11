@@ -82,7 +82,7 @@ export function SessionContextPane({
           : "Loop Mode changes review posture only. Keep driving the live session from the host terminal.";
   const primaryActionDescription = interaction.canChatFromBrowser
     ? "Open the dock below and send the next prompt into the live session."
-    : interaction.composerDisabledReason ?? interaction.notice?.body ?? interaction.capabilitySummary;
+    : interaction.composerDisabledReason ?? interaction.notice?.body ?? interaction.capabilitySummary ?? undefined;
 
   return (
     <div className="session-context-pane">
@@ -110,9 +110,11 @@ export function SessionContextPane({
             <Badge variant="warning">{session.environment}</Badge>
           ) : null}
         </div>
-        <div className="session-context-capability-summary" data-testid="session-capability-summary">
-          {interaction.capabilitySummary}
-        </div>
+        {interaction.capabilitySummary && (
+          <div className="session-context-capability-summary" data-testid="session-capability-summary">
+            {interaction.capabilitySummary}
+          </div>
+        )}
       </div>
 
       <div className="session-pane-section">

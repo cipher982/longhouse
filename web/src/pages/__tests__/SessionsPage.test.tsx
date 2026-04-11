@@ -438,14 +438,13 @@ describe("SessionsPage", () => {
     expect(prefetchSpy).not.toHaveBeenCalled();
   });
 
-  it("shows the capability summary on session cards", async () => {
+  it("shows the capability badge on session cards", async () => {
     renderSessionsPage("/timeline");
 
     const capability = await screen.findByTestId("session-card-capability");
     expect(capability).toHaveTextContent("Search only");
-    expect(capability).toHaveTextContent(
-      "Search and inspect this Codex session here.",
-    );
+    // Cards show badge only — no prose summary
+    expect(capability.querySelector(".session-card-capability-text")).toBeNull();
   });
 
   it("keeps the timeline card action semantically honest", async () => {

@@ -676,7 +676,6 @@ function SessionCard({
           )}
           <div className="session-card-capability" data-testid="session-card-capability">
             <Badge variant={interaction.capabilityVariant}>{interaction.capabilityLabel}</Badge>
-            <span className="session-card-capability-text">{interaction.capabilitySummary}</span>
           </div>
           {title && <div className="session-card-title">{title}</div>}
           {showSummary && (
