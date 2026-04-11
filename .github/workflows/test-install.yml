@@ -109,7 +109,11 @@ jobs:
       - name: Run public installer smoke
         run: |
           chmod +x scripts/ci/installer-first-run.sh
-          ./scripts/ci/installer-first-run.sh --installer remote --shell "${{ matrix.shell_path }}"
+          ./scripts/ci/installer-first-run.sh \
+            --installer remote \
+            --shell "${{ matrix.shell_path }}" \
+            --installer-onboard \
+            --runtime-artifact-smoke
 
   installer-upgrade-local:
     if: ${{ github.event_name != 'schedule' }}

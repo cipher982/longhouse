@@ -416,8 +416,8 @@ test-install-first-run-fresh: ## Run disposable first-run installer smoke and fo
 test-install-e2e-browser: ## Run installer smoke with Playwright browser verification of timeline
 	@./scripts/ci/installer-first-run.sh --e2e-browser
 
-test-install-wheel: ## Run installer smoke from a built wheel (tests real package artifact)
-	@./scripts/ci/installer-first-run.sh --wheel --e2e-browser
+test-install-wheel: ## Run installer-owned wheel smoke with released runtime artifacts + browser verification
+	@./scripts/ci/installer-first-run.sh --wheel --installer-onboard --runtime-artifact-smoke --e2e-browser
 
 test-install-macos-ambient: ## Run explicit local macOS installer smoke with ambient menu bar enabled (heavy)
 	@./scripts/ci/installer-first-run.sh --shell /bin/zsh --menubar
@@ -429,7 +429,7 @@ test-wheel-package: ## Build the CLI wheel and verify the archive has no duplica
 	@./scripts/qa/test-wheel-package.sh
 
 test-install-remote: ## Run public installer smoke against get.longhouse.ai (manual/scheduled)
-	@./scripts/ci/installer-first-run.sh --installer remote
+	@./scripts/ci/installer-first-run.sh --installer remote --installer-onboard --runtime-artifact-smoke
 
 test-install-upgrade: ## Rehearse CLI install -> upgrade in a disposable temp HOME
 	@bash ./scripts/qa/test-cli-upgrade.sh
