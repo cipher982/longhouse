@@ -240,12 +240,12 @@ ensure-playwright-browser: ## @internal Install Playwright Chromium when missing
 	@$(MAKE) ensure-js-deps
 	@cd e2e && bunx playwright install chromium >/dev/null
 
-test-e2e: ## Run E2E tests (core + a11y)
-	@echo "🎭 Running E2E tests (core + a11y)..."
+test-e2e: ## Run launch-surface E2E tests (timeline/session detail + a11y)
+	@echo "🎭 Running launch-surface E2E tests (core + a11y)..."
 	$(MAKE) test-e2e-core
 	$(MAKE) test-e2e-a11y
 
-test-e2e-core: ## Run core E2E tests only — no retries, must pass 100% (called by test-e2e)
+test-e2e-core: ## Run launch-surface core E2E only — no retries, must pass 100% (called by test-e2e)
 	@$(MAKE) ensure-playwright-browser
 	@echo "🔴 Running CORE E2E tests (no retries, must pass 100%)..."
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
