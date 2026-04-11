@@ -179,6 +179,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 - `~/.claude/longhouse-machine-name` is read at engine startup, not live.
 - Use `scripts/hosted-loop-debug.sh <subdomain>` before improvising hosted loop debugging.
 - If a tool or workflow already provides a completion signal, do not turn it into a polling loop.
+- `/api/timeline/sessions` caps `limit` at 100. Frontend URL parsing needs to clamp to that or the timeline can self-422 on oversized `limit` params.
 
 ## Pushing Changes
 
