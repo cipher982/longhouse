@@ -881,6 +881,7 @@ export default function SessionsPage() {
   const queryClient = useQueryClient();
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
   const lastTimelineScrollAtRef = useRef(0);
+  const timelineScrollUiTimeoutRef = useRef<number | null>(null);
   const { data: runnersData } = useRunners();
   const runners = runnersData ?? [];
   const runnerActionLabel = runners.length > 0 ? "Open Machines" : "Connect Machine";
@@ -1014,13 +1015,32 @@ export default function SessionsPage() {
       return;
     }
 
-    const handleScroll = () => {
-      lastTimelineScrollAtRef.current = performance.now();
+    const clearTimelineScrollUiTimeout = () => {
+      if (timelineScrollUiTimeoutRef.current != null) {
+        window.clearTimeout(timelineScrollUiTimeoutRef.current);
+        timelineScrollUiTimeoutRef.current = null;
+      }
     };
 
-    scroller.addEventListener("scroll", handleScroll, { passive: true });
+    const markTimelineScrolling = () => {
+      lastTimelineScrollAtRef.current = performance.now();
+      scroller.classList.add("page-shell--timeline-scrolling");
+      clearTimelineScrollUiTimeout();
+      timelineScrollUiTimeoutRef.current = window.setTimeout(() => {
+        timelineScrollUiTimeoutRef.current = null;
+        scroller.classList.remove("page-shell--timeline-scrolling");
+      }, SESSION_CARD_SCROLL_SUPPRESSION_MS);
+    };
+
+    scroller.addEventListener("wheel", markTimelineScrolling, { passive: true });
+    scroller.addEventListener("touchmove", markTimelineScrolling, { passive: true });
+    scroller.addEventListener("scroll", markTimelineScrolling, { passive: true });
     return () => {
-      scroller.removeEventListener("scroll", handleScroll);
+      clearTimelineScrollUiTimeout();
+      scroller.classList.remove("page-shell--timeline-scrolling");
+      scroller.removeEventListener("wheel", markTimelineScrolling);
+      scroller.removeEventListener("touchmove", markTimelineScrolling);
+      scroller.removeEventListener("scroll", markTimelineScrolling);
     };
   }, []);
 

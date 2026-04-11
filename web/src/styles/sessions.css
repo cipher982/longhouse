@@ -437,6 +437,17 @@
     transition: all var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
+  /*
+   * When the user is actively scrolling, cards slide under a stationary cursor.
+   * Hover animations then pile up across successive cards and blow up software
+   * raster cost. Keep the hover state, but snap it instead of animating it.
+   */
+  .page-shell--timeline-scrolling .session-card,
+  .page-shell--timeline-scrolling .session-card-archive-btn,
+  .page-shell--timeline-scrolling .session-card-arrow {
+    transition: none !important;
+  }
+
   @supports (content-visibility: auto) {
     .session-card {
       /* Skip offscreen card work in large timelines while preserving scroll height. */
