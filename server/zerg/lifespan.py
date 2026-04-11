@@ -73,6 +73,12 @@ async def lifespan(app: FastAPI):
             logger.error(str(_e))
             raise
         logger.info("Database tables initialized")
+        try:
+            url = default_engine.url
+            masked = str(url).replace(url.password or "", "***") if url.password else str(url)
+            logger.info("Database bound to: %s", masked)
+        except Exception:
+            pass
 
         # FTS5 check
         try:
