@@ -18,7 +18,7 @@ Usage: scripts/ci/provision-e2e.sh [--mode core|extended]
 
 Modes:
   core      Provision a hosted instance and verify the launch-critical ready path
-  extended  Run core checks plus image backfill, jobs repo sync, job execution, and rolling deploy
+  extended  Run core checks plus image backfill and rolling deploy
 USAGE
 }
 

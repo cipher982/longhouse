@@ -428,7 +428,7 @@ test-runtime-packaging-macos: ## Build/sign/zip the canonical Longhouse.app bund
 test-wheel-package: ## Build the CLI wheel and verify the archive has no duplicate ZIP entries
 	@./scripts/qa/test-wheel-package.sh
 
-test-install-remote: ## Run public installer smoke against get.longhouse.ai (manual/scheduled)
+test-install-remote: ## Run public installer smoke against the published get.longhouse.ai script
 	@./scripts/ci/installer-first-run.sh --installer remote --installer-onboard --runtime-artifact-smoke
 
 test-install-upgrade: ## Rehearse CLI install -> upgrade in a disposable temp HOME
@@ -439,7 +439,7 @@ launch-gate-local: test-install onboarding-funnel ## Run the local launch onboar
 test-provision-e2e: ## Provision an instance via control plane and verify the core hosted ready path
 	@./scripts/ci/provision-e2e.sh --mode core
 
-test-provision-e2e-extended: ## Run the extended hosted canary (jobs repo sync + rolling deploy)
+test-provision-e2e-extended: ## Run the extended hosted canary (image backfill + rolling deploy)
 	@./scripts/ci/provision-e2e.sh --mode extended
 
 test-integration: ## @internal Run integration tests (REAL API calls, requires API keys)
