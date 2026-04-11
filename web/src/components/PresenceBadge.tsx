@@ -122,8 +122,9 @@ function Dot({ state, size, compact = false }: DotProps) {
       <span
         style={{
           ...base,
-          background: "radial-gradient(circle, #fb923c 30%, #f97316 100%)",
-          animation: "presence-pulse 1.4s ease-in-out infinite",
+          background: compact ? "#fb923c" : "radial-gradient(circle, #fb923c 30%, #f97316 100%)",
+          animation: compact ? undefined : "presence-pulse 1.4s ease-in-out infinite",
+          opacity: compact ? 0.88 : 1,
           // CSS custom property for glow color used in keyframes
           ["--presence-glow" as string]: "rgba(251, 146, 60, 0.6)",
         }}
@@ -136,9 +137,10 @@ function Dot({ state, size, compact = false }: DotProps) {
       <span
         style={{
           ...base,
-          background: "radial-gradient(circle, #38bdf8 30%, #0ea5e9 100%)",
-          animation: "presence-run-blink 0.9s ease-in-out infinite",
-          boxShadow: "0 0 6px 2px rgba(56, 189, 248, 0.5)",
+          background: compact ? "#38bdf8" : "radial-gradient(circle, #38bdf8 30%, #0ea5e9 100%)",
+          animation: compact ? undefined : "presence-run-blink 0.9s ease-in-out infinite",
+          boxShadow: compact ? undefined : "0 0 6px 2px rgba(56, 189, 248, 0.5)",
+          opacity: compact ? 0.88 : 1,
         }}
       />
     );

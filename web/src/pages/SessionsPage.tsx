@@ -293,11 +293,16 @@ function getRuntimeMetaLabel(runtime: ReturnType<typeof resolveSessionRuntimeSta
   return null;
 }
 
-function parsePositiveIntParam(rawValue: string | null, fallback: number, min: number = 1): number {
+function parsePositiveIntParam(
+  rawValue: string | null,
+  fallback: number,
+  min: number = 1,
+  max: number = Number.POSITIVE_INFINITY,
+): number {
   if (rawValue == null || rawValue.trim() === "") return fallback;
   const parsed = Number(rawValue);
   if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(min, Math.floor(parsed));
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
 }
 
 function readSessionsUrlState(searchParams: URLSearchParams): SessionsUrlState {
@@ -317,7 +322,7 @@ function readSessionsUrlState(searchParams: URLSearchParams): SessionsUrlState {
     searchQuery: searchParams.get("query") || "",
     aiSearch,
     sortOrder: searchParams.get("sort") === "recent" ? "recent" : DEFAULT_SORT_ORDER,
-    limit: parsePositiveIntParam(searchParams.get("limit"), PAGE_SIZE, PAGE_SIZE),
+    limit: parsePositiveIntParam(searchParams.get("limit"), PAGE_SIZE, PAGE_SIZE, 100),
   };
 }
 

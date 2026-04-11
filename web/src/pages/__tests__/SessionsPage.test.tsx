@@ -304,7 +304,7 @@ describe("SessionsPage", () => {
         environment: "laptop",
         days_back: 30,
         query: "fix bug",
-        limit: 150,
+        limit: 100,
         mode: "hybrid",
         sort: "recency",
         hide_autonomous: false,
