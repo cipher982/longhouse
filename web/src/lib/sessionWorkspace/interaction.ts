@@ -55,7 +55,7 @@ export function getSessionInteractionCapabilities({
       ? `Message this live ${providerLabel} session from Longhouse, or reattach on the host machine.`
       : mode === "managed_local_unavailable"
         ? `This live ${providerLabel} session is visible here, but you need the host terminal to keep driving it.`
-        : `Search and inspect this ${providerLabel} session here.`;
+        : null;
 
   const title =
     mode === "managed_local"

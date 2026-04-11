@@ -84,7 +84,7 @@ export type SessionInteractionCapabilities = {
   canChatFromBrowser: boolean;
   capabilityLabel: string;
   capabilityVariant: "neutral" | "success" | "warning";
-  capabilitySummary: string;
+  capabilitySummary: string | null;
   composerDisabledReason: string | null;
   primaryActionLabel: string;
   submitLabel: string;
