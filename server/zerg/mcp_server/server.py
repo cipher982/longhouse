@@ -10,6 +10,7 @@ import json
 import logging
 import re
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 
 from zerg.mcp_server.api_client import LonghouseAPIClient
@@ -21,6 +22,19 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 logger = logging.getLogger(__name__)
 _CURRENT_SESSION_HEADER = CURRENT_SESSION_HEADER
+
+
+def _format_error(exc: Exception, api_url: str) -> str:
+    """Format an exception into a helpful JSON error string."""
+    if isinstance(exc, httpx.ConnectError):
+        return json.dumps(
+            {
+                "error": f"Cannot connect to Longhouse at {api_url}",
+                "hint": "Is the server running? Try: longhouse serve",
+            }
+        )
+    msg = str(exc)
+    return json.dumps({"error": msg or repr(exc)})
 
 
 def _truncate_event(event: dict, max_chars: int, include_tool_output: bool) -> dict:
@@ -111,7 +125,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                     return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return _format_error(exc, api_url)
 
     # ------------------------------------------------------------------
     # Tool: get_session_detail
@@ -181,7 +195,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 }
             )
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return _format_error(exc, api_url)
 
     # ------------------------------------------------------------------
     # Tool: get_session_events
@@ -254,7 +268,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 }
             )
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return _format_error(exc, api_url)
 
     # ------------------------------------------------------------------
     # Tool: notify_oikos
@@ -339,7 +353,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return _format_error(exc, api_url)
 
     # ------------------------------------------------------------------
     # Tool: recall
@@ -387,7 +401,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return _format_error(exc, api_url)
 
     # ------------------------------------------------------------------
     # Tool: check_wall
@@ -424,7 +438,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return _format_error(exc, api_url)
 
     # ------------------------------------------------------------------
     # Tool: session_tail
@@ -458,7 +472,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return _format_error(exc, api_url)
 
     # ------------------------------------------------------------------
     # Tool: peers
@@ -523,7 +537,7 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 )
             return json.dumps({"peers": sessions, "total": len(sessions)})
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return _format_error(exc, api_url)
 
     # ------------------------------------------------------------------
     # Tool: message_session
@@ -562,6 +576,6 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
                 return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
             return resp.text
         except Exception as exc:
-            return json.dumps({"error": str(exc)})
+            return _format_error(exc, api_url)
 
     return server
