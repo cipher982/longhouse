@@ -418,6 +418,14 @@ def serve(
         typer.echo(f"  Or find what's using it: lsof -i :{port}")
         raise typer.Exit(code=1) from e
 
+    # Write the URL file so MCP server, hooks, and engine can find us.
+    # Always write 127.0.0.1 — that's what local clients connect to,
+    # even when the server binds 0.0.0.0.
+    from zerg.services.shipper.token import save_zerg_url
+
+    local_url = f"http://127.0.0.1:{port}"
+    save_zerg_url(local_url)
+
     # Check for bundled frontend
     from zerg.main import FRONTEND_DIST_DIR
     from zerg.main import FRONTEND_SOURCE
