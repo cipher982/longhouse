@@ -1,22 +1,11 @@
 name: Provisioning E2E
 
 on:
-  push:
+  workflow_run:
+    workflows: ["Publish Runtime Image"]
+    types: [completed]
     branches:
       - main
-    paths:
-      - '.dockerignore'
-      - 'bun.lock'
-      - 'control-plane/**'
-      - 'server/**'
-      - 'web/**'
-      - 'config/**'
-      - 'docker/entrypoint.sh'
-      - 'docker/runtime.dockerfile'
-      - 'scripts/ci/provision-e2e.sh'
-      - 'scripts/lib/hosted-instance.sh'
-      - '.github/workflows/provision-e2e.yml'
-      - '.github/workflows/runtime-image.yml'
   pull_request:
     paths:
       - '.dockerignore'
@@ -39,6 +28,7 @@ permissions:
 
 jobs:
   provision-e2e-core:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -46,6 +36,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -74,30 +65,8 @@ jobs:
         run: |
           set -euo pipefail
           image=""
-          before_sha="${{ github.event.before }}"
-          runtime_paths=(
-            .dockerignore
-            bun.lock
-            server
-            web
-            config
-            docker/entrypoint.sh
-            docker/runtime.dockerfile
-            .github/workflows/runtime-image.yml
-          )
-
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:latest"
-            if [[ "$before_sha" != "0000000000000000000000000000000000000000" ]]; then
-              if ! git rev-parse --verify "${before_sha}^{commit}" >/dev/null 2>&1; then
-                git fetch --no-tags origin "$before_sha"
-              fi
-
-              if git diff --name-only "$before_sha" "$GITHUB_SHA" -- "${runtime_paths[@]}" | grep -q .; then
-                # runtime-image.yml publishes latest + full commit SHA tags.
-                image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
-              fi
-            fi
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${{ github.event.workflow_run.head_sha }}"
           fi
 
           echo "image=$image" >> "$GITHUB_OUTPUT"
@@ -114,7 +83,7 @@ jobs:
         run: ./scripts/ci/provision-e2e.sh --mode core
 
   provision-e2e-extended:
-    if: ${{ github.event_name != 'pull_request' }}
+    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -122,6 +91,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -150,29 +120,8 @@ jobs:
         run: |
           set -euo pipefail
           image=""
-          before_sha="${{ github.event.before }}"
-          runtime_paths=(
-            .dockerignore
-            bun.lock
-            server
-            web
-            config
-            docker/entrypoint.sh
-            docker/runtime.dockerfile
-            .github/workflows/runtime-image.yml
-          )
-
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
-            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:latest"
-            if [[ "$before_sha" != "0000000000000000000000000000000000000000" ]]; then
-              if ! git rev-parse --verify "${before_sha}^{commit}" >/dev/null 2>&1; then
-                git fetch --no-tags origin "$before_sha"
-              fi
-
-              if git diff --name-only "$before_sha" "$GITHUB_SHA" -- "${runtime_paths[@]}" | grep -q .; then
-                image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
-              fi
-            fi
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${{ github.event.workflow_run.head_sha }}"
           fi
 
           echo "image=$image" >> "$GITHUB_OUTPUT"
