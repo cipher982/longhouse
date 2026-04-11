@@ -347,21 +347,50 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline", queryClient);
 
-    fireEvent.mouseEnter(await screen.findByTestId("session-card"));
+    const card = await screen.findByTestId("session-card");
 
+    fireEvent.mouseEnter(card);
+    expect(prefetchSpy).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 220));
+    });
+
+    expect(prefetchSpy).toHaveBeenCalledTimes(1);
+    expect(prefetchSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queryKey: ["agent-session-workspace", "session-1", { limit: 200, branch_mode: "head" }],
+        staleTime: 10_000,
+      }),
+    );
     await waitFor(() => {
-      expect(prefetchSpy).toHaveBeenCalledTimes(1);
-      expect(prefetchSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          queryKey: ["agent-session-workspace", "session-1", { limit: 200, branch_mode: "head" }],
-          staleTime: 10_000,
-        }),
-      );
       expect(workspaceSpy).toHaveBeenCalledWith("session-1", {
         limit: 200,
         branch_mode: "head",
       });
     });
+  });
+
+  it("suppresses hover prefetch while the timeline is actively scrolling", async () => {
+    const queryClient = createQueryClient();
+    const prefetchSpy = vi.spyOn(queryClient, "prefetchQuery").mockImplementation(async (options) => {
+      await options.queryFn?.();
+    });
+
+    renderSessionsPage("/timeline", queryClient);
+
+    const card = await screen.findByTestId("session-card");
+    const scroller = document.querySelector(".page-shell");
+    expect(scroller).not.toBeNull();
+
+    fireEvent.scroll(scroller!);
+    fireEvent.mouseEnter(card);
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 220));
+    });
+
+    expect(prefetchSpy).not.toHaveBeenCalled();
   });
 
   it("does not start a workspace prefetch on mouse pointer-down", async () => {
