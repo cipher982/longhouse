@@ -1011,6 +1011,7 @@ export default function SessionsPage() {
 
   useEffect(() => {
     const scroller = document.querySelector<HTMLElement>(".page-shell");
+    const appRoot = document.getElementById("react-root");
     if (!scroller) {
       return;
     }
@@ -1025,10 +1026,12 @@ export default function SessionsPage() {
     const markTimelineScrolling = () => {
       lastTimelineScrollAtRef.current = performance.now();
       scroller.classList.add("page-shell--timeline-scrolling");
+      appRoot?.classList.add("react-root--timeline-scrolling");
       clearTimelineScrollUiTimeout();
       timelineScrollUiTimeoutRef.current = window.setTimeout(() => {
         timelineScrollUiTimeoutRef.current = null;
         scroller.classList.remove("page-shell--timeline-scrolling");
+        appRoot?.classList.remove("react-root--timeline-scrolling");
       }, SESSION_CARD_SCROLL_SUPPRESSION_MS);
     };
 
@@ -1038,6 +1041,7 @@ export default function SessionsPage() {
     return () => {
       clearTimelineScrollUiTimeout();
       scroller.classList.remove("page-shell--timeline-scrolling");
+      appRoot?.classList.remove("react-root--timeline-scrolling");
       scroller.removeEventListener("wheel", markTimelineScrolling);
       scroller.removeEventListener("touchmove", markTimelineScrolling);
       scroller.removeEventListener("scroll", markTimelineScrolling);
