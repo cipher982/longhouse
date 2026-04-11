@@ -19,6 +19,8 @@ ENABLE_MENUBAR_SMOKE="${INSTALLER_TEST_MENUBAR:-0}"
 REBUILD_FRONTEND="${INSTALLER_TEST_REBUILD_FRONTEND:-0}"
 ENABLE_E2E_BROWSER="${INSTALLER_TEST_E2E_BROWSER:-0}"
 BUILD_WHEEL="${INSTALLER_TEST_WHEEL:-0}"
+USE_INSTALLER_ONBOARD="${INSTALLER_TEST_INSTALLER_ONBOARD:-0}"
+ENABLE_RUNTIME_ARTIFACT_SMOKE="${INSTALLER_TEST_RUNTIME_ARTIFACT_SMOKE:-0}"
 
 usage() {
   cat <<'USAGE'
@@ -39,6 +41,8 @@ Options:
   --rebuild-frontend          Force a fresh web/dist build for local package installs
   --e2e-browser               Run Playwright browser verification after demo seed
   --wheel                     Build a wheel from server/ and install from it (tests real package)
+  --installer-onboard         Let scripts/install.sh run onboarding instead of skipping the wizard
+  --runtime-artifact-smoke    Force-install released runtime artifacts via the hidden CLI smoke command
   --port <port>               Fixed port for onboarding/demo server
   --demo-port <port>          Fixed port for demo server (default: random free port)
   --home <path>               Reuse an existing temp HOME (skip mktemp)
@@ -286,6 +290,61 @@ if expected_version and payload.get("installed_version") != expected_version:
 PY
 }
 
+validate_runtime_artifact_json() {
+  local path="$1"
+  local expected_component="$2"
+  python3 - "$path" "$expected_component" <<'PY'
+import json
+import os
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+expected_component = sys.argv[2]
+if payload.get("component") != expected_component:
+    raise SystemExit(f"runtime artifact component mismatch: expected {expected_component}, got {payload.get('component')}")
+artifact_path = Path(payload.get("path") or "")
+launch_path = Path(payload.get("launch_path") or "")
+if not artifact_path.exists():
+    raise SystemExit(f"runtime artifact path missing: {artifact_path}")
+if not launch_path.exists():
+    raise SystemExit(f"runtime artifact launch path missing: {launch_path}")
+if expected_component == "engine" and not os.access(launch_path, os.X_OK):
+    raise SystemExit(f"engine launch path is not executable: {launch_path}")
+PY
+}
+
+runtime_artifact_launch_path() {
+  local path="$1"
+  python3 - "$path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(payload["launch_path"])
+PY
+}
+
+smoke_runtime_artifact() {
+  local component="$1"
+  local artifact_json=""
+  local launch_path=""
+
+  artifact_json="$(mktemp -t longhouse-runtime-artifact.XXXXXX.json)"
+  longhouse runtime-artifact-smoke "$component" --overwrite --json > "$artifact_json"
+  validate_runtime_artifact_json "$artifact_json" "$component"
+  launch_path="$(runtime_artifact_launch_path "$artifact_json")"
+
+  if [[ "$component" == "engine" ]]; then
+    if ! "$launch_path" --help >/dev/null 2>&1; then
+      fail "Released engine binary was installed but did not respond to --help"
+    fi
+  fi
+
+  rm -f "$artifact_json"
+}
+
 assert_fresh_shell_path() {
   local profile_path="$1"
   local shell_bin="$2"
@@ -393,6 +452,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --wheel)
       BUILD_WHEEL=1
+      shift
+      ;;
+    --installer-onboard)
+      USE_INSTALLER_ONBOARD=1
+      shift
+      ;;
+    --runtime-artifact-smoke)
+      ENABLE_RUNTIME_ARTIFACT_SMOKE=1
       shift
       ;;
     --port)
@@ -524,6 +591,8 @@ log "  menubar smoke: $ENABLE_MENUBAR_SMOKE"
 log "  frontend rebuild: $REBUILD_FRONTEND"
 log "  e2e browser: $ENABLE_E2E_BROWSER"
 log "  wheel install: $BUILD_WHEEL"
+log "  installer onboard: $USE_INSTALLER_ONBOARD"
+log "  runtime artifact smoke: $ENABLE_RUNTIME_ARTIFACT_SMOKE"
 
 EXPECT_SERVICE_INSTALL=0
 
@@ -531,8 +600,15 @@ env_vars=(
   "HOME=$HOME"
   "PATH=$ORIGINAL_PATH"
   "SHELL=$TEST_SHELL"
-  "LONGHOUSE_NO_WIZARD=1"
 )
+
+if [[ "$USE_INSTALLER_ONBOARD" == "1" ]]; then
+  env_vars+=("LONGHOUSE_ONBOARD_HOST=127.0.0.1")
+  env_vars+=("LONGHOUSE_ONBOARD_PORT=$PORT")
+  env_vars+=("LONGHOUSE_ONBOARD_NO_BROWSER=1")
+else
+  env_vars+=("LONGHOUSE_NO_WIZARD=1")
+fi
 
 if [[ -n "$PACKAGE_SOURCE" ]]; then
   env_vars+=("LONGHOUSE_PKG_SOURCE=$PACKAGE_SOURCE")
@@ -606,14 +682,29 @@ if [[ "$DOCTOR_STATUS" -ne 0 ]]; then
 fi
 rm -f "$DOCTOR_JSON"
 
-log "🧭 Running onboarding quickstart (safe mode)..."
-ONBOARD_LOG="$(mktemp -t longhouse-onboard.XXXXXX.log)"
-longhouse onboard --quick --no-demo --no-browser --port "$PORT" | tee "$ONBOARD_LOG"
-
-if grep -q "\[WARN\] Test event failed" "$ONBOARD_LOG"; then
-  fail "Onboarding verification emitted a test-event warning"
+if [[ "$ENABLE_RUNTIME_ARTIFACT_SMOKE" == "1" ]]; then
+  log "🧱 Verifying released runtime artifacts..."
+  smoke_runtime_artifact engine
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    smoke_runtime_artifact local-health-app
+  fi
 fi
-rm -f "$ONBOARD_LOG"
+
+if [[ "$USE_INSTALLER_ONBOARD" == "1" ]]; then
+  log "🧭 Verifying installer-owned onboarding..."
+  if ! wait_for_health "http://127.0.0.1:${PORT}/api/readyz" "Installer onboarding server"; then
+    fail "Installer-owned onboarding did not leave a healthy local runtime"
+  fi
+else
+  log "🧭 Running onboarding quickstart (safe mode)..."
+  ONBOARD_LOG="$(mktemp -t longhouse-onboard.XXXXXX.log)"
+  longhouse onboard --quick --no-demo --no-browser --port "$PORT" | tee "$ONBOARD_LOG"
+
+  if grep -q "\[WARN\] Test event failed" "$ONBOARD_LOG"; then
+    fail "Onboarding verification emitted a test-event warning"
+  fi
+  rm -f "$ONBOARD_LOG"
+fi
 
 log "🔌 Verifying local runtime install..."
 if [[ "$EXPECT_SERVICE_INSTALL" -eq 1 || -z "${CI:-}" ]]; then
