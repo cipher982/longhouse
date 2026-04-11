@@ -42,7 +42,7 @@ Options:
   --e2e-browser               Run Playwright browser verification after demo seed
   --wheel                     Build a wheel from server/ and install from it (tests real package)
   --installer-onboard         Let scripts/install.sh run onboarding instead of skipping the wizard
-  --runtime-artifact-smoke    Force-install released runtime artifacts via the hidden CLI smoke command
+  --runtime-artifact-smoke    Force-install released runtime artifacts via the repo smoke helper
   --port <port>               Fixed port for onboarding/demo server
   --demo-port <port>          Fixed port for demo server (default: random free port)
   --home <path>               Reuse an existing temp HOME (skip mktemp)
@@ -328,21 +328,27 @@ PY
 
 smoke_runtime_artifact() {
   local component="$1"
+  local artifact_home=""
   local artifact_json=""
-  local launch_path=""
 
+  artifact_home="$(mktemp -d -t longhouse-runtime-home.XXXXXX)"
   artifact_json="$(mktemp -t longhouse-runtime-artifact.XXXXXX.json)"
-  longhouse runtime-artifact-smoke "$component" --overwrite --json > "$artifact_json"
-  validate_runtime_artifact_json "$artifact_json" "$component"
-  launch_path="$(runtime_artifact_launch_path "$artifact_json")"
 
-  if [[ "$component" == "engine" ]]; then
-    if ! "$launch_path" --help >/dev/null 2>&1; then
-      fail "Released engine binary was installed but did not respond to --help"
+  (
+    local launch_path=""
+    trap 'rm -f "$artifact_json"; rm -rf "$artifact_home"' EXIT
+
+    cd "$ROOT_DIR/server"
+    HOME="$artifact_home" uv run python ../scripts/ci/runtime-artifact-smoke.py --component "$component" --overwrite --json > "$artifact_json"
+    validate_runtime_artifact_json "$artifact_json" "$component"
+    launch_path="$(runtime_artifact_launch_path "$artifact_json")"
+
+    if [[ "$component" == "engine" ]]; then
+      if ! "$launch_path" --help >/dev/null 2>&1; then
+        fail "Released engine binary was installed but did not respond to --help"
+      fi
     fi
-  fi
-
-  rm -f "$artifact_json"
+  )
 }
 
 assert_fresh_shell_path() {
@@ -605,6 +611,7 @@ env_vars=(
 if [[ "$USE_INSTALLER_ONBOARD" == "1" ]]; then
   env_vars+=("LONGHOUSE_ONBOARD_HOST=127.0.0.1")
   env_vars+=("LONGHOUSE_ONBOARD_PORT=$PORT")
+  env_vars+=("LONGHOUSE_ONBOARD_QUICK=1")
   env_vars+=("LONGHOUSE_ONBOARD_NO_BROWSER=1")
 else
   env_vars+=("LONGHOUSE_NO_WIZARD=1")
