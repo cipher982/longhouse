@@ -33,6 +33,7 @@ _CORE_OWNED_ENV_KEYS = {
     "TRIGGER_SIGNING_SECRET",
     "CONTROL_PLANE_URL",
     "LONGHOUSE_PASSWORD",
+    "LONGHOUSE_RUNTIME_PORT",
 }
 
 
@@ -190,6 +191,7 @@ def _env_for(
         "FERNET_SECRET": settings.instance_fernet_secret,
         "TRIGGER_SIGNING_SECRET": settings.instance_trigger_signing_secret,
         "CONTROL_PLANE_URL": f"https://control.{settings.root_domain}",
+        "LONGHOUSE_RUNTIME_PORT": str(settings.instance_port),
     }
 
     if password:
