@@ -65,6 +65,8 @@ const DEFAULT_DAYS_BACK = 14;
 const TIMELINE_RECONCILIATION_MS = 120_000;
 const DEFAULT_SORT_ORDER = "relevant";
 const SESSION_WORKSPACE_PREFETCH_LIMIT = 200;
+const SESSION_CARD_HOVER_PREFETCH_DELAY_MS = 180;
+const SESSION_CARD_SCROLL_SUPPRESSION_MS = 250;
 
 type SortOrder = "relevant" | "recent";
 
@@ -499,6 +501,7 @@ interface SessionCardProps {
   thread: TimelineSessionCard;
   onClick: () => void;
   onPrefetch?: () => void;
+  allowHoverPrefetch?: () => boolean;
   onArchive?: () => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
@@ -510,6 +513,7 @@ function SessionCard({
   thread,
   onClick,
   onPrefetch,
+  allowHoverPrefetch,
   onArchive,
   highlightQuery,
   isSemanticResult,
@@ -517,6 +521,7 @@ function SessionCard({
   relativeNowMs,
 }: SessionCardProps) {
   const [confirming, setConfirming] = useState(false);
+  const hoverPrefetchTimerRef = useRef<number | null>(null);
   const detailSession = thread.detail;
   const session = compatibilityMode ? detailSession : thread.head;
   const interaction = getSessionInteractionCapabilities({ session });
@@ -550,13 +555,45 @@ function SessionCard({
     runtime.tone === "blocked" ? "session-card--blocked" : "",
   ].filter(Boolean).join(" ");
 
+  const clearHoverPrefetchTimer = useCallback(() => {
+    if (hoverPrefetchTimerRef.current != null) {
+      window.clearTimeout(hoverPrefetchTimerRef.current);
+      hoverPrefetchTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => clearHoverPrefetchTimer, [clearHoverPrefetchTimer]);
+
+  const scheduleHoverPrefetch = useCallback(() => {
+    if (!onPrefetch) {
+      return;
+    }
+
+    clearHoverPrefetchTimer();
+    hoverPrefetchTimerRef.current = window.setTimeout(() => {
+      hoverPrefetchTimerRef.current = null;
+      if (allowHoverPrefetch && !allowHoverPrefetch()) {
+        return;
+      }
+      onPrefetch();
+    }, SESSION_CARD_HOVER_PREFETCH_DELAY_MS);
+  }, [allowHoverPrefetch, clearHoverPrefetchTimer, onPrefetch]);
+
+  const handleFocusPrefetch = useCallback(() => {
+    clearHoverPrefetchTimer();
+    onPrefetch?.();
+  }, [clearHoverPrefetchTimer, onPrefetch]);
+
   return (
     <Card
       className={cardClassName}
-      onMouseEnter={onPrefetch}
-      onFocus={onPrefetch}
+      onMouseEnter={scheduleHoverPrefetch}
+      onMouseLeave={clearHoverPrefetchTimer}
+      onFocus={handleFocusPrefetch}
+      onBlur={clearHoverPrefetchTimer}
       onPointerDown={(event) => {
         if (event.pointerType === "touch" || event.pointerType === "pen") {
+          clearHoverPrefetchTimer();
           onPrefetch?.();
         }
       }}
@@ -736,6 +773,7 @@ interface SessionGroupProps {
   sessions: TimelineSessionCard[];
   onSessionClick: (thread: TimelineSessionCard) => void;
   onSessionPrefetch: (thread: TimelineSessionCard) => void;
+  allowHoverPrefetch: () => boolean;
   onSessionArchive: (thread: TimelineSessionCard) => void;
   highlightQuery?: string;
   isSemanticResult?: boolean;
@@ -748,6 +786,7 @@ function SessionGroup({
   sessions,
   onSessionClick,
   onSessionPrefetch,
+  allowHoverPrefetch,
   onSessionArchive,
   highlightQuery,
   isSemanticResult,
@@ -767,6 +806,7 @@ function SessionGroup({
             thread={thread}
             onClick={() => onSessionClick(thread)}
             onPrefetch={() => onSessionPrefetch(thread)}
+            allowHoverPrefetch={allowHoverPrefetch}
             onArchive={() => onSessionArchive(thread)}
             highlightQuery={highlightQuery}
             isSemanticResult={isSemanticResult}
@@ -840,6 +880,7 @@ export default function SessionsPage() {
   const [showAddRunnerModal, setShowAddRunnerModal] = useState(false);
   const queryClient = useQueryClient();
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
+  const lastTimelineScrollAtRef = useRef(0);
   const { data: runnersData } = useRunners();
   const runners = runnersData ?? [];
   const runnerActionLabel = runners.length > 0 ? "Open Machines" : "Connect Machine";
@@ -966,6 +1007,26 @@ export default function SessionsPage() {
 
   const threadCards = sessions;
   const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards, relativeNowMs), [threadCards, relativeNowMs]);
+
+  useEffect(() => {
+    const scroller = document.querySelector<HTMLElement>(".page-shell");
+    if (!scroller) {
+      return;
+    }
+
+    const handleScroll = () => {
+      lastTimelineScrollAtRef.current = performance.now();
+    };
+
+    scroller.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      scroller.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
+
+  const allowHoverPrefetch = useCallback(() => {
+    return performance.now() - lastTimelineScrollAtRef.current > SESSION_CARD_SCROLL_SUPPRESSION_MS;
+  }, []);
 
   const prefetchSessionWorkspace = useCallback((sessionId: string | null) => {
     if (!sessionId || prefetchedSessionIdsRef.current.has(sessionId)) {
@@ -1416,6 +1477,7 @@ export default function SessionsPage() {
                 sessions={daySessions}
                 onSessionClick={handleSessionClick}
                 onSessionPrefetch={handleSessionPrefetch}
+                allowHoverPrefetch={allowHoverPrefetch}
                 onSessionArchive={handleSessionArchive}
                 highlightQuery={debouncedQuery}
                 isSemanticResult={aiSearch}
