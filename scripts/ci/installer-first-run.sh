@@ -380,6 +380,17 @@ assert_fresh_shell_path() {
   log "✅ Fresh shell resolves longhouse via $resolved"
 }
 
+verify_remote_installer_sync() {
+  local sync_script="$ROOT_DIR/scripts/ci/check-public-installer-sync.sh"
+
+  if [[ ! -x "$sync_script" ]]; then
+    fail "Remote installer sync helper missing or not executable: $sync_script"
+  fi
+
+  log "🔎 Verifying published installer sync..."
+  "$sync_script" --url "$INSTALLER_URL"
+}
+
 dump_debug() {
   if [[ -z "$HOME" || ! -d "$HOME" ]]; then
     return
@@ -580,6 +591,7 @@ case "$INSTALLER_MODE" in
     INSTALLER_SCRIPT="$ROOT_DIR/scripts/install.sh"
     ;;
   remote)
+    verify_remote_installer_sync
     INSTALLER_TMP="$(mktemp -t longhouse-installer.XXXXXX.sh)"
     curl -fsSL "$INSTALLER_URL" -o "$INSTALLER_TMP"
     chmod +x "$INSTALLER_TMP"

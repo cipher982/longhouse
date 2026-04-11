@@ -34,6 +34,7 @@ The launch product decision for macOS lives in `docs/specs/macos-launch-product-
 ## Current State
 
 - `scripts/install.sh` is the public bootstrap path.
+- `get.longhouse.ai/install.sh` currently redirects to raw GitHub `main`, so remote installer canaries validate the published default-branch script, not unpushed local commits.
 - The installer currently ensures `uv`, ensures Python 3.12, then installs or upgrades `longhouse`.
 - `.github/workflows/publish.yml` builds a wheel, uploads it to the GitHub release, and publishes the package to PyPI.
 - `README.md` already documents `uv tool upgrade longhouse`.
