@@ -78,7 +78,6 @@ Boundary rules:
 - `docs/specs/macos-launch-product-shape.md`
 - `docs/specs/distribution-update-loop.md`
 - `docs/specs/agents-machine-surface.md`
-- `docs/specs/prelaunch-simplification-cut-plan.md`
 - `README.md`
 - `runner/README.md`
 - `control-plane/README.md`
