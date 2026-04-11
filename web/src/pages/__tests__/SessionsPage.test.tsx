@@ -393,6 +393,28 @@ describe("SessionsPage", () => {
     expect(prefetchSpy).not.toHaveBeenCalled();
   });
 
+  it("disables timeline card hover transitions while the user is actively scrolling", async () => {
+    vi.useFakeTimers();
+    renderSessionsPage("/timeline");
+
+    const scroller = document.querySelector(".page-shell");
+    expect(scroller).not.toBeNull();
+    expect(scroller).not.toHaveClass("page-shell--timeline-scrolling");
+
+    fireEvent.wheel(scroller!);
+    expect(scroller).toHaveClass("page-shell--timeline-scrolling");
+
+    act(() => {
+      vi.advanceTimersByTime(249);
+    });
+    expect(scroller).toHaveClass("page-shell--timeline-scrolling");
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(scroller).not.toHaveClass("page-shell--timeline-scrolling");
+  });
+
   it("does not start a workspace prefetch on mouse pointer-down", async () => {
     const queryClient = createQueryClient();
     const prefetchSpy = vi.spyOn(queryClient, "prefetchQuery").mockImplementation(async (options) => {

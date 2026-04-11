@@ -234,4 +234,5 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Control-plane admin calls are user-agent sensitive. Use the existing scripts and curl patterns before improvising custom Python clients.
 - Hosted tenant data on `zerg` lives under `/var/app-data/longhouse/<subdomain>` and mounts to `/data` in the container.
 - Timeline card `mouseenter` prefetch can turn scrolling under a stationary cursor into accidental workspace-request churn; treat hover prefetch as scroll-sensitive, not as free.
+- Timeline card `transition: all` hover animations can explode software-raster cost when cards slide under a stationary cursor during scroll; active scrolling should suppress card hover transitions.
 - `/api/threads/{id}/runs` needs direct backend coverage. Dead runtime imports can survive broad suites and only surface in hosted chat smoke.
