@@ -1,75 +1,56 @@
-# Root .dockerignore - Controls what gets sent to Docker build context
-# Keep this minimal to allow flexible build contexts
+# Root-context Docker builds should only see the files used by
+# `docker/runtime.dockerfile` and `docker/backend.dockerfile`.
+# Keep this as an explicit allowlist so large sibling trees do not
+# accidentally inflate hosted smoke and image build loops.
+*
+!.dockerignore
+!bun.lock
 
-# Version control
-.git
-.gitignore
+!server/
+!server/**
 
-# Documentation (unless needed for builds)
-*.md
-!README.md
-docs/
-scratch/
+!web/
+!web/**
 
-# Test artifacts
-test-results/
-e2e/test-results/
-e2e/playwright-report/
-**/.pytest_cache/
-**/htmlcov/
-**/.coverage
+!control-plane/
+control-plane/*
+!control-plane/longhouse_shared/
+!control-plane/longhouse_shared/**
 
-# Development artifacts
-**/.vscode/
-**/.idea/
-**/__pycache__/
-**/.DS_Store
-**/Thumbs.db
+!config/
+config/*
+!config/models.json
 
-# Build artifacts that shouldn't be in context
-**/node_modules/
-**/target/
-**/dist/
-**/pkg/
+!docker/
+docker/*
+!docker/backend.dockerfile
+!docker/runtime.dockerfile
+!docker/entrypoint.sh
 
-# Python virtual environments (large, rebuilt in container)
-**/.venv/
-**/venv/
+# Ignore heavyweight/generated content inside the allowlisted trees.
+server/.venv
+server/.venv/**
+server/.uv_cache
+server/.uv_cache/**
+server/.uv_tmp
+server/.uv_tmp/**
+server/venv
+server/venv/**
+server/dist
+server/dist/**
+server/data
+server/data/**
+server/.pytest_cache
+server/.pytest_cache/**
+server/.ruff_cache
+server/.ruff_cache/**
+server/__pycache__
+server/__pycache__/**
 
-# Environment files (should be passed as build args)
-.env*
-!.env.example
+web/node_modules
+web/node_modules/**
+web/dist
+web/dist/**
 
-# Database files
-**/*.db
-**/*.db-*
-
-# Logs
-**/*.log
-**/logs/
-
-# Local data directories (LLM audit logs, debug dumps - can be gigabytes)
-server/data/
-
-# Temporary files
-**/tmp/
-**/temp/
-**/.tmp/
-
-# IDE and editor files
-**/.vscode/
-**/.idea/
-**/*.swp
-**/*.swo
-*~
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Test stubs (shadow real packages in production)
-server/apscheduler/
-
-# Docker files (prevent recursive copying)
-**/Dockerfile*
-**/docker-compose*.yml
+control-plane/.venv
+control-plane/.venv/**
