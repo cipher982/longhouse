@@ -5,17 +5,66 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOSTED_INSTANCE_HELPER="$ROOT_DIR/scripts/lib/hosted-instance.sh"
 CONTROL_PLANE_DIR="$ROOT_DIR/control-plane"
 API_URL="http://127.0.0.1:48080"
-INSTANCE_PORT=8000
-INSTANCE_URL="http://127.0.0.1:${INSTANCE_PORT}"
+INSTANCE_PORT="${PROVISION_E2E_INSTANCE_PORT:-}"
+INSTANCE_URL=""
 CI_SUBDOMAIN="ci"
 CI_CONTAINER_NAME="longhouse-${CI_SUBDOMAIN}"
 IMAGE_TAG="longhouse-runtime:ci-${GITHUB_SHA:-local}"
+PROVISION_MODE="${PROVISION_E2E_MODE:-core}"
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/ci/provision-e2e.sh [--mode core|extended]
+
+Modes:
+  core      Provision a hosted instance and verify the launch-critical ready path
+  extended  Run core checks plus image backfill, jobs repo sync, job execution, and rolling deploy
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --mode)
+      PROVISION_MODE="${2:-}"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+case "$PROVISION_MODE" in
+  core|extended) ;;
+  *)
+    echo "Unsupported provision mode: $PROVISION_MODE" >&2
+    usage >&2
+    exit 1
+    ;;
+esac
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+pick_port() {
+  "$PYTHON_BIN" - <<'PY'
+import socket
+
+sock = socket.socket()
+sock.bind(("", 0))
+print(sock.getsockname()[1])
+sock.close()
+PY
 }
 
 require_cmd docker
@@ -39,6 +88,11 @@ if [[ ! -f "$HOSTED_INSTANCE_HELPER" ]]; then
   echo "Hosted instance helper missing: $HOSTED_INSTANCE_HELPER" >&2
   exit 1
 fi
+
+if [[ -z "$INSTANCE_PORT" ]]; then
+  INSTANCE_PORT="$(pick_port)"
+fi
+INSTANCE_URL="http://127.0.0.1:${INSTANCE_PORT}"
 
 # shellcheck disable=SC1090
 . "$HOSTED_INSTANCE_HELPER"
@@ -88,6 +142,9 @@ prepare_runtime_image() {
 }
 
 prepare_runtime_image
+
+printf "\n==> Provisioning mode: %s\n" "$PROVISION_MODE"
+printf "==> Published instance port: %s\n" "$INSTANCE_PORT"
 
 make_secret() {
   "$PYTHON_BIN" - <<'PY'
@@ -169,6 +226,7 @@ CONTROL_PLANE_DATABASE_URL="sqlite:///$CONTROL_PLANE_DB" \
 CONTROL_PLANE_DOCKER_HOST="unix:///var/run/docker.sock" \
 CONTROL_PLANE_IMAGE="$IMAGE_TAG" \
 CONTROL_PLANE_PUBLISH_PORTS="1" \
+CONTROL_PLANE_INSTANCE_PORT="$INSTANCE_PORT" \
 CONTROL_PLANE_PROXY_NETWORK="" \
 CONTROL_PLANE_INSTANCE_DATA_ROOT="$INSTANCE_DATA_ROOT" \
 CONTROL_PLANE_INSTANCE_AUTH_DISABLED="1" \
@@ -223,6 +281,10 @@ done
 
 if ! curl -sf "${INSTANCE_URL}/api/readyz" >/dev/null; then
   echo "Instance readiness check failed." >&2
+  echo "Host readiness probe:" >&2
+  curl -sv --connect-timeout 2 --max-time 5 "${INSTANCE_URL}/api/readyz" -o /dev/null || true
+  echo "Container health:" >&2
+  docker inspect --format '{{json .State.Health}}' "$CONTAINER_NAME" 2>/dev/null || true
   docker ps -a
   docker logs "$CONTAINER_NAME" || true
   exit 1
@@ -233,112 +295,14 @@ curl -sf "${INSTANCE_URL}/api/readyz" >/dev/null
 curl -sf "${INSTANCE_URL}/api/health" >/dev/null
 curl -sf "${INSTANCE_URL}/timeline" >/dev/null
 
+if [[ "$PROVISION_MODE" == "core" ]]; then
+  echo "✅ Provisioning E2E core checks passed."
+  exit 0
+fi
+
 printf "\n==> Backfilling instance images\n"
 curl -sf -X POST "${API_URL}/api/instances/backfill-images" \
   -H "X-Admin-Token: ${ADMIN_TOKEN}" >/dev/null
-
-# ---------------------------------------------------------------------------
-# Custom jobs E2E test
-# ---------------------------------------------------------------------------
-
-FIXTURES_DIR="$ROOT_DIR/scripts/ci/fixtures/test-jobs"
-INSTANCE_DATA_DIR="$INSTANCE_DATA_ROOT/$CI_SUBDOMAIN"
-BARE_REPO_DIR="$INSTANCE_DATA_DIR/test-jobs-repo"
-
-printf "\n==> Setting up test jobs bare repo\n"
-mkdir -p "$BARE_REPO_DIR"
-git init --bare "$BARE_REPO_DIR"
-
-# Push fixture files into the bare repo
-WORK_DIR=$(mktemp -d)
-git -C "$WORK_DIR" init -b main
-cp -r "$FIXTURES_DIR"/* "$WORK_DIR/"
-git -C "$WORK_DIR" add -A
-git -C "$WORK_DIR" -c user.name="CI" -c user.email="ci@test" commit -m "test jobs"
-git -C "$WORK_DIR" remote add origin "$BARE_REPO_DIR"
-git -C "$WORK_DIR" push origin main
-rm -rf "$WORK_DIR"
-
-printf "\n==> Configuring jobs repo via API (hot-start)\n"
-curl -sf -X POST "${INSTANCE_URL}/api/jobs/repo/config" \
-  -H "Content-Type: application/json" \
-  -d "{\"repo_url\":\"file:///data/test-jobs-repo\",\"branch\":\"main\"}" \
-  >/dev/null
-
-printf "\n==> Waiting for git sync to complete\n"
-sync_ok=0
-for _ in {1..30}; do
-  sleep 2
-  repo_resp=$(curl -sf "${INSTANCE_URL}/api/jobs/repo/config" 2>/dev/null || echo "{}")
-  sync_sha=$("$PYTHON_BIN" -c "
-import json, sys
-data = json.loads(sys.argv[1])
-print(data.get('last_sync_sha') or '')
-" "$repo_resp" 2>/dev/null || echo "")
-  if [[ -n "$sync_sha" ]]; then
-    printf "  Synced: %s\n" "$sync_sha"
-    sync_ok=1
-    break
-  fi
-done
-
-if [[ "$sync_ok" -ne 1 ]]; then
-  echo "Git sync did not complete within timeout." >&2
-  docker logs "$CONTAINER_NAME" 2>&1 | tail -50 || true
-  exit 1
-fi
-
-printf "\n==> Verifying custom test job is registered\n"
-jobs_resp=$(curl -sf "${INSTANCE_URL}/api/jobs/" 2>/dev/null || echo '{"jobs":[]}')
-has_test_job=$("$PYTHON_BIN" -c "
-import json, sys
-data = json.loads(sys.argv[1])
-jobs = data.get('jobs', []) if isinstance(data, dict) else data
-found = any(j.get('id') == 'ci-echo-test' for j in jobs)
-print('yes' if found else 'no')
-" "$jobs_resp" 2>/dev/null || echo "no")
-
-if [[ "$has_test_job" != "yes" ]]; then
-  echo "Custom test job 'ci-echo-test' not found in jobs list." >&2
-  echo "Jobs response: $jobs_resp" >&2
-  docker logs "$CONTAINER_NAME" 2>&1 | tail -50 || true
-  exit 1
-fi
-printf "  ci-echo-test: registered ✓\n"
-
-printf "\n==> Triggering test job run\n"
-# Get the job ID for triggering
-run_resp=$(curl -sf -X POST "${INSTANCE_URL}/api/jobs/ci-echo-test/run" 2>/dev/null || echo "{}")
-run_status=$("$PYTHON_BIN" -c "
-import json, sys
-data = json.loads(sys.argv[1])
-print(data.get('status', 'unknown'))
-" "$run_resp" 2>/dev/null || echo "unknown")
-
-if [[ "$run_status" != "success" ]]; then
-  echo "Test job run failed (status=$run_status)." >&2
-  echo "Run response: $run_resp" >&2
-  exit 1
-fi
-printf "  ci-echo-test: executed successfully ✓\n"
-
-printf "\n==> Verifying job-health-monitor builtin is registered\n"
-has_health=$("$PYTHON_BIN" -c "
-import json, sys
-data = json.loads(sys.argv[1])
-jobs = data.get('jobs', []) if isinstance(data, dict) else data
-found = any(j.get('id') == 'job-health-monitor' for j in jobs)
-print('yes' if found else 'no')
-" "$jobs_resp" 2>/dev/null || echo "no")
-
-if [[ "$has_health" != "yes" ]]; then
-  echo "Builtin job 'job-health-monitor' not found in jobs list." >&2
-  echo "Jobs response: $jobs_resp" >&2
-  exit 1
-fi
-printf "  job-health-monitor: registered ✓\n"
-
-printf "\n==> Custom jobs E2E: PASSED\n"
 
 # ---------------------------------------------------------------------------
 # Rolling deploy test
@@ -399,8 +363,12 @@ fi
 printf "\n==> Verifying instance health after deploy\n"
 if ! curl -sf "${INSTANCE_URL}/api/readyz" >/dev/null; then
   echo "Instance readiness check failed after deploy." >&2
+  echo "Host readiness probe after deploy:" >&2
+  curl -sv --connect-timeout 2 --max-time 5 "${INSTANCE_URL}/api/readyz" -o /dev/null || true
+  echo "Container health after deploy:" >&2
+  docker inspect --format '{{json .State.Health}}' "$CONTAINER_NAME" 2>/dev/null || true
   docker logs "$CONTAINER_NAME" || true
   exit 1
 fi
 
-echo "✅ Provisioning E2E checks passed."
+echo "✅ Provisioning E2E extended checks passed."

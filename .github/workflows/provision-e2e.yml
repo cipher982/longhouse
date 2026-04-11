@@ -17,6 +17,20 @@ on:
       - 'scripts/lib/hosted-instance.sh'
       - '.github/workflows/provision-e2e.yml'
       - '.github/workflows/runtime-image.yml'
+  pull_request:
+    paths:
+      - '.dockerignore'
+      - 'bun.lock'
+      - 'control-plane/**'
+      - 'server/**'
+      - 'web/**'
+      - 'config/**'
+      - 'docker/entrypoint.sh'
+      - 'docker/runtime.dockerfile'
+      - 'scripts/ci/provision-e2e.sh'
+      - 'scripts/lib/hosted-instance.sh'
+      - '.github/workflows/provision-e2e.yml'
+      - '.github/workflows/runtime-image.yml'
   workflow_dispatch: {}
 
 permissions:
@@ -24,7 +38,7 @@ permissions:
   packages: read
 
 jobs:
-  provision-e2e:
+  provision-e2e-core:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -59,7 +73,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:latest"
+          image=""
           before_sha="${{ github.event.before }}"
           runtime_paths=(
             .dockerignore
@@ -72,22 +86,104 @@ jobs:
             .github/workflows/runtime-image.yml
           )
 
-          if [[ "${GITHUB_EVENT_NAME}" == "push" ]] && [[ "$before_sha" != "0000000000000000000000000000000000000000" ]]; then
-            if ! git rev-parse --verify "${before_sha}^{commit}" >/dev/null 2>&1; then
-              git fetch --no-tags origin "$before_sha"
-            fi
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:latest"
+            if [[ "$before_sha" != "0000000000000000000000000000000000000000" ]]; then
+              if ! git rev-parse --verify "${before_sha}^{commit}" >/dev/null 2>&1; then
+                git fetch --no-tags origin "$before_sha"
+              fi
 
-            if git diff --name-only "$before_sha" "$GITHUB_SHA" -- "${runtime_paths[@]}" | grep -q .; then
-              # runtime-image.yml publishes latest + full commit SHA tags.
-              image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
+              if git diff --name-only "$before_sha" "$GITHUB_SHA" -- "${runtime_paths[@]}" | grep -q .; then
+                # runtime-image.yml publishes latest + full commit SHA tags.
+                image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
+              fi
             fi
           fi
 
           echo "image=$image" >> "$GITHUB_OUTPUT"
-          echo "Selected runtime image: $image"
+          if [[ -n "$image" ]]; then
+            echo "Selected published runtime image: $image"
+          else
+            echo "Selected runtime image: build current checkout"
+          fi
 
-      - name: Provisioning E2E (control plane + instance)
+      - name: Provisioning E2E core gate (control plane + instance)
         env:
           PROVISION_E2E_RUNTIME_IMAGE: ${{ steps.runtime-image.outputs.image }}
           PROVISION_E2E_RUNTIME_PLATFORM: linux/amd64
-        run: ./scripts/ci/provision-e2e.sh
+        run: ./scripts/ci/provision-e2e.sh --mode core
+
+  provision-e2e-extended:
+    if: ${{ github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker gate
+        run: |
+          set -euo pipefail
+          command -v docker
+          docker info
+
+      - name: Select runtime image
+        id: runtime-image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=""
+          before_sha="${{ github.event.before }}"
+          runtime_paths=(
+            .dockerignore
+            bun.lock
+            server
+            web
+            config
+            docker/entrypoint.sh
+            docker/runtime.dockerfile
+            .github/workflows/runtime-image.yml
+          )
+
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:latest"
+            if [[ "$before_sha" != "0000000000000000000000000000000000000000" ]]; then
+              if ! git rev-parse --verify "${before_sha}^{commit}" >/dev/null 2>&1; then
+                git fetch --no-tags origin "$before_sha"
+              fi
+
+              if git diff --name-only "$before_sha" "$GITHUB_SHA" -- "${runtime_paths[@]}" | grep -q .; then
+                image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
+              fi
+            fi
+          fi
+
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          if [[ -n "$image" ]]; then
+            echo "Selected published runtime image: $image"
+          else
+            echo "Selected runtime image: build current checkout"
+          fi
+
+      - name: Provisioning E2E extended canary
+        env:
+          PROVISION_E2E_RUNTIME_IMAGE: ${{ steps.runtime-image.outputs.image }}
+          PROVISION_E2E_RUNTIME_PLATFORM: linux/amd64
+        run: ./scripts/ci/provision-e2e.sh --mode extended
