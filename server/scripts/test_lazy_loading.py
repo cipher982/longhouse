@@ -27,16 +27,15 @@ from __future__ import annotations
 import asyncio
 import sys
 
-from langchain_core.messages import HumanMessage
-from langchain_core.messages import SystemMessage
-
 
 async def run_test():
     """Run the lazy loading validation test."""
-    from zerg.services.oikos_react_engine import run_oikos_loop
+    from zerg.services.runtime_react import run_runtime_react_loop
     from zerg.tools import get_registry
     from zerg.tools.lazy_binder import CORE_TOOLS
     from zerg.tools.tool_search import build_catalog
+    from zerg.types.messages import HumanMessage
+    from zerg.types.messages import SystemMessage
 
     print("=" * 70)
     print("LAZY LOADING VALIDATION TEST")
@@ -86,14 +85,14 @@ async def run_test():
     ]
 
     print("\n" + "-" * 70)
-    print("TEST: Running oikos with lazy_loading=True")
+    print("TEST: Running runtime loop with lazy_loading=True")
     print("-" * 70)
     print(f"User message: '{messages[0].content}'")
     print("Expected: LLM should need 'get_current_location' (non-core tool)")
     print()
 
     try:
-        result = await run_oikos_loop(
+        result = await run_runtime_react_loop(
             messages=messages,
             fiche_row=fiche_mock,
             tools=all_tools,

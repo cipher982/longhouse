@@ -70,12 +70,13 @@ class WsTokenCallback(AsyncCallbackHandler):
                 self._warned_no_context = True
             return
 
-        # Get oikos context for SSE correlation (may be None for non-oikos calls)
-        from zerg.services.oikos_context import get_oikos_context
+        # Use commis context for SSE correlation when present; otherwise this
+        # is a normal dashboard chat run and WebSocket delivery is the live path.
+        from zerg.context import get_commis_context
 
-        ctx = get_oikos_context()
+        ctx = get_commis_context()
         run_id = ctx.run_id if ctx else None
-        message_id = ctx.message_id if ctx else None
+        message_id = None
 
         # Publish to event bus for SSE consumers (Oikos chat)
         # NOTE: Tokens are NOT persisted to DB - only published to live subscribers.
