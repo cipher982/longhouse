@@ -395,24 +395,34 @@ describe("SessionsPage", () => {
 
   it("disables timeline card hover transitions while the user is actively scrolling", async () => {
     vi.useFakeTimers();
+    const appRoot = document.createElement("div");
+    appRoot.id = "react-root";
+    document.body.appendChild(appRoot);
     renderSessionsPage("/timeline");
 
     const scroller = document.querySelector(".page-shell");
     expect(scroller).not.toBeNull();
+    expect(appRoot).not.toBeNull();
     expect(scroller).not.toHaveClass("page-shell--timeline-scrolling");
+    expect(appRoot).not.toHaveClass("react-root--timeline-scrolling");
 
     fireEvent.wheel(scroller!);
     expect(scroller).toHaveClass("page-shell--timeline-scrolling");
+    expect(appRoot).toHaveClass("react-root--timeline-scrolling");
 
     act(() => {
       vi.advanceTimersByTime(249);
     });
     expect(scroller).toHaveClass("page-shell--timeline-scrolling");
+    expect(appRoot).toHaveClass("react-root--timeline-scrolling");
 
     act(() => {
       vi.advanceTimersByTime(1);
     });
     expect(scroller).not.toHaveClass("page-shell--timeline-scrolling");
+    expect(appRoot).not.toHaveClass("react-root--timeline-scrolling");
+
+    appRoot.remove();
   });
 
   it("does not start a workspace prefetch on mouse pointer-down", async () => {
