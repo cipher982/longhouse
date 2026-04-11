@@ -14,6 +14,8 @@ from datetime import timezone
 from importlib import metadata
 from pathlib import Path
 from typing import Sequence
+from urllib.parse import unquote
+from urllib.parse import urlparse
 
 import httpx
 import typer
@@ -67,6 +69,13 @@ class CachedUpdateCheck:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class DistributionInstallProbe:
+    install_method: str | None = None
+    install_source: str | None = None
+    package_ref: str | None = None
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -85,6 +94,14 @@ def _update_lock_path() -> Path:
 
 def current_installed_version(package_name: str = PACKAGE_NAME) -> str:
     return metadata.version(package_name)
+
+
+def _normalize_file_url(raw_url: str) -> str:
+    parsed = urlparse(raw_url)
+    path = unquote(parsed.path or "")
+    if parsed.netloc and parsed.netloc not in {"", "localhost"}:
+        path = f"//{parsed.netloc}{path}"
+    return path or raw_url
 
 
 def _parse_iso8601(raw: str | None) -> datetime | None:
@@ -110,6 +127,49 @@ def load_install_metadata() -> InstallMetadata | None:
         installed_at=str(payload.get("installed_at") or _utc_now_iso()),
         last_upgrade_at=str(payload.get("last_upgrade_at") or payload.get("installed_at") or _utc_now_iso()),
         package_ref=str(payload.get("package_ref")).strip() if payload.get("package_ref") else None,
+    )
+
+
+def _probe_installed_distribution(package_name: str = PACKAGE_NAME) -> DistributionInstallProbe:
+    try:
+        distribution = metadata.distribution(package_name)
+    except metadata.PackageNotFoundError:
+        return DistributionInstallProbe()
+
+    installer = (distribution.read_text("INSTALLER") or "").strip() or None
+    direct_url_raw = (distribution.read_text("direct_url.json") or "").strip()
+    if not direct_url_raw:
+        return DistributionInstallProbe(install_method=installer)
+
+    try:
+        direct_url = json.loads(direct_url_raw)
+    except json.JSONDecodeError:
+        return DistributionInstallProbe(install_method=installer)
+
+    url = str(direct_url.get("url") or "").strip()
+    if not url:
+        return DistributionInstallProbe(install_method=installer)
+
+    if url.startswith("file://"):
+        dir_info = direct_url.get("dir_info") if isinstance(direct_url, dict) else None
+        editable = bool(dir_info.get("editable")) if isinstance(dir_info, dict) else False
+        return DistributionInstallProbe(
+            install_method=installer,
+            install_source="editable-path" if editable else "local-path",
+            package_ref=_normalize_file_url(url),
+        )
+
+    if isinstance(direct_url.get("vcs_info"), dict):
+        return DistributionInstallProbe(
+            install_method=installer,
+            install_source="git",
+            package_ref=url,
+        )
+
+    return DistributionInstallProbe(
+        install_method=installer,
+        install_source="custom",
+        package_ref=url,
     )
 
 
@@ -176,17 +236,40 @@ def write_update_cache(result: UpdateCheckResult | None, *, error: str | None = 
 
 def detect_install_metadata() -> InstallMetadata:
     existing = load_install_metadata()
-    if existing is not None:
-        return existing
+    probe = _probe_installed_distribution()
+    now = _utc_now_iso()
+    installed_version = current_installed_version()
+    if existing is None:
+        return InstallMetadata(
+            install_method=probe.install_method or DEFAULT_INSTALL_METHOD,
+            install_source=probe.install_source or DEFAULT_INSTALL_SOURCE,
+            package_name=PACKAGE_NAME,
+            channel=DEFAULT_CHANNEL,
+            installed_version=installed_version,
+            installed_at=now,
+            last_upgrade_at=now,
+            package_ref=probe.package_ref,
+        )
+
+    install_method = probe.install_method or existing.install_method
+    install_source = existing.install_source
+    package_ref = existing.package_ref
+
+    if probe.install_source is not None:
+        install_source = probe.install_source
+        package_ref = probe.package_ref
+    elif existing.install_source == "unknown" and probe.install_method == "uv":
+        install_source = DEFAULT_INSTALL_SOURCE
+
     return InstallMetadata(
-        install_method=DEFAULT_INSTALL_METHOD,
-        install_source="unknown",
-        package_name=PACKAGE_NAME,
-        channel=DEFAULT_CHANNEL,
-        installed_version=current_installed_version(),
-        installed_at=_utc_now_iso(),
-        last_upgrade_at=_utc_now_iso(),
-        package_ref=None,
+        install_method=install_method,
+        install_source=install_source,
+        package_name=existing.package_name,
+        channel=existing.channel,
+        installed_version=installed_version,
+        installed_at=existing.installed_at,
+        last_upgrade_at=existing.last_upgrade_at,
+        package_ref=package_ref,
     )
 
 
@@ -448,8 +531,9 @@ def upgrade_command(
         except FileNotFoundError:
             typer.secho("uv is not installed or not on PATH.", fg=typer.colors.RED)
             raise typer.Exit(code=1)
-        install_source = install_metadata.install_source if install_metadata.install_source != "unknown" else DEFAULT_INSTALL_SOURCE
-        package_ref = install_metadata.package_ref
+        refreshed_install_metadata = detect_install_metadata()
+        install_source = refreshed_install_metadata.install_source
+        package_ref = refreshed_install_metadata.package_ref
 
     if completed.returncode != 0:
         raise typer.Exit(code=completed.returncode)

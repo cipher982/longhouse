@@ -35,6 +35,57 @@ def test_write_install_metadata_persists_file(monkeypatch, tmp_path):
     assert metadata_payload.installed_version == "0.1.5"
 
 
+def test_detect_install_metadata_defaults_to_pypi_when_runtime_has_no_direct_source(monkeypatch):
+    monkeypatch.setattr(update_manager, "load_install_metadata", lambda: None)
+    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.5")
+    monkeypatch.setattr(
+        update_manager,
+        "_probe_installed_distribution",
+        lambda package_name="longhouse": update_manager.DistributionInstallProbe(install_method="uv"),
+    )
+
+    metadata_payload = update_manager.detect_install_metadata()
+
+    assert metadata_payload.install_method == "uv"
+    assert metadata_payload.install_source == "pypi"
+    assert metadata_payload.package_ref is None
+
+
+def test_detect_install_metadata_prefers_runtime_editable_path_over_stale_record(monkeypatch):
+    monkeypatch.setattr(
+        update_manager,
+        "load_install_metadata",
+        lambda: update_manager.InstallMetadata(
+            install_method="uv",
+            install_source="pypi",
+            package_name="longhouse",
+            channel="stable",
+            installed_version="0.1.5",
+            installed_at="2026-04-07T00:00:00+00:00",
+            last_upgrade_at="2026-04-07T00:00:00+00:00",
+            package_ref=None,
+        ),
+    )
+    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.8")
+    monkeypatch.setattr(
+        update_manager,
+        "_probe_installed_distribution",
+        lambda package_name="longhouse": update_manager.DistributionInstallProbe(
+            install_method="uv",
+            install_source="editable-path",
+            package_ref="/Users/davidrose/git/zerg/server",
+        ),
+    )
+
+    metadata_payload = update_manager.detect_install_metadata()
+
+    assert metadata_payload.install_method == "uv"
+    assert metadata_payload.install_source == "editable-path"
+    assert metadata_payload.package_ref == "/Users/davidrose/git/zerg/server"
+    assert metadata_payload.installed_version == "0.1.8"
+    assert metadata_payload.installed_at == "2026-04-07T00:00:00+00:00"
+
+
 def test_version_command_reports_installed_version(monkeypatch):
     runner = CliRunner()
     monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.5")
@@ -101,6 +152,11 @@ def test_upgrade_command_runs_uv_tool_upgrade_and_records_metadata(monkeypatch, 
         ),
     )
     monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.6")
+    monkeypatch.setattr(
+        update_manager,
+        "_probe_installed_distribution",
+        lambda package_name="longhouse": update_manager.DistributionInstallProbe(install_method="uv"),
+    )
 
     calls: list[list[str]] = []
 
@@ -118,6 +174,58 @@ def test_upgrade_command_runs_uv_tool_upgrade_and_records_metadata(monkeypatch, 
     assert metadata_payload is not None
     assert metadata_payload.install_source == "pypi"
     assert metadata_payload.installed_version == "0.1.6"
+
+
+def test_upgrade_command_rewrites_stale_metadata_from_runtime_probe(monkeypatch, tmp_path):
+    runner = CliRunner()
+    runner_home = tmp_path / "home"
+    runner_home.mkdir()
+    monkeypatch.setenv("HOME", str(runner_home))
+    stale_install_json = runner_home / ".longhouse" / "install.json"
+    stale_install_json.parent.mkdir(parents=True)
+    stale_install_json.write_text(
+        """
+{
+  "install_method": "uv",
+  "install_source": "pypi",
+  "package_name": "longhouse",
+  "channel": "stable",
+  "installed_version": "0.1.5",
+  "installed_at": "2026-04-07T00:00:00+00:00",
+  "last_upgrade_at": "2026-04-07T00:00:00+00:00"
+}
+""".strip()
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.8")
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, check=False):
+        calls.append(list(cmd))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(update_manager.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        update_manager,
+        "_probe_installed_distribution",
+        lambda package_name="longhouse": update_manager.DistributionInstallProbe(
+            install_method="uv",
+            install_source="editable-path",
+            package_ref="/Users/davidrose/git/zerg/server",
+        ),
+    )
+
+    result = runner.invoke(app, ["upgrade"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [["uv", "tool", "upgrade", "longhouse"]]
+    metadata_payload = update_manager.load_install_metadata()
+    assert metadata_payload is not None
+    assert metadata_payload.install_source == "editable-path"
+    assert metadata_payload.package_ref == "/Users/davidrose/git/zerg/server"
+    assert metadata_payload.installed_version == "0.1.8"
 
 
 def test_upgrade_command_override_source_reinstalls_from_custom_package(monkeypatch, tmp_path):
