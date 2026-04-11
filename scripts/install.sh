@@ -8,6 +8,12 @@
 # Environment:
 #   LONGHOUSE_NO_WIZARD=1  Skip onboarding wizard
 #   LONGHOUSE_API_URL      Custom API URL (default: http://localhost:8080)
+#   LONGHOUSE_ONBOARD_HOST Override onboarding host when the installer runs it
+#   LONGHOUSE_ONBOARD_PORT Override onboarding port when the installer runs it
+#   LONGHOUSE_ONBOARD_NO_BROWSER=1  Skip auto-opening the browser during installer-owned onboarding
+#   LONGHOUSE_ONBOARD_NO_SERVER=1   Skip local runtime startup during installer-owned onboarding
+#   LONGHOUSE_ONBOARD_NO_SHIPPER=1  Skip machine-agent install during installer-owned onboarding
+#   LONGHOUSE_ONBOARD_NO_DEMO=1     Skip demo seeding during installer-owned onboarding
 #   http_proxy/https_proxy Proxy settings (honored automatically)
 #
 set -euo pipefail
@@ -394,6 +400,27 @@ verify_fresh_shell_path() {
 
 # Run onboarding wizard
 run_onboard() {
+    local -a onboard_args=()
+
+    if [[ -n "${LONGHOUSE_ONBOARD_HOST:-}" ]]; then
+        onboard_args+=(--host "$LONGHOUSE_ONBOARD_HOST")
+    fi
+    if [[ -n "${LONGHOUSE_ONBOARD_PORT:-}" ]]; then
+        onboard_args+=(--port "$LONGHOUSE_ONBOARD_PORT")
+    fi
+    if [[ "${LONGHOUSE_ONBOARD_NO_BROWSER:-}" =~ ^(1|true|yes)$ ]]; then
+        onboard_args+=(--no-browser)
+    fi
+    if [[ "${LONGHOUSE_ONBOARD_NO_SERVER:-}" =~ ^(1|true|yes)$ ]]; then
+        onboard_args+=(--no-server)
+    fi
+    if [[ "${LONGHOUSE_ONBOARD_NO_SHIPPER:-}" =~ ^(1|true|yes)$ ]]; then
+        onboard_args+=(--no-shipper)
+    fi
+    if [[ "${LONGHOUSE_ONBOARD_NO_DEMO:-}" =~ ^(1|true|yes)$ ]]; then
+        onboard_args+=(--no-demo)
+    fi
+
     if [[ "${LONGHOUSE_NO_WIZARD:-}" == "1" ]]; then
         info "Skipping onboarding wizard (LONGHOUSE_NO_WIZARD=1)"
         ONBOARD_RESULT="skipped"
@@ -413,7 +440,7 @@ run_onboard() {
     # Try to reconnect to the real terminal via /dev/tty.
     if [[ -t 0 ]]; then
         # Interactive terminal available directly
-        if longhouse onboard; then
+        if longhouse onboard "${onboard_args[@]}"; then
             ONBOARD_RESULT="completed"
         else
             warn "Onboarding wizard exited with error"
@@ -423,7 +450,7 @@ run_onboard() {
     elif : < /dev/tty 2>/dev/null; then
         # Stdin is pipe but TTY is accessible - redirect from /dev/tty
         info "Reconnecting to terminal for interactive setup..."
-        if longhouse onboard < /dev/tty; then
+        if longhouse onboard "${onboard_args[@]}" < /dev/tty; then
             ONBOARD_RESULT="completed"
         else
             warn "Onboarding wizard exited with error"
@@ -433,7 +460,7 @@ run_onboard() {
     else
         # No TTY available (Docker, CI, headless) - use non-interactive mode
         info "No TTY available, using QuickStart defaults"
-        if longhouse onboard --quick; then
+        if longhouse onboard --quick "${onboard_args[@]}"; then
             ONBOARD_RESULT="completed"
         else
             warn "Onboarding wizard exited with error"
