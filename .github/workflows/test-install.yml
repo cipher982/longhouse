@@ -9,7 +9,8 @@ on:
 
 concurrency:
   group: installer-validation-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep PR/scheduled dedupe, but never preempt default-branch pushes; every main SHA must run.
+  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref_name == github.event.repository.default_branch) }}
 
 jobs:
   runtime-packaging-macos:

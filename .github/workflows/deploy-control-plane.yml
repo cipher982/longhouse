@@ -12,7 +12,8 @@ on:
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('deploy-control-plane-manual-{0}', github.run_id) || format('deploy-control-plane-{0}', github.ref_name) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  # Deploy main in commit order; never preempt an already-approved SHA.
+  cancel-in-progress: false
 
 jobs:
   gate:
@@ -21,7 +22,6 @@ jobs:
     outputs:
       head_sha: ${{ steps.meta.outputs.head_sha }}
       head_branch: ${{ steps.meta.outputs.head_branch }}
-      stale: ${{ steps.freshness.outputs.stale }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -44,28 +44,11 @@ jobs:
           head_branch: ${{ steps.meta.outputs.head_branch }}
           github_token: ${{ github.token }}
 
-      - name: Check if commit is superseded
-        id: freshness
-        uses: ./.github/actions/check-freshness
-        with:
-          head_sha: ${{ steps.meta.outputs.head_sha }}
-          github_token: ${{ github.token }}
-
-      - name: Summary
-        if: ${{ steps.freshness.outputs.stale == 'true' }}
-        run: |
-          {
-            echo "## Control Plane Deploy Results"
-            echo ""
-            echo "- Skipped because commit \`${{ steps.meta.outputs.head_sha }}\` is no longer the head of \`main\`."
-          } >> "$GITHUB_STEP_SUMMARY"
-
   deploy:
     name: "Deploy Control Plane"
     runs-on: cube-deploy
     timeout-minutes: 20
     needs: gate
-    if: ${{ needs.gate.outputs.stale != 'true' }}
 
     env:
       CONTROL_PLANE_URL: https://control.longhouse.ai
