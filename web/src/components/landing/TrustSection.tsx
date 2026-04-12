@@ -8,28 +8,24 @@ interface FAQ {
 const faqs: FAQ[] = [
   {
     question: "Do I need a credit card to try it?",
-    answer: "No for the core product. Self-hosting is the free path. Hosted beta is the convenience path you choose later if you want us to run the box for you."
+    answer: "No. Self-hosting is free and open source. Hosted beta is optional convenience if you want us to run the server for you."
   },
   {
     question: "Where is my data stored?",
-    answer: "When you self-host, your data lives in a SQLite database on your machine. Hosted runs the same core product in your isolated runtime. We do not sell or share your data."
-  },
-  {
-    question: "Is the CLI/API surface real or just landing-page copy?",
-    answer: "It is real. The machine-facing surface lives under /api/agents/* and the CLI maps onto the same core flows: wall, peers, tail, message, inbox, and continue."
+    answer: "When you self-host, everything lives in a SQLite database on your machine. Hosted beta runs your own isolated runtime. We never sell or share your data."
   },
   {
     question: "Why not just use ssh + tmux?",
-    answer: "If you only need one remote shell, ssh + tmux is simpler. Longhouse is for when you want the session itself to be searchable, addressable, messageable, and branchable from browser, CLI, or API."
+    answer: "If you only need one remote shell, ssh + tmux is simpler. Longhouse is for when you want sessions to be searchable, addressable, and controllable from browser, CLI, or API."
   },
   {
     question: "Do you train AI models on my data?",
-    answer: "No. Your conversations and data are never used to train any AI models. Your data is yours alone."
+    answer: "No. Your sessions and data are never used to train any AI models."
   },
   {
-    question: "What AI coding agents do you support?",
-    answer: "Claude Code currently has the strongest hooks, telemetry, and live control. Codex CLI and Gemini CLI already land in the same timeline and machine surface today. OpenCode and Cursor are coming soon."
-  }
+    question: "Can I migrate from self-hosted to hosted?",
+    answer: "Yes. Export your SQLite database and import it into your hosted instance. Same data, same sessions."
+  },
 ];
 
 export function TrustSection() {
@@ -42,11 +38,8 @@ export function TrustSection() {
   return (
     <section className="landing-trust">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Questions</p>
-        <h2 className="landing-section-title">Answer the obvious objections fast.</h2>
-        <p className="landing-section-subtitle">
-          Clear answers matter more than a long enterprise-security theater section at this stage.
-        </p>
+        <p className="landing-section-label">FAQ</p>
+        <h2 className="landing-section-title">Common questions.</h2>
 
         <div className="landing-faq-list">
           {faqs.map((faq, index) => (

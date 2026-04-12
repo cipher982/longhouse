@@ -27,13 +27,12 @@ export function PricingSection() {
       name: "Self-Hosted",
       price: "Free",
       period: "forever",
-      description: "Run it on the machine where work should live",
+      description: "Run it on your laptop, VPS, or homelab",
       features: [
-        "Self-host on your laptop, VPS, Mac mini, or homelab box",
-        "SQLite core, no external services",
-        "Import existing Claude Code, Codex, and Gemini sessions",
-        "Search, detail, and machine surface",
-        "Keep a control channel open by starting sessions through Longhouse",
+        "Full product — timeline, search, live control",
+        "SQLite only, no external services needed",
+        "Import Claude, Codex, and Gemini sessions",
+        "CLI and HTTP API included",
         "Open source (Apache 2.0)",
       ],
       ctaText: "Self-Host Free",
@@ -44,14 +43,13 @@ export function PricingSection() {
       name: "Hosted Beta",
       price: "$5",
       period: "/month",
-      description: "Same product, zero infrastructure — we run the box",
+      description: "Same product, we run the server",
       features: [
-        "Same core loop as self-hosted",
-        "Browser access from anywhere, no port forwarding",
-        "No server to maintain, patch, or keep online",
+        "Everything in self-hosted",
+        "Access from anywhere, no port forwarding",
+        "No server to maintain or keep online",
         "Your own subdomain + automatic updates",
-        "Migrate from self-hosted with a single export",
-        "Start self-hosted, upgrade when you want convenience",
+        "Migrate from self-hosted anytime",
       ],
       ctaText: "Hosted Beta",
       ctaAction: handleGetHosted,
@@ -61,11 +59,10 @@ export function PricingSection() {
   return (
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Run It Where Work Should Live</p>
-        <h2 className="landing-section-title">Works on your laptop. Shines on a machine that stays on.</h2>
+        <p className="landing-section-label">Pricing</p>
+        <h2 className="landing-section-title">Free to self-host. Hosted if you want it easy.</h2>
         <p className="landing-section-subtitle">
-          Self-hosted is the free default path. Hosted beta is the convenience version of the same loop,
-          not a different product category or the required first step.
+          Same product either way. Self-host on your own machine, or let us run it for you.
         </p>
 
         <div className="landing-pricing-grid">

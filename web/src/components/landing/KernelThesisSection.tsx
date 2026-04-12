@@ -5,19 +5,19 @@ interface ThesisCard {
 
 const cards: ThesisCard[] = [
   {
-    title: "A session stays addressable",
+    title: "Search across every session",
     description:
-      "It is not just history. You can inspect it, message it, tail it, and continue it later.",
+      "Find the session where you already solved auth, retries, or that migration. No more grepping JSONL logs by hand.",
   },
   {
-    title: "One session, more capability",
+    title: "Pick up where you left off",
     description:
-      "Longhouse in the launch path changes what you can do with a session later. It does not create a second class of session.",
+      "Open the raw transcript and tool history. Continue from the exact context instead of starting over.",
   },
   {
-    title: "Laptop now. Durable machine later.",
+    title: "Steer sessions after launch",
     description:
-      "You can start on your laptop, then move to a box that stays on when you want stronger continuity.",
+      "Start through Longhouse and the session stays reachable. Message it, tail it, or continue it later from browser, CLI, or API.",
   },
 ];
 
@@ -25,11 +25,10 @@ export function KernelThesisSection() {
   return (
     <section className="landing-kernel-thesis">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Why It Works</p>
-        <h2 className="landing-section-title">Built around real sessions.</h2>
+        <p className="landing-section-label">Why Longhouse</p>
+        <h2 className="landing-section-title">Your sessions are worth more than a transcript.</h2>
         <p className="landing-section-subtitle">
-          Longhouse keeps the session, the machine context, and the control surface tied together so you
-          can come back later and keep working.
+          Every session you run is prior art. Longhouse makes it searchable, inspectable, and controllable.
         </p>
 
         <div className="landing-thesis-grid">

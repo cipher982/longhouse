@@ -63,8 +63,8 @@ vi.mock("../../components/landing/TrustSection", () => ({
   TrustSection: () => <div>Trust Section</div>,
 }));
 
-vi.mock("../../components/landing/SocialProof", () => ({
-  SocialProof: () => <div>Social Proof</div>,
+vi.mock("../../components/landing/InstallSection", () => ({
+  InstallSection: () => <div>Install Section</div>,
 }));
 
 vi.mock("../../components/landing/FooterCTA", () => ({

@@ -19,21 +19,18 @@ describe("landing provider claims", () => {
     expect(screen.getByText("Import and search today")).toBeInTheDocument();
     expect(screen.getAllByText("Live now")).toHaveLength(3);
     expect(
-      screen.getByText(/Claude currently has the richest hooks and telemetry/i),
+      screen.getByText(/Codex and Gemini sessions are already searchable/i),
     ).toBeInTheDocument();
   });
 
-  it("explains provider support levels", async () => {
+  it("renders FAQ with provider migration question", async () => {
     const user = userEvent.setup();
     render(<TrustSection />);
 
-    await user.click(screen.getByRole("button", { name: /What AI coding agents do you support\?/i }));
+    await user.click(screen.getByRole("button", { name: /Can I migrate from self-hosted to hosted\?/i }));
 
     expect(
-      screen.getByText(/Claude Code currently has the strongest hooks, telemetry, and live control/i),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Codex CLI and Gemini CLI already land in the same timeline and machine surface today/i),
+      screen.getByText(/Export your SQLite database/i),
     ).toBeInTheDocument();
   });
 });

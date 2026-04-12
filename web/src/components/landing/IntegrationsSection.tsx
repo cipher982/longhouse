@@ -30,11 +30,10 @@ export function IntegrationsSection() {
   return (
     <section id="providers" className="landing-integrations">
       <div className="landing-section-inner">
-        <p className="landing-section-label">What Works Today</p>
-        <h2 className="landing-section-title">Claude is strongest today.</h2>
+        <p className="landing-section-label">Providers</p>
+        <h2 className="landing-section-title">Works with Claude, Codex, and Gemini.</h2>
         <p className="landing-section-subtitle">
-          Import, search, and live control already work across providers. Claude has the deepest
-          integration at launch.
+          All providers land in the same timeline. Claude has the deepest hooks and live control today.
         </p>
 
         <div className="landing-providers-grid">
@@ -57,12 +56,7 @@ export function IntegrationsSection() {
         </div>
 
         <p className="landing-providers-tagline">
-          All providers land in the same timeline today. Claude has the richest hooks and live control.
-        </p>
-
-        <p className="landing-providers-tagline landing-providers-tagline--subtle">
-          Claude currently has the richest hooks and telemetry. Codex and Gemini are already useful in the
-          timeline and CLI/API surface.
+          Codex and Gemini sessions are already searchable and inspectable. Live control support is expanding.
         </p>
       </div>
     </section>

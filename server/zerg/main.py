@@ -318,7 +318,8 @@ async def serve_config_js():
         "WS_BASE_URL": ws_host or "",
         "__APP_MODE__": _settings.app_mode.value,
         "__GOOGLE_CLIENT_ID__": google_client_id,
-        "__SINGLE_TENANT__": _settings.single_tenant,
+        # In dev mode (auth disabled), expose landing page by reporting single_tenant=false
+        "__SINGLE_TENANT__": False if _settings.auth_disabled else _settings.single_tenant,
         "__LLM_AVAILABLE__": _llm_avail_bool,
         "__EMBEDDINGS_AVAILABLE__": _emb_avail_bool,
         "__UMAMI_WEBSITE_ID__": _settings.umami_website_id or "",

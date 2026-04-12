@@ -6,28 +6,14 @@ type SurfaceCard = {
 
 const cards: SurfaceCard[] = [
   {
-    title: "Read the wall",
-    description: "See active and recent sessions around a repo or project.",
+    title: "See what's running",
+    description: "List active sessions across all your machines and repos.",
     code: "longhouse wall --json",
   },
   {
-    title: "Inspect a session",
-    description: "Tail the latest events or fetch the full machine-facing session detail.",
-    code: "longhouse tail SESSION_ID\nlonghouse sessions get SESSION_ID --json",
-  },
-  {
-    title: "Coordinate work",
-    description: "Send a directed session message and read the durable inbox.",
-    code: "longhouse message TARGET_ID \"Inspect the failing test\"\nlonghouse messages --json",
-  },
-  {
-    title: "Control live sessions",
-    description: "Send live messages to running sessions from terminal or API.",
-    code: `curl -X POST \\
-  -H "X-Agents-Token: $LONGHOUSE_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{"message":"Check that test"}' \\
-  "$LONGHOUSE_URL/api/agents/sessions/$SESSION_ID/send-live"`,
+    title: "Message a live session",
+    description: "Send instructions to a running session from terminal or API.",
+    code: `longhouse message SESSION_ID "Check the failing test"`,
   },
 ];
 
@@ -58,15 +44,9 @@ export function MachineSurfaceSection() {
           ))}
         </div>
 
-        <div className="landing-surface-note">
-          <p>
-            One timeline, one session model. When a session starts through Longhouse, browser, CLI, and API
-            all speak to the same session surface.
-          </p>
-          <p>
-            The timeline still matters, but it is one surface on top of the same session model.
-          </p>
-        </div>
+        <p className="landing-surface-note">
+          Browser, CLI, and HTTP API all share the same session model. <a href="https://github.com/cipher982/longhouse" target="_blank" rel="noopener noreferrer">See the full API reference &rarr;</a>
+        </p>
       </div>
     </section>
   );

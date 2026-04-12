@@ -17,7 +17,7 @@ import { DemoSection } from "../components/landing/DemoSection";
 import { IntegrationsSection } from "../components/landing/IntegrationsSection";
 import { PricingSection } from "../components/landing/PricingSection";
 import { TrustSection } from "../components/landing/TrustSection";
-import { SocialProof } from "../components/landing/SocialProof";
+import { InstallSection } from "../components/landing/InstallSection";
 import { FooterCTA } from "../components/landing/FooterCTA";
 import { LandingPerfHud } from "../components/landing/LandingPerfHud";
 
@@ -148,11 +148,11 @@ export default function LandingPage() {
           heroAnimationsEnabled={heroAnimationsEnabled}
           screenshotTheme={screenshotTheme}
         />
-        <SocialProof />
         <KernelThesisSection />
-        <HowItWorksSection />
-        <MachineSurfaceSection />
         <DemoSection screenshotTheme={screenshotTheme} />
+        <HowItWorksSection />
+        <InstallSection className="landing-install-standalone" />
+        <MachineSurfaceSection />
         <IntegrationsSection />
         <PricingSection />
         <TrustSection />

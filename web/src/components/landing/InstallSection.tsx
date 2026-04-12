@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { AppScreenshotFrame } from "./AppScreenshotFrame";
 
 type Platform = "macos" | "linux" | "windows";
 
@@ -15,7 +14,7 @@ const installCommands: Record<Platform, { label: string; command: string; note?:
   windows: {
     label: "Windows (WSL)",
     command: "curl -fsSL https://get.longhouse.ai/install.sh | bash",
-    note: "Run in WSL terminal. Native Windows coming soon.",
+    note: "Run inside WSL. Native Windows coming soon.",
   },
 };
 
@@ -35,7 +34,6 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Fallback for older browsers
       const textArea = document.createElement("textarea");
       textArea.value = currentCommand.command;
       document.body.appendChild(textArea);
@@ -48,103 +46,83 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
   };
 
   return (
-    <div className={`install-section ${className}`}>
-      <div className="install-header">
-        <h3>Get started fast</h3>
-        <p>
-          One install command. Guided onboarding starts Longhouse, gets you to the first useful
-          moment, and leaves the local runtime in place. On macOS, Longhouse also adds a menu bar
-          app.
+    <section id="landing-install" className={`install-section ${className}`}>
+      <div className="landing-section-inner">
+        <p className="landing-section-label">Get Started</p>
+        <h2 className="landing-section-title">One command. Guided onboarding.</h2>
+        <p className="landing-section-subtitle">
+          Install, import your first sessions, and open the timeline.
+          On macOS, Longhouse also adds a menu bar app for local status.
         </p>
-      </div>
 
-      <div className="install-tabs" role="tablist" aria-label="Installation platform">
-        {(Object.keys(installCommands) as Platform[]).map((p) => (
+        <div className="install-tabs" role="tablist" aria-label="Installation platform">
+          {(Object.keys(installCommands) as Platform[]).map((p) => (
+            <button
+              key={p}
+              role="tab"
+              aria-selected={platform === p}
+              className={`install-tab ${platform === p ? "active" : ""}`}
+              onClick={() => setPlatform(p)}
+            >
+              {installCommands[p].label}
+            </button>
+          ))}
+        </div>
+
+        <div className="install-command-container">
           <button
-            key={p}
-            role="tab"
-            aria-selected={platform === p}
-            className={`install-tab ${platform === p ? "active" : ""}`}
-            onClick={() => setPlatform(p)}
+            type="button"
+            className="install-command"
+            onClick={handleCopy}
+            aria-label={`Copy install command: ${currentCommand.command}`}
           >
-            {installCommands[p].label}
+            <span className="install-prompt" aria-hidden="true">$</span>
+            <code className="install-text">{currentCommand.command}</code>
           </button>
-        ))}
-      </div>
+          <button
+            type="button"
+            className={`install-copy-btn ${copied ? "copied" : ""}`}
+            onClick={handleCopy}
+            aria-label={copied ? "Copied!" : "Copy to clipboard"}
+          >
+            {copied ? (
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
+              </svg>
+            ) : (
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z" />
+                <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z" />
+              </svg>
+            )}
+          </button>
+        </div>
 
-      <div className="install-command-container">
-        <button
-          type="button"
-          className="install-command"
-          onClick={handleCopy}
-          aria-label={`Copy install command: ${currentCommand.command}`}
-        >
-          <span className="install-prompt" aria-hidden="true">$</span>
-          <code className="install-text">{currentCommand.command}</code>
-        </button>
-        <button
-          type="button"
-          className={`install-copy-btn ${copied ? "copied" : ""}`}
-          onClick={handleCopy}
-          aria-label={copied ? "Copied!" : "Copy to clipboard"}
-        >
-          {copied ? (
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+        {currentCommand.note && (
+          <p className="install-note">{currentCommand.note}</p>
+        )}
+
+        <div className="install-features">
+          <span className="install-feature">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
               <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
             </svg>
-          ) : (
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-              <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z" />
-              <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z" />
+            No sudo required
+          </span>
+          <span className="install-feature">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
             </svg>
-          )}
-        </button>
+            Guided onboarding
+          </span>
+          <span className="install-feature">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
+            </svg>
+            Menu bar app on macOS
+          </span>
+        </div>
       </div>
-
-      {currentCommand.note && (
-        <p className="install-note">{currentCommand.note}</p>
-      )}
-
-      <p className="install-note">
-        Run the installer, open Longhouse, find one prior session, then go back to work. When you
-        want control after launch, start with <code>longhouse claude</code> or{" "}
-        <code>longhouse codex</code>. On macOS, keep Longhouse in the menu bar for live local
-        status. Repair tools stay one layer down if you need them later.
-      </p>
-
-      <div className="install-proof">
-        <AppScreenshotFrame
-          src="/images/landing/ambient-menu-bar.png"
-          alt="Longhouse local status panel showing the menu bar app in a healthy state"
-          title="Longhouse in your menu bar"
-          aspectRatio="4/3"
-          theme="cool-pop"
-        />
-        <p className="install-proof-caption">
-          Longhouse stays in your menu bar on macOS with live health, launch-readiness checks, and repair actions.
-        </p>
-      </div>
-
-      <div className="install-features">
-        <span className="install-feature">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
-          </svg>
-          No sudo required
-        </span>
-        <span className="install-feature">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
-          </svg>
-          Guided onboarding included
-        </span>
-        <span className="install-feature">
-          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-            <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
-          </svg>
-          Menu bar app on macOS
-        </span>
-      </div>
-    </div>
+    </section>
   );
 }
