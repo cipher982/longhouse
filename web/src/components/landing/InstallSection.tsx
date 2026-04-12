@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { AppScreenshotFrame } from "./AppScreenshotFrame";
 
 const installCommand = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
 
@@ -115,14 +114,42 @@ export function InstallSection({ className = "" }: InstallSectionProps) {
 
           <aside className="landing-install-proof">
             <p className="landing-install-proof-label">macOS surface</p>
-            <AppScreenshotFrame
-              src="/images/landing/ambient-menu-bar.png"
-              alt="Longhouse menu bar app showing local machine health"
-              title="Longhouse.app"
-              aspectRatio="21/9"
-              showChrome={false}
-              className="landing-install-proof-frame"
-            />
+            <div className="landing-install-ambient-card">
+              <div className="landing-install-ambient-menubar">
+                <span className="landing-install-ambient-signal" aria-hidden="true" />
+                <span className="landing-install-ambient-title">Longhouse.app</span>
+                <span className="landing-install-ambient-chip">Quiet</span>
+              </div>
+              <div className="landing-install-ambient-panel">
+                <div className="landing-install-ambient-header">
+                  <div>
+                    <p className="landing-install-ambient-eyebrow">Local health</p>
+                    <h3>Visible when you need it.</h3>
+                  </div>
+                  <span className="landing-install-ambient-status">Healthy</span>
+                </div>
+
+                <div className="landing-install-ambient-rows">
+                  <div className="landing-install-ambient-row">
+                    <span>Machine Agent</span>
+                    <strong>Shipping</strong>
+                  </div>
+                  <div className="landing-install-ambient-row">
+                    <span>Timeline import</span>
+                    <strong>Watching</strong>
+                  </div>
+                  <div className="landing-install-ambient-row">
+                    <span>Control path</span>
+                    <strong>Ready</strong>
+                  </div>
+                </div>
+
+                <div className="landing-install-ambient-repair">
+                  <span>Repair seam</span>
+                  <code>longhouse connect --install</code>
+                </div>
+              </div>
+            </div>
             <p className="landing-install-proof-caption">
               Quiet by default, but always a visible local status and repair path.
             </p>
