@@ -21,11 +21,10 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
   }, []);
 
   const navLinks = [
-    { label: "Proof", href: "#journey" },
-    { label: "Surface", href: "#surface" },
-    { label: "Providers", href: "#providers" },
+    { label: "How it works", href: "#journey" },
+    { label: "CLI & API", href: "#surface" },
+    { label: "Pricing", href: "#pricing" },
     { label: "Docs", href: "https://github.com/cipher982/longhouse", external: true },
-    { label: "Hosted", href: "#pricing" },
   ];
 
   const handleNavClick = (href: string, external?: boolean) => {

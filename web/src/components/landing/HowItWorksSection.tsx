@@ -41,11 +41,11 @@ export function HowItWorksSection() {
   return (
     <section id="journey" className="landing-how-it-works landing-proof-journey">
       <div className="landing-section-inner">
-        <p className="landing-section-label">How It Clicks</p>
-        <h2 className="landing-section-title">One timeline. Then keep control.</h2>
+        <p className="landing-section-label">How It Works</p>
+        <h2 className="landing-section-title">From install to live control in five steps.</h2>
         <p className="landing-section-subtitle">
-          First you recover something you already solved. Then you see that the same timeline can still
-          steer live work later when Longhouse kept the control path open.
+          Start by recovering something you already solved. Then keep a control path open
+          for next time.
         </p>
 
         <div className="landing-journey-grid">

@@ -56,6 +56,7 @@ def test_config_js_includes_runtime_umami_values(monkeypatch):
     monkeypatch.setattr(_settings, "control_plane_url", None)
     monkeypatch.setattr(_settings, "google_client_id", "google-client-id")
     monkeypatch.setattr(_settings, "single_tenant", True)
+    monkeypatch.setattr(_settings, "auth_disabled", False)
     monkeypatch.setattr(_settings, "umami_website_id", "demo-site")
     monkeypatch.setattr(_settings, "umami_script_src", "https://analytics.example/script.js")
     monkeypatch.setattr(_settings, "umami_domains", "longhouse.ai")

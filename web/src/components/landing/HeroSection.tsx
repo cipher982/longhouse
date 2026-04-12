@@ -1,7 +1,7 @@
-import { useNavigate } from "react-router-dom";
 import { Button } from "../ui";
 import { AppScreenshotFrame } from "./AppScreenshotFrame";
 import config from "../../lib/config";
+import { useNavigate } from "react-router-dom";
 
 interface HeroSectionProps {
   onScrollToHowItWorks: () => void;
@@ -28,25 +28,13 @@ export function HeroSection({
     <section className="landing-hero">
       <div className="landing-hero-split">
         <div className="landing-hero-text">
-          <div className="landing-hero-badge">
-            <span className="landing-hero-badge-dot" />
-            One timeline for every session
-          </div>
-
           <h1 className="landing-hero-headline">
-            Control live sessions <span className="gradient-text">after launch.</span>
+            Mission control for your <span className="gradient-text">AI coding sessions.</span>
           </h1>
 
           <p className="landing-hero-subhead">
-            Install Longhouse on the machine where work lives. Open one timeline for Claude Code, Codex,
-            and Gemini sessions. Find a prior session fast and recover the context you need. When you want
-            to message, tail, or continue a session later, start it through Longhouse.
-          </p>
-
-          <p className="landing-hero-note">
-            Works on your laptop. Shines on a machine that stays on. On macOS, Longhouse also lives in
-            your menu bar. Self-host free where the work lives, or use hosted beta later if you want us
-            to run the box.
+            One timeline for every Claude, Codex, and Gemini session.
+            Find past work fast. Steer live sessions from anywhere.
           </p>
 
           <div className="landing-hero-ctas">
@@ -63,61 +51,19 @@ export function HeroSection({
             )}
           </div>
 
-          <div className="landing-hero-friction-reducers">
-            <span>Find prior work first</span>
-            <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>Start through Longhouse when you want control</span>
-            <span className="landing-hero-friction-dot" aria-hidden="true" />
-            <span>Browser and CLI stay in sync</span>
-          </div>
-
-          <div className="landing-hero-install" id="landing-install">
-            <p className="landing-hero-install-label">Install Longhouse. Open it. Find one prior session.</p>
-            <div className="landing-hero-install-grid">
-              <pre className="landing-code-block">
-                <code>{"curl -fsSL https://get.longhouse.ai/install.sh | bash"}</code>
-              </pre>
-              <pre className="landing-code-block">
-                <code>{"longhouse claude\nlonghouse codex"}</code>
-              </pre>
-            </div>
-            <p className="landing-hero-install-note">
-              One command installs the CLI, starts Longhouse during guided onboarding, and gets you to the
-              timeline right away. On macOS, Longhouse also adds a menu bar app so local status is always
-              visible. Later, when you want a session to stay reachable after launch, start it with{" "}
-              <code>longhouse claude</code> or <code>longhouse codex</code>. Use{" "}
-              <code>longhouse serve --demo</code> only when you want a safe preview before importing
-              real work. Repair tools stay one layer down if you need them later.
-            </p>
-          </div>
+          <p className="landing-hero-note">
+            Open source. Runs on your laptop, VPS, or homelab.
+            No account required to self-host.
+          </p>
 
           <div className="landing-hero-cta-secondary">
             <Button variant="ghost" size="lg" className="landing-cta-text" onClick={onScrollToHowItWorks}>
-              See how it works <span className="landing-cta-arrow">↓</span>
+              See how it works <span className="landing-cta-arrow">&darr;</span>
             </Button>
           </div>
         </div>
 
         <div className="landing-hero-visual">
-          <div className="landing-hero-signal-panel">
-            <p className="landing-hero-signal-label">How people get value fast</p>
-            <h2 className="landing-hero-signal-title">One timeline first. Then keep control.</h2>
-            <div className="landing-hero-signal-list">
-              <div className="landing-hero-signal-card">
-                <p className="landing-hero-signal-card-title">Timeline</p>
-                <p>Search prior work, inspect raw session detail, and recover the exact context that matters.</p>
-              </div>
-              <div className="landing-hero-signal-card">
-                <p className="landing-hero-signal-card-title">Control channel</p>
-                <p>Start through Longhouse when you want the session to stay reachable later from the browser or CLI.</p>
-              </div>
-              <div className="landing-hero-signal-card">
-                <p className="landing-hero-signal-card-title">Coordination</p>
-                <p>Timeline, browser actions, and the CLI all point at the same session.</p>
-              </div>
-            </div>
-          </div>
-
           <AppScreenshotFrame
             src="/images/landing/timeline-preview.png"
             alt="Longhouse timeline showing Claude Code sessions"
