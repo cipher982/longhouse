@@ -1,22 +1,32 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generate web icon assets for Longhouse from the master logo.
-# Requires ImageMagick (magick command).
+# Generate brand assets from a single canonical SVG plus a menu bar-specific
+# monochrome derivative. Requires ImageMagick and Playwright's Chromium runtime.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="${ROOT_DIR}/branding/swarm-logo-master.png"
+SRC="${ROOT_DIR}/branding/longhouse-logo-master.svg"
+MENUBAR_SRC="${ROOT_DIR}/branding/longhouse-menubar-template.svg"
 PUBLIC_DIR="${ROOT_DIR}/public"
+MENUBAR_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghouseMenuIcon.png"
 
 if [[ ! -f "${SRC}" ]]; then
   echo "Master logo not found at ${SRC}" >&2
   exit 1
 fi
 
+if [[ ! -f "${MENUBAR_SRC}" ]]; then
+  echo "Menu bar template logo not found at ${MENUBAR_SRC}" >&2
+  exit 1
+fi
+
 mkdir -p "${PUBLIC_DIR}"
 
+echo "Copying canonical SVG…"
+cp "${SRC}" "${PUBLIC_DIR}/longhouse-logo.svg"
+
 echo "Generating favicon base (512px)…"
-magick "${SRC}" -resize 512x512 "${PUBLIC_DIR}/favicon-512.png"
+node "${ROOT_DIR}/scripts/render-svg-asset.mjs" "${SRC}" "${PUBLIC_DIR}/favicon-512.png" 512 512
 
 echo "Generating favicons (32px, 16px, ICO)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 32x32 "${PUBLIC_DIR}/favicon-32.png"
@@ -29,6 +39,10 @@ magick "${PUBLIC_DIR}/favicon-512.png" -resize 180x180 "${PUBLIC_DIR}/apple-touc
 echo "Generating maskable icons (192px, 512px)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 192x192 "${PUBLIC_DIR}/maskable-icon-192.png"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 512x512 "${PUBLIC_DIR}/maskable-icon-512.png"
+
+echo "Generating menu bar template icon…"
+mkdir -p "$(dirname "${MENUBAR_OUT}")"
+node "${ROOT_DIR}/scripts/render-svg-asset.mjs" "${MENUBAR_SRC}" "${MENUBAR_OUT}" 36 36
 
 echo "Generating social preview (1200x630)…"
 magick \
