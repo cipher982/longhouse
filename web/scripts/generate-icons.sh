@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # Generate brand assets from the canonical SVG master.
+# The menu bar icon is a two-tone derivative generated from the same geometry.
 # Requires ImageMagick and Playwright's Chromium runtime.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,9 +35,9 @@ echo "Generating maskable icons (192px, 512px)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 192x192 "${PUBLIC_DIR}/maskable-icon-192.png"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 512x512 "${PUBLIC_DIR}/maskable-icon-512.png"
 
-echo "Generating menu bar icon from master logo…"
+echo "Generating menu bar icon from master logo geometry…"
 mkdir -p "$(dirname "${MENUBAR_OUT}")"
-node "${ROOT_DIR}/scripts/render-svg-asset.mjs" "${SRC}" "${MENUBAR_OUT}" 36 36
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_OUT}" 36 36
 
 echo "Generating social preview (1200x630)…"
 magick \
