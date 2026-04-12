@@ -78,6 +78,10 @@ export function useScrollActivity(
       el.removeEventListener("touchmove", markScrolling);
       el.removeEventListener("scroll", markScrolling);
     };
+    // getElement is intentionally excluded: it's a stable getter ref and
+    // re-running the effect when it changes identity would tear down and
+    // re-attach listeners unnecessarily. scrollClass/rootClass/suppressionMs
+    // are the only values that should trigger a full listener refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollClass, rootClass, suppressionMs]);
 
