@@ -403,24 +403,24 @@ describe("SessionsPage", () => {
     const scroller = document.querySelector(".page-shell");
     expect(scroller).not.toBeNull();
     expect(appRoot).not.toBeNull();
-    expect(scroller).not.toHaveClass("page-shell--timeline-scrolling");
-    expect(appRoot).not.toHaveClass("react-root--timeline-scrolling");
+    expect(scroller).not.toHaveClass("page-shell--scrolling");
+    expect(appRoot).not.toHaveClass("react-root--scrolling");
 
     fireEvent.wheel(scroller!);
-    expect(scroller).toHaveClass("page-shell--timeline-scrolling");
-    expect(appRoot).toHaveClass("react-root--timeline-scrolling");
+    expect(scroller).toHaveClass("page-shell--scrolling");
+    expect(appRoot).toHaveClass("react-root--scrolling");
 
     act(() => {
       vi.advanceTimersByTime(249);
     });
-    expect(scroller).toHaveClass("page-shell--timeline-scrolling");
-    expect(appRoot).toHaveClass("react-root--timeline-scrolling");
+    expect(scroller).toHaveClass("page-shell--scrolling");
+    expect(appRoot).toHaveClass("react-root--scrolling");
 
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(scroller).not.toHaveClass("page-shell--timeline-scrolling");
-    expect(appRoot).not.toHaveClass("react-root--timeline-scrolling");
+    expect(scroller).not.toHaveClass("page-shell--scrolling");
+    expect(appRoot).not.toHaveClass("react-root--scrolling");
 
     appRoot.remove();
   });
