@@ -8,6 +8,7 @@ public enum HarnessAction: String, Codable {
     case openLogs
     case openLonghouse
     case copyDiagnostics
+    case upgradeNow
 }
 
 public enum HarnessEffectMode: String {
@@ -66,6 +67,8 @@ public struct SpyHealthActionSink: HealthActionSink {
                let string = String(data: data, encoding: .utf8) {
                 pasteboard.setString(string, forType: .string)
             }
+        case .upgradeNow:
+            runDetachedShell("longhouse upgrade")
         case .refresh:
             break
         }

@@ -16,6 +16,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
+from zerg.cli.update_manager import load_update_cache
 from zerg.services.shipper.service import get_service_info
 
 SCHEMA_VERSION = 1
@@ -312,6 +313,23 @@ def _collect_service() -> dict[str, Any]:
     return get_service_info()
 
 
+def _collect_version_info() -> dict[str, Any] | None:
+    """Read cached PyPI update check — no network call, cache only."""
+    try:
+        cached = load_update_cache()
+    except Exception:
+        return None
+    if cached is None:
+        return None
+    return {
+        "installed_version": cached.installed_version,
+        "latest_version": cached.latest_version,
+        "update_available": cached.update_available,
+        "upgrade_command": cached.upgrade_command,
+        "checked_at": cached.checked_at,
+    }
+
+
 def _with_action(actions: list[str], text: str) -> None:
     if text not in actions:
         actions.append(text)
@@ -516,6 +534,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "engine_status": engine_status,
         "outbox": outbox,
         "launch_readiness": launch_readiness,
+        "update_info": _collect_version_info(),
         "thresholds": {
             "engine_fresh_seconds": ENGINE_FRESH_SECONDS,
             "engine_stale_seconds": ENGINE_STALE_SECONDS,
