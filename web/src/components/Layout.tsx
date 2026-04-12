@@ -12,6 +12,7 @@ import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useEscapeKey } from "../hooks/useEscapeKey";
 import { useConfirm } from "./confirm";
 import { fetchRunnerStatus } from "../services/api";
+import { SwarmLogo } from "./SwarmLogo";
 import "../styles/layout.css";
 import { SidebarIcon, XIcon } from "./icons";
 import { getNavItems } from "./navigation/navItems";
@@ -164,11 +165,7 @@ function WelcomeHeader() {
         <div className="header-brand">
           <a href="/timeline" className="brand-link" onClick={(e) => { e.preventDefault(); navigate('/timeline'); }}>
             <div className="brand-logo-wrapper">
-              <img
-                src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"
-                alt=""
-                className="brand-logo"
-              />
+              <SwarmLogo size={28} className="brand-logo" />
               <div className="brand-logo-glow" aria-hidden="true" />
             </div>
             <h1>Longhouse</h1>
@@ -265,10 +262,7 @@ function WelcomeHeader() {
     >
       <div className="mobile-nav-header">
         <div className="mobile-nav-brand">
-          <img
-            src="/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png"
-            alt=""
-          />
+          <SwarmLogo size={24} />
           <span>Longhouse</span>
         </div>
         <button

@@ -35,8 +35,7 @@ import {
   useAutomationOverviewRealtimeSubscriptions,
 } from "./automations/useAutomationOverviewRealtime";
 
-// App logo (served from public folder)
-const appLogo = "/Gemini_Generated_Image_klhmhfklhmhfklhm-removebg-preview.png";
+const appLogo = "/longhouse-logo.svg";
 
 type Scope = "my" | "all";
 
