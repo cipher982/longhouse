@@ -15,7 +15,10 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "LonghouseMenuBarCore"
+            name: "LonghouseMenuBarCore",
+            resources: [
+                .process("Resources"),
+            ]
         ),
         .executableTarget(
             name: "LonghouseMenuBarHarnessSnapshot",
