@@ -16,6 +16,14 @@ export default function RemoteControlPage() {
         terminal closes. Message it, tail it, or continue it later — from the
         browser, CLI, or API.
       </p>
+      <div className="docs-callout">
+        <p>
+          <strong>Provider truth matters.</strong> Claude is the strongest
+          control-after-launch path today. Codex is supported and useful here
+          too. Gemini still lands in the archive, but it is not the control
+          story to buy yet.
+        </p>
+      </div>
 
       <h2>How it works</h2>
       <p>
@@ -93,11 +101,11 @@ longhouse wall --json       # machine-readable output`}
           </tr>
           <tr>
             <td>Long-running work you want to check on later</td>
-            <td><code>longhouse claude</code></td>
+            <td><code>longhouse claude</code> / <code>longhouse codex</code></td>
           </tr>
           <tr>
             <td>Work on a remote machine you want to steer from your laptop</td>
-            <td><code>longhouse claude</code></td>
+            <td><code>longhouse claude</code> / <code>longhouse codex</code></td>
           </tr>
           <tr>
             <td>Coordinating multiple sessions on the same project</td>

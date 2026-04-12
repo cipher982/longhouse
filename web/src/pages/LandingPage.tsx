@@ -5,6 +5,7 @@ import config from "../lib/config";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import { useRootUiEffects } from "../hooks/useRootUiEffects";
+import { usePageMeta } from "../hooks/usePageMeta";
 import "../styles/landing.css";
 
 // Section components
@@ -88,6 +89,11 @@ export default function LandingPage() {
   // Enable normal document scrolling (app shell locks root by default)
   usePublicPageScroll();
   useRootUiEffects(particlesEnabled || heroAnimationsEnabled);
+  usePageMeta({
+    title: "Longhouse - Mission control for your AI coding sessions",
+    description:
+      "Bring Claude Code, Codex CLI, and Gemini CLI sessions into one timeline, find past work fast, and steer live sessions later.",
+  });
 
   // Show loading while checking auth or accepting token
   if (isLoading) {
@@ -149,10 +155,10 @@ export default function LandingPage() {
           screenshotTheme={screenshotTheme}
         />
         <KernelThesisSection />
-        <DemoSection screenshotTheme={screenshotTheme} />
         <HowItWorksSection />
         <InstallSection className="landing-install-standalone" />
         <MachineSurfaceSection />
+        <DemoSection screenshotTheme={screenshotTheme} />
         <IntegrationsSection />
         <PricingSection />
         <TrustSection />

@@ -13,13 +13,16 @@ export default function IntegrationsPage() {
       <h1>Integrations</h1>
       <p className="docs-subtitle">
         Longhouse reads the session files your CLI tools already produce.
-        No plugins or provider-side configuration needed.
+        No plugins or provider-side configuration needed. Starting through
+        Longhouse keeps the control path explicit instead of pretending every
+        provider is equally mature.
       </p>
 
       <h2>Claude Code</h2>
       <p>
-        <strong>Best support today.</strong> Full session import, search, detail,
-        and remote control when started through Longhouse.
+        <strong>Strongest today.</strong> Claude has the best end-to-end story:
+        import, search, raw session detail, and the strongest control-after-launch
+        path when started through Longhouse.
       </p>
       <CodeBlock title="terminal">
         {`longhouse claude               # start with control channel`}
@@ -39,14 +42,16 @@ export default function IntegrationsPage() {
         <tbody>
           <tr><td>Session import</td><td>Full</td></tr>
           <tr><td>Search & detail</td><td>Full</td></tr>
-          <tr><td>Remote control (wall, tail, message)</td><td>Full</td></tr>
-          <tr><td>Continue / branch</td><td>Full</td></tr>
+          <tr><td>Live control (wall, tail, message)</td><td>Strongest today</td></tr>
+          <tr><td>Continue / branch</td><td>Strongest today</td></tr>
         </tbody>
       </table>
 
       <h2>Codex CLI</h2>
       <p>
-        Session import, search, detail, and remote control.
+        Archive and search are solid, and launch-through-Longhouse is supported.
+        Codex can stay reachable after launch, but the continuation path is still
+        catching up to Claude.
       </p>
       <CodeBlock title="terminal">
         {`longhouse codex                # start with control channel`}
@@ -61,15 +66,17 @@ export default function IntegrationsPage() {
         <tbody>
           <tr><td>Session import</td><td>Full</td></tr>
           <tr><td>Search & detail</td><td>Full</td></tr>
-          <tr><td>Remote control</td><td>Full</td></tr>
-          <tr><td>Continue / branch</td><td>Full</td></tr>
+          <tr><td>Launch through Longhouse</td><td>Supported</td></tr>
+          <tr><td>Live control</td><td>Supported</td></tr>
+          <tr><td>Continue / branch</td><td>Supported, maturing</td></tr>
         </tbody>
       </table>
 
       <h2>Gemini CLI</h2>
       <p>
-        Session import and search/detail. Remote control support is in
-        progress.
+        Treat Gemini as archive and search first today. Longhouse ingests the
+        sessions cleanly, but live control and continuation are not the reason
+        to buy on Gemini yet.
       </p>
       <table>
         <thead>
@@ -81,8 +88,9 @@ export default function IntegrationsPage() {
         <tbody>
           <tr><td>Session import</td><td>Full</td></tr>
           <tr><td>Search & detail</td><td>Full</td></tr>
-          <tr><td>Remote control</td><td>Coming soon</td></tr>
-          <tr><td>Continue / branch</td><td>Coming soon</td></tr>
+          <tr><td>Launch through Longhouse</td><td>Early</td></tr>
+          <tr><td>Live control</td><td>Not yet</td></tr>
+          <tr><td>Continue / branch</td><td>Not yet</td></tr>
         </tbody>
       </table>
 
@@ -100,7 +108,8 @@ export default function IntegrationsPage() {
       </p>
       <p>
         The background shipping service (<code>longhouse connect --install</code>)
-        handles automatic imports. You can also trigger a one-time import with:
+        handles automatic imports and repairs the local hook path. You can also
+        trigger a one-time import with:
       </p>
       <CodeBlock title="terminal">{`longhouse ship`}</CodeBlock>
 

@@ -14,23 +14,25 @@ describe("landing provider claims", () => {
     );
 
     expect(screen.getByText("Claude Code")).toBeInTheDocument();
-    expect(screen.getByText("Import, search, and live control")).toBeInTheDocument();
-    expect(screen.getByText("Import, search, and control-ready launches through Longhouse")).toBeInTheDocument();
-    expect(screen.getByText("Import and search today")).toBeInTheDocument();
-    expect(screen.getAllByText("Live now")).toHaveLength(3);
+    expect(screen.getByText("Archive, search, and strongest control path")).toBeInTheDocument();
+    expect(screen.getByText("Archive, search, and Longhouse launch path")).toBeInTheDocument();
+    expect(screen.getByText("Archive and search today")).toBeInTheDocument();
+    expect(screen.getByText("Strongest today")).toBeInTheDocument();
+    expect(screen.getByText("Control-ready")).toBeInTheDocument();
+    expect(screen.getByText("Archive first")).toBeInTheDocument();
     expect(
-      screen.getByText(/Codex and Gemini sessions are already searchable/i),
+      screen.getByText(/Codex launch-through-Longhouse is supported/i),
     ).toBeInTheDocument();
   });
 
-  it("renders FAQ with provider migration question", async () => {
+  it("renders FAQ with honest provider capability question", async () => {
     const user = userEvent.setup();
     render(<TrustSection />);
 
-    await user.click(screen.getByRole("button", { name: /Can I migrate from self-hosted to hosted\?/i }));
+    await user.click(screen.getByRole("button", { name: /Which providers are strongest today\?/i }));
 
     expect(
-      screen.getByText(/Export your SQLite database/i),
+      screen.getByText(/Claude is the strongest continuation path today/i),
     ).toBeInTheDocument();
   });
 });

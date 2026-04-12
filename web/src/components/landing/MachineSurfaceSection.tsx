@@ -11,9 +11,14 @@ const cards: SurfaceCard[] = [
     code: "longhouse wall --json",
   },
   {
-    title: "Message a live session",
-    description: "Send instructions to a running session from terminal or API.",
-    code: `longhouse message SESSION_ID "Check the failing test"`,
+    title: "Read the live tail",
+    description: "Watch the recent event stream for a session from any machine.",
+    code: "longhouse tail SESSION_ID",
+  },
+  {
+    title: "Continue from recovered context",
+    description: "Re-open the exact session context that matters instead of starting over.",
+    code: "longhouse continue SESSION_ID",
   },
 ];
 
@@ -22,10 +27,10 @@ export function MachineSurfaceSection() {
     <section className="landing-machine-surface" id="surface">
       <div className="landing-section-inner">
         <p className="landing-section-label">CLI + API</p>
-        <h2 className="landing-section-title">Use it from terminal, not just the browser.</h2>
+        <h2 className="landing-section-title">The machine surface is real.</h2>
         <p className="landing-section-subtitle">
-          Browser, CLI, and <code>/api/agents/*</code> share the same session surface. You do not need an
-          MCP host or a web UI just to steer live work.
+          Wall, tail, continue, and <code>/api/agents/*</code> are first-class. The browser is the bundled
+          workspace on top of the same session model, not a separate source of truth.
         </p>
 
         <div className="landing-surface-grid">
@@ -45,7 +50,8 @@ export function MachineSurfaceSection() {
         </div>
 
         <p className="landing-surface-note">
-          Browser, CLI, and HTTP API all share the same session model. <a href="https://github.com/cipher982/longhouse" target="_blank" rel="noopener noreferrer">See the full API reference &rarr;</a>
+          Browser, CLI, and HTTP all share the same session model. Read the{" "}
+          <a href="/docs/cli">CLI reference</a> or the <a href="/docs/api">machine API docs</a> for the full surface.
         </p>
       </div>
     </section>
