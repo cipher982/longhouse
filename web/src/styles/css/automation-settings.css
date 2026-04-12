@@ -447,7 +447,9 @@
     cursor: pointer;
     inset: 0;
     background-color: var(--color-surface-elevated);
-    transition: all var(--motion-duration-slow) var(--motion-easing-standard);
+    transition:
+      background-color var(--motion-duration-slow) var(--motion-easing-standard),
+      box-shadow var(--motion-duration-slow) var(--motion-easing-standard);
     border-radius: 34px;
   }
 
@@ -459,7 +461,9 @@
     left: 4px;
     bottom: 4px;
     background-color: white;
-    transition: all var(--motion-duration-slow) var(--motion-easing-standard);
+    transition:
+      background-color var(--motion-duration-slow) var(--motion-easing-standard),
+      transform var(--motion-duration-slow) var(--motion-easing-standard);
     border-radius: 50%;
   }
 

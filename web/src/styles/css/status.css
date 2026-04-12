@@ -84,7 +84,9 @@
   border-radius: var(--radius-full);
   background-color: var(--color-text-muted);
   box-shadow: 0 0 2px var(--color-text-muted);
-  transition: all var(--motion-duration-instant) var(--motion-easing-standard);
+  transition:
+    background-color var(--motion-duration-instant) var(--motion-easing-standard),
+    box-shadow var(--motion-duration-instant) var(--motion-easing-standard);
 }
 
 #api-status.flash::before {

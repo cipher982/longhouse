@@ -35,7 +35,10 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  transition:
+    background var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard),
+    border-color var(--motion-duration-fast) var(--motion-easing-standard);
   padding: 0; /* Override header-button padding */
 }
 
@@ -155,7 +158,9 @@
   font-weight: 500;
   letter-spacing: 0.01em;
   border-radius: var(--radius-md);
-  transition: all var(--motion-duration-normal) var(--motion-easing-standard);
+  transition:
+    background var(--motion-duration-normal) var(--motion-easing-standard),
+    color var(--motion-duration-normal) var(--motion-easing-standard);
   cursor: pointer;
   font-family: var(--font-family-base);
 }
@@ -235,7 +240,12 @@
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   text-decoration: none;
-  transition: all var(--motion-duration-normal) var(--motion-easing-standard);
+  transition:
+    background var(--motion-duration-normal) var(--motion-easing-standard),
+    border-color var(--motion-duration-normal) var(--motion-easing-standard),
+    color var(--motion-duration-normal) var(--motion-easing-standard),
+    box-shadow var(--motion-duration-normal) var(--motion-easing-standard),
+    transform var(--motion-duration-normal) var(--motion-easing-standard);
   cursor: pointer;
   font-family: var(--font-family-base);
 }
@@ -268,7 +278,10 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  transition:
+    background var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard),
+    border-color var(--motion-duration-fast) var(--motion-easing-standard);
   flex-shrink: 0;
 }
 
@@ -293,7 +306,9 @@
   width: 100%;
   background: currentColor;
   border-radius: 1px;
-  transition: all var(--motion-duration-normal) var(--motion-easing-standard);
+  transition:
+    transform var(--motion-duration-normal) var(--motion-easing-standard),
+    opacity var(--motion-duration-normal) var(--motion-easing-standard);
 }
 
 /* Hamburger to X animation */
@@ -371,7 +386,9 @@
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  transition:
+    background var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard);
 }
 
 .mobile-nav-close:hover {
@@ -400,7 +417,9 @@
   font-size: var(--font-size-base);
   font-weight: 500;
   border-radius: var(--radius-md);
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  transition:
+    background var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard);
   background: transparent;
   border: none;
   width: 100%;
@@ -487,7 +506,10 @@
   border-radius: var(--radius-md);
   font-size: var(--font-size-sm);
   cursor: pointer;
-  transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+  transition:
+    background var(--motion-duration-fast) var(--motion-easing-standard),
+    color var(--motion-duration-fast) var(--motion-easing-standard),
+    border-color var(--motion-duration-fast) var(--motion-easing-standard);
   text-align: left;
 }
 

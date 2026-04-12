@@ -121,7 +121,10 @@
     font-family: var(--font-family-base);
     white-space: nowrap;
     flex-shrink: 0;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      background var(--motion-duration-fast) var(--motion-easing-standard),
+      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .sessions-ai-toggle:hover {
@@ -179,7 +182,10 @@
     border-radius: var(--radius-md);
     color: var(--color-text-secondary);
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      background var(--motion-duration-fast) var(--motion-easing-standard),
+      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .sessions-filter-toggle:hover {
@@ -334,7 +340,10 @@
     font-weight: var(--font-weight-medium);
     font-family: var(--font-family-base);
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      color var(--motion-duration-fast) var(--motion-easing-standard),
+      background var(--motion-duration-fast) var(--motion-easing-standard);
     white-space: nowrap;
   }
 
@@ -434,7 +443,10 @@
     border-left: 3px solid transparent;
     padding: var(--space-4);
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
+      transform var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   /*
@@ -1775,7 +1787,10 @@
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      background var(--motion-duration-fast) var(--motion-easing-standard),
+      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .filter-btn:hover {

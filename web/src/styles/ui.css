@@ -36,7 +36,13 @@
     font-weight: var(--font-weight-medium);
     text-decoration: none;
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      background var(--motion-duration-fast) var(--motion-easing-standard),
+      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      color var(--motion-duration-fast) var(--motion-easing-standard),
+      box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
+      transform var(--motion-duration-fast) var(--motion-easing-standard),
+      opacity var(--motion-duration-fast) var(--motion-easing-standard);
     border: 1px solid transparent;
     white-space: nowrap;
     user-select: none;
@@ -188,7 +194,10 @@
     background: transparent;
     color: var(--color-text-secondary);
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      background var(--motion-duration-fast) var(--motion-easing-standard),
+      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .ui-icon-button:hover:not(:disabled) {
@@ -281,7 +290,9 @@
     padding: 0 var(--space-3);
     color: var(--color-text-primary);
     font-size: var(--font-size-base);
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .ui-input:focus {
@@ -421,7 +432,9 @@
     color: var(--color-intent-error);
     font-size: 0.75rem;
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      background var(--motion-duration-fast) var(--motion-easing-standard),
+      border-color var(--motion-duration-fast) var(--motion-easing-standard);
     flex-shrink: 0;
   }
 
