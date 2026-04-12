@@ -68,7 +68,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 pasteboard.setString(string, forType: .string)
             }
         case .upgradeNow:
-            runDetachedShell(upgradeCommand(for: snapshot))
+            openTerminal(command: upgradeCommand(for: snapshot))
         case .refresh:
             break
         }
@@ -115,6 +115,15 @@ public struct SpyHealthActionSink: HealthActionSink {
             return command
         }
         return "longhouse upgrade"
+    }
+
+    private func openTerminal(command: String) {
+        // Open a visible Terminal window so the user can see upgrade progress and errors.
+        let escaped = command.replacingOccurrences(of: "\\", with: "\\\\")
+                             .replacingOccurrences(of: "\"", with: "\\\"")
+        let script = "tell application \"Terminal\" to do script \"\(escaped)\""
+        var error: NSDictionary?
+        NSAppleScript(source: script)?.executeAndReturnError(&error)
     }
 
     private func runDetachedShell(_ command: String) {
