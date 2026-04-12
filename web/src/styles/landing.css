@@ -18,7 +18,9 @@
     z-index: 100;
     background: rgba(3, 3, 5, 0.7);
     border-bottom: 1px solid transparent;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: background var(--motion-duration-fast) var(--motion-easing-standard),
+                border-bottom-color var(--motion-duration-fast) var(--motion-easing-standard),
+                box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-header--scrolled {
@@ -70,7 +72,8 @@
     border: none;
     border-radius: var(--radius-md);
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: color var(--motion-duration-fast) var(--motion-easing-standard),
+                background var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-header-nav-link:hover {
@@ -105,7 +108,8 @@
     height: 2px;
     background: var(--color-text-primary);
     border-radius: 1px;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: transform var(--motion-duration-fast) var(--motion-easing-standard),
+                opacity var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .hamburger--open .hamburger-line:nth-child(1) {
@@ -133,7 +137,8 @@
     opacity: 0;
     transform: translateY(-10px);
     pointer-events: none;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: opacity var(--motion-duration-fast) var(--motion-easing-standard),
+                transform var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-header-mobile-menu--open {
@@ -159,7 +164,8 @@
     border-radius: var(--radius-md);
     cursor: pointer;
     text-align: left;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: color var(--motion-duration-fast) var(--motion-easing-standard),
+                background var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-header-mobile-link:hover {
@@ -443,7 +449,9 @@
       0 0 48px rgba(201, 166, 107, 0.25),
       0 4px 16px rgba(18, 11, 9, 0.4);
     border: 1px solid rgba(158, 124, 90, 0.70) !important;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
+                transform var(--motion-duration-fast) var(--motion-easing-standard),
+                border-color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-cta-main.ui-button--primary:hover {
@@ -831,7 +839,9 @@
     background: #1F1912;
     border: 1px solid #261F18;
     border-radius: var(--radius-xl);
-    transition: all var(--motion-duration-normal) var(--motion-easing-standard);
+    transition: border-color var(--motion-duration-normal) var(--motion-easing-standard),
+                transform var(--motion-duration-normal) var(--motion-easing-standard),
+                box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
     animation: landing-fadeInUp 0.6s ease-out backwards;
     /* Visible elevation for card distinction */
     box-shadow: 0 4px 16px rgba(18, 11, 9, 0.3), 0 0 0 1px #1F1912 inset;
@@ -978,7 +988,8 @@
     background: #1F1912;
     border: 1px solid #261F18;
     border-radius: var(--radius-xl);
-    transition: all var(--motion-duration-fast);
+    transition: border-color var(--motion-duration-fast),
+                transform var(--motion-duration-fast);
     animation: landing-fadeInUp 0.4s ease-out backwards;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
   }
@@ -1137,7 +1148,8 @@
     display: flex;
     flex-direction: column;
     position: relative;
-    transition: all var(--motion-duration-normal) var(--motion-easing-standard);
+    transition: transform var(--motion-duration-normal) var(--motion-easing-standard),
+                box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
     box-shadow: 0 4px 16px rgba(18, 11, 9, 0.3), 0 0 0 1px #1E1812 inset;
   }
 
@@ -1479,7 +1491,9 @@
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-full);
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: color var(--motion-duration-fast) var(--motion-easing-standard),
+                border-color var(--motion-duration-fast) var(--motion-easing-standard),
+                background var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-page .product-showcase-tab:hover {
@@ -1530,7 +1544,8 @@
     box-shadow:
       var(--shadow-lg),
       0 0 48px var(--screenshot-frame-shadow);
-    transition: all var(--motion-duration-normal) var(--motion-easing-standard);
+    transition: transform var(--motion-duration-normal) var(--motion-easing-standard),
+                box-shadow var(--motion-duration-normal) var(--motion-easing-standard);
   }
 
   .landing-page .app-screenshot-frame:hover {
@@ -1705,7 +1720,10 @@
     font-size: var(--font-size-xs);
     font-weight: var(--font-weight-semibold);
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: color var(--motion-duration-fast) var(--motion-easing-standard),
+                border-color var(--motion-duration-fast) var(--motion-easing-standard),
+                background var(--motion-duration-fast) var(--motion-easing-standard),
+                box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .landing-screenshot-theme-button:hover {
@@ -1810,7 +1828,9 @@
     border: 1px solid var(--color-border-subtle);
     border-radius: var(--radius-md);
     cursor: pointer;
-    transition: all var(--motion-duration-fast);
+    transition: color var(--motion-duration-fast),
+                border-color var(--motion-duration-fast),
+                background var(--motion-duration-fast);
   }
 
   .install-tab:hover {
@@ -1877,7 +1897,8 @@
     border-left: 1px solid var(--color-border-subtle);
     color: var(--color-text-muted);
     cursor: pointer;
-    transition: all var(--motion-duration-fast);
+    transition: color var(--motion-duration-fast),
+                background var(--motion-duration-fast);
     flex-shrink: 0;
   }
 
@@ -2123,7 +2144,9 @@
     font-size: var(--font-size-sm);
     color: var(--color-text-secondary);
     text-decoration: none;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition: color var(--motion-duration-fast) var(--motion-easing-standard),
+                border-color var(--motion-duration-fast) var(--motion-easing-standard),
+                transform var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .social-proof-badge:hover {
@@ -2240,5 +2263,14 @@
     .comparison-feature-desc {
       display: none;
     }
+  }
+
+  /*
+   * Pause decorative infinite animations during page scroll so the
+   * software renderer can budget its time on moving content.
+   */
+  html.public-page--scrolling .landing-hero-badge-dot,
+  html.public-page--scrolling .landing-screenshot-placeholder {
+    animation-play-state: paused !important;
   }
 }

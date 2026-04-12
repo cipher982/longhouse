@@ -5,6 +5,7 @@ import config from "../lib/config";
 import { SwarmLogo } from "../components/SwarmLogo";
 import { usePublicPageScroll } from "../hooks/usePublicPageScroll";
 import { useRootUiEffects } from "../hooks/useRootUiEffects";
+import { useScrollActivity } from "../hooks/useScrollActivity";
 import "../styles/landing.css";
 
 // Section components
@@ -88,6 +89,11 @@ export default function LandingPage() {
   // Enable normal document scrolling (app shell locks root by default)
   usePublicPageScroll();
   useRootUiEffects(particlesEnabled || heroAnimationsEnabled);
+
+  // Suppress decorative animations during scroll (landing uses document scroll)
+  useScrollActivity(() => document.documentElement, {
+    scrollClass: "public-page--scrolling",
+  });
 
   // Show loading while checking auth or accepting token
   if (isLoading) {
