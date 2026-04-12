@@ -16,7 +16,6 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
-from zerg.cli.update_manager import load_update_cache
 from zerg.services.shipper.service import get_service_info
 
 SCHEMA_VERSION = 1
@@ -316,6 +315,10 @@ def _collect_service() -> dict[str, Any]:
 def _collect_version_info() -> dict[str, Any] | None:
     """Read cached PyPI update check — no network call, cache only."""
     try:
+        # Import lazily so the service layer does not take a hard module-import
+        # dependency on CLI startup order.
+        from zerg.cli.update_manager import load_update_cache
+
         cached = load_update_cache()
     except Exception:
         return None

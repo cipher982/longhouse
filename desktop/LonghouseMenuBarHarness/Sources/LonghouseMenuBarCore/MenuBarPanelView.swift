@@ -97,8 +97,13 @@ public struct MenuBarPanelView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 let installed = snapshot.updateInfo?.installedVersion ?? ""
-                let latest = snapshot.updateInfo?.latestVersion ?? ""
-                Text("Longhouse \(latest) available (you have \(installed))")
+                let latest = snapshot.updateInfo?.latestVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let label = if let latest, !latest.isEmpty {
+                    "Longhouse \(latest) available (you have \(installed))"
+                } else {
+                    "A Longhouse update is available (you have \(installed))"
+                }
+                Text(label)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.primary)
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.UpdateBanner.label)

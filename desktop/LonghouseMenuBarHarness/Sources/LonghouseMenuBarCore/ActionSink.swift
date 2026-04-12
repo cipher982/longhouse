@@ -68,7 +68,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 pasteboard.setString(string, forType: .string)
             }
         case .upgradeNow:
-            runDetachedShell("longhouse upgrade")
+            runDetachedShell(upgradeCommand(for: snapshot))
         case .refresh:
             break
         }
@@ -107,6 +107,14 @@ public struct SpyHealthActionSink: HealthActionSink {
         }
         _ = try? handle.seekToEnd()
         try? handle.write(contentsOf: Data(line.utf8))
+    }
+
+    private func upgradeCommand(for snapshot: HealthSnapshot) -> String {
+        let command = snapshot.updateInfo?.upgradeCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let command, !command.isEmpty {
+            return command
+        }
+        return "longhouse upgrade"
     }
 
     private func runDetachedShell(_ command: String) {
