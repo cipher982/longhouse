@@ -1788,6 +1788,21 @@
     max-width: 540px;
   }
 
+  /* Standalone install section (outside hero) — full-width centered like other landing sections */
+  .install-section.landing-install-standalone {
+    max-width: none;
+    padding: var(--space-12) 0;
+    text-align: center;
+  }
+
+  .install-section.landing-install-standalone .install-command-container,
+  .install-section.landing-install-standalone .install-tabs,
+  .install-section.landing-install-standalone .install-features {
+    max-width: 540px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+
   .landing-hero-install {
     margin-left: 0;
     margin-right: auto;
