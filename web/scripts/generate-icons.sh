@@ -26,18 +26,38 @@ node "${ROOT_DIR}/scripts/render-svg-asset.mjs" "${SRC}" "${PUBLIC_DIR}/favicon-
 echo "Generating favicons (32px, 16px, ICO)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 32x32 "${PUBLIC_DIR}/favicon-32.png"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 16x16 "${PUBLIC_DIR}/favicon-16.png"
-magick "${PUBLIC_DIR}/favicon-16.png" "${PUBLIC_DIR}/favicon-32.png" "${PUBLIC_DIR}/favicon-512.png" -colors 256 "${PUBLIC_DIR}/favicon.ico"
+magick "${PUBLIC_DIR}/favicon-16.png" "${PUBLIC_DIR}/favicon-32.png" -colors 256 "${PUBLIC_DIR}/favicon.ico"
 
 echo "Generating Apple touch icon (180px)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 180x180 "${PUBLIC_DIR}/apple-touch-icon.png"
 
 echo "Generating maskable icons (192px, 512px)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 192x192 "${PUBLIC_DIR}/maskable-icon-192.png"
-magick "${PUBLIC_DIR}/favicon-512.png" -resize 512x512 "${PUBLIC_DIR}/maskable-icon-512.png"
+cp "${PUBLIC_DIR}/favicon-512.png" "${PUBLIC_DIR}/maskable-icon-512.png"
 
 echo "Generating menu bar icon from master logo geometry…"
 mkdir -p "$(dirname "${MENUBAR_OUT}")"
 node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_OUT}" 36 36
+
+echo "Generating macOS app icon (AppIcon.icns)…"
+ICNS_OUT="${ROOT_DIR}/../artifacts/runtime-packaging/stage/Longhouse.app/Contents/Resources/AppIcon.icns"
+if command -v iconutil &>/dev/null; then
+  ICONSET_DIR=$(mktemp -d)/AppIcon.iconset
+  mkdir -p "${ICONSET_DIR}"
+  for sz in 16 32 128 256 512; do
+    magick "${PUBLIC_DIR}/favicon-512.png" -resize "${sz}x${sz}" "${ICONSET_DIR}/icon_${sz}x${sz}.png"
+    double=$((sz * 2))
+    if [ "${double}" -le 1024 ]; then
+      magick "${PUBLIC_DIR}/favicon-512.png" -resize "${double}x${double}" "${ICONSET_DIR}/icon_${sz}x${sz}@2x.png"
+    fi
+  done
+  mkdir -p "$(dirname "${ICNS_OUT}")"
+  iconutil -c icns "${ICONSET_DIR}" -o "${ICNS_OUT}"
+  rm -rf "$(dirname "${ICONSET_DIR}")"
+  echo "  → ${ICNS_OUT}"
+else
+  echo "  ⚠ iconutil not found (macOS only), skipping .icns generation"
+fi
 
 echo "Generating social preview (1200x630)…"
 magick \
