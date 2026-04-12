@@ -26,7 +26,7 @@ node "${ROOT_DIR}/scripts/render-svg-asset.mjs" "${SRC}" "${PUBLIC_DIR}/favicon-
 echo "Generating favicons (32px, 16px, ICO)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 32x32 "${PUBLIC_DIR}/favicon-32.png"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 16x16 "${PUBLIC_DIR}/favicon-16.png"
-magick "${PUBLIC_DIR}/favicon-16.png" "${PUBLIC_DIR}/favicon-32.png" -colors 256 "${PUBLIC_DIR}/favicon.ico"
+magick "${PUBLIC_DIR}/favicon-16.png" "${PUBLIC_DIR}/favicon-32.png" "${PUBLIC_DIR}/favicon.ico"
 
 echo "Generating Apple touch icon (180px)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 180x180 "${PUBLIC_DIR}/apple-touch-icon.png"
