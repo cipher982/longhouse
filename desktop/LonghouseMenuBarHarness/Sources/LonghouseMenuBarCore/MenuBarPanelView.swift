@@ -19,6 +19,9 @@ public struct MenuBarPanelView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 header
+                if snapshot.updateInfo?.updateAvailable == true {
+                    updateBanner
+                }
                 metrics
                 controls
                 detailBlocks
@@ -84,6 +87,44 @@ public struct MenuBarPanelView: View {
                     )
             }
         }
+    }
+
+    private var updateBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.up.circle.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.blue)
+
+            VStack(alignment: .leading, spacing: 2) {
+                let installed = snapshot.updateInfo?.installedVersion ?? ""
+                let latest = snapshot.updateInfo?.latestVersion ?? ""
+                Text("Longhouse \(latest) available (you have \(installed))")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.UpdateBanner.label)
+            }
+
+            Spacer()
+
+            Button("Upgrade") {
+                actionSink.handle(.upgradeNow, snapshot: snapshot)
+            }
+            .buttonStyle(.plain)
+            .font(.system(size: 11, weight: .bold, design: .rounded))
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color.blue)
+            .clipShape(Capsule())
+            .harnessAccessibilityButton(
+                identifier: LonghouseMenuBarAccessibilityID.Button.upgradeNow,
+                label: "Upgrade"
+            )
+        }
+        .padding(12)
+        .background(Color.blue.opacity(0.10))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.UpdateBanner.container)
     }
 
     private var metrics: some View {

@@ -75,5 +75,11 @@ public enum LonghouseMenuBarAccessibilityID {
         public static let copyDiagnostics = "LonghouseMenuBar.Button.CopyDiagnostics"
         public static let openLogs = "LonghouseMenuBar.Button.OpenLogs"
         public static let openLonghouse = "LonghouseMenuBar.Button.OpenLonghouse"
+        public static let upgradeNow = "LonghouseMenuBar.Button.UpgradeNow"
+    }
+
+    public enum UpdateBanner {
+        public static let container = "LonghouseMenuBar.UpdateBanner"
+        public static let label = "LonghouseMenuBar.UpdateBanner.Label"
     }
 }

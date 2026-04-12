@@ -38,6 +38,14 @@ public enum HarnessSeverity: String, Codable, CaseIterable {
     }
 }
 
+public struct UpdateInfoSnapshot: Codable, Equatable {
+    public let installedVersion: String
+    public let latestVersion: String?
+    public let updateAvailable: Bool
+    public let upgradeCommand: String
+    public let checkedAt: String?
+}
+
 public struct HealthSnapshot: Codable, Equatable {
     public let schemaVersion: Int?
     public let collectedAt: String?
@@ -50,6 +58,7 @@ public struct HealthSnapshot: Codable, Equatable {
     public let engineStatus: EngineStatusSnapshot?
     public let outbox: OutboxSnapshot?
     public let launchReadiness: LaunchReadinessSnapshot?
+    public let updateInfo: UpdateInfoSnapshot?
 
     public init(
         schemaVersion: Int?,
@@ -62,7 +71,8 @@ public struct HealthSnapshot: Codable, Equatable {
         service: ServiceSnapshot?,
         engineStatus: EngineStatusSnapshot?,
         outbox: OutboxSnapshot?,
-        launchReadiness: LaunchReadinessSnapshot?
+        launchReadiness: LaunchReadinessSnapshot?,
+        updateInfo: UpdateInfoSnapshot? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.collectedAt = collectedAt
@@ -75,6 +85,7 @@ public struct HealthSnapshot: Codable, Equatable {
         self.engineStatus = engineStatus
         self.outbox = outbox
         self.launchReadiness = launchReadiness
+        self.updateInfo = updateInfo
     }
 
     public var parsedSeverity: HarnessSeverity {
