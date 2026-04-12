@@ -416,6 +416,11 @@ def _should_skip_update_notice(argv: Sequence[str] | None) -> bool:
 def maybe_notify_update(argv: Sequence[str] | None = None) -> None:
     if _should_skip_update_notice(argv):
         return
+    # TTY guard is intentional: non-interactive callers (scripts, pipes, CI)
+    # should not get update noise on stderr. Non-TTY users are covered by the
+    # menu bar upgrade banner (via local health snapshot) and explicit
+    # `longhouse version --check`. Do not remove this without adding an
+    # alternative notification path for non-interactive contexts.
     if not sys.stderr.isatty():
         return
 
