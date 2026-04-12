@@ -220,7 +220,9 @@
     padding: var(--space-6);
     text-decoration: none;
     color: inherit;
-    transition: all var(--motion-duration-fast);
+    transition:
+      border-color var(--motion-duration-fast),
+      transform var(--motion-duration-fast);
   }
 
   .docs-nav-card:hover {

@@ -201,7 +201,9 @@
     border: 1px solid var(--border-glass-1);
     border-radius: var(--radius-sm, 4px);
     padding: 16px;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      background var(--motion-duration-fast) var(--motion-easing-standard),
+      border-color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .tool-toggle:hover {
@@ -546,7 +548,9 @@
     padding: 6px 10px;
     border: 1px solid var(--border-glass-1);
     border-radius: var(--radius-sm, 4px);
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      background var(--motion-duration-fast) var(--motion-easing-standard),
+      border-color var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .llm-provider-option:hover {

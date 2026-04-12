@@ -62,7 +62,9 @@
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-sm);
-    transition: all var(--motion-duration-fast);
+    transition:
+      background var(--motion-duration-fast),
+      color var(--motion-duration-fast);
   }
 
   .modal-close-button:hover {

@@ -25,7 +25,10 @@
     border-radius: 12px;
     padding: 1.25rem;
     cursor: pointer;
-    transition: all var(--motion-duration-fast) var(--motion-easing-standard);
+    transition:
+      border-color var(--motion-duration-fast) var(--motion-easing-standard),
+      box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
+      transform var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
   .runner-card:hover {
