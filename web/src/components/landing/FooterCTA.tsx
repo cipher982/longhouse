@@ -7,8 +7,8 @@ export function FooterCTA() {
     document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const handleGetHosted = () => {
-    window.location.href = "https://control.longhouse.ai";
+  const handleDocs = () => {
+    window.location.assign("/docs");
   };
 
   const currentYear = new Date().getFullYear();
@@ -19,16 +19,20 @@ export function FooterCTA() {
         {/* Final CTA */}
         <div className="landing-footer-cta">
           <blockquote className="landing-footer-quote">
-            Find past work. Steer live sessions. One timeline for everything.
+            Find the session. Ask it. Continue it.
           </blockquote>
           <div className="landing-footer-cta-buttons">
             <Button variant="primary" size="lg" onClick={handleSelfHost}>
               Self-Host Free
             </Button>
-            <Button variant="secondary" size="lg" onClick={handleGetHosted}>
-              Hosted Beta
+            <Button variant="secondary" size="lg" onClick={handleDocs}>
+              Read the Docs
             </Button>
           </div>
+          <p className="landing-footer-subnote">
+            Hosted is the convenience layer later, not the first step.{" "}
+            <a href="https://control.longhouse.ai">Request beta access</a>.
+          </p>
         </div>
 
         {/* Footer links */}
@@ -44,7 +48,7 @@ export function FooterCTA() {
               <a href="#journey">How it works</a>
               <a href="#surface">CLI & API</a>
               <a href="#providers">Providers</a>
-              <a href="#pricing">Pricing</a>
+              <a href="#pricing">Deployment</a>
             </div>
             <div className="landing-footer-nav-group">
               <h4>Resources</h4>

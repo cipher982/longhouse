@@ -35,6 +35,12 @@ export default function QuickStartPage() {
         Guided onboarding starts Longhouse for you. Open <code>http://localhost:8080</code>. Your
         data stays in a SQLite database on your machine at <code>~/.longhouse/longhouse.db</code>.
       </p>
+      <p>
+        This laptop setup is the fast proof path. When you want Longhouse to
+        stay reachable while the laptop sleeps, move the Runtime Host to a
+        machine that stays on and keep the Machine Agent on the dev machine
+        where work happens.
+      </p>
 
       <h2>3. Find one prior session</h2>
       <p>

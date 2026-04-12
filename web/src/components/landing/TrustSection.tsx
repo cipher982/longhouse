@@ -7,24 +7,34 @@ interface FAQ {
 
 const faqs: FAQ[] = [
   {
-    question: "Do I need a credit card to try it?",
-    answer: "No. Self-hosting is free and open source. Hosted beta is optional convenience if you want us to run the server for you."
+    question: "Do I need hosted to try it?",
+    answer:
+      "No. Self-hosting is the first path. Install Longhouse locally, import existing sessions, and prove the product before deciding whether you want us to run the always-on box later.",
+  },
+  {
+    question: "What runs on my machine versus the always-on box?",
+    answer:
+      "The Machine Agent runs where work happens. The Runtime Host runs where you want durability to live. For a quick tryout, your laptop can run both. For a durable setup, move the Runtime Host to a VPS, Mac mini, or homelab box.",
+  },
+  {
+    question: "What happens when my laptop sleeps?",
+    answer:
+      "If your laptop is running both pieces, Longhouse stops because the machine slept. That is not a hidden failure. It just means durability belongs on a machine that stays on.",
+  },
+  {
+    question: "Are imported sessions different from sessions started through Longhouse?",
+    answer:
+      "No. They are the same kind of session object. Importing makes them searchable and inspectable. Starting through Longhouse adds capability later, such as live control or an explicit reattach path.",
+  },
+  {
+    question: "Which providers are strongest today?",
+    answer:
+      "Claude is the strongest continuation path today. Codex launches through Longhouse and lands in the archive, but it is still catching up to Claude. Gemini is archive and search first.",
   },
   {
     question: "Where is my data stored?",
-    answer: "When you self-host, everything lives in a SQLite database on your machine. Hosted beta runs your own isolated runtime. We never sell or share your data."
-  },
-  {
-    question: "Why not just use ssh + tmux?",
-    answer: "If you only need one remote shell, ssh + tmux is simpler. Longhouse is for when you want sessions to be searchable, addressable, and controllable from browser, CLI, or API."
-  },
-  {
-    question: "Do you train AI models on my data?",
-    answer: "No. Your sessions and data are never used to train any AI models."
-  },
-  {
-    question: "Can I migrate from self-hosted to hosted?",
-    answer: "Yes. Export your SQLite database and import it into your hosted instance. Same data, same sessions."
+    answer:
+      "When you self-host, everything lives in SQLite on your machine or the box you control. Hosted is the same product with us running the Runtime Host for you later if you want that convenience.",
   },
 ];
 

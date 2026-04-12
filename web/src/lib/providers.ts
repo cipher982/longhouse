@@ -23,8 +23,8 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   claude: {
     id: "claude",
     marketingName: "Claude Code",
-    cardDescription: "Import, search, and live control",
-    statusLabel: "Live now",
+    cardDescription: "Archive, search, and strongest control path",
+    statusLabel: "Strongest today",
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "live",
@@ -33,8 +33,8 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   codex: {
     id: "codex",
     marketingName: "Codex CLI",
-    cardDescription: "Import, search, and control-ready launches through Longhouse",
-    statusLabel: "Live now",
+    cardDescription: "Archive, search, and Longhouse launch path",
+    statusLabel: "Control-ready",
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "none",
@@ -43,8 +43,8 @@ const LAUNCH_PROVIDER_SUPPORT: Record<LaunchProviderId, LaunchProviderSupport> =
   gemini: {
     id: "gemini",
     marketingName: "Gemini CLI",
-    cardDescription: "Import and search today",
-    statusLabel: "Live now",
+    cardDescription: "Archive and search today",
+    statusLabel: "Archive first",
     archiveVisibility: "live",
     cloudSessionStart: "live",
     hooksSupport: "none",

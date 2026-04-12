@@ -30,10 +30,11 @@ export function IntegrationsSection() {
   return (
     <section id="providers" className="landing-integrations">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Providers</p>
-        <h2 className="landing-section-title">Works with Claude, Codex, and Gemini.</h2>
+        <p className="landing-section-label">Provider Truth</p>
+        <h2 className="landing-section-title">Claude is strongest today. The archive works across all three.</h2>
         <p className="landing-section-subtitle">
-          All providers land in the same timeline. Claude has the deepest hooks and live control today.
+          Claude, Codex, and Gemini all land in the same timeline. Capability after launch depends on how
+          mature each control path is today, and the page should say that plainly.
         </p>
 
         <div className="landing-providers-grid">
@@ -56,7 +57,8 @@ export function IntegrationsSection() {
         </div>
 
         <p className="landing-providers-tagline">
-          Codex and Gemini sessions are already searchable and inspectable. Live control support is expanding.
+          Codex launch-through-Longhouse is supported, but Claude is still the strongest continuation path.
+          Gemini is archive and search first.
         </p>
       </div>
     </section>

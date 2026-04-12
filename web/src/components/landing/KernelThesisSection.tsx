@@ -5,19 +5,19 @@ interface ThesisCard {
 
 const cards: ThesisCard[] = [
   {
-    title: "Search across every session",
+    title: "Every session lands in one timeline",
     description:
-      "Find the session where you already solved auth, retries, or that migration. No more grepping JSONL logs by hand.",
+      "Import what you already ran and recover prior art fast instead of grepping provider logs and JSONL files by hand.",
   },
   {
-    title: "Pick up where you left off",
+    title: "Start through Longhouse when you want control later",
     description:
-      "Open the raw transcript and tool history. Continue from the exact context instead of starting over.",
+      "The session stays addressable. Message it, tail it, or continue it later from browser, CLI, or API.",
   },
   {
-    title: "Steer sessions after launch",
+    title: "Laptop for tryout. Always-on box for durability.",
     description:
-      "Start through Longhouse and the session stays reachable. Message it, tail it, or continue it later from browser, CLI, or API.",
+      "Run everything locally to prove value fast. Move the Runtime Host to a VPS, Mac mini, or homelab box when you want it to stay on.",
   },
 ];
 
@@ -26,9 +26,10 @@ export function KernelThesisSection() {
     <section className="landing-kernel-thesis">
       <div className="landing-section-inner">
         <p className="landing-section-label">Why Longhouse</p>
-        <h2 className="landing-section-title">Your sessions are worth more than a transcript.</h2>
+        <h2 className="landing-section-title">One session model. Explicit capabilities.</h2>
         <p className="landing-section-subtitle">
-          Every session you run is prior art. Longhouse makes it searchable, inspectable, and controllable.
+          Imported sessions are immediately searchable. Sessions started through Longhouse keep a control path
+          attached. Same session, better options later.
         </p>
 
         <div className="landing-thesis-grid">

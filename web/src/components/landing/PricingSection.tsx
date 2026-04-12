@@ -2,15 +2,14 @@ import { CheckCircleIcon } from "../icons";
 import { Button } from "../ui";
 
 interface PricingTier {
+  label: string;
   name: string;
-  price: string;
-  period: string;
+  callout: string;
   description: string;
   features: string[];
   ctaText: string;
   ctaAction: () => void;
   highlighted?: boolean;
-  comingSoon?: boolean;
 }
 
 export function PricingSection() {
@@ -18,66 +17,62 @@ export function PricingSection() {
     document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const handleGetHosted = () => {
+  const handleRequestHosted = () => {
     window.location.href = "https://control.longhouse.ai";
   };
 
   const tiers: PricingTier[] = [
     {
+      label: "Start here",
       name: "Self-Hosted",
-      price: "Free",
-      period: "forever",
-      description: "Run it on your laptop, VPS, or homelab",
+      callout: "Free",
+      description: "Put Longhouse where durability should live and get first value without signing up first.",
       features: [
-        "Full product — timeline, search, live control",
-        "SQLite only, no external services needed",
-        "Import Claude, Codex, and Gemini sessions",
-        "CLI and HTTP API included",
-        "Open source (Apache 2.0)",
+        "Run it on your laptop first, or on a VPS / Mac mini / homelab box for durability",
+        "Free and open source",
+        "Import existing Claude, Codex, and Gemini sessions immediately",
+        "Browser, CLI, and /api/agents/* included",
       ],
       ctaText: "Self-Host Free",
       ctaAction: handleStartFree,
       highlighted: true,
     },
     {
-      name: "Hosted Beta",
-      price: "$5",
-      period: "/month",
-      description: "Same product, we run the server",
+      label: "Convenience path",
+      name: "Hosted Later",
+      callout: "By request",
+      description: "Same session model, with us running the always-on Runtime Host for you.",
       features: [
-        "Everything in self-hosted",
-        "Access from anywhere, no port forwarding",
-        "No server to maintain or keep online",
-        "Your own subdomain + automatic updates",
-        "Migrate from self-hosted anytime",
+        "Same archive and control loop as self-hosted",
+        "Useful when you already want durability but do not want to run the box",
+        "A narrow beta while the launch story stays self-host first",
+        "Migrate from self-hosted when you want us to run the always-on machine",
       ],
-      ctaText: "Hosted Beta",
-      ctaAction: handleGetHosted,
+      ctaText: "Request Hosted Beta",
+      ctaAction: handleRequestHosted,
     },
   ];
 
   return (
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
-        <p className="landing-section-label">Pricing</p>
-        <h2 className="landing-section-title">Free to self-host. Hosted if you want it easy.</h2>
+        <p className="landing-section-label">Deployment</p>
+        <h2 className="landing-section-title">Self-host first. Hosted later when you want convenience.</h2>
         <p className="landing-section-subtitle">
-          Same product either way. Self-host on your own machine, or let us run it for you.
+          Hosted is the same product with us running the always-on box. It is not the thing that unlocks
+          the core loop.
         </p>
 
         <div className="landing-pricing-grid">
           {tiers.map((tier, index) => (
             <div
               key={index}
-              className={`landing-pricing-card ${tier.highlighted ? "highlighted" : ""} ${tier.comingSoon ? "coming-soon" : ""}`}
+              className={`landing-pricing-card ${tier.highlighted ? "highlighted" : ""}`}
             >
-              {tier.comingSoon && <div className="landing-pricing-badge">Beta</div>}
               <div className="landing-pricing-header">
+                <div className="landing-pricing-badge">{tier.label}</div>
                 <h3 className="landing-pricing-name">{tier.name}</h3>
-                <div className="landing-pricing-price">
-                  <span className="landing-pricing-amount">{tier.price}</span>
-                  <span className="landing-pricing-period">{tier.period}</span>
-                </div>
+                <p className="landing-pricing-callout">{tier.callout}</p>
                 <p className="landing-pricing-description">{tier.description}</p>
               </div>
 

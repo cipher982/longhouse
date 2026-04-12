@@ -7,6 +7,12 @@ interface LandingHeaderProps {
   onGetStarted?: () => void;
 }
 
+type LandingNavLink = {
+  label: string;
+  href: string;
+  external?: boolean;
+};
+
 export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -20,21 +26,23 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
-  const navLinks = [
+  const navLinks: LandingNavLink[] = [
     { label: "How it works", href: "#journey" },
-    { label: "CLI & API", href: "#surface" },
-    { label: "Pricing", href: "#pricing" },
-    { label: "Docs", href: "https://github.com/cipher982/longhouse", external: true },
+    { label: "Machine surface", href: "#surface" },
+    { label: "Providers", href: "#providers" },
+    { label: "Docs", href: "/docs" },
   ];
 
   const handleNavClick = (href: string, external?: boolean) => {
     if (external) {
       window.open(href, "_blank", "noopener,noreferrer");
-    } else {
+    } else if (href.startsWith("#")) {
       const element = document.querySelector(href);
       if (element) {
         element.scrollIntoView({ behavior: "smooth" });
       }
+    } else {
+      window.location.assign(href);
     }
     setIsMobileMenuOpen(false);
   };

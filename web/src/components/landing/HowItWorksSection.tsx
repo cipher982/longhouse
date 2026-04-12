@@ -7,33 +7,33 @@ interface Step {
 const steps: Step[] = [
   {
     number: "1",
-    title: "Bring sessions into one timeline",
+    title: "Install on the machine where you already work",
     description:
-      "Bring in real Claude, Codex, or Gemini sessions before changing your workflow. Demo data is only the safe preview path.",
+      "Start locally on macOS, Linux, or WSL. The first proof is seeing one real session show up fast.",
   },
   {
     number: "2",
-    title: "Find the exact prior solution",
+    title: "Choose where durability should live",
     description:
-      "Search for the session where auth, retries, or a refactor was already solved instead of grepping provider logs by hand.",
+      "Run both pieces on your laptop for a tryout, or point your machines at an always-on Runtime Host when you want Longhouse available after the lid closes.",
   },
   {
     number: "3",
-    title: "Open the raw transcript",
+    title: "Bring existing sessions in immediately",
     description:
-      "Open the exact transcript and tool history that matters. The model already did the work; Longhouse makes it reusable.",
+      "Claude, Codex, and Gemini sessions can land in the archive without forcing a brand-new workflow first.",
   },
   {
     number: "4",
-    title: "Start through Longhouse for live control",
+    title: "Start through Longhouse when the session should stay reachable",
     description:
-      "When Longhouse is in the launch path, the session stays reachable later from browser, CLI, or API through an explicit control capability.",
+      "Use explicit Longhouse launch commands when you want control after launch instead of a dead transcript later.",
   },
   {
     number: "5",
-    title: "Message it or continue it later",
+    title: "Find it, inspect it, and steer it later",
     description:
-      "Use the wall, send the session a message, or continue it from the recovered context when you come back.",
+      "Use the timeline, wall, tail, directed messages, or continue from recovered context when you come back.",
   },
 ];
 
@@ -42,10 +42,10 @@ export function HowItWorksSection() {
     <section id="journey" className="landing-how-it-works landing-proof-journey">
       <div className="landing-section-inner">
         <p className="landing-section-label">How It Works</p>
-        <h2 className="landing-section-title">From install to live control in five steps.</h2>
+        <h2 className="landing-section-title">Install locally. Put durability where it belongs.</h2>
         <p className="landing-section-subtitle">
-          Start by recovering something you already solved. Then keep a control path open
-          for next time.
+          Work happens on your machine. Longhouse keeps the archive and control path attached without pretending
+          sessions moved somewhere magical.
         </p>
 
         <div className="landing-journey-grid">
@@ -62,11 +62,12 @@ export function HowItWorksSection() {
           </div>
 
           <aside className="landing-journey-note">
-            <p className="landing-journey-note-label">What changes</p>
-            <blockquote>Find the session. Ask it. Continue it.</blockquote>
+            <p className="landing-journey-note-label">The honest model</p>
+            <blockquote>One session. Explicit capability states.</blockquote>
             <p>
-              The session stops being a dead transcript. It becomes something you can search, return to,
-              and steer from more than one surface. Longhouse changes capability, not what the session is.
+              Imported sessions are search-first. Longhouse-launched sessions can also keep live control or
+              a host-reattach path. A sleeping laptop is not a system failure. It just means durability
+              belongs on a machine that stays on.
             </p>
           </aside>
         </div>
