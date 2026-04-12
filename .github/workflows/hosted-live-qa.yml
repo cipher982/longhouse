@@ -11,7 +11,8 @@ on:
 
 concurrency:
   group: ${{ (github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'workflow_dispatch') && format('hosted-live-qa-manual-{0}', github.event_name == 'workflow_dispatch' && github.run_id || github.event.workflow_run.id) || format('hosted-live-qa-{0}', github.event.workflow_run.head_branch || github.ref_name) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.event.workflow_run.event != 'workflow_dispatch' }}
+  # Run hosted QA for every deployed main commit in order.
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -33,14 +34,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Check if commit is superseded
-        id: freshness
-        uses: ./.github/actions/check-freshness
-        with:
-          github_token: ${{ github.token }}
-
       - name: Restore Bun download cache
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         uses: actions/cache@v4
         with:
           path: ~/.bun/install/cache
@@ -49,7 +43,6 @@ jobs:
             longhouse-bun-${{ runner.os }}-
 
       - name: Restore Playwright browser cache
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         uses: actions/cache@v4
         with:
           path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
@@ -58,37 +51,30 @@ jobs:
             longhouse-playwright-${{ runner.os }}-
 
       - name: Set up Python
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
       - name: Setup Node
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         uses: actions/setup-node@v6
         with:
           node-version: '20'
 
       - name: Setup Bun
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.2.20'
 
       - name: Install JS deps
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         run: bun install --frozen-lockfile
 
       - name: Install Playwright browsers + deps
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         run: cd e2e && bunx playwright install --with-deps chromium
 
       - name: Prepare isolated QA home
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         run: mkdir -p "$QA_HOME" "$PLAYWRIGHT_BROWSERS_PATH"
 
       - name: Run hosted live QA
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         id: qa_live
         env:
           HOME: ${{ env.QA_HOME }}
@@ -104,7 +90,6 @@ jobs:
           done
 
       - name: Run hosted chat QA
-        if: ${{ steps.freshness.outputs.stale != 'true' }}
         id: qa_live_chat
         env:
           HOME: ${{ env.QA_HOME }}
@@ -128,7 +113,6 @@ jobs:
             echo "- Instance: \`$QA_INSTANCE_SUBDOMAIN\`"
             echo "- Trigger: \`${{ github.event_name }}\`"
             echo "- Commit: \`${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}\`"
-            echo "- Skipped as stale: \`${{ steps.freshness.outputs.stale || 'false' }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- qa-live-chat: \`${{ steps.qa_live_chat.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -16,7 +16,8 @@ permissions:
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('runtime-image-manual-{0}', github.run_id) || (github.ref_type == 'tag' && format('runtime-image-tag-{0}', github.ref_name)) || (github.event_name == 'workflow_run' && format('runtime-image-branch-{0}', github.event.workflow_run.head_branch)) || format('runtime-image-branch-{0}', github.ref_name) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref_type != 'tag' }}
+  # Serialize default-branch image publishes instead of cancelling older SHAs mid-pipeline.
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && github.ref_type != 'tag' && !(github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == github.event.repository.default_branch) && !(github.event_name != 'workflow_run' && github.ref_name == github.event.repository.default_branch) }}
 
 jobs:
   gate:

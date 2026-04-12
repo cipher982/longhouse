@@ -17,7 +17,8 @@ on:
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('quality-manual-{0}', github.run_id) || (github.event_name == 'pull_request' && format('quality-pr-{0}', github.event.pull_request.number)) || format('quality-branch-{0}', github.ref_name) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  # Keep PR dedupe, but never preempt default-branch pushes; every main SHA must clear CI.
+  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && !(github.event_name == 'push' && github.ref_name == github.event.repository.default_branch) }}
 
 jobs:
   build-frontend:

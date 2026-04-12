@@ -14,7 +14,8 @@ on:
 
 concurrency:
   group: ${{ github.event_name == 'workflow_dispatch' && format('deploy-and-verify-manual-{0}', github.run_id) || format('deploy-and-verify-{0}', github.event.workflow_run.head_branch || github.ref_name) }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  # Deploy main in commit order; never preempt an already-approved SHA.
+  cancel-in-progress: false
 
 permissions:
   actions: read
@@ -32,7 +33,6 @@ jobs:
       runtime_image_name: ${{ steps.meta.outputs.runtime_image_name }}
       runtime_image_tag: ${{ steps.meta.outputs.runtime_image_tag }}
       runtime_image_ref: ${{ steps.meta.outputs.runtime_image_ref }}
-      stale: ${{ steps.freshness.outputs.stale }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -69,28 +69,11 @@ jobs:
           head_branch: ${{ steps.meta.outputs.head_branch }}
           github_token: ${{ github.token }}
 
-      - name: Check if commit is superseded
-        id: freshness
-        uses: ./.github/actions/check-freshness
-        with:
-          head_sha: ${{ steps.meta.outputs.head_sha }}
-          github_token: ${{ github.token }}
-
-      - name: Summary
-        if: ${{ steps.freshness.outputs.stale == 'true' }}
-        run: |
-          {
-            echo "## Runtime Deploy + Verify Results"
-            echo ""
-            echo "- Skipped because commit \`${{ steps.meta.outputs.head_sha }}\` is no longer the head of \`main\`."
-          } >> "$GITHUB_STEP_SUMMARY"
-
   deploy-demo:
     name: "Deploy public demo runtime"
     runs-on: cube-deploy
     timeout-minutes: 20
     needs: gate
-    if: ${{ needs.gate.outputs.stale != 'true' }}
 
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
@@ -130,7 +113,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: gate
-    if: ${{ needs.gate.outputs.stale != 'true' }}
     outputs:
       instance_id: ${{ steps.instance.outputs.instance_id }}
       instance_url: ${{ steps.instance.outputs.instance_url }}
@@ -177,7 +159,7 @@ jobs:
       - gate
       - deploy-demo
       - reprovision-canary
-    if: ${{ always() && needs.gate.result == 'success' && needs.gate.outputs.stale != 'true' }}
+    if: ${{ always() && needs.gate.result == 'success' }}
     env:
       PUBLIC_DEMO_URL: https://longhouse.ai
       CONTROL_PLANE_URL: https://control.longhouse.ai
