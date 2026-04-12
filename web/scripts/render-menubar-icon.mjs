@@ -41,6 +41,10 @@ function deriveSilverCharcoalMenubarSvg(svg) {
   derived = derived.replace('fill="url(#highlightGrad)"', 'fill="rgba(255,255,255,0.14)"');
   derived = derived.replace('fill="#ffffff" opacity="0.14"', 'fill="rgba(255,255,255,0.14)"');
 
+  // Tighten the exported viewBox to the actual logo bounds plus a small,
+  // symmetric pad so the menu bar icon uses more of the available slot.
+  derived = derived.replace('viewBox="0 0 200 200"', 'viewBox="11 17 178 176"');
+
   return derived;
 }
 
