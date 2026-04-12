@@ -50,7 +50,7 @@ export function getSessionInteractionCapabilities({
         ? "warning"
         : "neutral";
 
-  const capabilitySummary =
+  const capabilityDescription =
     mode === "managed_local"
       ? `Message this live ${providerLabel} session from Longhouse, or reattach on the host machine.`
       : mode === "managed_local_unavailable"
@@ -106,7 +106,7 @@ export function getSessionInteractionCapabilities({
     canChatFromBrowser: liveControlAvailable,
     capabilityLabel,
     capabilityVariant,
-    capabilitySummary,
+    capabilityDescription,
     composerDisabledReason,
     primaryActionLabel: liveControlAvailable ? "Open live dock" : "Unavailable",
     submitLabel,
