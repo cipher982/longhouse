@@ -192,6 +192,8 @@ If you touch a secondary area, either simplify it toward the core story or expla
 | `runner/` | Runner lane | No |
 | Anything else (docs, scripts, tests) | CI only, no deploy | No |
 
+**Mac app binary:** every push runs a packaging smoke test (builds + signs the `.app` to catch breakage) but does NOT publish. A distributable release only fires when a GitHub release is published — that is a manual/intentional act, not part of the normal push loop.
+
 **Provisioning rule:** if your change adds a new DB column, new required env var, or touches schema — flag it explicitly and run `make reprovision` after CI passes. Otherwise skip it.
 
 **Machine agent (Rust engine):** hosted tenants get the new binary automatically via the runtime image. Users running the engine locally need `make install-engine`. Mention this when shipping engine changes.
