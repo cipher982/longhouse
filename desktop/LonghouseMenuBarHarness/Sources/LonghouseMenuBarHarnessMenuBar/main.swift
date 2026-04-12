@@ -61,12 +61,15 @@ struct LonghouseMenuBarHarnessMenuBarApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("Longhouse", systemImage: store.snapshot?.parsedSeverity.symbolName ?? "circle.dotted") {
+        MenuBarExtra {
             HarnessRootView(
                 store: store,
                 actionSink: actionSink,
                 refreshIntervalSeconds: config.refreshIntervalSeconds
             )
+        } label: {
+            Image(nsImage: MenuBarBrandIcon.templateImage)
+                .accessibilityLabel("Longhouse")
         }
         .menuBarExtraStyle(.window)
     }
