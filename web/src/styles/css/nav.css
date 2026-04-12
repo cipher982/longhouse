@@ -104,7 +104,7 @@
  * glow animations so the software renderer can spend its budget on the
  * moving content, not on unrelated chrome.
  */
-.react-root--timeline-scrolling .brand-logo-glow {
+.react-root--scrolling .brand-logo-glow {
   animation: none !important;
   opacity: 0.35;
 }
@@ -210,7 +210,7 @@
   opacity: 1;
 }
 
-.react-root--timeline-scrolling .nav-tab-indicator {
+.react-root--scrolling .nav-tab-indicator {
   animation: none !important;
   opacity: 0.9;
   box-shadow: none;

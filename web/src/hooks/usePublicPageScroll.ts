@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useScrollActivity } from "./useScrollActivity";
 
 /**
  * Hook to enable document scrolling on public pages.
@@ -9,6 +10,10 @@ import { useEffect } from "react";
  * container styles.
  */
 export function usePublicPageScroll() {
+  useScrollActivity(() => document.documentElement, {
+    scrollClass: "public-page--scrolling",
+  });
+
   useEffect(() => {
     document.documentElement.classList.add("public-page-scroll");
     document.body.classList.add("public-page-scroll");

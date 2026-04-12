@@ -228,6 +228,17 @@
     transform: translateY(-2px);
   }
 
+  /*
+   * These public pages use document scrolling. While the page is moving under a
+   * stationary cursor, keep the hover states but remove the transition work so
+   * card animations do not pile up during a fast scroll.
+   */
+  html.public-page--scrolling .pricing-tier,
+  html.public-page--scrolling .docs-nav-card,
+  html.public-page--scrolling .info-page-back {
+    transition: none !important;
+  }
+
   .docs-nav-icon {
     font-size: 2rem;
     margin-bottom: var(--space-3);

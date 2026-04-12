@@ -406,6 +406,13 @@
     text-decoration: none;
   }
 
+  html.public-page--scrolling .docs-sidebar-link,
+  html.public-page--scrolling .docs-codeblock-copy,
+  html.public-page--scrolling .docs-footer-nav-link,
+  html.public-page--scrolling .docs-overview-card {
+    transition: none !important;
+  }
+
   .docs-overview-card h3 {
     font-size: var(--font-size-base);
     font-weight: var(--font-weight-semibold);
