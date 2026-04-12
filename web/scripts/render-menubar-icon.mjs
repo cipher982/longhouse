@@ -25,21 +25,21 @@ if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height 
 const masterPath = path.resolve(inputPath);
 const masterSvg = await readFile(masterPath, "utf8");
 
-function deriveSilverCharcoalMenubarSvg(svg) {
+function deriveBrightMonochromeMenubarSvg(svg) {
   let derived = svg;
 
   // Keep one geometry source of truth, but remap the full-color logo into a
-  // menu-bar-specific two-tone palette that preserves visor/detail separation.
+  // menu-bar-specific bright white/ink palette that preserves visor/detail separation.
   derived = derived.replace(/<defs>[\s\S]*?<\/defs>/, "");
-  derived = derived.replaceAll('fill="url(#helmetGrad)"', 'fill="#D7DDE6"');
-  derived = derived.replaceAll('stroke="#2E1A62"', 'stroke="#4B5563"');
-  derived = derived.replaceAll('fill="url(#visorGrad)"', 'fill="#1F2937"');
+  derived = derived.replaceAll('fill="url(#helmetGrad)"', 'fill="#F8FAFC"');
+  derived = derived.replaceAll('stroke="#2E1A62"', 'stroke="#7C8795"');
+  derived = derived.replaceAll('fill="url(#visorGrad)"', 'fill="#0B0F14"');
   derived = derived.replace('stroke="#8EF0AA"', 'stroke="#FFFFFF"');
-  derived = derived.replace('stroke="#AAFFD0"', 'stroke="#E5EEF8"');
+  derived = derived.replace('stroke="#AAFFD0"', 'stroke="#FFFFFF"');
   derived = derived.replaceAll('fill="#9AF7A8"', 'fill="#FFFFFF"');
-  derived = derived.replaceAll('stroke="#9AF7A8"', 'stroke="#E5EEF8"');
-  derived = derived.replace('fill="url(#highlightGrad)"', 'fill="rgba(255,255,255,0.14)"');
-  derived = derived.replace('fill="#ffffff" opacity="0.14"', 'fill="rgba(255,255,255,0.14)"');
+  derived = derived.replaceAll('stroke="#9AF7A8"', 'stroke="#FFFFFF"');
+  derived = derived.replace('fill="url(#highlightGrad)"', 'fill="rgba(255,255,255,0.22)"');
+  derived = derived.replace('fill="#ffffff" opacity="0.14"', 'fill="rgba(255,255,255,0.18)"');
 
   // Tighten the exported viewBox to the actual logo bounds plus a small,
   // symmetric pad so the menu bar icon uses more of the available slot.
@@ -48,7 +48,7 @@ function deriveSilverCharcoalMenubarSvg(svg) {
   return derived;
 }
 
-const svg = deriveSilverCharcoalMenubarSvg(masterSvg);
+const svg = deriveBrightMonochromeMenubarSvg(masterSvg);
 
 const browser = await chromium.launch({ headless: true });
 
