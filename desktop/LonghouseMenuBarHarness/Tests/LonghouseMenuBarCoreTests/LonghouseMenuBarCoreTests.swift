@@ -107,11 +107,35 @@ struct LonghouseMenuBarCoreTests {
         )
 
         let sink = SpyHealthActionSink(logURL: logURL, uiURL: nil, effectMode: .logOnly)
-        sink.handle(.refresh, snapshot: snapshot)
+        _ = sink.handle(.refresh, snapshot: snapshot)
 
         let content = try String(contentsOf: logURL)
         #expect(content.contains("\"action\":\"refresh\""))
         #expect(content.contains("Longhouse shipping healthy"))
+    }
+
+    @Test
+    func repairDryRunReturnsVisibleFeedback() throws {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse engine service is stopped",
+            reasons: ["service_stopped"],
+            suggestedActions: ["Run: longhouse connect --install"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            launchReadiness: nil
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.repairInstall, snapshot: snapshot)
+
+        #expect(feedback?.style == .warning)
+        #expect(feedback?.title == "Repair dry run recorded")
+        #expect(feedback?.detail.contains("without changing your machine") == true)
     }
 
     @Test

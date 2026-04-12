@@ -4,6 +4,9 @@ public struct MenuBarPanelView: View {
     private let snapshot: HealthSnapshot
     private let actionSink: any HealthActionSink
     private let refresh: () -> Void
+    @State private var feedback: HealthActionFeedback?
+    @State private var showSupportSection: Bool
+    @State private var showTechnicalDetails: Bool
 
     public init(
         snapshot: HealthSnapshot,
@@ -13,6 +16,9 @@ public struct MenuBarPanelView: View {
         self.snapshot = snapshot
         self.actionSink = actionSink
         self.refresh = refresh
+        _feedback = State(initialValue: nil)
+        _showSupportSection = State(initialValue: snapshot.parsedSeverity != .green)
+        _showTechnicalDetails = State(initialValue: false)
     }
 
     public var body: some View {
@@ -23,8 +29,11 @@ public struct MenuBarPanelView: View {
                     updateBanner
                 }
                 metrics
-                controls
-                detailBlocks
+                if let feedback {
+                    feedbackBanner(feedback)
+                }
+                actionSection
+                technicalDetailsSection
             }
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.panel)
@@ -32,7 +41,7 @@ public struct MenuBarPanelView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(width: 420, alignment: .topLeading)
-        .frame(maxHeight: 760, alignment: .topLeading)
+        .frame(minHeight: 360, idealHeight: 560, maxHeight: 760, alignment: .topLeading)
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color(nsColor: .windowBackgroundColor))
@@ -43,6 +52,10 @@ public struct MenuBarPanelView: View {
                 .stroke(Color.black.opacity(0.05), lineWidth: 1)
         )
         .padding(12)
+    }
+
+    private var isHealthy: Bool {
+        snapshot.parsedSeverity == .green && snapshot.healthState.lowercased() == "healthy"
     }
 
     private var header: some View {
@@ -85,6 +98,14 @@ public struct MenuBarPanelView: View {
                         identifier: LonghouseMenuBarAccessibilityID.Header.lastShip,
                         label: "Last ship: \(snapshot.lastShipLabel)"
                     )
+
+                if let launchHeadline = snapshot.launchReadiness?.headline,
+                   !launchHeadline.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(launchHeadline)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }
@@ -112,7 +133,7 @@ public struct MenuBarPanelView: View {
             Spacer()
 
             Button("Upgrade") {
-                actionSink.handle(.upgradeNow, snapshot: snapshot)
+                feedback = actionSink.handle(.upgradeNow, snapshot: snapshot)
             }
             .buttonStyle(.plain)
             .font(.system(size: 11, weight: .bold, design: .rounded))
@@ -171,44 +192,247 @@ public struct MenuBarPanelView: View {
         )
     }
 
-    private var detailBlocks: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            labeledRow(label: "Service File", value: snapshot.service?.serviceFile ?? "-", detail: .serviceFile)
-            labeledRow(label: "Log Path", value: snapshot.service?.logPath ?? "-", detail: .logPath)
-            labeledRow(label: "Spool Pending", value: snapshot.spoolPendingLabel, detail: .spoolPending)
-            labeledRow(label: "Outbox Oldest", value: snapshot.outboxOldestLabel, detail: .outboxOldest)
-            labeledRow(label: "Launch State", value: snapshot.launchStateLabel, detail: .launchState)
-            labeledRow(label: "Machine / Runner", value: snapshot.machineRunnerLabel, detail: .machineRunner)
-            labeledRow(label: "Service Machine", value: snapshot.serviceMachineLabel, detail: .serviceMachine)
-            labeledRow(label: "Stored / Runner URL", value: snapshot.storedRunnerURLLabel, detail: .storedRunnerURL)
+    @ViewBuilder
+    private var actionSection: some View {
+        if isHealthy {
+            healthyActionSection
+        } else {
+            troubleshootingSection
+        }
+    }
 
-            if let launchReasons = snapshot.launchReadiness?.reasons, !launchReasons.isEmpty {
-                tagSection(
-                    title: "Launch Checks",
-                    values: launchReasons,
-                    color: snapshot.parsedSeverity.accentColor,
-                    section: .launchChecks
+    private var healthyActionSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
+
+            sectionEyebrow("Primary")
+
+            Text("Longhouse looks healthy on this Mac. Open the dashboard or leave this running quietly in the menu bar.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                controlButton("Open Longhouse", systemImage: "arrow.up.forward.square", tone: .primary) {
+                    perform(.openLonghouse)
+                }
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
+                    label: "Open Longhouse"
+                )
+
+                controlButton("Refresh", systemImage: "arrow.clockwise", tone: .secondary) {
+                    perform(.refresh)
+                }
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.refresh,
+                    label: "Refresh"
                 )
             }
 
-            if !snapshot.reasons.isEmpty {
-                tagSection(
-                    title: "Reasons",
-                    values: snapshot.reasons,
-                    color: snapshot.parsedSeverity.accentColor,
-                    section: .reasons
+            DisclosureGroup(isExpanded: $showSupportSection) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Doctor is read-only. Repair can update the local app, service wiring, and automatic imports on this Mac.")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    HStack(spacing: 8) {
+                        controlButton("Doctor", systemImage: "stethoscope", tone: .secondary) {
+                            perform(.runDoctor)
+                        }
+                        .harnessAccessibilityButton(
+                            identifier: LonghouseMenuBarAccessibilityID.Button.doctor,
+                            label: "Doctor"
+                        )
+
+                        controlButton("Logs", systemImage: "doc.text.magnifyingglass", tone: .secondary) {
+                            perform(.openLogs)
+                        }
+                        .harnessAccessibilityButton(
+                            identifier: LonghouseMenuBarAccessibilityID.Button.openLogs,
+                            label: "Logs"
+                        )
+
+                        controlButton("Repair", systemImage: "wrench.and.screwdriver", tone: .warning) {
+                            perform(.repairInstall)
+                        }
+                        .harnessAccessibilityButton(
+                            identifier: LonghouseMenuBarAccessibilityID.Button.repair,
+                            label: "Repair"
+                        )
+                    }
+
+                    controlButton("Copy JSON", systemImage: "doc.on.doc", tone: .secondary) {
+                        perform(.copyDiagnostics)
+                    }
+                    .harnessAccessibilityButton(
+                        identifier: LonghouseMenuBarAccessibilityID.Button.copyDiagnostics,
+                        label: "Copy JSON"
+                    )
+                }
+                .padding(.top, 10)
+            } label: {
+                sectionDisclosureLabel("Maintenance & diagnostics")
+            }
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Disclosure.troubleshooting)
+        }
+    }
+
+    private var troubleshootingSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Divider()
+
+            sectionEyebrow("Needs attention")
+
+            if let firstSuggestedAction = snapshot.suggestedActions.first {
+                Text(firstSuggestedAction)
+                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(snapshot.parsedSeverity.accentColor.opacity(0.10))
+                    )
+            }
+
+            Text("Repair is the fastest way to rewire the local runtime. Doctor is safer when you want to inspect before changing anything.")
+                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                controlButton("Repair", systemImage: "wrench.and.screwdriver", tone: .danger) {
+                    perform(.repairInstall)
+                }
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.repair,
+                    label: "Repair"
+                )
+
+                controlButton("Doctor", systemImage: "stethoscope", tone: .secondary) {
+                    perform(.runDoctor)
+                }
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.doctor,
+                    label: "Doctor"
+                )
+
+                controlButton("Logs", systemImage: "doc.text.magnifyingglass", tone: .secondary) {
+                    perform(.openLogs)
+                }
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.openLogs,
+                    label: "Logs"
                 )
             }
 
-            if !snapshot.suggestedActions.isEmpty {
-                tagSection(
-                    title: "Next",
-                    values: snapshot.suggestedActions,
-                    color: Color.blue,
-                    section: .next
+            HStack(spacing: 8) {
+                controlButton("Refresh", systemImage: "arrow.clockwise", tone: .secondary) {
+                    perform(.refresh)
+                }
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.refresh,
+                    label: "Refresh"
                 )
+
+                controlButton("Open Longhouse", systemImage: "arrow.up.forward.square", tone: .secondary) {
+                    perform(.openLonghouse)
+                }
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
+                    label: "Open Longhouse"
+                )
+
+                controlButton("Copy JSON", systemImage: "doc.on.doc", tone: .secondary) {
+                    perform(.copyDiagnostics)
+                }
+                .harnessAccessibilityButton(
+                    identifier: LonghouseMenuBarAccessibilityID.Button.copyDiagnostics,
+                    label: "Copy JSON"
+                )
+            }
+
+            DisclosureGroup(isExpanded: $showSupportSection) {
+                VStack(alignment: .leading, spacing: 10) {
+                    if !snapshot.reasons.isEmpty {
+                        tagSection(
+                            title: "Reasons",
+                            values: snapshot.reasons,
+                            color: snapshot.parsedSeverity.accentColor,
+                            section: .reasons
+                        )
+                    }
+
+                    if !snapshot.suggestedActions.isEmpty {
+                        suggestionList(snapshot.suggestedActions)
+                    }
+                }
+                .padding(.top, 10)
+            } label: {
+                sectionDisclosureLabel("Troubleshooting details")
+            }
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Disclosure.troubleshooting)
+        }
+    }
+
+    private var technicalDetailsSection: some View {
+        DisclosureGroup(isExpanded: $showTechnicalDetails) {
+            VStack(alignment: .leading, spacing: 10) {
+                labeledRow(label: "Service File", value: snapshot.service?.serviceFile ?? "-", detail: .serviceFile)
+                labeledRow(label: "Log Path", value: snapshot.service?.logPath ?? "-", detail: .logPath)
+                labeledRow(label: "Spool Pending", value: snapshot.spoolPendingLabel, detail: .spoolPending)
+                labeledRow(label: "Outbox Oldest", value: snapshot.outboxOldestLabel, detail: .outboxOldest)
+                labeledRow(label: "Launch State", value: snapshot.launchStateLabel, detail: .launchState)
+                labeledRow(label: "Machine / Runner", value: snapshot.machineRunnerLabel, detail: .machineRunner)
+                labeledRow(label: "Service Machine", value: snapshot.serviceMachineLabel, detail: .serviceMachine)
+                labeledRow(label: "Stored / Runner URL", value: snapshot.storedRunnerURLLabel, detail: .storedRunnerURL)
+
+                if let launchReasons = snapshot.launchReadiness?.reasons, !launchReasons.isEmpty {
+                    tagSection(
+                        title: "Launch checks",
+                        values: launchReasons,
+                        color: snapshot.parsedSeverity.accentColor,
+                        section: .launchChecks
+                    )
+                }
+            }
+            .padding(.top, 10)
+        } label: {
+            sectionDisclosureLabel("Technical details")
+        }
+        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Disclosure.technicalDetails)
+    }
+
+    private func feedbackBanner(_ feedback: HealthActionFeedback) -> some View {
+        let tint = feedbackColor(for: feedback.style)
+
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: feedbackIcon(for: feedback.style))
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(tint)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(feedback.title)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.primary)
+                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.title)
+
+                Text(feedback.detail)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.detail)
             }
         }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(tint.opacity(0.10))
+        )
+        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.container)
     }
 
     private func labeledRow(
@@ -254,65 +478,64 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private var controls: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider()
-            HStack(spacing: 8) {
-                controlButton("Refresh", systemImage: "arrow.clockwise") {
-                    actionSink.handle(.refresh, snapshot: snapshot)
-                    refresh()
-                }
-                .harnessAccessibilityButton(
-                    identifier: LonghouseMenuBarAccessibilityID.Button.refresh,
-                    label: "Refresh"
+    private func suggestionList(_ values: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("NEXT")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.secondary)
+                .harnessAccessibility(
+                    identifier: LonghouseMenuBarAccessibilityID.Section.next.title,
+                    label: "NEXT"
                 )
 
-                controlButton("Doctor", systemImage: "stethoscope") {
-                    actionSink.handle(.runDoctor, snapshot: snapshot)
+            ForEach(Array(values.enumerated()), id: \.offset) { index, value in
+                HStack(alignment: .top, spacing: 8) {
+                    Circle()
+                        .fill(Color.blue)
+                        .frame(width: 5, height: 5)
+                        .padding(.top, 5)
+                    Text(value)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .harnessAccessibility(
+                            identifier: LonghouseMenuBarAccessibilityID.Section.next.tag(index),
+                            label: value
+                        )
                 }
-                .harnessAccessibilityButton(
-                    identifier: LonghouseMenuBarAccessibilityID.Button.doctor,
-                    label: "Doctor"
-                )
-
-                controlButton("Repair", systemImage: "wrench.and.screwdriver") {
-                    actionSink.handle(.repairInstall, snapshot: snapshot)
-                }
-                .harnessAccessibilityButton(
-                    identifier: LonghouseMenuBarAccessibilityID.Button.repair,
-                    label: "Repair"
-                )
-            }
-
-            HStack(spacing: 8) {
-                controlButton("Copy JSON", systemImage: "doc.on.doc") {
-                    actionSink.handle(.copyDiagnostics, snapshot: snapshot)
-                }
-                .harnessAccessibilityButton(
-                    identifier: LonghouseMenuBarAccessibilityID.Button.copyDiagnostics,
-                    label: "Copy JSON"
-                )
-
-                controlButton("Logs", systemImage: "doc.text.magnifyingglass") {
-                    actionSink.handle(.openLogs, snapshot: snapshot)
-                }
-                .harnessAccessibilityButton(
-                    identifier: LonghouseMenuBarAccessibilityID.Button.openLogs,
-                    label: "Logs"
-                )
-
-                controlButton("Open Longhouse", systemImage: "arrow.up.forward.square") {
-                    actionSink.handle(.openLonghouse, snapshot: snapshot)
-                }
-                .harnessAccessibilityButton(
-                    identifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
-                    label: "Open Longhouse"
-                )
             }
         }
     }
 
-    private func controlButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+    private func sectionEyebrow(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundStyle(Color.secondary)
+    }
+
+    private func sectionDisclosureLabel(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.primary)
+            Spacer()
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func perform(_ action: HarnessAction) {
+        feedback = actionSink.handle(action, snapshot: snapshot)
+        if action == .refresh {
+            refresh()
+        }
+    }
+
+    private func controlButton(
+        _ title: String,
+        systemImage: String,
+        tone: ControlButtonTone,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Label(title, systemImage: systemImage)
                 .font(.system(size: 12, weight: .semibold, design: .rounded))
@@ -321,10 +544,70 @@ public struct MenuBarPanelView: View {
                 .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
+        .foregroundStyle(tone.foregroundColor)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.black.opacity(0.06))
+                .fill(tone.backgroundColor)
         )
+    }
+
+    private func feedbackColor(for style: HealthActionFeedbackStyle) -> Color {
+        switch style {
+        case .info:
+            return Color.blue
+        case .success:
+            return snapshot.parsedSeverity == .green ? snapshot.parsedSeverity.accentColor : Color.green
+        case .warning:
+            return Color.orange
+        case .failure:
+            return Color.red
+        }
+    }
+
+    private func feedbackIcon(for style: HealthActionFeedbackStyle) -> String {
+        switch style {
+        case .info:
+            return "info.circle.fill"
+        case .success:
+            return "checkmark.circle.fill"
+        case .warning:
+            return "exclamationmark.triangle.fill"
+        case .failure:
+            return "xmark.circle.fill"
+        }
+    }
+}
+
+private enum ControlButtonTone {
+    case primary
+    case secondary
+    case warning
+    case danger
+
+    var backgroundColor: Color {
+        switch self {
+        case .primary:
+            return Color.blue
+        case .secondary:
+            return Color.black.opacity(0.06)
+        case .warning:
+            return Color.orange.opacity(0.16)
+        case .danger:
+            return Color.red.opacity(0.16)
+        }
+    }
+
+    var foregroundColor: Color {
+        switch self {
+        case .primary:
+            return Color.white
+        case .secondary:
+            return Color.primary
+        case .warning:
+            return Color.orange
+        case .danger:
+            return Color.red
+        }
     }
 }
 
