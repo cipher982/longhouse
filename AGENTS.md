@@ -183,30 +183,34 @@ If you touch a secondary area, either simplify it toward the core story or expla
 
 ## Pushing Changes
 
-Before merge, prefer the GitHub automation chain on cube over a laptop-local full CI burn.
+**`git push` is the full deploy action in 95% of cases.** GitHub Actions detects which paths changed and fires the right lane automatically. Agents do not need to figure out what to build — just push.
+
+| Changed paths | Lane fired automatically | Extra step needed? |
+|---|---|---|
+| `server/`, `web/`, `engine/`, `config/`, `docker/runtime.dockerfile` | Runtime: builds image, deploys demo, reprovisions canary | Only if you added a DB migration → `make reprovision` |
+| `control-plane/` | Control-plane deploy only | No |
+| `runner/` | Runner lane | No |
+| Anything else (docs, scripts, tests) | CI only, no deploy | No |
+
+**Provisioning rule:** if your change adds a new DB column, new required env var, or touches schema — flag it explicitly and run `make reprovision` after CI passes. Otherwise skip it.
+
+**Machine agent (Rust engine):** hosted tenants get the new binary automatically via the runtime image. Users running the engine locally need `make install-engine`. Mention this when shipping engine changes.
 
 Default path:
 
 ```bash
 git push
-gh run watch -R cipher982/longhouse
+gh run list -R cipher982/longhouse --limit 3  # confirm lanes fired
 ```
 
-Local fallback when remote CI is unavailable, the branch cannot be pushed yet, or David explicitly wants a local simulation:
+Local fallback when remote CI is unavailable or David explicitly wants a local run:
 
 ```bash
 make test-ci
 make test-e2e
 ```
 
-Deploy lanes:
-
-- **Runtime lane:** changes under `server/**`, `web/**`, `engine/**`, `config/**`, or `docker/runtime.dockerfile` build the shared runtime image, deploy the public demo runtime, and reprovision the hosted canary.
-- **Control-plane lane:** changes under `control-plane/**` deploy only the control plane.
-
-Prefer the GitHub automation chain over manual ship steps.
-
-Manual fallback:
+Manual deploy fallback:
 
 ```bash
 ./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
