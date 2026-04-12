@@ -18,12 +18,16 @@ final class LonghouseMenuBarWindowHostUITests: XCTestCase {
         XCTAssertTrue(window.waitForExistence(timeout: 5), "Window host did not appear")
         XCTAssertEqual(window.title, "Longhouse Local Health")
         XCTAssertTrue(app.staticTexts["Longhouse engine service is stopped"].waitForExistence(timeout: 5))
-        let repairButton = app.buttons[AccessibilityID.Button.repair]
-        XCTAssertTrue(repairButton.exists)
-        repairButton.tap()
+        let repairButton = try XCTUnwrap(
+            findButton(in: app, candidates: [AccessibilityID.Button.repair, "Repair"], container: window),
+            "Repair button was not found"
+        )
+        tapWhenVisible(repairButton, in: window)
 
-        let copyButton = app.buttons[AccessibilityID.Button.copyDiagnostics]
-        XCTAssertTrue(copyButton.exists)
+        let copyButton = try XCTUnwrap(
+            findButton(in: app, candidates: [AccessibilityID.Button.copyDiagnostics, "Copy Diagnostics", "Copy JSON"], container: window),
+            "Copy diagnostics button was not found"
+        )
         tapWhenVisible(copyButton, in: window)
 
         let actions = try waitForActionRecords(at: actionLogURL, count: 2)
@@ -97,6 +101,25 @@ final class LonghouseMenuBarWindowHostUITests: XCTestCase {
             container.swipeUp()
         }
         XCTFail("Element was never hittable: \(element)")
+    }
+
+    @MainActor
+    private func findButton(
+        in app: XCUIApplication,
+        candidates: [String],
+        container: XCUIElement,
+        attempts: Int = 6
+    ) -> XCUIElement? {
+        for _ in 0..<attempts {
+            for candidate in candidates {
+                let button = app.buttons[candidate]
+                if button.exists {
+                    return button
+                }
+            }
+            container.swipeUp()
+        }
+        return nil
     }
 }
 

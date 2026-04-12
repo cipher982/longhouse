@@ -17,6 +17,8 @@ Usage:
   scripts/qa/menubar-harness.sh test
   scripts/qa/menubar-harness.sh snapshot-fixture <fixture-name> [output.png]
   scripts/qa/menubar-harness.sh snapshot-live [output.png]
+  scripts/qa/menubar-harness.sh raw-snapshot-fixture <fixture-name> [output.png]
+  scripts/qa/menubar-harness.sh raw-snapshot-live [output.png]
   scripts/qa/menubar-harness.sh render-fixtures
   scripts/qa/menubar-harness.sh smoke [fixture-name]
   scripts/qa/menubar-harness.sh xcuitest
@@ -73,7 +75,7 @@ fixture_path() {
   echo "$PKG_PATH/Fixtures/${name}.json"
 }
 
-snapshot_exec() {
+raw_snapshot_exec() {
   swift run --package-path "$PKG_PATH" LonghouseMenuBarHarnessSnapshot "$@"
 }
 
@@ -83,6 +85,141 @@ app_exec() {
 
 menubar_exec() {
   swift run --package-path "$PKG_PATH" LonghouseMenuBarHarnessMenuBar "$@"
+}
+
+build_app_binary() {
+  swift build --package-path "$PKG_PATH" --product LonghouseMenuBarHarnessApp >/dev/null
+  echo "$(swift build --package-path "$PKG_PATH" --show-bin-path)/LonghouseMenuBarHarnessApp"
+}
+
+wait_for_window_id() {
+  local owner_name="$1"
+  local window_title="$2"
+  local window_id=""
+  local attempt
+  for attempt in $(seq 1 80); do
+    window_id="$(swift - "$owner_name" "$window_title" <<'SWIFT'
+import Foundation
+import CoreGraphics
+
+let ownerName = CommandLine.arguments[1]
+let windowTitle = CommandLine.arguments[2]
+let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+for row in infos {
+    let owner = row[kCGWindowOwnerName as String] as? String ?? ""
+    let name = row[kCGWindowName as String] as? String ?? ""
+    if owner == ownerName && name == windowTitle {
+        print(row[kCGWindowNumber as String] ?? 0)
+        break
+    }
+}
+SWIFT
+)"
+    if [[ -n "$window_id" ]]; then
+      echo "$window_id"
+      return 0
+    fi
+    sleep 0.1
+  done
+
+  echo "Timed out waiting for window '$window_title' owned by '$owner_name'" >&2
+  return 1
+}
+
+verify_png_has_visible_content() {
+  local png_path="$1"
+  swift - "$png_path" <<'SWIFT'
+import AppKit
+import Foundation
+
+let pngPath = CommandLine.arguments[1]
+let thresholdPercent = 5.0
+
+guard let data = try? Data(contentsOf: URL(fileURLWithPath: pngPath)),
+      let rep = NSBitmapImageRep(data: data) else {
+    fputs("Failed to load PNG for validation: \(pngPath)\n", stderr)
+    exit(1)
+}
+
+let width = rep.pixelsWide
+let height = rep.pixelsHigh
+guard width > 0, height > 0 else {
+    fputs("Invalid PNG dimensions for validation: \(pngPath)\n", stderr)
+    exit(1)
+}
+
+var darkPixels = 0
+for y in 0..<height {
+    for x in 0..<width {
+        guard let color = rep.colorAt(x: x, y: y) else {
+            continue
+        }
+        let rgb = color.usingColorSpace(.deviceRGB) ?? color
+        let alpha = rgb.alphaComponent
+        let red = rgb.redComponent * 255.0
+        let green = rgb.greenComponent * 255.0
+        let blue = rgb.blueComponent * 255.0
+        if alpha > 0.01 && (red < 220.0 || green < 220.0 || blue < 220.0) {
+            darkPixels += 1
+        }
+    }
+}
+
+let totalPixels = Double(width * height)
+let darkPercent = (Double(darkPixels) / totalPixels) * 100.0
+if darkPercent < thresholdPercent {
+    fputs(
+        String(
+            format: "PNG appears blank or near-blank (dark pixel rate %.2f%% < %.2f%%): %@\n",
+            darkPercent,
+            thresholdPercent,
+            pngPath
+        ),
+        stderr
+    )
+    exit(1)
+}
+SWIFT
+}
+
+capture_window_render() {
+  local app_bin="$1"
+  local input_json="$2"
+  local output_png="$3"
+  local pid=""
+  local capture_status=0
+  local window_id=""
+
+  rm -f "$output_png"
+  "$app_bin" --input "$input_json" --quit-after 30 >/dev/null 2>&1 &
+  pid=$!
+
+  if ! window_id="$(wait_for_window_id "LonghouseMenuBarHarnessApp" "Longhouse Local Health")"; then
+    capture_status=$?
+  fi
+
+  if [[ $capture_status -eq 0 ]]; then
+    if ! screencapture -x -l "$window_id" "$output_png"; then
+      capture_status=$?
+    fi
+  fi
+
+  if [[ $capture_status -eq 0 ]]; then
+    if ! verify_png_has_visible_content "$output_png"; then
+      capture_status=$?
+    fi
+  fi
+
+  if [[ -n "$pid" ]]; then
+    kill "$pid" >/dev/null 2>&1 || true
+    wait "$pid" >/dev/null 2>&1 || true
+  fi
+
+  if [[ $capture_status -ne 0 ]]; then
+    return "$capture_status"
+  fi
+
+  echo "$output_png"
 }
 
 xcode_ui_exec() {
@@ -205,21 +342,40 @@ case "$cmd" in
       exit 2
     fi
     output="${2:-$ARTIFACT_DIR/${fixture}.png}"
-    snapshot_exec --input "$(fixture_path "$fixture")" --output "$output"
-    echo "$output"
+    app_bin="$(build_app_binary)"
+    capture_window_render "$app_bin" "$(fixture_path "$fixture")" "$output"
     ;;
   snapshot-live)
     output="${1:-$ARTIFACT_DIR/live.png}"
     tmp_json="$(mktemp "${TMPDIR:-/tmp}/lh-menubar-live.XXXXXX.json")"
     trap 'rm -f "$tmp_json"' EXIT
     (cd "$ROOT" && uv run --project server longhouse local-health --json > "$tmp_json")
-    snapshot_exec --input "$tmp_json" --output "$output"
+    app_bin="$(build_app_binary)"
+    capture_window_render "$app_bin" "$tmp_json" "$output"
+    ;;
+  raw-snapshot-fixture)
+    fixture="${1:-}"
+    if [[ -z "$fixture" ]]; then
+      usage
+      exit 2
+    fi
+    output="${2:-$ARTIFACT_DIR/${fixture}.png}"
+    raw_snapshot_exec --input "$(fixture_path "$fixture")" --output "$output"
+    echo "$output"
+    ;;
+  raw-snapshot-live)
+    output="${1:-$ARTIFACT_DIR/live.png}"
+    tmp_json="$(mktemp "${TMPDIR:-/tmp}/lh-menubar-live.XXXXXX.json")"
+    trap 'rm -f "$tmp_json"' EXIT
+    (cd "$ROOT" && uv run --project server longhouse local-health --json > "$tmp_json")
+    raw_snapshot_exec --input "$tmp_json" --output "$output"
     echo "$output"
     ;;
   render-fixtures)
-    "$0" snapshot-fixture healthy "$ARTIFACT_DIR/healthy.png"
-    "$0" snapshot-fixture degraded "$ARTIFACT_DIR/degraded.png"
-    "$0" snapshot-fixture broken "$ARTIFACT_DIR/broken.png"
+    app_bin="$(build_app_binary)"
+    capture_window_render "$app_bin" "$(fixture_path healthy)" "$ARTIFACT_DIR/healthy.png"
+    capture_window_render "$app_bin" "$(fixture_path degraded)" "$ARTIFACT_DIR/degraded.png"
+    capture_window_render "$app_bin" "$(fixture_path broken)" "$ARTIFACT_DIR/broken.png"
     ;;
   smoke)
     fixture="${1:-healthy}"

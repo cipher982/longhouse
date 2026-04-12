@@ -68,6 +68,17 @@ public enum LonghouseMenuBarAccessibilityID {
         }
     }
 
+    public enum Disclosure {
+        public static let troubleshooting = "LonghouseMenuBar.Disclosure.Troubleshooting"
+        public static let technicalDetails = "LonghouseMenuBar.Disclosure.TechnicalDetails"
+    }
+
+    public enum Feedback {
+        public static let container = "LonghouseMenuBar.Feedback"
+        public static let title = "LonghouseMenuBar.Feedback.Title"
+        public static let detail = "LonghouseMenuBar.Feedback.Detail"
+    }
+
     public enum Button {
         public static let refresh = "LonghouseMenuBar.Button.Refresh"
         public static let doctor = "LonghouseMenuBar.Button.Doctor"
