@@ -68,7 +68,7 @@ struct LonghouseMenuBarHarnessMenuBarApp: App {
                 refreshIntervalSeconds: config.refreshIntervalSeconds
             )
         } label: {
-            Image(nsImage: MenuBarBrandIcon.templateImage)
+            Image(nsImage: MenuBarBrandIcon.image)
                 .accessibilityLabel("Longhouse")
         }
         .menuBarExtraStyle(.window)
