@@ -880,7 +880,6 @@ export default function SessionsPage() {
   const queryClient = useQueryClient();
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
   const lastTimelineScrollAtRef = useRef(0);
-  const timelineScrollUiTimeoutRef = useRef<number | null>(null);
   const { data: runnersData } = useRunners();
   const runners = runnersData ?? [];
   const runnerActionLabel = runners.length > 0 ? "Open Machines" : "Connect Machine";
@@ -1008,43 +1007,10 @@ export default function SessionsPage() {
   const threadCards = sessions;
   const groupedSessions = useMemo(() => groupThreadCardsByDay(threadCards, relativeNowMs), [threadCards, relativeNowMs]);
 
-  useEffect(() => {
-    const scroller = document.querySelector<HTMLElement>(".page-shell");
-    const appRoot = document.getElementById("react-root");
-    if (!scroller) {
-      return;
-    }
-
-    const clearTimelineScrollUiTimeout = () => {
-      if (timelineScrollUiTimeoutRef.current != null) {
-        window.clearTimeout(timelineScrollUiTimeoutRef.current);
-        timelineScrollUiTimeoutRef.current = null;
-      }
-    };
-
-    const markTimelineScrolling = () => {
-      lastTimelineScrollAtRef.current = performance.now();
-      scroller.classList.add("page-shell--timeline-scrolling");
-      appRoot?.classList.add("react-root--timeline-scrolling");
-      clearTimelineScrollUiTimeout();
-      timelineScrollUiTimeoutRef.current = window.setTimeout(() => {
-        timelineScrollUiTimeoutRef.current = null;
-        scroller.classList.remove("page-shell--timeline-scrolling");
-        appRoot?.classList.remove("react-root--timeline-scrolling");
-      }, SESSION_CARD_SCROLL_SUPPRESSION_MS);
-    };
-
-    scroller.addEventListener("wheel", markTimelineScrolling, { passive: true });
-    scroller.addEventListener("touchmove", markTimelineScrolling, { passive: true });
-    scroller.addEventListener("scroll", markTimelineScrolling, { passive: true });
-    return () => {
-      clearTimelineScrollUiTimeout();
-      scroller.classList.remove("page-shell--timeline-scrolling");
-      appRoot?.classList.remove("react-root--timeline-scrolling");
-      scroller.removeEventListener("wheel", markTimelineScrolling);
-      scroller.removeEventListener("touchmove", markTimelineScrolling);
-      scroller.removeEventListener("scroll", markTimelineScrolling);
-    };
+  // PageShell owns scroll detection and CSS class toggling; we only track the
+  // timestamp here to gate hover-prefetch intent.
+  const handleScrollActivity = useCallback(() => {
+    lastTimelineScrollAtRef.current = performance.now();
   }, []);
 
   const allowHoverPrefetch = useCallback(() => {
@@ -1193,7 +1159,7 @@ export default function SessionsPage() {
   // Loading state
   if (isLoading && sessions.length === 0) {
     return (
-      <PageShell size="wide" className="sessions-page-container">
+      <PageShell size="wide" className="sessions-page-container" onScrollActivity={handleScrollActivity}>
         <EmptyState
           icon={<Spinner size="lg" />}
           title="Loading timeline..."
@@ -1206,7 +1172,7 @@ export default function SessionsPage() {
   // Error state — full-page only when there's no cached data to fall back on
   if (error && sessions.length === 0) {
     return (
-      <PageShell size="wide" className="sessions-page-container">
+      <PageShell size="wide" className="sessions-page-container" onScrollActivity={handleScrollActivity}>
         <EmptyState
           variant="error"
           title="Error loading timeline"
@@ -1224,7 +1190,7 @@ export default function SessionsPage() {
   // Hero empty state — no sessions, no filters: show full-viewport centered CTA
   if (showGuidedEmptyState) {
     return (
-      <PageShell size="wide" className="sessions-page-container">
+      <PageShell size="wide" className="sessions-page-container" onScrollActivity={handleScrollActivity}>
         <div className="sessions-hero-empty">
           <EmptyState
             title="Import sessions you already have"
@@ -1284,7 +1250,7 @@ export default function SessionsPage() {
   }
 
   return (
-    <PageShell size="wide" className="sessions-page-container">
+    <PageShell size="wide" className="sessions-page-container" onScrollActivity={handleScrollActivity}>
       <div className="sessions-page">
         <SectionHeader
           title="Timeline"

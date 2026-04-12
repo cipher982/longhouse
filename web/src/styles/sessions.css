@@ -442,9 +442,9 @@
    * Hover animations then pile up across successive cards and blow up software
    * raster cost. Keep the hover state, but snap it instead of animating it.
    */
-  .page-shell--timeline-scrolling .session-card,
-  .page-shell--timeline-scrolling .session-card-archive-btn,
-  .page-shell--timeline-scrolling .session-card-arrow {
+  .page-shell--scrolling .session-card,
+  .page-shell--scrolling .session-card-archive-btn,
+  .page-shell--scrolling .session-card-arrow {
     transition: none !important;
   }
 
