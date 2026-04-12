@@ -185,14 +185,24 @@ If you touch a secondary area, either simplify it toward the core story or expla
 
 **`git push` is the full deploy action in 95% of cases.** GitHub Actions detects which paths changed and fires the right lane automatically. Agents do not need to figure out what to build — just push.
 
-| Changed paths | Lane fired automatically | Extra step needed? |
+Two completely separate user populations update differently:
+
+**Hosted users** (demo + paid tenants on your infra) — update on every push via CI:
+
+| Changed paths | Lane | Extra step? |
 |---|---|---|
-| `server/`, `web/`, `engine/`, `config/`, `docker/runtime.dockerfile` | Runtime: builds image, deploys demo, reprovisions canary | Only if you added a DB migration → `make reprovision` |
+| `server/`, `web/`, `engine/`, `config/`, `docker/runtime.dockerfile` | Rebuilds runtime image, redeploys demo, reprovisions canary | Only if DB migration added → `make reprovision` |
 | `control-plane/` | Control-plane deploy only | No |
 | `runner/` | Runner lane | No |
-| Anything else (docs, scripts, tests) | CI only, no deploy | No |
+| Docs/scripts/tests | CI only, no deploy | No |
 
-**Mac app binary:** every push runs a packaging smoke test (builds + signs the `.app` to catch breakage) but does NOT publish. A distributable release only fires when a GitHub release is published — that is a manual/intentional act, not part of the normal push loop.
+**Self-installed users** (CLI via PyPI, `Longhouse.app` download) — completely decoupled from push:
+- Only get an update when you publish a GitHub release (`vX.Y.Z` tag → triggers PyPI publish)
+- Must manually run `longhouse upgrade` or `uv tool upgrade longhouse` — no silent auto-update
+- `longhouse version --check` tells them if they're behind
+- After CLI upgrade, they may also need `longhouse connect --install` to rewire hooks/engine service
+
+**Mac app binary:** every push runs a packaging smoke test (builds + signs `.app` to catch breakage early) but does NOT distribute. Real signed + notarized release only fires on a published `vX.Y.Z` GitHub release.
 
 **Provisioning rule:** if your change adds a new DB column, new required env var, or touches schema — flag it explicitly and run `make reprovision` after CI passes. Otherwise skip it.
 
