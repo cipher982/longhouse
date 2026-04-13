@@ -305,6 +305,8 @@ struct ProviderComparisonRows: View {
                     }
                 }
             }
+            .padding(.top, 2)
+            .padding(.bottom, 4)
         }
     }
 }
