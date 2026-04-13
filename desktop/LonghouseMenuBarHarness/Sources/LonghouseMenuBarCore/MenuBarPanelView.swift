@@ -341,11 +341,22 @@ public struct MenuBarPanelView: View {
     }
 
     private var recentActivityEntries: [ActivityFeedEntry] {
-        snapshot.recentTouches.map { touch in
-            let provider = (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let touches = snapshot.recentTouches
+        let baseLabels = touches.map { snapshot.recentTouchWorkspaceLabel($0) }
+        let duplicateCounts = Dictionary(baseLabels.map { ($0, 1) }, uniquingKeysWith: +)
+
+        return touches.map { touch in
+            let provider = snapshot.recentTouchProviderLabel(touch)
+            let baseLabel = snapshot.recentTouchWorkspaceLabel(touch)
+            let title: String
+            if (duplicateCounts[baseLabel] ?? 0) > 1 {
+                title = "\(baseLabel) · \(provider)"
+            } else {
+                title = baseLabel
+            }
             return ActivityFeedEntry(
-                provider: provider,
-                title: snapshot.recentTouchTitle(touch),
+                provider: (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                title: title,
                 age: snapshot.recentTouchAgeLabel(touch, relativeTo: presentationDate)
             )
         }

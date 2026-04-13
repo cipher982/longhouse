@@ -74,6 +74,7 @@ The healthy/default state should show:
    - one short support line for launch readiness, engine freshness, and disk free
 3. `Recent activity`
    - the most recent distinct session touches, shown as a live feed with provider + age
+   - when local metadata allows it, rows should lead with workspace/repo context, not provider-only labels
    - recent activity is allowed to look busy, but it must read immediately as time-ordered activity
 4. `Today`
    - provider mix

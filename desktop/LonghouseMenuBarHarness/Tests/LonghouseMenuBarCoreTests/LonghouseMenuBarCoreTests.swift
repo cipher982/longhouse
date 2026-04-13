@@ -295,8 +295,8 @@ struct LonghouseMenuBarCoreTests {
               "claude": 3
             },
             "recent_touches": [
-              { "provider": "claude", "last_updated": "2026-04-11T10:00:00Z" },
-              { "provider": "codex", "last_updated": "2026-04-11T09:57:00Z" }
+              { "provider": "claude", "workspace_label": "zerg", "last_updated": "2026-04-11T10:00:00Z" },
+              { "provider": "codex", "workspace_label": "crims", "last_updated": "2026-04-11T09:57:00Z" }
             ],
             "session_recency_bands": [
               { "label": "0-1m", "session_count": 2 },
@@ -319,6 +319,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.recentActivitySummaryLabel == "4 active in 15m")
         #expect(snapshot.recentTouches.count == 2)
         #expect(snapshot.recentTouches.first?.provider == "claude")
+        #expect(snapshot.recentTouches.first?.workspaceLabel == "zerg")
         #expect(snapshot.recentTouches.first?.lastUpdated == "2026-04-11T10:00:00Z")
     }
 }
