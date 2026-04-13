@@ -246,6 +246,8 @@ struct LonghouseMenuBarCoreTests {
                 sessionsToday: 4,
                 sessionsRecent: 2,
                 providerCountsToday: ["codex": 4],
+                providerCountsRecent: ["codex": 2],
+                sessionRecencyBands: nil,
                 latestActivityAt: "2026-04-08T01:51:30Z",
                 recentWindowMinutes: 15
             ),
@@ -272,34 +274,46 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func pulseWindowModelCollapsesFlatHistoryToSteadySummary() {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        let baseDate = formatter.date(from: "2026-04-08T01:00:00Z")!
+    func decodesActivityBandsAndRecentProviderMix() throws {
+        let data = Data("""
+        {
+          "health_state": "healthy",
+          "severity": "green",
+          "headline": "Longhouse shipping healthy",
+          "reasons": [],
+          "suggested_actions": [],
+          "activity_summary": {
+            "sessions_today": 7,
+            "sessions_recent": 4,
+            "provider_counts_today": {
+              "codex": 3,
+              "claude": 4
+            },
+            "provider_counts_recent": {
+              "codex": 1,
+              "claude": 3
+            },
+            "session_recency_bands": [
+              { "label": "0-1m", "session_count": 2 },
+              { "label": "1-5m", "session_count": 1 },
+              { "label": "5-15m", "session_count": 1 },
+              { "label": "15-60m", "session_count": 0 },
+              { "label": "1-6h", "session_count": 2 },
+              { "label": "6h+", "session_count": 1 }
+            ],
+            "latest_activity_at": "2026-04-11T10:00:00Z",
+            "recent_window_minutes": 15
+          }
+        }
+        """.utf8)
 
-        let history = [
-            SnapshotHistorySample(
-                capturedAt: baseDate,
-                sessionsRecent: 4,
-                spoolPendingCount: 0,
-                outboxCount: 0,
-                severity: .green
-            ),
-            SnapshotHistorySample(
-                capturedAt: baseDate.addingTimeInterval(600),
-                sessionsRecent: 4,
-                spoolPendingCount: 0,
-                outboxCount: 0,
-                severity: .green
-            ),
-        ]
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
 
-        let model = PulseWindowModel(history: history)
-
-        #expect(model.hasEnoughHistory == true)
-        #expect(model.isSteadyState == true)
-        #expect(model.trailingLabel == "Stable")
-        #expect(model.coverageLabel == "Last 10m")
-        #expect(model.steadyHeadline == "4 recent sessions · queue idle")
+        #expect(snapshot.hotSessionsLabel == "2")
+        #expect(snapshot.providerCountsRecent.map(\.provider) == ["claude", "codex"])
+        #expect(snapshot.recentProviderMixLabel == "Claude 3 · Codex 1")
+        #expect(snapshot.sessionRecencyBands.count == 6)
+        #expect(snapshot.sessionRecencyBands.first?.label == "0-1m")
+        #expect(snapshot.sessionRecencyBands.first?.sessionCount == 2)
     }
 }

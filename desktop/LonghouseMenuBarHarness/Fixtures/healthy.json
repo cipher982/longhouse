@@ -49,6 +49,18 @@
       "codex": 5,
       "gemini": 1
     },
+    "provider_counts_recent": {
+      "claude": 2,
+      "codex": 1
+    },
+    "session_recency_bands": [
+      { "label": "0-1m", "session_count": 0 },
+      { "label": "1-5m", "session_count": 0 },
+      { "label": "5-15m", "session_count": 3 },
+      { "label": "15-60m", "session_count": 5 },
+      { "label": "1-6h", "session_count": 2 },
+      { "label": "6h+", "session_count": 4 }
+    ],
     "latest_activity_at": "2026-04-08T01:51:58Z",
     "recent_window_minutes": 15
   },

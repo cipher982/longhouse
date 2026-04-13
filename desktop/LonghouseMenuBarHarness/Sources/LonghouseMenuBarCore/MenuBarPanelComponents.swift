@@ -267,360 +267,155 @@ struct ProviderMixBar: View {
     }
 }
 
-struct PulseWindowModel {
-    struct SignalSummary {
-        let points: [Int]
-        let currentValue: Int
-        let minimumValue: Int
-        let maximumValue: Int
+struct FlightStripSegment: Identifiable {
+    let id: String
+    let label: String
+    let value: String
+    let tone: Color
 
-        var hasVariance: Bool {
-            minimumValue != maximumValue
-        }
-    }
-
-    private enum BucketAggregation {
-        case averageRounded
-        case max
-    }
-
-    private let history: [SnapshotHistorySample]
-    private let retentionMinutes: Int
-    private let maxPoints: Int
-
-    init(
-        history: [SnapshotHistorySample],
-        retentionMinutes: Int = 30,
-        maxPoints: Int = 16
-    ) {
-        self.history = history
-        self.retentionMinutes = retentionMinutes
-        self.maxPoints = maxPoints
-    }
-
-    var hasEnoughHistory: Bool {
-        history.count > 1
-    }
-
-    var coverageLabel: String {
-        guard hasEnoughHistory,
-              let first = history.first?.capturedAt,
-              let last = history.last?.capturedAt else {
-            return "Collecting"
-        }
-        let seconds = max(0, last.timeIntervalSince(first))
-        let minutes = max(1, Int(ceil(seconds / 60.0)))
-        return "Last \(min(minutes, retentionMinutes))m"
-    }
-
-    var latestActivityCount: Int {
-        history.last?.sessionsRecent ?? 0
-    }
-
-    var latestQueueDepth: Int {
-        guard let latest = history.last else {
-            return 0
-        }
-        return latest.spoolPendingCount + latest.outboxCount
-    }
-
-    var activity: SignalSummary {
-        makeSignalSummary(
-            currentValue: latestActivityCount,
-            values: bucketedValues(
-                metric: { $0.sessionsRecent },
-                aggregation: .averageRounded
-            )
-        )
-    }
-
-    var queue: SignalSummary {
-        makeSignalSummary(
-            currentValue: latestQueueDepth,
-            values: bucketedValues(
-                metric: { $0.spoolPendingCount + $0.outboxCount },
-                aggregation: .max
-            )
-        )
-    }
-
-    var isSteadyState: Bool {
-        hasEnoughHistory && !activity.hasVariance && !queue.hasVariance
-    }
-
-    var shouldChartActivity: Bool {
-        hasEnoughHistory && activity.hasVariance
-    }
-
-    var shouldChartQueue: Bool {
-        hasEnoughHistory && (queue.hasVariance || queue.maximumValue > 0)
-    }
-
-    var trailingLabel: String {
-        guard hasEnoughHistory else {
-            return "Collecting"
-        }
-        if isSteadyState {
-            if latestQueueDepth > 0 {
-                return "Steady"
-            }
-            if latestActivityCount > 0 {
-                return "Stable"
-            }
-            return "Idle"
-        }
-        if latestQueueDepth > 0 {
-            return "Queue \(latestQueueDepth)"
-        }
-        if latestActivityCount > 0 {
-            return "\(latestActivityCount) active"
-        }
-        return "Live"
-    }
-
-    var steadyHeadline: String {
-        let sessionSummary = latestActivityCount == 1 ? "1 recent session" : "\(latestActivityCount) recent sessions"
-        let queueSummary = latestQueueDepth == 0 ? "queue idle" : "queue holding at \(latestQueueDepth)"
-        return "\(sessionSummary) · \(queueSummary)"
-    }
-
-    var steadyDetail: String {
-        "No meaningful variance across \(coverageLabel.lowercased())"
-    }
-
-    var activityStatusLabel: String {
-        signalStatusLabel(
-            currentValue: latestActivityCount,
-            minimumValue: activity.minimumValue,
-            maximumValue: activity.maximumValue,
-            emptyLabel: "idle"
-        )
-    }
-
-    var queueStatusLabel: String {
-        signalStatusLabel(
-            currentValue: latestQueueDepth,
-            minimumValue: queue.minimumValue,
-            maximumValue: queue.maximumValue,
-            emptyLabel: "idle"
-        )
-    }
-
-    private func makeSignalSummary(currentValue: Int, values: [Int]) -> SignalSummary {
-        let resolvedValues = values.isEmpty ? [0] : values
-        return SignalSummary(
-            points: resolvedValues,
-            currentValue: currentValue,
-            minimumValue: resolvedValues.min() ?? 0,
-            maximumValue: resolvedValues.max() ?? 0
-        )
-    }
-
-    private func bucketedValues(
-        metric: (SnapshotHistorySample) -> Int,
-        aggregation: BucketAggregation
-    ) -> [Int] {
-        guard !history.isEmpty else {
-            return []
-        }
-        guard history.count > maxPoints else {
-            return history.map { max(0, metric($0)) }
-        }
-
-        let bucketSize = Double(history.count) / Double(maxPoints)
-        return (0..<maxPoints).map { bucketIndex in
-            let lowerBound = Int(floor(Double(bucketIndex) * bucketSize))
-            let upperBound = min(history.count, Int(ceil(Double(bucketIndex + 1) * bucketSize)))
-            let slice = history[lowerBound..<max(lowerBound + 1, upperBound)]
-            let values = slice.map { max(0, metric($0)) }
-
-            switch aggregation {
-            case .averageRounded:
-                let total = values.reduce(0, +)
-                return Int((Double(total) / Double(max(values.count, 1))).rounded())
-            case .max:
-                return values.max() ?? 0
-            }
-        }
-    }
-
-    private func signalStatusLabel(
-        currentValue: Int,
-        minimumValue: Int,
-        maximumValue: Int,
-        emptyLabel: String
-    ) -> String {
-        if maximumValue == 0 {
-            return emptyLabel
-        }
-        if minimumValue == maximumValue {
-            return "steady \(currentValue)"
-        }
-        return "now \(currentValue) · range \(minimumValue)-\(maximumValue)"
+    init(id: String? = nil, label: String, value: String, tone: Color = .primary) {
+        self.id = id ?? label
+        self.label = label
+        self.value = value
+        self.tone = tone
     }
 }
 
-struct PulseWindowView: View {
-    let model: PulseWindowModel
+struct FlightStrip: View {
+    let segments: [FlightStripSegment]
+    let accent: Color
 
     var body: some View {
-        if !model.hasEnoughHistory {
-            Text("Collecting live shipping samples")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.secondary)
+        HStack(alignment: .center, spacing: 0) {
+            ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(segment.label.uppercased())
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.secondary)
+                        .tracking(0.5)
+                    Text(segment.value)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(segment.tone)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.74)
+                }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 10)
                 .padding(.vertical, 8)
-        } else if model.isSteadyState {
-            steadyStateView
-        } else {
-            VStack(alignment: .leading, spacing: 10) {
-                if model.shouldChartActivity {
-                    PulseSignalRow(
-                        title: "Sessions",
-                        status: model.activityStatusLabel,
-                        points: model.activity.points,
-                        tint: Color(red: 0.31, green: 0.78, blue: 0.50)
-                    )
-                } else {
-                    PulseSignalSummaryRow(title: "Sessions", status: model.activityStatusLabel)
-                }
 
-                if model.shouldChartQueue {
-                    PulseSignalRow(
-                        title: "Queue",
-                        status: model.queueStatusLabel,
-                        points: model.queue.points,
-                        tint: Color(red: 0.90, green: 0.74, blue: 0.30)
-                    )
-                } else {
-                    PulseSignalSummaryRow(title: "Queue", status: model.queueStatusLabel)
+                if index < segments.count - 1 {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.07))
+                        .frame(width: 1)
+                        .padding(.vertical, 8)
                 }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(accent.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+        )
+    }
+}
 
-                HStack {
-                    Text(model.coverageLabel)
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.secondary)
-                    Spacer()
-                    Text("Now")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundStyle(Color.secondary)
-                }
+struct SignalCell: Identifiable {
+    let id: String
+    let label: String
+    let value: String
+    let detail: String?
+    let tone: Color
+
+    init(id: String? = nil, label: String, value: String, detail: String? = nil, tone: Color = .primary) {
+        self.id = id ?? label
+        self.label = label
+        self.value = value
+        self.detail = detail
+        self.tone = tone
+    }
+}
+
+struct SignalGrid: View {
+    let signals: [SignalCell]
+    let columns: Int
+
+    var body: some View {
+        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 8) {
+            ForEach(signals) { signal in
+                signalCell(signal)
             }
         }
     }
 
-    private var steadyStateView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                steadyMetric(title: "Sessions", value: model.latestActivityCount == 0 ? "Idle" : "\(model.latestActivityCount)")
-                steadyMetric(title: "Queue", value: model.latestQueueDepth == 0 ? "Idle" : "\(model.latestQueueDepth)")
-            }
-
-            Text(model.steadyHeadline)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-
-            Text(model.steadyDetail)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .padding(.vertical, 4)
+    private var gridColumns: [GridItem] {
+        Array(repeating: GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 8), count: max(columns, 1))
     }
 
     @ViewBuilder
-    private func steadyMetric(title: String, value: String) -> some View {
+    private func signalCell(_ signal: SignalCell) -> some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(title.uppercased())
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+            Text(signal.label.uppercased())
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
                 .foregroundStyle(Color.secondary)
                 .tracking(0.45)
 
-            Text(value)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Color.primary)
+            Text(signal.value)
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .foregroundStyle(signal.tone)
                 .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+            if let detail = signal.detail {
+                Text(detail.uppercased())
+                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+                    .tracking(0.4)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.72)
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .fill(Color.white.opacity(0.03))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.white.opacity(0.05), lineWidth: 1)
+        )
     }
 }
 
-private struct PulseSignalSummaryRow: View {
+struct ProviderMixDeck: View {
     let title: String
-    let status: String
+    let summary: String
+    let entries: [(provider: String, count: Int)]
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Text(title.uppercased())
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color.secondary)
-                .tracking(0.45)
-
-            Spacer(minLength: 8)
-
-            Text(status)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.primary)
-                .monospacedDigit()
-        }
-        .padding(.vertical, 2)
-    }
-}
-
-private struct PulseSignalRow: View {
-    let title: String
-    let status: String
-    let points: [Int]
-    let tint: Color
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .center, spacing: 8) {
                 Text(title.uppercased())
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.secondary)
                     .tracking(0.45)
 
                 Spacer(minLength: 8)
 
-                Text(status)
-                    .font(.system(size: 11, weight: .semibold))
+                Text(summary)
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
                     .monospacedDigit()
             }
 
-            GeometryReader { geometry in
-                let maxValue = max(points.max() ?? 0, 1)
-                let spacing: CGFloat = 3
-                let barWidth = max(6, (geometry.size.width - CGFloat(max(points.count - 1, 0)) * spacing) / CGFloat(max(points.count, 1)))
-
-                ZStack(alignment: .bottomLeading) {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.05))
-                        .frame(height: 1)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-
-                    HStack(alignment: .bottom, spacing: spacing) {
-                        ForEach(Array(points.enumerated()), id: \.offset) { _, value in
-                            let normalized = CGFloat(max(0, value)) / CGFloat(maxValue)
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(tint.opacity(value == 0 ? 0.22 : 0.92))
-                                .frame(width: barWidth, height: max(value == 0 ? 2 : 6, normalized * geometry.size.height))
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                }
-            }
-            .frame(height: 18)
+            ProviderMixBar(entries: entries)
         }
     }
 }

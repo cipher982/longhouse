@@ -253,8 +253,17 @@ def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: P
     assert activity["sessions_today"] == 2
     assert activity["sessions_recent"] == 1
     assert activity["provider_counts_today"] == {"claude": 1, "codex": 1}
+    assert activity["provider_counts_recent"] == {"claude": 1}
     assert activity["latest_activity_at"] == recent.isoformat()
     assert activity["recent_window_minutes"] == local_health_service.ACTIVITY_RECENT_MINUTES
+    assert activity["session_recency_bands"] == [
+        {"label": "0-1m", "session_count": 0},
+        {"label": "1-5m", "session_count": 1},
+        {"label": "5-15m", "session_count": 0},
+        {"label": "15-60m", "session_count": 0},
+        {"label": "1-6h", "session_count": 1},
+        {"label": "6h+", "session_count": 0},
+    ]
 
 
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):

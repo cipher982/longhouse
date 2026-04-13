@@ -4,7 +4,7 @@ public enum MenuBarPanelLayout {
     public static let panelWidth: CGFloat = 376
     public static let loadingHeight: CGFloat = 170
     public static let failureHeight: CGFloat = 198
-    public static let healthyHeight: CGFloat = 560
+    public static let healthyHeight: CGFloat = 648
     public static let attentionHeight: CGFloat = 564
 
     public static func preferredHeight(for snapshot: HealthSnapshot) -> CGFloat {
@@ -249,73 +249,102 @@ public struct MenuBarPanelView: View {
 
     private var healthySurface: some View {
         VStack(alignment: .leading, spacing: 12) {
-            MissionReadoutGrid(readouts: healthyReadouts)
+            FlightStrip(segments: flightStripSegments, accent: snapshot.parsedSeverity.accentColor)
 
-            PanelSection(title: "Operations") {
-                TelemetryTable(entries: healthyOperationsEntries)
+            PanelSection(title: "Transport Rail") {
+                SignalGrid(signals: transportSignals, columns: 6)
+            }
 
-                if !snapshot.providerCountsToday.isEmpty {
+            PanelSection(title: "Session Traffic", trailing: snapshot.recentWindowCompactLabel) {
+                SignalGrid(signals: trafficSignals, columns: 6)
+
+                if !snapshot.providerCountsRecent.isEmpty || !snapshot.providerCountsToday.isEmpty {
                     sectionDivider
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("PROVIDER MIX")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Color.secondary)
-                            .tracking(0.55)
+                    VStack(alignment: .leading, spacing: 8) {
+                        if !snapshot.providerCountsRecent.isEmpty {
+                            ProviderMixDeck(
+                                title: "Recent Mix",
+                                summary: snapshot.recentProviderMixLabel,
+                                entries: snapshot.providerCountsRecent
+                            )
+                        }
 
-                        Text(snapshot.providerMixLabel)
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundStyle(Color.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.76)
-                            .monospacedDigit()
+                        if !snapshot.providerCountsRecent.isEmpty, !snapshot.providerCountsToday.isEmpty {
+                            sectionDivider
+                        }
 
-                        ProviderMixBar(entries: snapshot.providerCountsToday)
+                        if !snapshot.providerCountsToday.isEmpty {
+                            ProviderMixDeck(
+                                title: "Today Mix",
+                                summary: snapshot.providerMixLabel,
+                                entries: snapshot.providerCountsToday
+                            )
+                        }
                     }
                 }
             }
 
-            PanelSection(title: "Recent Window", trailing: pulseModel.trailingLabel) {
-                PulseWindowView(model: pulseModel)
+            PanelSection(title: "Ops Ledger", trailing: snapshot.machineNameLabel) {
+                SignalGrid(signals: controlSignals, columns: 3)
             }
         }
     }
 
-    private var healthyReadouts: [PanelReadout] {
+    private var flightStripSegments: [FlightStripSegment] {
         [
-            PanelReadout(label: "Ship", value: snapshot.lastShipCompactLabel(relativeTo: presentationDate), detail: "Last ship"),
-            PanelReadout(label: "Beat", value: snapshot.engineAgeLabel(relativeTo: presentationDate), detail: snapshot.engineFreshnessLabel(relativeTo: presentationDate)),
-            PanelReadout(label: "Today", value: snapshot.sessionsTodayLabel, detail: "Sessions"),
-            PanelReadout(label: snapshot.recentWindowCompactLabel, value: snapshot.sessionsRecentLabel, detail: "Active"),
+            FlightStripSegment(label: "State", value: snapshot.ambientStatusLabel.uppercased(), tone: snapshot.parsedSeverity.accentColor),
+            FlightStripSegment(label: "Ship", value: snapshot.lastShipCompactLabel(relativeTo: presentationDate)),
+            FlightStripSegment(label: "Beat", value: snapshot.engineAgeLabel(relativeTo: presentationDate)),
+            FlightStripSegment(label: "Launch", value: snapshot.launchStateLabel.uppercased()),
         ]
     }
 
-    private var healthyOperationsEntries: [PanelTelemetryEntry] {
-        var entries = [
-            PanelTelemetryEntry(
-                label: "Launch",
-                value: snapshot.launchValueLabel,
-                labelIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.label,
-                valueIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.value
-            ),
-            PanelTelemetryEntry(label: "Heartbeat", value: snapshot.engineFreshnessValueLabel(relativeTo: presentationDate)),
-            PanelTelemetryEntry(
-                label: "Buffers",
-                value: "OUT \(snapshot.outboxCount) · Q \(snapshot.spoolPendingLabel) · DEAD \(snapshot.spoolDeadLabel)",
-                valueColor: pipelineColor
-            ),
-            PanelTelemetryEntry(label: "Latest", value: snapshot.latestActivityLabel(relativeTo: presentationDate)),
+    private var transportSignals: [SignalCell] {
+        [
+            SignalCell(label: "Out", value: "\(snapshot.outboxCount)", detail: "Outbox", tone: snapshot.outboxCount > 0 ? pipelineColor : .primary),
+            SignalCell(label: "Q", value: snapshot.spoolPendingLabel, detail: "Spool", tone: snapshot.spoolPendingLabel == "0" ? .primary : pipelineColor),
+            SignalCell(label: "Dead", value: snapshot.spoolDeadLabel, detail: "Letters", tone: snapshot.spoolDeadLabel == "0" ? .primary : .red),
+            SignalCell(label: "Parse", value: snapshot.parseErrorCountLabel, detail: "1h", tone: snapshot.parseErrorCountLabel == "0" ? .primary : .yellow),
+            SignalCell(label: "Fail", value: snapshot.consecutiveFailuresLabel, detail: "Ships", tone: snapshot.consecutiveFailuresLabel == "0" ? .primary : .red),
+            SignalCell(label: "Free", value: snapshot.diskFreeCompactLabel, detail: "Disk"),
+        ]
+    }
+
+    private var trafficSignals: [SignalCell] {
+        let bands = snapshot.sessionRecencyBands
+        if bands.isEmpty {
+            return [
+                SignalCell(label: "0-1m", value: snapshot.hotSessionsLabel, detail: "Hot"),
+                SignalCell(label: "1-5m", value: "0", detail: "Warm"),
+                SignalCell(label: "5-15m", value: snapshot.sessionsRecentLabel, detail: "Recent"),
+            ]
+        }
+        return bands.map { band in
+            let count = band.sessionCount ?? 0
+            return SignalCell(
+                label: band.label,
+                value: "\(count)",
+                tone: count > 0 ? snapshot.parsedSeverity.accentColor : .primary
+            )
+        }
+    }
+
+    private var controlSignals: [SignalCell] {
+        var signals = [
+            SignalCell(label: "Launch", value: snapshot.launchStateLabel.uppercased(), detail: snapshot.machineNameLabel),
+            SignalCell(label: "Runner", value: snapshot.runnerNameValueLabel),
+            SignalCell(label: "Mode", value: snapshot.installModeValueLabel),
+            SignalCell(label: "Host", value: snapshot.hostValueLabel),
+            SignalCell(label: "Latest", value: snapshot.latestActivityCompactLabel(relativeTo: presentationDate), detail: "Touch"),
+            SignalCell(label: "App", value: snapshot.installedVersionLabel, detail: snapshot.installedVersionDetailLabel)
         ]
 
         if let updateBadge = snapshot.updateBadgeLabel {
-            entries.append(PanelTelemetryEntry(label: "Update", value: updateBadge, valueColor: .blue))
+            signals.append(SignalCell(label: "Update", value: updateBadge, tone: .blue))
         }
 
-        return entries
-    }
-
-    private var pulseModel: PulseWindowModel {
-        PulseWindowModel(history: history)
+        return signals
     }
 
     private var blockerSection: some View {
