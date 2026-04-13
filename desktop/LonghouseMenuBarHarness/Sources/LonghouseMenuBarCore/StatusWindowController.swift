@@ -5,14 +5,12 @@ public final class StatusWindowController: NSWindowController {
     public init(
         store: SnapshotStore,
         actionSink: any HealthActionSink,
-        refreshIntervalSeconds: TimeInterval?,
-        healthyConcept: HealthyPanelConcept = .production
+        refreshIntervalSeconds: TimeInterval?
     ) {
         let rootView = HarnessRootView(
             store: store,
             actionSink: actionSink,
-            refreshIntervalSeconds: refreshIntervalSeconds,
-            healthyConcept: healthyConcept
+            refreshIntervalSeconds: refreshIntervalSeconds
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(
@@ -20,7 +18,7 @@ public final class StatusWindowController: NSWindowController {
                 x: 0,
                 y: 0,
                 width: MenuBarPanelLayout.panelWidth,
-                height: healthyConcept.panelHeight
+                height: MenuBarPanelLayout.attentionHeight
             ),
             styleMask: [.titled, .closable],
             backing: .buffered,
@@ -32,7 +30,7 @@ public final class StatusWindowController: NSWindowController {
         window.setContentSize(
             NSSize(
                 width: MenuBarPanelLayout.panelWidth,
-                height: healthyConcept.panelHeight
+                height: MenuBarPanelLayout.attentionHeight
             )
         )
         window.contentViewController = hostingController

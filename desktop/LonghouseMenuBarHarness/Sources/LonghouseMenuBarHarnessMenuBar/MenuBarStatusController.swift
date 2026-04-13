@@ -17,21 +17,18 @@ final class MenuBarStatusController: NSObject {
     init(
         store: SnapshotStore,
         actionSink: SpyHealthActionSink,
-        refreshIntervalSeconds: TimeInterval?,
-        healthyConcept: HealthyPanelConcept = .production
+        refreshIntervalSeconds: TimeInterval?
     ) {
         self.store = store
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        self.healthyConcept = healthyConcept
         self.panelController = MenuBarPanelWindowController(
             rootView: HarnessRootView(
                 store: store,
                 actionSink: actionSink,
                 refreshIntervalSeconds: nil,
-                managePresentationUpdates: false,
-                healthyConcept: healthyConcept
+                managePresentationUpdates: false
             ),
-            initialSize: MenuBarStatusController.preferredPanelSize(for: store, healthyConcept: healthyConcept)
+            initialSize: MenuBarStatusController.preferredPanelSize(for: store)
         )
 
         super.init()
@@ -111,7 +108,7 @@ final class MenuBarStatusController: NSObject {
     private func openPanel(relativeTo button: NSStatusBarButton) {
         panelGeneration &+= 1
         store.beginPresentationUpdates()
-        panelController.updateContentSize(Self.preferredPanelSize(for: store, healthyConcept: healthyConcept))
+        panelController.updateContentSize(Self.preferredPanelSize(for: store))
         panelController.show(relativeTo: button)
         installEventMonitors(for: panelGeneration)
     }
@@ -124,7 +121,7 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func refreshPanelLayout() {
-        let size = Self.preferredPanelSize(for: store, healthyConcept: healthyConcept)
+        let size = Self.preferredPanelSize(for: store)
         panelController.updateContentSize(size)
         if panelController.isPresented, let button = statusItem.button {
             panelController.reposition(relativeTo: button)
@@ -203,12 +200,10 @@ final class MenuBarStatusController: NSObject {
         return buttonFrameOnScreen.insetBy(dx: -6, dy: -6).contains(point)
     }
 
-    private let healthyConcept: HealthyPanelConcept
-
-    private static func preferredPanelSize(for store: SnapshotStore, healthyConcept: HealthyPanelConcept) -> NSSize {
+    private static func preferredPanelSize(for store: SnapshotStore) -> NSSize {
         let width = MenuBarPanelLayout.panelWidth
         if let snapshot = store.snapshot {
-            return NSSize(width: width, height: MenuBarPanelLayout.preferredHeight(for: snapshot, healthyConcept: healthyConcept))
+            return NSSize(width: width, height: MenuBarPanelLayout.preferredHeight(for: snapshot))
         }
         if store.isInitialLoading {
             return NSSize(width: width, height: MenuBarPanelLayout.loadingHeight)

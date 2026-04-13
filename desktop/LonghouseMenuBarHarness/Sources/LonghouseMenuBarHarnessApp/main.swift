@@ -49,11 +49,10 @@ struct LonghouseMenuBarHarnessApp: App {
             HarnessRootView(
                 store: store,
                 actionSink: actionSink,
-                refreshIntervalSeconds: config.refreshIntervalSeconds,
-                healthyConcept: config.healthyConcept
+                refreshIntervalSeconds: config.refreshIntervalSeconds
             )
         }
         .windowResizability(.contentSize)
-        .defaultSize(width: MenuBarPanelLayout.panelWidth, height: config.healthyConcept.panelHeight)
+        .defaultSize(width: MenuBarPanelLayout.panelWidth, height: MenuBarPanelLayout.attentionHeight)
     }
 }

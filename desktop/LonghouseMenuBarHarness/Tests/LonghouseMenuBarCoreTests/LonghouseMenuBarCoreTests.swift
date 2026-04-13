@@ -30,7 +30,6 @@ struct LonghouseMenuBarCoreTests {
             "--action-log", "/tmp/actions.jsonl",
             "--ui-url", "https://longhouse.ai",
             "--effect-mode", "log-only",
-            "--healthy-concept", "repo-deck",
             "--exercise-actions", "refresh,copyDiagnostics",
             "--quit-after", "2.5",
             "--refresh-seconds", "5",
@@ -41,7 +40,6 @@ struct LonghouseMenuBarCoreTests {
         #expect(config.actionLogURL?.path == "/tmp/actions.jsonl")
         #expect(config.uiURL?.absoluteString == "https://longhouse.ai")
         #expect(config.effectMode == .logOnly)
-        #expect(config.healthyConcept == .repoDeck)
         #expect(config.exerciseActions == [.refresh, .copyDiagnostics])
         #expect(config.quitAfterSeconds == 2.5)
         #expect(config.refreshIntervalSeconds == 5)
@@ -68,7 +66,6 @@ struct LonghouseMenuBarCoreTests {
     func defaultsDirectLaunchToLiveStatusWindow() throws {
         let config = try HarnessRuntimeConfig.parse(arguments: [])
 
-        #expect(config.healthyConcept == .production)
         #expect(config.refreshIntervalSeconds == HarnessRuntimeConfig.defaultRefreshIntervalSeconds)
         #expect(config.showStatusWindowOnLaunch == true)
     }
