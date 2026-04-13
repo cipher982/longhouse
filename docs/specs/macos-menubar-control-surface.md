@@ -43,6 +43,14 @@ This is a hybrid of:
 - `Telemetry Strip + Grid` for core machine health
 - `Now / Today Split` for proving the machine is doing useful work, not merely "green"
 
+Healthy-state hierarchy is now explicitly:
+
+1. headline + status + small accessory controls
+2. one compact metric strip for the four numbers that matter at a glance
+3. one dense operations table with right-aligned values
+4. one lightweight trend zone
+5. one primary exit action, with diagnostics behind a secondary menu
+
 ## Healthy State
 
 The healthy/default state should show:
@@ -70,6 +78,16 @@ The healthy/default state should show:
    - primary: `Open Longhouse`
    - secondary: `Details`
    - refresh stays icon-only
+
+Healthy-state layout rules:
+
+- fixed height, no scroll
+- no multi-line paragraphs
+- no duplicated primary actions
+- no individual metric cards unless they meaningfully improve scanning
+- values right-aligned and preferably monospaced
+- healthy-state secondary verbs stay in a menu, not a visible button wall
+- the surface should read like a compact utility console, not a dashboard webpage
 
 Healthy state must not show:
 
@@ -123,6 +141,8 @@ If we later want message counts or true activity timelines, add a dedicated back
 - Use material-backed or AppKit-native chrome instead of stacked "card inside card" containers.
 - Keep color discipline tight: one state accent plus exception colors only when signals are abnormal.
 - Reserve visual emphasis for telemetry changes, not for buttons.
+- Prefer one unified strip or section shell over repeated inset rounded cards in the healthy path.
+- Keep SF Symbols sparse: status glyph plus small action glyphs only.
 
 ## Icon Rules
 

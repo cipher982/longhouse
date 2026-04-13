@@ -93,19 +93,11 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func observeStore() {
-        store.$snapshot
-            .sink { [weak self] _ in
-                self?.refreshPanelLayout()
-            }
-            .store(in: &cancellables)
-
-        store.$isLoading
-            .sink { [weak self] _ in
-                self?.refreshPanelLayout()
-            }
-            .store(in: &cancellables)
-
-        store.$loadError
+        Publishers.Merge3(
+            store.$snapshot.map { _ in () },
+            store.$isLoading.map { _ in () },
+            store.$loadError.map { _ in () }
+        )
             .sink { [weak self] _ in
                 self?.refreshPanelLayout()
             }

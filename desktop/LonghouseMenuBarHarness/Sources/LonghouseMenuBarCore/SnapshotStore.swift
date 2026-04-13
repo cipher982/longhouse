@@ -3,6 +3,8 @@ import SwiftUI
 
 @MainActor
 public final class SnapshotStore: ObservableObject {
+    public static let historyRetentionMinutes = 30
+
     @Published public private(set) var snapshot: HealthSnapshot?
     @Published public private(set) var history: [SnapshotHistorySample]
     @Published public private(set) var loadError: String?
@@ -10,7 +12,7 @@ public final class SnapshotStore: ObservableObject {
 
     private let source: any HealthSnapshotSource
     private var refreshTask: Task<Void, Never>?
-    private static let historyRetentionSeconds: TimeInterval = 30 * 60
+    private static let historyRetentionSeconds: TimeInterval = Double(historyRetentionMinutes * 60)
     private static let maxHistorySamples = 180
 
     public init(source: any HealthSnapshotSource) {
@@ -62,15 +64,13 @@ public final class SnapshotStore: ObservableObject {
     }
 
     private static func loadSnapshot(from source: any HealthSnapshotSource) async -> SnapshotLoadResult {
-        await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    continuation.resume(returning: .success(try source.load()))
-                } catch {
-                    continuation.resume(returning: .failure(error.localizedDescription))
-                }
+        await Task.detached(priority: .userInitiated) {
+            do {
+                return .success(try source.load())
+            } catch {
+                return .failure(error.localizedDescription)
             }
-        }
+        }.value
     }
 
     private func appendHistorySample(for snapshot: HealthSnapshot) {

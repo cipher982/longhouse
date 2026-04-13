@@ -367,23 +367,24 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
         return summary
 
     try:
-        latest_row = conn.execute("SELECT MAX(last_updated) FROM file_state").fetchone()
-        if latest_row is not None:
-            summary["latest_activity_at"] = latest_row[0]
-
-        today_row = conn.execute(
-            f"SELECT COUNT(DISTINCT {session_expr}) FROM file_state WHERE julianday(last_updated) >= julianday(?)",
-            (today_cutoff,),
+        aggregate_row = conn.execute(
+            f"""
+            SELECT
+                MAX(last_updated),
+                COUNT(DISTINCT CASE
+                    WHEN julianday(last_updated) >= julianday(?) THEN {session_expr}
+                END),
+                COUNT(DISTINCT CASE
+                    WHEN julianday(last_updated) >= julianday(?) THEN {session_expr}
+                END)
+            FROM file_state
+            """,
+            (today_cutoff, recent_cutoff),
         ).fetchone()
-        if today_row is not None:
-            summary["sessions_today"] = int(today_row[0] or 0)
-
-        recent_row = conn.execute(
-            f"SELECT COUNT(DISTINCT {session_expr}) FROM file_state WHERE julianday(last_updated) >= julianday(?)",
-            (recent_cutoff,),
-        ).fetchone()
-        if recent_row is not None:
-            summary["sessions_recent"] = int(recent_row[0] or 0)
+        if aggregate_row is not None:
+            summary["latest_activity_at"] = aggregate_row[0]
+            summary["sessions_today"] = int(aggregate_row[1] or 0)
+            summary["sessions_recent"] = int(aggregate_row[2] or 0)
 
         provider_counts_today: dict[str, int] = {}
         for provider, count in conn.execute(
