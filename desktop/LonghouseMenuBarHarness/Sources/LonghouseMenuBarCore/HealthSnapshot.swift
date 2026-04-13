@@ -123,6 +123,16 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "Last ship \(Self.relativeLabel(for: parsed))"
     }
 
+    public var lastShipValueLabel: String {
+        guard let raw = engineStatus?.payload?.lastShipAt else {
+            return "No shipments yet"
+        }
+        guard let parsed = Self.parseISO8601(raw) else {
+            return raw
+        }
+        return Self.relativeLabel(for: parsed)
+    }
+
     public var serviceStatusLabel: String {
         service?.status?.replacingOccurrences(of: "-", with: " ") ?? "unknown"
     }
@@ -175,6 +185,25 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "Launch state unavailable"
         }
         return "Launch \(state)"
+    }
+
+    public var launchValueLabel: String {
+        let state = launchStateLabel
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if state.lowercased() == "ready",
+           let machineName = launchReadiness?.machineName,
+           !machineName.isEmpty {
+            return "Ready on \(machineName)"
+        }
+
+        if state.isEmpty || state == "-" {
+            return "Unavailable"
+        }
+
+        return state.prefix(1).uppercased() + state.dropFirst()
     }
 
     public var attentionSummaryLabel: String {

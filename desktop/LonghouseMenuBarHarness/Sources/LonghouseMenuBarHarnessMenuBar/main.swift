@@ -43,10 +43,25 @@ private final class HarnessMenuBarAppDelegate: NSObject, NSApplicationDelegate {
             statusWindowController?.showWindow()
         }
 
+        let toggleProfile = config.toggleProfileLogURL.map {
+            HarnessAutomationCoordinator.ToggleProfileConfiguration(
+                logURL: $0,
+                count: config.toggleProfileCount,
+                intervalMilliseconds: config.toggleProfileIntervalMilliseconds
+            )
+        }
+
         HarnessAutomationCoordinator.schedule(
             store: store,
             actionSink: actionSink,
             exerciseActions: config.exerciseActions,
+            toggleProfile: toggleProfile,
+            triggerToggle: { [weak self] in
+                self?.menuBarController?.performAutomationToggle()
+            },
+            panelPresented: { [weak self] in
+                self?.menuBarController?.isPanelPresented ?? false
+            },
             quitAfterSeconds: config.quitAfterSeconds,
             quit: { NSApplication.shared.terminate(nil) }
         )
