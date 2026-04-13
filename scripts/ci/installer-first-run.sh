@@ -109,15 +109,17 @@ build_desktop_app_bundle() {
   local bundle_root="$1"
   local package_path="$ROOT_DIR/desktop/LonghouseMenuBarHarness"
   local app_path="$bundle_root/Longhouse.app"
+  local menubar_binary=""
 
   require_cmd swift
   log "🍎 Building local Longhouse.app bundle for installer validation..." >&2
-  swift build --package-path "$package_path" -c release --product LonghouseMenuBarHarnessMenuBar >/dev/null
-  local menubar_bin_dir
-  menubar_bin_dir="$(swift build --package-path "$package_path" -c release --show-bin-path)"
+  menubar_binary="$("$ROOT_DIR/scripts/resolve-swift-product-path.sh" \
+    --package-path "$package_path" \
+    --product LonghouseMenuBarHarnessMenuBar \
+    --configuration release)"
 
   "$ROOT_DIR/scripts/release/macos-package-app.sh" \
-    --binary "$menubar_bin_dir/LonghouseMenuBarHarnessMenuBar" \
+    --binary "$menubar_binary" \
     --app-name Longhouse \
     --exec-name Longhouse \
     --bundle-id ai.longhouse.app \
@@ -126,6 +128,10 @@ build_desktop_app_bundle() {
     --output-dir "$bundle_root" \
     --icon-png "$ROOT_DIR/web/public/favicon-512.png" \
     --lsuielement true >/dev/null
+
+  if [[ ! -d "$app_path" ]]; then
+    fail "Longhouse.app bundle was not created: $app_path"
+  fi
 
   printf '%s\n' "$app_path"
 }
@@ -193,6 +199,75 @@ wait_for_down() {
   done
 
   return 1
+}
+
+server_pid_file() {
+  printf '%s\n' "$HOME/.longhouse/server.pid"
+}
+
+wait_for_server_pid_clear() {
+  local name="$1"
+  local attempts="${2:-120}"
+  local pid_file=""
+  local pid=""
+
+  pid_file="$(server_pid_file)"
+
+  for _ in $(seq 1 "$attempts"); do
+    if [[ ! -f "$pid_file" ]]; then
+      log "✅ $name daemon PID cleared"
+      return 0
+    fi
+
+    pid="$(tr -d '[:space:]' < "$pid_file" 2>/dev/null || true)"
+    if [[ -z "$pid" || ! "$pid" =~ ^[0-9]+$ ]]; then
+      rm -f "$pid_file"
+      log "✅ $name daemon PID cleared"
+      return 0
+    fi
+
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      rm -f "$pid_file"
+      log "✅ $name daemon PID cleared"
+      return 0
+    fi
+
+    sleep 0.5
+  done
+
+  return 1
+}
+
+stop_longhouse_server() {
+  local name="$1"
+  local url="$2"
+  local attempts="${3:-30}"
+  local stop_log=""
+
+  stop_log="$(mktemp -t longhouse-stop.XXXXXX.log)"
+  if ! longhouse serve --stop >"$stop_log" 2>&1; then
+    log "ℹ️  $name stop command needed extra wait; polling PID state..."
+  fi
+
+  if ! wait_for_down "$url" "$name" "$attempts"; then
+    if [[ -s "$stop_log" ]]; then
+      log "Stop output for $name:"
+      cat "$stop_log"
+    fi
+    rm -f "$stop_log"
+    fail "$name did not stop cleanly"
+  fi
+
+  if ! wait_for_server_pid_clear "$name"; then
+    if [[ -s "$stop_log" ]]; then
+      log "Stop output for $name:"
+      cat "$stop_log"
+    fi
+    rm -f "$stop_log"
+    fail "$name daemon PID did not clear cleanly"
+  fi
+
+  rm -f "$stop_log"
 }
 
 connect_status_value() {
@@ -755,10 +830,7 @@ PY
 rm -f "$DESKTOP_STATUS_JSON"
 
 log "🧪 Starting local server from onboarded config..."
-longhouse serve --stop >/dev/null 2>&1 || true
-if ! wait_for_down "http://127.0.0.1:${PORT}/api/readyz" "Onboarding server"; then
-  fail "Onboarding server did not stop cleanly"
-fi
+stop_longhouse_server "Onboarding server" "http://127.0.0.1:${PORT}/api/readyz"
 RUNTIME_PORT="$(pick_port)"
 longhouse serve --host 127.0.0.1 --port "$RUNTIME_PORT" --daemon
 
@@ -767,10 +839,7 @@ if ! wait_for_health "http://127.0.0.1:${RUNTIME_PORT}/api/readyz" "Onboarded lo
 fi
 
 log "🛑 Stopping onboarded server..."
-longhouse serve --stop
-if ! wait_for_down "http://127.0.0.1:${RUNTIME_PORT}/api/readyz" "Onboarded local server"; then
-  fail "Onboarded local server did not stop cleanly"
-fi
+stop_longhouse_server "Onboarded local server" "http://127.0.0.1:${RUNTIME_PORT}/api/readyz"
 
 log "🎭 Starting demo server..."
 if [[ "$ENABLE_E2E_BROWSER" == "1" ]]; then
@@ -829,6 +898,6 @@ if [[ "$ENABLE_E2E_BROWSER" == "1" ]]; then
 fi
 
 log "🛑 Stopping demo server..."
-longhouse serve --stop
+stop_longhouse_server "Demo server" "http://127.0.0.1:${DEMO_PORT}/api/readyz"
 
 log "✅ Installer first-run smoke passed"

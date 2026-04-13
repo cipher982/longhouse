@@ -88,8 +88,10 @@ menubar_exec() {
 }
 
 build_app_binary() {
-  swift build --package-path "$PKG_PATH" --product LonghouseMenuBarHarnessApp >/dev/null
-  echo "$(swift build --package-path "$PKG_PATH" --show-bin-path)/LonghouseMenuBarHarnessApp"
+  "$ROOT/scripts/resolve-swift-product-path.sh" \
+    --package-path "$PKG_PATH" \
+    --product LonghouseMenuBarHarnessApp \
+    --configuration debug
 }
 
 wait_for_window_id() {
