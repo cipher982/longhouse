@@ -20,6 +20,7 @@ public struct HarnessRootView: View {
             if let snapshot = store.snapshot {
                 MenuBarPanelView(
                     snapshot: snapshot,
+                    history: store.history,
                     actionSink: actionSink,
                     isRefreshing: store.isLoading
                 ) {

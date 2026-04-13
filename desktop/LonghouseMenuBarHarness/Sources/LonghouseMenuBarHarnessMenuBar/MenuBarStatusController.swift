@@ -12,6 +12,7 @@ final class MenuBarStatusController: NSObject {
     private var cancellables: Set<AnyCancellable> = []
     private var localMonitor: Any?
     private var globalMonitor: Any?
+    private var panelGeneration: UInt64 = 0
 
     init(
         store: SnapshotStore,
@@ -19,7 +20,7 @@ final class MenuBarStatusController: NSObject {
         refreshIntervalSeconds: TimeInterval?
     ) {
         self.store = store
-        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         self.panelController = MenuBarPanelWindowController(
             rootView: HarnessRootView(
                 store: store,
@@ -67,10 +68,10 @@ final class MenuBarStatusController: NSObject {
         icon.isTemplate = false
         button.image = icon
         button.imagePosition = .imageOnly
-        button.imageScaling = .scaleProportionallyUpOrDown
+        button.imageScaling = .scaleNone
         button.target = self
         button.action = #selector(togglePanel(_:))
-        button.sendAction(on: [.leftMouseDown])
+        button.sendAction(on: [.leftMouseUp])
         button.toolTip = "Longhouse"
         button.setAccessibilityLabel("Longhouse")
     }
@@ -112,12 +113,14 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func openPanel(relativeTo button: NSStatusBarButton) {
+        panelGeneration &+= 1
         panelController.updateContentSize(Self.preferredPanelSize(for: store))
         panelController.show(relativeTo: button)
-        installEventMonitors()
+        installEventMonitors(for: panelGeneration)
     }
 
     private func closePanel() {
+        panelGeneration &+= 1
         panelController.hide()
         removeEventMonitors()
     }
@@ -130,7 +133,7 @@ final class MenuBarStatusController: NSObject {
         }
     }
 
-    private func installEventMonitors() {
+    private func installEventMonitors(for generation: UInt64) {
         guard localMonitor == nil, globalMonitor == nil else {
             return
         }
@@ -138,13 +141,13 @@ final class MenuBarStatusController: NSObject {
         localMonitor = NSEvent.addLocalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown, .keyDown]
         ) { [weak self] event in
-            self?.handleLocalEvent(event) ?? event
+            self?.handleLocalEvent(event, generation: generation) ?? event
         }
 
         globalMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         ) { [weak self] _ in
-            self?.handleGlobalMouseDown()
+            self?.handleGlobalMouseDown(generation: generation)
         }
     }
 
@@ -159,7 +162,11 @@ final class MenuBarStatusController: NSObject {
         }
     }
 
-    private func handleLocalEvent(_ event: NSEvent) -> NSEvent? {
+    private func handleLocalEvent(_ event: NSEvent, generation: UInt64) -> NSEvent? {
+        guard generation == panelGeneration else {
+            return event
+        }
+
         if event.type == .keyDown, event.keyCode == 53 {
             closePanel()
             return nil
@@ -175,10 +182,13 @@ final class MenuBarStatusController: NSObject {
         return event
     }
 
-    private func handleGlobalMouseDown() {
+    private func handleGlobalMouseDown(generation: UInt64) {
         let point = NSEvent.mouseLocation
         if !panelController.containsScreenPoint(point), !statusItemContainsScreenPoint(point) {
             Task { @MainActor in
+                guard generation == self.panelGeneration, self.panelController.isPresented else {
+                    return
+                }
                 self.closePanel()
             }
         }

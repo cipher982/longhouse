@@ -38,6 +38,20 @@
     "file_count": 0,
     "oldest_age_seconds": null
   },
+  "activity_summary": {
+    "path": "/Users/davidrose/.claude/longhouse-shipper.db",
+    "exists": true,
+    "error": null,
+    "sessions_today": 14,
+    "sessions_recent": 3,
+    "provider_counts_today": {
+      "claude": 8,
+      "codex": 5,
+      "gemini": 1
+    },
+    "latest_activity_at": "2026-04-08T01:51:58Z",
+    "recent_window_minutes": 15
+  },
   "launch_readiness": {
     "state": "ready",
     "headline": "Managed launch configuration looks coherent",

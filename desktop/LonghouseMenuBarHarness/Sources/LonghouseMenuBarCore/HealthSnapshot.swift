@@ -57,6 +57,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let service: ServiceSnapshot?
     public let engineStatus: EngineStatusSnapshot?
     public let outbox: OutboxSnapshot?
+    public let activitySummary: ActivitySummarySnapshot?
     public let launchReadiness: LaunchReadinessSnapshot?
     public let updateInfo: UpdateInfoSnapshot?
 
@@ -71,6 +72,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         service: ServiceSnapshot?,
         engineStatus: EngineStatusSnapshot?,
         outbox: OutboxSnapshot?,
+        activitySummary: ActivitySummarySnapshot?,
         launchReadiness: LaunchReadinessSnapshot?,
         updateInfo: UpdateInfoSnapshot? = nil
     ) {
@@ -84,6 +86,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.service = service
         self.engineStatus = engineStatus
         self.outbox = outbox
+        self.activitySummary = activitySummary
         self.launchReadiness = launchReadiness
         self.updateInfo = updateInfo
     }
@@ -111,6 +114,28 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     public var lastShipLabel: String {
         engineStatus?.payload?.lastShipAt ?? "No shipments yet"
+    }
+
+    public var collectedAtDate: Date? {
+        guard let collectedAt else {
+            return nil
+        }
+        return Self.parseISO8601(collectedAt)
+    }
+
+    public var snapshotAgeLabel: String {
+        guard let collectedAtDate else {
+            return "Unknown"
+        }
+        return Self.relativeLabel(for: collectedAtDate)
+    }
+
+    public var snapshotAgeCompactLabel: String {
+        guard let collectedAtDate else {
+            return "Unknown"
+        }
+        let seconds = max(0, Int(Date().timeIntervalSince(collectedAtDate)))
+        return Self.compactAgeLabel(seconds: seconds)
     }
 
     public var lastShipSummaryLabel: String {
@@ -159,12 +184,124 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "-"
     }
 
+    public var engineFreshnessLabel: String {
+        guard let ageSeconds = engineStatus?.ageSeconds else {
+            return "Unknown"
+        }
+        if ageSeconds <= 30 {
+            return "Fresh"
+        }
+        if ageSeconds <= 120 {
+            return "Aging"
+        }
+        return "Stale"
+    }
+
+    public var engineFreshnessValueLabel: String {
+        guard let ageSeconds = engineStatus?.ageSeconds else {
+            return "Unavailable"
+        }
+        return "\(engineFreshnessLabel) · \(Self.ageLabel(seconds: ageSeconds))"
+    }
+
     public var spoolPendingLabel: String {
         String(engineStatus?.payload?.spoolPendingCount ?? 0)
     }
 
     public var spoolDeadLabel: String {
         String(engineStatus?.payload?.spoolDeadCount ?? 0)
+    }
+
+    public var pipelineValueLabel: String {
+        let pending = engineStatus?.payload?.spoolPendingCount ?? 0
+        let dead = engineStatus?.payload?.spoolDeadCount ?? 0
+
+        if dead > 0 {
+            return "\(pending) pending · \(dead) dead"
+        }
+        if pending > 0 && outboxCount > 0 {
+            return "\(pending) pending · \(outboxCount) outbox"
+        }
+        if pending > 0 {
+            return "\(pending) pending"
+        }
+        if outboxCount > 0 {
+            return "\(outboxCount) outbox"
+        }
+        return "Clear"
+    }
+
+    public var latestActivityLabel: String {
+        guard let raw = activitySummary?.latestActivityAt,
+              let parsed = Self.parseISO8601(raw) else {
+            return "No recent sessions"
+        }
+        return Self.relativeLabel(for: parsed)
+    }
+
+    public var sessionsTodayLabel: String {
+        String(activitySummary?.sessionsToday ?? 0)
+    }
+
+    public var sessionsRecentLabel: String {
+        String(activitySummary?.sessionsRecent ?? 0)
+    }
+
+    public var recentWindowLabel: String {
+        let minutes = activitySummary?.recentWindowMinutes ?? 15
+        return "Last \(minutes)m"
+    }
+
+    public var providerCountsToday: [(provider: String, count: Int)] {
+        guard let providerCounts = activitySummary?.providerCountsToday,
+              !providerCounts.isEmpty else {
+            return []
+        }
+
+        let preferredOrder = ["claude", "codex", "gemini"]
+        return providerCounts
+            .filter { !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.value > 0 }
+            .sorted { lhs, rhs in
+                if lhs.value != rhs.value {
+                    return lhs.value > rhs.value
+                }
+                let lhsIndex = preferredOrder.firstIndex(of: lhs.key.lowercased()) ?? preferredOrder.count
+                let rhsIndex = preferredOrder.firstIndex(of: rhs.key.lowercased()) ?? preferredOrder.count
+                if lhsIndex != rhsIndex {
+                    return lhsIndex < rhsIndex
+                }
+                return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending
+            }
+            .map { ($0.key, $0.value) }
+    }
+
+    public var providerMixLabel: String {
+        let entries = providerCountsToday
+        guard !entries.isEmpty else {
+            return "No tracked sessions today"
+        }
+        return entries
+            .map { "\(Self.providerDisplayName($0.provider)) \($0.count)" }
+            .joined(separator: " · ")
+    }
+
+    public var updateBadgeLabel: String? {
+        guard updateInfo?.updateAvailable == true else {
+            return nil
+        }
+        return "Update ready"
+    }
+
+    public var diskFreeLabel: String {
+        guard let bytes = engineStatus?.payload?.diskFreeBytes else {
+            return "-"
+        }
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useGB]
+        formatter.countStyle = .binary
+        formatter.includesUnit = true
+        formatter.isAdaptive = true
+        return formatter.string(fromByteCount: Int64(bytes))
     }
 
     public var launchStateLabel: String {
@@ -252,6 +389,19 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "\(seconds / 3600)h"
     }
 
+    private static func compactAgeLabel(seconds: Int) -> String {
+        if seconds < 60 {
+            return "\(seconds)s"
+        }
+        if seconds < 3600 {
+            return "\(seconds / 60)m"
+        }
+        if seconds < 86_400 {
+            return "\(seconds / 3600)h"
+        }
+        return "\(seconds / 86_400)d"
+    }
+
     private static func parseISO8601(_ raw: String) -> Date? {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -264,10 +414,26 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return plain.date(from: raw)
     }
 
-    private static func relativeLabel(for date: Date) -> String {
+    private static func relativeLabel(
+        for date: Date,
+        unitsStyle: RelativeDateTimeFormatter.UnitsStyle = .full
+    ) -> String {
         let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
+        formatter.unitsStyle = unitsStyle
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private static func providerDisplayName(_ raw: String) -> String {
+        switch raw.lowercased() {
+        case "claude":
+            return "Claude"
+        case "codex":
+            return "Codex"
+        case "gemini":
+            return "Gemini"
+        default:
+            return raw.capitalized
+        }
     }
 
     private static func humanizeReason(_ raw: String) -> String {
@@ -345,6 +511,17 @@ public struct OutboxSnapshot: Codable, Equatable, Sendable {
     public let path: String?
     public let fileCount: Int?
     public let oldestAgeSeconds: Int?
+}
+
+public struct ActivitySummarySnapshot: Codable, Equatable, Sendable {
+    public let path: String?
+    public let exists: Bool?
+    public let error: String?
+    public let sessionsToday: Int?
+    public let sessionsRecent: Int?
+    public let providerCountsToday: [String: Int]?
+    public let latestActivityAt: String?
+    public let recentWindowMinutes: Int?
 }
 
 public struct LaunchReadinessSnapshot: Codable, Equatable, Sendable {

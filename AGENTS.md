@@ -250,6 +250,7 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Control-plane admin calls are user-agent sensitive. Use the existing scripts and curl patterns before improvising custom Python clients.
 - Hosted tenant data on `zerg` lives under `/var/app-data/longhouse/<subdomain>` and mounts to `/data` in the container.
 - macOS menu bar surfaces should open from cached/loading state and refresh off the main thread; SwiftUI menu hosts are prone to size and open-latency regressions, so prefer explicit AppKit popover control for fixed panels.
+- The tight master logo SVG is not enough proof for the macOS status item; the generated menu bar glyph still needs menu-bar-specific optical framing and a live installed-app capture check before ship.
 - Timeline card `mouseenter` prefetch can turn scrolling under a stationary cursor into accidental workspace-request churn; treat hover prefetch as scroll-sensitive, not as free.
 - Timeline card `transition: all` hover animations can explode software-raster cost when cards slide under a stationary cursor during scroll; active scrolling should suppress card hover transitions.
 - Decorative shell animations can also steal software-render budget from timeline scroll. On the timeline route, pause header glow animations during active scrolling instead of only tuning the cards.

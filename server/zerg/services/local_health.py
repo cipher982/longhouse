@@ -11,7 +11,9 @@ import json
 import os
 import plistlib
 import shlex
+import sqlite3
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +29,7 @@ DEGRADED_BACKLOG_COUNT = 1
 BROKEN_BACKLOG_COUNT = 25
 DISK_DEGRADED_BYTES = 5 * 1024 * 1024 * 1024
 DISK_BROKEN_BYTES = 1 * 1024 * 1024 * 1024
+ACTIVITY_RECENT_MINUTES = 15
 
 
 def _utc_now() -> datetime:
@@ -333,6 +336,78 @@ def _collect_version_info() -> dict[str, Any] | None:
     }
 
 
+def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, Any]:
+    db_path = claude_dir / "longhouse-shipper.db"
+    summary = {
+        "path": str(db_path),
+        "exists": db_path.exists(),
+        "error": None,
+        "sessions_today": 0,
+        "sessions_recent": 0,
+        "provider_counts_today": {},
+        "latest_activity_at": None,
+        "recent_window_minutes": ACTIVITY_RECENT_MINUTES,
+    }
+    if not db_path.exists():
+        return summary
+
+    local_now = now.astimezone()
+    start_of_day_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    start_of_day_utc = start_of_day_local.astimezone(timezone.utc)
+    recent_cutoff_utc = now - timedelta(minutes=ACTIVITY_RECENT_MINUTES)
+    today_cutoff = _to_rfc3339(start_of_day_utc)
+    recent_cutoff = _to_rfc3339(recent_cutoff_utc)
+    session_expr = "provider || ':' || COALESCE(NULLIF(session_id, ''), NULLIF(provider_session_id, ''), path)"
+    provider_session_expr = "COALESCE(NULLIF(session_id, ''), NULLIF(provider_session_id, ''), path)"
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+    except sqlite3.Error as exc:
+        summary["error"] = str(exc)
+        return summary
+
+    try:
+        latest_row = conn.execute("SELECT MAX(last_updated) FROM file_state").fetchone()
+        if latest_row is not None:
+            summary["latest_activity_at"] = latest_row[0]
+
+        today_row = conn.execute(
+            f"SELECT COUNT(DISTINCT {session_expr}) FROM file_state WHERE julianday(last_updated) >= julianday(?)",
+            (today_cutoff,),
+        ).fetchone()
+        if today_row is not None:
+            summary["sessions_today"] = int(today_row[0] or 0)
+
+        recent_row = conn.execute(
+            f"SELECT COUNT(DISTINCT {session_expr}) FROM file_state WHERE julianday(last_updated) >= julianday(?)",
+            (recent_cutoff,),
+        ).fetchone()
+        if recent_row is not None:
+            summary["sessions_recent"] = int(recent_row[0] or 0)
+
+        provider_counts_today: dict[str, int] = {}
+        for provider, count in conn.execute(
+            f"""
+            SELECT provider, COUNT(DISTINCT {provider_session_expr})
+            FROM file_state
+            WHERE julianday(last_updated) >= julianday(?)
+            GROUP BY provider
+            """,
+            (today_cutoff,),
+        ):
+            provider_name = str(provider or "").strip()
+            if not provider_name:
+                continue
+            provider_counts_today[provider_name] = int(count or 0)
+        summary["provider_counts_today"] = provider_counts_today
+        return summary
+    except sqlite3.Error as exc:
+        summary["error"] = str(exc)
+        return summary
+    finally:
+        conn.close()
+
+
 def _with_action(actions: list[str], text: str) -> None:
     if text not in actions:
         actions.append(text)
@@ -517,6 +592,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     service = _collect_service()
     engine_status = _collect_engine_status(resolved_claude_dir, now=now)
     outbox = _collect_outbox(resolved_claude_dir, now=now)
+    activity_summary = _collect_activity_summary(resolved_claude_dir, now=now)
     launch_readiness = _collect_launch_readiness(resolved_claude_dir, service=service)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
@@ -536,6 +612,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "service": service,
         "engine_status": engine_status,
         "outbox": outbox,
+        "activity_summary": activity_summary,
         "launch_readiness": launch_readiness,
         "update_info": _collect_version_info(),
         "thresholds": {
