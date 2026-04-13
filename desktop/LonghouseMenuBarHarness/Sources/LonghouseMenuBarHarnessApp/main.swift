@@ -53,6 +53,6 @@ struct LonghouseMenuBarHarnessApp: App {
             )
         }
         .windowResizability(.contentSize)
-        .defaultSize(width: MenuBarPanelLayout.panelWidth, height: MenuBarPanelLayout.attentionHeight)
+        .defaultSize(width: MenuBarPanelLayout.panelWidth, height: MenuBarPanelLayout.defaultWindowHeight)
     }
 }

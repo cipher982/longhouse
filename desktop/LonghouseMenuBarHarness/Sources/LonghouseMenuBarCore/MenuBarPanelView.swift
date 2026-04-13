@@ -2,27 +2,21 @@ import SwiftUI
 
 public enum MenuBarPanelLayout {
     public static let panelWidth: CGFloat = 376
-    public static let loadingHeight: CGFloat = 170
-    public static let failureHeight: CGFloat = 198
-    public static let healthyHeight: CGFloat = 572
-    public static let attentionHeight: CGFloat = 564
-    private static let healthyProviderRowIncrement: CGFloat = 64
-
-    public static func preferredHeight(for snapshot: HealthSnapshot) -> CGFloat {
-        guard snapshot.parsedSeverity == .green else {
-            return attentionHeight
-        }
-
-        let extraProviderRows = max(snapshot.providerCountsToday.count - 1, 0)
-        return healthyHeight + (CGFloat(extraProviderRows) * healthyProviderRowIncrement)
-    }
+    public static let defaultWindowHeight: CGFloat = 560
+    public static let chromeCornerRadius: CGFloat = 20
+    public static let sectionCornerRadius: CGFloat = 14
+    public static let chromePadding: CGFloat = 16
+    public static let rootSpacing: CGFloat = 14
+    public static let sectionSpacing: CGFloat = 12
+    public static let sectionHeaderSpacing: CGFloat = 10
+    public static let sectionInsets = EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12)
 }
 
 public struct MenuBarLoadingView: View {
     public init() {}
 
     public var body: some View {
-        PanelChrome(height: MenuBarPanelLayout.loadingHeight, accent: .gray) {
+        PanelChrome(accent: .gray) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .center, spacing: 12) {
                     statusEmblem(color: .gray, systemImage: "arrow.trianglehead.clockwise")
@@ -61,7 +55,7 @@ public struct MenuBarFailureView: View {
     }
 
     public var body: some View {
-        PanelChrome(height: MenuBarPanelLayout.failureHeight, accent: .red) {
+        PanelChrome(accent: .red) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .center, spacing: 12) {
                     statusEmblem(color: .red, systemImage: "xmark.circle.fill")
@@ -127,8 +121,8 @@ public struct MenuBarPanelView: View {
     }
 
     public var body: some View {
-        PanelChrome(height: MenuBarPanelLayout.preferredHeight(for: snapshot), accent: snapshot.parsedSeverity.accentColor) {
-            VStack(alignment: .leading, spacing: 14) {
+        PanelChrome(accent: snapshot.parsedSeverity.accentColor) {
+            VStack(alignment: .leading, spacing: MenuBarPanelLayout.rootSpacing) {
                 header
 
                 if isHealthy {
@@ -254,7 +248,7 @@ public struct MenuBarPanelView: View {
     }
 
     private var healthySurface: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: MenuBarPanelLayout.sectionSpacing) {
             PanelSection(title: "Right now") {
                 MissionReadoutGrid(readouts: primaryReadouts)
 

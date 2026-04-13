@@ -1,7 +1,11 @@
 import AppKit
+import Combine
 import SwiftUI
 
 public final class StatusWindowController: NSWindowController {
+    private let hostingController: NSHostingController<HarnessRootView>
+    private var cancellables: Set<AnyCancellable> = []
+
     public init(
         store: SnapshotStore,
         actionSink: any HealthActionSink,
@@ -12,13 +16,16 @@ public final class StatusWindowController: NSWindowController {
             actionSink: actionSink,
             refreshIntervalSeconds: refreshIntervalSeconds
         )
-        let hostingController = NSHostingController(rootView: rootView)
+        self.hostingController = NSHostingController(rootView: rootView)
+        if #available(macOS 13.0, *) {
+            self.hostingController.sizingOptions = [.preferredContentSize, .intrinsicContentSize]
+        }
         let window = NSWindow(
             contentRect: NSRect(
                 x: 0,
                 y: 0,
                 width: MenuBarPanelLayout.panelWidth,
-                height: MenuBarPanelLayout.attentionHeight
+                height: MenuBarPanelLayout.defaultWindowHeight
             ),
             styleMask: [.titled, .closable],
             backing: .buffered,
@@ -27,15 +34,15 @@ public final class StatusWindowController: NSWindowController {
         window.title = "Longhouse"
         window.center()
         window.isReleasedWhenClosed = false
-        window.setContentSize(
-            NSSize(
-                width: MenuBarPanelLayout.panelWidth,
-                height: MenuBarPanelLayout.attentionHeight
-            )
-        )
-        window.contentViewController = hostingController
+        window.setContentSize(MenuBarPanelSizing.defaultSize())
+        window.contentViewController = self.hostingController
 
         super.init(window: window)
+
+        observe(store: store)
+        DispatchQueue.main.async { [weak self] in
+            self?.updateContentSizeToFit()
+        }
     }
 
     @available(*, unavailable)
@@ -47,7 +54,33 @@ public final class StatusWindowController: NSWindowController {
         guard let window else {
             return
         }
+        updateContentSizeToFit()
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func observe(store: SnapshotStore) {
+        Publishers.Merge3(
+            store.$snapshot.map { _ in () },
+            store.$isInitialLoading.map { _ in () },
+            store.$loadError.map { _ in () }
+        )
+        .sink { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.updateContentSizeToFit()
+            }
+        }
+        .store(in: &cancellables)
+    }
+
+    private func updateContentSizeToFit() {
+        guard let window else {
+            return
+        }
+
+        let size = MenuBarPanelSizing.measuredSize(for: hostingController.view)
+        if window.contentRect(forFrameRect: window.frame).size != size {
+            window.setContentSize(size)
+        }
     }
 }

@@ -42,16 +42,11 @@ struct PanelReadout: Identifiable {
     }
 }
 
-private let panelCornerRadius: CGFloat = 20
-private let sectionCornerRadius: CGFloat = 14
-
 struct PanelChrome<Content: View>: View {
-    let height: CGFloat
     let accent: Color
     let content: Content
 
-    init(height: CGFloat, accent: Color, @ViewBuilder content: () -> Content) {
-        self.height = height
+    init(accent: Color, @ViewBuilder content: () -> Content) {
         self.accent = accent
         self.content = content()
     }
@@ -67,12 +62,13 @@ struct PanelChrome<Content: View>: View {
             )
 
             content
-                .padding(16)
+                .padding(MenuBarPanelLayout.chromePadding)
         }
-        .frame(width: MenuBarPanelLayout.panelWidth, height: height, alignment: .topLeading)
-        .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
+        .frame(width: MenuBarPanelLayout.panelWidth, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
+        .clipShape(RoundedRectangle(cornerRadius: MenuBarPanelLayout.chromeCornerRadius, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: MenuBarPanelLayout.chromeCornerRadius, style: .continuous)
                 .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
         )
         .overlay(alignment: .top) {
@@ -110,7 +106,7 @@ struct PanelSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: MenuBarPanelLayout.sectionHeaderSpacing) {
             HStack(alignment: .center, spacing: 8) {
                 deckColumnTitle(title)
 
@@ -126,13 +122,13 @@ struct PanelSection<Content: View>: View {
 
             content
         }
-        .padding(10)
+        .padding(MenuBarPanelLayout.sectionInsets)
         .background(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: MenuBarPanelLayout.sectionCornerRadius, style: .continuous)
                 .fill(Color.white.opacity(0.035))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: MenuBarPanelLayout.sectionCornerRadius, style: .continuous)
                 .stroke(Color.white.opacity(0.07), lineWidth: 1)
         )
     }
@@ -291,7 +287,7 @@ struct ProviderComparisonRows: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.secondary)
         } else {
-            VStack(alignment: .leading, spacing: 9) {
+            VStack(alignment: .leading, spacing: 10) {
                 ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
                     ProviderComparisonRow(
                         provider: entry.provider,
@@ -305,8 +301,6 @@ struct ProviderComparisonRows: View {
                     }
                 }
             }
-            .padding(.top, 4)
-            .padding(.bottom, 12)
         }
     }
 }

@@ -27,8 +27,7 @@ final class MenuBarStatusController: NSObject {
                 actionSink: actionSink,
                 refreshIntervalSeconds: nil,
                 managePresentationUpdates: false
-            ),
-            initialSize: MenuBarStatusController.preferredPanelSize(for: store)
+            )
         )
 
         super.init()
@@ -36,6 +35,9 @@ final class MenuBarStatusController: NSObject {
         configureStatusItem()
         configureRefreshTimer(refreshIntervalSeconds)
         observeStore()
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshPanelLayout()
+        }
     }
 
     var isPanelPresented: Bool {
@@ -100,7 +102,9 @@ final class MenuBarStatusController: NSObject {
             store.$loadError.map { _ in () }
         )
             .sink { [weak self] _ in
-                self?.refreshPanelLayout()
+                DispatchQueue.main.async {
+                    self?.refreshPanelLayout()
+                }
             }
             .store(in: &cancellables)
     }
@@ -108,7 +112,6 @@ final class MenuBarStatusController: NSObject {
     private func openPanel(relativeTo button: NSStatusBarButton) {
         panelGeneration &+= 1
         store.beginPresentationUpdates()
-        panelController.updateContentSize(Self.preferredPanelSize(for: store))
         panelController.show(relativeTo: button)
         installEventMonitors(for: panelGeneration)
     }
@@ -121,8 +124,7 @@ final class MenuBarStatusController: NSObject {
     }
 
     private func refreshPanelLayout() {
-        let size = Self.preferredPanelSize(for: store)
-        panelController.updateContentSize(size)
+        panelController.updateContentSizeToFit()
         if panelController.isPresented, let button = statusItem.button {
             panelController.reposition(relativeTo: button)
         }
@@ -198,16 +200,5 @@ final class MenuBarStatusController: NSObject {
         let buttonFrame = button.convert(button.bounds, to: nil)
         let buttonFrameOnScreen = window.convertToScreen(buttonFrame)
         return buttonFrameOnScreen.insetBy(dx: -6, dy: -6).contains(point)
-    }
-
-    private static func preferredPanelSize(for store: SnapshotStore) -> NSSize {
-        let width = MenuBarPanelLayout.panelWidth
-        if let snapshot = store.snapshot {
-            return NSSize(width: width, height: MenuBarPanelLayout.preferredHeight(for: snapshot))
-        }
-        if store.isInitialLoading {
-            return NSSize(width: width, height: MenuBarPanelLayout.loadingHeight)
-        }
-        return NSSize(width: width, height: MenuBarPanelLayout.failureHeight)
     }
 }
