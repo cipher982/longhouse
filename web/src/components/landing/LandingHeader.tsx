@@ -27,7 +27,7 @@ export function LandingHeader({ onSignIn, onGetStarted }: LandingHeaderProps) {
   }, []);
 
   const navLinks: LandingNavLink[] = [
-    { label: "How it works", href: "#journey" },
+    { label: "How it works", href: "#how-it-works" },
     { label: "Machine surface", href: "#surface" },
     { label: "Providers", href: "#providers" },
     { label: "Docs", href: "/docs" },

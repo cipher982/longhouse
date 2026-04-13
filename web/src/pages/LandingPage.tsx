@@ -12,7 +12,6 @@ import "../styles/landing.css";
 import { LandingHeader } from "../components/landing/LandingHeader";
 import { HeroSection } from "../components/landing/HeroSection";
 import { KernelThesisSection } from "../components/landing/KernelThesisSection";
-import { HowItWorksSection } from "../components/landing/HowItWorksSection";
 import { MachineSurfaceSection } from "../components/landing/MachineSurfaceSection";
 import { DemoSection } from "../components/landing/DemoSection";
 import { IntegrationsSection } from "../components/landing/IntegrationsSection";
@@ -147,7 +146,6 @@ export default function LandingPage() {
         <HeroSection />
         <DemoSection screenshotTheme={screenshotTheme} />
         <KernelThesisSection />
-        <HowItWorksSection />
         <MachineSurfaceSection />
         <IntegrationsSection />
         <PricingSection />
