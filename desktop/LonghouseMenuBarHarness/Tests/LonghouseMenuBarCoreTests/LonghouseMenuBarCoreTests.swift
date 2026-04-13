@@ -176,7 +176,91 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(feedback?.style == .warning)
         #expect(feedback?.title == "Repair dry run recorded")
-        #expect(feedback?.detail.contains("without changing your machine") == true)
+        #expect(feedback?.detail.contains("longhouse connect --install") == true)
+    }
+
+    @Test
+    func setupDryRunReturnsVisibleFeedback() throws {
+        let snapshot = HealthSnapshot.setupRequiredSnapshot(detail: "zsh:1: command not found: longhouse")
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.repairInstall, snapshot: snapshot)
+
+        #expect(feedback?.style == .info)
+        #expect(feedback?.title == "Setup dry run recorded")
+        #expect(feedback?.detail.contains("standard Longhouse installer") == true)
+    }
+
+    @Test
+    func cliSourceReturnsSetupRequiredSnapshotWhenLonghouseIsMissing() throws {
+        let source = CLIHealthSnapshotSource(
+            launchPath: "/bin/zsh",
+            arguments: ["-lc", "__longhouse_missing_for_test__ local-health --json"]
+        )
+
+        let snapshot = try source.load()
+
+        #expect(snapshot.isSetupRequired == true)
+        #expect(snapshot.headline == "Longhouse setup required")
+        #expect(snapshot.launchReadiness?.state == "setup-required")
+    }
+
+    @Test
+    func defaultHealthInvocationPrefersUserLocalBinary() throws {
+        let homeDirectory = try makeFakeHomeDirectory()
+        let executableURL = try installFakeLonghouseBinary(homeDirectory: homeDirectory)
+
+        let invocation = LonghouseCLI.defaultHealthInvocation(
+            homeDirectory: homeDirectory,
+            pathEnvironment: "/usr/bin:/bin"
+        )
+
+        #expect(invocation.launchPath == executableURL.path)
+        #expect(invocation.arguments == ["local-health", "--json"])
+    }
+
+    @Test
+    func repairInstallInvocationUsesResolvedCLIAndPreferredMachineName() throws {
+        let homeDirectory = try makeFakeHomeDirectory()
+        let executableURL = try installFakeLonghouseBinary(homeDirectory: homeDirectory)
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse engine service is stopped",
+            reasons: ["service_stopped"],
+            suggestedActions: ["Run: longhouse connect --install"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: LaunchReadinessSnapshot(
+                state: "repair-required",
+                headline: nil,
+                reasons: nil,
+                suggestedActions: nil,
+                storedURL: nil,
+                machineName: "ember",
+                serviceMachineName: "fallback-name",
+                runner: nil
+            )
+        )
+
+        let invocation = LonghouseCLI.repairInstallInvocation(
+            snapshot: snapshot,
+            homeDirectory: homeDirectory,
+            pathEnvironment: "/usr/bin:/bin"
+        )
+
+        #expect(invocation?.launchPath == executableURL.path)
+        #expect(invocation?.arguments == [
+            "connect",
+            "--install",
+            "--machine-name",
+            "ember",
+            "--menubar",
+        ])
     }
 
     @Test
@@ -321,5 +405,25 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.recentTouches.first?.provider == "claude")
         #expect(snapshot.recentTouches.first?.workspaceLabel == "zerg")
         #expect(snapshot.recentTouches.first?.lastUpdated == "2026-04-11T10:00:00Z")
+    }
+
+    private func makeFakeHomeDirectory() throws -> URL {
+        let tempDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
+        return tempDirectory
+    }
+
+    private func installFakeLonghouseBinary(homeDirectory: URL) throws -> URL {
+        let binDirectory = homeDirectory.appendingPathComponent(".local/bin", isDirectory: true)
+        try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+        let executableURL = binDirectory.appendingPathComponent("longhouse", isDirectory: false)
+        let contents = Data("#!/bin/sh\nexit 0\n".utf8)
+        FileManager.default.createFile(atPath: executableURL.path, contents: contents)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: executableURL.path
+        )
+        return executableURL
     }
 }

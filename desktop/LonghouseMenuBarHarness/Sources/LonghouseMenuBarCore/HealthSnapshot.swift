@@ -95,11 +95,21 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         HarnessSeverity(rawValue: severity) ?? .gray
     }
 
+    public var isSetupRequired: Bool {
+        if launchReadiness?.state == "setup-required" {
+            return true
+        }
+        return reasons.contains("desktop_app_setup_required")
+    }
+
     public var statusBadge: String {
         "\(parsedSeverity.uppercaseLabel) · \(healthState.replacingOccurrences(of: "_", with: " ").uppercased())"
     }
 
     public var ambientStatusLabel: String {
+        if isSetupRequired {
+            return "Setup required"
+        }
         switch parsedSeverity {
         case .green:
             return "Healthy"
@@ -541,6 +551,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var attentionSummaryLabel: String {
+        if isSetupRequired {
+            return "Longhouse.app needs to finish setup on this Mac. Set Up Longhouse to install the CLI, runtime, and menu bar wiring."
+        }
         let primaryReason = reasons.first.map(Self.humanizeReason)
         switch parsedSeverity {
         case .green:
@@ -670,6 +683,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
 
     private static func humanizeReason(_ raw: String) -> String {
         switch raw {
+        case "desktop_app_setup_required":
+            return "Longhouse needs setup on this Mac"
         case "service_stopped":
             return "The local service is stopped"
         case "spool_dead":
@@ -684,6 +699,37 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
                 .replacingOccurrences(of: "-", with: " ")
                 .capitalized
         }
+    }
+
+    public static func setupRequiredSnapshot(detail: String? = nil) -> HealthSnapshot {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let suggestedAction = "Set up Longhouse from this app to install the CLI, runtime, and menu bar service."
+        let reason = detail?.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        return HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: formatter.string(from: Date()),
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse setup required",
+            reasons: ["desktop_app_setup_required"],
+            suggestedActions: [suggestedAction],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: LaunchReadinessSnapshot(
+                state: "setup-required",
+                headline: "Longhouse setup required",
+                reasons: reason.map { [$0] } ?? ["Longhouse CLI is not installed yet."],
+                suggestedActions: [suggestedAction],
+                storedURL: nil,
+                machineName: nil,
+                serviceMachineName: nil,
+                runner: nil
+            )
+        )
     }
 }
 

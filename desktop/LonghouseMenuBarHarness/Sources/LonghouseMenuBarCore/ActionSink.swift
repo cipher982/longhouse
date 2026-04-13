@@ -49,6 +49,8 @@ public protocol HealthActionSink {
 
 public struct SpyHealthActionSink: HealthActionSink {
     public static let defaultLonghouseURL = "http://127.0.0.1:8080"
+    public static let defaultInstallScriptURL = "https://get.longhouse.ai/install.sh"
+    public static let standardInstallerCommand = "curl -fsSL \(defaultInstallScriptURL) | bash"
 
     public let logURL: URL?
     public let uiURL: URL?
@@ -70,7 +72,7 @@ public struct SpyHealthActionSink: HealthActionSink {
         append(record: record)
 
         guard effectMode == .live else {
-            return dryRunFeedback(for: action)
+            return dryRunFeedback(for: action, snapshot: snapshot)
         }
 
         switch action {
@@ -90,20 +92,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 detail: "Longhouse could not open Terminal to run `longhouse doctor`."
             )
         case .repairInstall:
-            if openTerminal(command: "longhouse connect --install") {
-                return feedback(
-                    for: action,
-                    style: .warning,
-                    title: "Repair opened in Terminal",
-                    detail: "Repair may update the app, service wiring, and automatic imports on this Mac."
-                )
-            }
-            return feedback(
-                for: action,
-                style: .failure,
-                title: "Repair could not open",
-                detail: "Longhouse could not open Terminal to run `longhouse connect --install`."
-            )
+            return startRepair(snapshot: snapshot)
         case .openLonghouse:
             if let resolvedURL = resolveLonghouseURL(snapshot: snapshot) {
                 if NSWorkspace.shared.open(resolvedURL) {
@@ -128,9 +117,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 detail: "Set a stored Longhouse URL before trying to open the dashboard."
             )
         case .openLogs:
-            if let logPath = snapshot.service?.logPath {
-                let trimmed = logPath.replacingOccurrences(of: ".*", with: "")
-                let directoryURL = URL(fileURLWithPath: trimmed).deletingLastPathComponent()
+            if let directoryURL = resolvedLogDirectory(snapshot: snapshot) {
                 if NSWorkspace.shared.open(directoryURL) {
                     return feedback(
                         for: action,
@@ -150,7 +137,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 for: action,
                 style: .failure,
                 title: "No log path available",
-                detail: "Longhouse has not reported an engine log location yet."
+                detail: "Longhouse has not reported an engine or installer log location yet."
             )
         case .copyDiagnostics:
             let pasteboard = NSPasteboard.general
@@ -162,14 +149,14 @@ public struct SpyHealthActionSink: HealthActionSink {
                     for: action,
                     style: .success,
                     title: "Copied diagnostics JSON",
-                    detail: "The current local-health snapshot is now on your clipboard."
+                    detail: "The current Longhouse status snapshot is now on your clipboard."
                 )
             }
             return feedback(
                 for: action,
                 style: .failure,
                 title: "Diagnostics copy failed",
-                detail: "Longhouse could not encode the current local-health snapshot."
+                detail: "Longhouse could not encode the current status snapshot."
             )
         case .upgradeNow:
             let command = upgradeCommand(for: snapshot)
@@ -235,6 +222,82 @@ public struct SpyHealthActionSink: HealthActionSink {
         return "longhouse upgrade"
     }
 
+    private func startStandardInstaller() -> URL? {
+        startBackgroundProcess(
+            launchPath: "/bin/zsh",
+            arguments: ["-lc", Self.standardInstallerCommand]
+        )
+    }
+
+    private func startRepairInstall(snapshot: HealthSnapshot) -> URL? {
+        guard let invocation = LonghouseCLI.repairInstallInvocation(snapshot: snapshot) else {
+            return nil
+        }
+        return startBackgroundProcess(
+            launchPath: invocation.launchPath,
+            arguments: invocation.arguments
+        )
+    }
+
+    private func startBackgroundProcess(launchPath: String, arguments: [String]) -> URL? {
+        let logURL = installerLogURL()
+        guard let handle = prepareInstallerLogHandle(at: logURL) else {
+            return nil
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: launchPath)
+        process.arguments = arguments
+        process.currentDirectoryURL = FileManager.default.homeDirectoryForCurrentUser
+        process.environment = LonghouseCLI.environment(prependingExecutablePath: launchPath)
+        process.standardOutput = handle
+        process.standardError = handle
+
+        do {
+            try process.run()
+            try? handle.close()
+            return logURL
+        } catch {
+            try? handle.close()
+            return nil
+        }
+    }
+
+    private func resolvedLogDirectory(snapshot: HealthSnapshot) -> URL? {
+        if let logPath = snapshot.service?.logPath {
+            let trimmed = logPath.replacingOccurrences(of: ".*", with: "")
+            return URL(fileURLWithPath: trimmed).deletingLastPathComponent()
+        }
+
+        let installerLog = installerLogURL()
+        guard FileManager.default.fileExists(atPath: installerLog.path) else {
+            return nil
+        }
+        return installerLog.deletingLastPathComponent()
+    }
+
+    private func installerLogURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/Longhouse", isDirectory: true)
+            .appendingPathComponent("desktop-installer.log", isDirectory: false)
+    }
+
+    private func prepareInstallerLogHandle(at url: URL) -> FileHandle? {
+        let fileManager = FileManager.default
+        let directoryURL = url.deletingLastPathComponent()
+        do {
+            try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+            if !fileManager.fileExists(atPath: url.path) {
+                fileManager.createFile(atPath: url.path, contents: nil)
+            }
+            let handle = try FileHandle(forWritingTo: url)
+            try handle.truncate(atOffset: 0)
+            return handle
+        } catch {
+            return nil
+        }
+    }
+
     private func openTerminal(command: String) -> Bool {
         // Open a visible Terminal window so the user can see upgrade progress and errors.
         let escaped = command.replacingOccurrences(of: "\\", with: "\\\\")
@@ -248,7 +311,51 @@ public struct SpyHealthActionSink: HealthActionSink {
         return error == nil
     }
 
-    private func dryRunFeedback(for action: HarnessAction) -> HealthActionFeedback? {
+    private func startRepair(snapshot: HealthSnapshot) -> HealthActionFeedback {
+        if snapshot.isSetupRequired {
+            if startStandardInstaller() != nil {
+                return feedback(
+                    for: .repairInstall,
+                    style: .info,
+                    title: "Setup running",
+                    detail: "Longhouse started the standard installer in the background. Open Logs for progress or errors."
+                )
+            }
+            return feedback(
+                for: .repairInstall,
+                style: .failure,
+                title: "Setup could not start",
+                detail: "Longhouse could not start the standard installer on this Mac."
+            )
+        }
+
+        if startRepairInstall(snapshot: snapshot) != nil {
+            return feedback(
+                for: .repairInstall,
+                style: .info,
+                title: "Repair running",
+                detail: "Longhouse is reinstalling the local runtime and menu bar wiring in the background. Open Logs for progress or errors."
+            )
+        }
+
+        if startStandardInstaller() != nil {
+            return feedback(
+                for: .repairInstall,
+                style: .warning,
+                title: "Repair fell back to setup",
+                detail: "Longhouse could not find the local CLI, so it started the standard installer in the background. Open Logs for progress or errors."
+            )
+        }
+
+        return feedback(
+            for: .repairInstall,
+            style: .failure,
+            title: "Repair could not start",
+            detail: "Longhouse could not start `longhouse connect --install` or the standard installer on this Mac."
+        )
+    }
+
+    private func dryRunFeedback(for action: HarnessAction, snapshot: HealthSnapshot) -> HealthActionFeedback? {
         switch action {
         case .runDoctor:
             return feedback(
@@ -260,9 +367,11 @@ public struct SpyHealthActionSink: HealthActionSink {
         case .repairInstall:
             return feedback(
                 for: action,
-                style: .warning,
-                title: "Repair dry run recorded",
-                detail: "The harness logged `longhouse connect --install` without changing your machine."
+                style: snapshot.isSetupRequired ? .info : .warning,
+                title: snapshot.isSetupRequired ? "Setup dry run recorded" : "Repair dry run recorded",
+                detail: snapshot.isSetupRequired
+                    ? "The harness logged the standard Longhouse installer command without changing your machine."
+                    : "The harness logged `longhouse connect --install --machine-name … --menubar` without changing your machine."
             )
         case .openLonghouse:
             return feedback(

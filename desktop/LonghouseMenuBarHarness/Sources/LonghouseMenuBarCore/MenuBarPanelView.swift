@@ -27,10 +27,10 @@ public struct MenuBarLoadingView: View {
                     statusEmblem(color: .gray, systemImage: "arrow.trianglehead.clockwise")
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Refreshing local shipping")
+                        Text("Refreshing Longhouse")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(Color.primary)
-                        Text("Longhouse is collecting the latest machine snapshot.")
+                        Text("Longhouse is collecting the latest status for this Mac.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.secondary)
                     }
@@ -40,7 +40,7 @@ public struct MenuBarLoadingView: View {
                     HStack(spacing: 10) {
                         ProgressView()
                             .controlSize(.small)
-                        Text("Loading cached health and telemetry")
+                        Text("Loading local runtime status")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.primary)
                     }
@@ -65,13 +65,13 @@ public struct MenuBarFailureView: View {
                 HStack(alignment: .center, spacing: 12) {
                     statusEmblem(color: .red, systemImage: "xmark.circle.fill")
                         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Error.headline)
-                        .accessibilityLabel(Text("Longhouse could not load local health"))
+                        .accessibilityLabel(Text("Longhouse could not load desktop status"))
 
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Health snapshot unavailable")
+                        Text("Longhouse status unavailable")
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundStyle(Color.primary)
-                        Text("The local menu bar surface could not load its latest snapshot.")
+                        Text("Longhouse.app could not load its latest status.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.secondary)
                     }
@@ -175,7 +175,7 @@ public struct MenuBarPanelView: View {
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("LONGHOUSE LOCAL")
+                Text("LONGHOUSE APP")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.secondary)
                     .tracking(0.9)
@@ -462,25 +462,27 @@ public struct MenuBarPanelView: View {
                 Button {
                     perform(.repairInstall)
                 } label: {
-                    Label("Repair", systemImage: "wrench.and.screwdriver")
+                    Label(primaryInstallActionTitle, systemImage: primaryInstallActionSymbol)
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(.red)
+                .tint(primaryInstallActionTint)
                 .controlSize(.large)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.repair)
-                .accessibilityLabel(Text("Repair"))
+                .accessibilityLabel(Text(primaryInstallActionTitle))
 
-                Button {
-                    perform(.openLonghouse)
-                } label: {
-                    Label("Open", systemImage: "arrow.up.forward.square")
-                        .frame(maxWidth: .infinity)
+                if !snapshot.isSetupRequired {
+                    Button {
+                        perform(.openLonghouse)
+                    } label: {
+                        Label("Open", systemImage: "arrow.up.forward.square")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLonghouse)
+                    .accessibilityLabel(Text("Open Longhouse"))
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLonghouse)
-                .accessibilityLabel(Text("Open Longhouse"))
             }
 
             HStack(spacing: 8) {
@@ -595,6 +597,18 @@ public struct MenuBarPanelView: View {
             return .orange
         }
         return snapshot.parsedSeverity == .green ? Color.primary : snapshot.parsedSeverity.accentColor
+    }
+
+    private var primaryInstallActionTitle: String {
+        snapshot.isSetupRequired ? "Set Up" : "Repair"
+    }
+
+    private var primaryInstallActionSymbol: String {
+        snapshot.isSetupRequired ? "square.and.arrow.down" : "wrench.and.screwdriver"
+    }
+
+    private var primaryInstallActionTint: Color {
+        snapshot.isSetupRequired ? .blue : .red
     }
 
     private func perform(_ action: HarnessAction) {
