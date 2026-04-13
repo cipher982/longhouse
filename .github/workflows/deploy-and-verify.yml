@@ -163,6 +163,9 @@ jobs:
         with:
           bun-version: '1.2.20'
 
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y make
+
       - name: Install JS deps
         run: bun install --frozen-lockfile
 
