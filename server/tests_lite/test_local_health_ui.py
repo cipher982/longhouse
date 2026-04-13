@@ -17,10 +17,11 @@ from zerg.services.shipper.service import Platform
 
 def test_build_local_health_command_includes_current_python_and_claude_dir():
     command = local_health_ui.build_local_health_command(claude_dir="/tmp/claude")
+    arguments = local_health_ui.build_local_health_arguments(claude_dir="/tmp/claude")
 
     assert "zerg.cli.main local-health --json" in command
-    assert "--claude-dir" in command
-    assert "/tmp/claude" in command
+    assert arguments[:4] == [arguments[0], "-m", "zerg.cli.main", "local-health"]
+    assert arguments[-2:] == ["--claude-dir", "/tmp/claude"]
 
 
 def test_default_install_menubar_respects_env(monkeypatch):
@@ -64,7 +65,8 @@ def test_install_menubar_service_writes_plist_and_loads(monkeypatch, tmp_path: P
     assert plist_path.exists()
     plist = plist_path.read_text(encoding="utf-8")
     assert "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse" in plist
-    assert "--health-command" in plist
+    assert "--health-exec" in plist
+    assert "zerg.cli.main" in plist
     assert "https://longhouse.ai" in plist
     assert calls[-1] == ["launchctl", "load", str(plist_path)]
     assert result["plist_path"] == str(plist_path)

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-public enum HarnessSeverity: String, Codable, CaseIterable {
+public enum HarnessSeverity: String, Codable, CaseIterable, Sendable {
     case green
     case yellow
     case red
@@ -38,7 +38,7 @@ public enum HarnessSeverity: String, Codable, CaseIterable {
     }
 }
 
-public struct UpdateInfoSnapshot: Codable, Equatable {
+public struct UpdateInfoSnapshot: Codable, Equatable, Sendable {
     public let installedVersion: String
     public let latestVersion: String?
     public let updateAvailable: Bool
@@ -46,7 +46,7 @@ public struct UpdateInfoSnapshot: Codable, Equatable {
     public let checkedAt: String?
 }
 
-public struct HealthSnapshot: Codable, Equatable {
+public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let schemaVersion: Int?
     public let collectedAt: String?
     public let healthState: String
@@ -96,12 +96,39 @@ public struct HealthSnapshot: Codable, Equatable {
         "\(parsedSeverity.uppercaseLabel) · \(healthState.replacingOccurrences(of: "_", with: " ").uppercased())"
     }
 
+    public var ambientStatusLabel: String {
+        switch parsedSeverity {
+        case .green:
+            return "Healthy"
+        case .yellow:
+            return "Watching"
+        case .red:
+            return "Needs repair"
+        case .gray:
+            return "Unknown"
+        }
+    }
+
     public var lastShipLabel: String {
         engineStatus?.payload?.lastShipAt ?? "No shipments yet"
     }
 
+    public var lastShipSummaryLabel: String {
+        guard let raw = engineStatus?.payload?.lastShipAt else {
+            return "No shipments yet"
+        }
+        guard let parsed = Self.parseISO8601(raw) else {
+            return "Last ship \(raw)"
+        }
+        return "Last ship \(Self.relativeLabel(for: parsed))"
+    }
+
     public var serviceStatusLabel: String {
         service?.status?.replacingOccurrences(of: "-", with: " ") ?? "unknown"
+    }
+
+    public var serviceStatusTitle: String {
+        serviceStatusLabel.capitalized
     }
 
     public var outboxCount: Int {
@@ -134,6 +161,42 @@ public struct HealthSnapshot: Codable, Equatable {
         launchReadiness?.state ?? "-"
     }
 
+    public var launchSummaryLabel: String {
+        let state = launchStateLabel
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if state.lowercased() == "ready",
+           let machineName = launchReadiness?.machineName,
+           !machineName.isEmpty {
+            return "Launch ready on \(machineName)"
+        }
+        if state.isEmpty || state == "-" {
+            return "Launch state unavailable"
+        }
+        return "Launch \(state)"
+    }
+
+    public var attentionSummaryLabel: String {
+        let primaryReason = reasons.first.map(Self.humanizeReason)
+        switch parsedSeverity {
+        case .green:
+            return "Shipping is healthy on this Mac. Leave Longhouse running quietly in the menu bar."
+        case .yellow:
+            if let primaryReason {
+                return "\(primaryReason). Refresh or inspect logs if this keeps aging."
+            }
+            return "Longhouse is still shipping, but local status is aging."
+        case .red:
+            if let primaryReason {
+                return "\(primaryReason). Repair is the fastest path to restore shipping."
+            }
+            return "Shipping is blocked on this Mac. Repair is the fastest path to restore it."
+        case .gray:
+            return "Longhouse could not determine the current local health state."
+        }
+    }
+
     public var machineRunnerLabel: String {
         let machineName = launchReadiness?.machineName ?? "-"
         let runnerName = launchReadiness?.runner?.runnerName ?? "-"
@@ -159,9 +222,45 @@ public struct HealthSnapshot: Codable, Equatable {
         }
         return "\(seconds / 3600)h"
     }
+
+    private static func parseISO8601(_ raw: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = fractional.date(from: raw) {
+            return parsed
+        }
+
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: raw)
+    }
+
+    private static func relativeLabel(for date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private static func humanizeReason(_ raw: String) -> String {
+        switch raw {
+        case "service_stopped":
+            return "The local service is stopped"
+        case "spool_dead":
+            return "Dead letters need attention"
+        case "outbox_stuck":
+            return "The outbox is backing up"
+        case "engine_status_stale":
+            return "The engine status is stale"
+        default:
+            return raw
+                .replacingOccurrences(of: "_", with: " ")
+                .replacingOccurrences(of: "-", with: " ")
+                .capitalized
+        }
+    }
 }
 
-public struct ServiceSnapshot: Codable, Equatable {
+public struct ServiceSnapshot: Codable, Equatable, Sendable {
     public let platform: String?
     public let status: String?
     public let serviceName: String?
@@ -169,7 +268,7 @@ public struct ServiceSnapshot: Codable, Equatable {
     public let logPath: String?
 }
 
-public struct EngineStatusSnapshot: Codable, Equatable {
+public struct EngineStatusSnapshot: Codable, Equatable, Sendable {
     public let path: String?
     public let exists: Bool?
     public let fresh: Bool?
@@ -178,7 +277,7 @@ public struct EngineStatusSnapshot: Codable, Equatable {
     public let error: String?
 }
 
-public struct EngineStatusPayload: Codable, Equatable {
+public struct EngineStatusPayload: Codable, Equatable, Sendable {
     public let version: String?
     public let daemonPid: Int?
     public let lastShipAt: String?
@@ -206,20 +305,20 @@ public struct EngineStatusPayload: Codable, Equatable {
     }
 }
 
-public struct DeadLetterSnapshot: Codable, Equatable {
+public struct DeadLetterSnapshot: Codable, Equatable, Sendable {
     public let provider: String?
     public let filePath: String?
     public let rangeBytes: Int?
     public let createdAt: String?
 }
 
-public struct OutboxSnapshot: Codable, Equatable {
+public struct OutboxSnapshot: Codable, Equatable, Sendable {
     public let path: String?
     public let fileCount: Int?
     public let oldestAgeSeconds: Int?
 }
 
-public struct LaunchReadinessSnapshot: Codable, Equatable {
+public struct LaunchReadinessSnapshot: Codable, Equatable, Sendable {
     public let state: String?
     public let headline: String?
     public let reasons: [String]?
@@ -241,7 +340,7 @@ public struct LaunchReadinessSnapshot: Codable, Equatable {
     }
 }
 
-public struct RunnerSnapshot: Codable, Equatable {
+public struct RunnerSnapshot: Codable, Equatable, Sendable {
     public let path: String?
     public let exists: Bool?
     public let error: String?

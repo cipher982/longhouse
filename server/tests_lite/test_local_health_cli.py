@@ -235,6 +235,7 @@ def test_local_health_window_launch_without_url(monkeypatch):
     assert len(calls) == 1
     command = calls[0]
     assert "LonghouseMenuBarHarnessApp" in command
+    assert "--health-exec" in command
     assert "--ui-url" not in command
 
 
@@ -261,6 +262,7 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
     assert result.exit_code == 0, result.output
     assert len(calls) == 1
     assert calls[0][0] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
+    assert "--health-exec" in calls[0]
     assert "swift" not in calls[0]
 
 

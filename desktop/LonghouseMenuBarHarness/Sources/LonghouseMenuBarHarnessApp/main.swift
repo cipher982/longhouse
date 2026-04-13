@@ -2,8 +2,21 @@ import AppKit
 import LonghouseMenuBarCore
 import SwiftUI
 
+@MainActor
+private final class WindowHostAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NSRunningApplication.current.activate(options: [.activateAllWindows])
+            for window in NSApp.windows {
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
+    }
+}
+
 @main
 struct LonghouseMenuBarHarnessApp: App {
+    @NSApplicationDelegateAdaptor(WindowHostAppDelegate.self) private var appDelegate
     @StateObject private var store: SnapshotStore
 
     private let config: HarnessRuntimeConfig
@@ -40,6 +53,6 @@ struct LonghouseMenuBarHarnessApp: App {
             )
         }
         .windowResizability(.contentSize)
-        .defaultSize(width: 460, height: 640)
+        .defaultSize(width: MenuBarPanelLayout.panelWidth, height: MenuBarPanelLayout.attentionHeight)
     }
 }

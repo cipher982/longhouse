@@ -14,12 +14,19 @@ public enum HarnessAutomationCoordinator {
         }
 
         Task { @MainActor in
-            if !exerciseActions.isEmpty, let initialSnapshot = store.snapshot {
-                for action in exerciseActions {
-                    let snapshot = store.snapshot ?? initialSnapshot
-                    actionSink.handle(action, snapshot: snapshot)
-                    if action == .refresh {
-                        store.refresh()
+            if !exerciseActions.isEmpty {
+                let deadline = Date().addingTimeInterval(5)
+                while store.snapshot == nil, store.isLoading, Date() < deadline {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+
+                if let initialSnapshot = store.snapshot {
+                    for action in exerciseActions {
+                        let snapshot = store.snapshot ?? initialSnapshot
+                        actionSink.handle(action, snapshot: snapshot)
+                        if action == .refresh {
+                            store.refresh()
+                        }
                     }
                 }
             }

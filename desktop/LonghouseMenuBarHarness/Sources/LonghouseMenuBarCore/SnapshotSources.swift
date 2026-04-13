@@ -1,6 +1,6 @@
 import Foundation
 
-public protocol HealthSnapshotSource {
+public protocol HealthSnapshotSource: Sendable {
     func load() throws -> HealthSnapshot
 }
 
@@ -81,6 +81,8 @@ public struct HarnessRuntimeConfig {
     public let quitAfterSeconds: TimeInterval?
     public let refreshIntervalSeconds: TimeInterval?
     public let healthCommand: String?
+    public let healthExecutablePath: String?
+    public let healthArguments: [String]
     public let showStatusWindowOnLaunch: Bool
 
     public init(
@@ -93,6 +95,8 @@ public struct HarnessRuntimeConfig {
         quitAfterSeconds: TimeInterval?,
         refreshIntervalSeconds: TimeInterval?,
         healthCommand: String?,
+        healthExecutablePath: String?,
+        healthArguments: [String],
         showStatusWindowOnLaunch: Bool
     ) {
         self.outputURL = outputURL
@@ -104,6 +108,8 @@ public struct HarnessRuntimeConfig {
         self.quitAfterSeconds = quitAfterSeconds
         self.refreshIntervalSeconds = refreshIntervalSeconds
         self.healthCommand = healthCommand
+        self.healthExecutablePath = healthExecutablePath
+        self.healthArguments = healthArguments
         self.showStatusWindowOnLaunch = showStatusWindowOnLaunch
     }
 
@@ -118,6 +124,8 @@ public struct HarnessRuntimeConfig {
         var quitAfterSeconds: TimeInterval?
         var refreshIntervalSeconds: TimeInterval?
         var healthCommand: String?
+        var healthExecutablePath: String?
+        var healthArguments: [String] = []
         var explicitLiveMode = false
 
         var index = 0
@@ -192,6 +200,18 @@ public struct HarnessRuntimeConfig {
                     throw SnapshotSourceError.invalidArguments("Expected shell command after --health-command")
                 }
                 healthCommand = arguments[index]
+            case "--health-exec":
+                index += 1
+                guard index < arguments.count else {
+                    throw SnapshotSourceError.invalidArguments("Expected executable path after --health-exec")
+                }
+                healthExecutablePath = arguments[index]
+            case "--health-arg":
+                index += 1
+                guard index < arguments.count else {
+                    throw SnapshotSourceError.invalidArguments("Expected argument value after --health-arg")
+                }
+                healthArguments.append(arguments[index])
             case "-ApplePersistenceIgnoreState":
                 index += 1
                 guard index < arguments.count else {
@@ -215,8 +235,12 @@ public struct HarnessRuntimeConfig {
         if let inputURL {
             source = FixtureHealthSnapshotSource(fileURL: inputURL)
         } else if useLive {
-            let liveArguments = healthCommand.map { ["-lc", $0] } ?? ["-lc", "longhouse local-health --json"]
-            source = CLIHealthSnapshotSource(arguments: liveArguments)
+            if let healthExecutablePath {
+                source = CLIHealthSnapshotSource(launchPath: healthExecutablePath, arguments: healthArguments)
+            } else {
+                let liveArguments = healthCommand.map { ["-lc", $0] } ?? ["-lc", "longhouse local-health --json"]
+                source = CLIHealthSnapshotSource(arguments: liveArguments)
+            }
         } else {
             throw SnapshotSourceError.invalidArguments("Pass either --input <file> or --live")
         }
@@ -231,6 +255,8 @@ public struct HarnessRuntimeConfig {
             quitAfterSeconds: quitAfterSeconds,
             refreshIntervalSeconds: refreshIntervalSeconds,
             healthCommand: healthCommand,
+            healthExecutablePath: healthExecutablePath,
+            healthArguments: healthArguments,
             showStatusWindowOnLaunch: showStatusWindowOnLaunch
         )
     }

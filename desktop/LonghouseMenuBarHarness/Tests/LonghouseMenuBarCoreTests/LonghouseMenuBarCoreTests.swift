@@ -48,6 +48,21 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func parsesDirectHealthExecutableArguments() throws {
+        let config = try HarnessRuntimeConfig.parse(arguments: [
+            "--live",
+            "--health-exec", "/usr/bin/python3",
+            "--health-arg", "-m",
+            "--health-arg", "zerg.cli.main",
+            "--health-arg", "local-health",
+            "--health-arg", "--json",
+        ])
+
+        #expect(config.healthExecutablePath == "/usr/bin/python3")
+        #expect(config.healthArguments == ["-m", "zerg.cli.main", "local-health", "--json"])
+    }
+
+    @Test
     func defaultsDirectLaunchToLiveStatusWindow() throws {
         let config = try HarnessRuntimeConfig.parse(arguments: [])
 

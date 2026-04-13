@@ -104,7 +104,7 @@ import CoreGraphics
 
 let ownerName = CommandLine.arguments[1]
 let windowTitle = CommandLine.arguments[2]
-let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+let infos = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
 for row in infos {
     let owner = row[kCGWindowOwnerName as String] as? String ?? ""
     let name = row[kCGWindowName as String] as? String ?? ""

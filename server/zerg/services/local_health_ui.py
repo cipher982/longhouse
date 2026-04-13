@@ -24,6 +24,10 @@ DEFAULT_REFRESH_SECONDS = 10
 
 
 def build_local_health_command(*, claude_dir: str | None = None) -> str:
+    return shlex.join(build_local_health_arguments(claude_dir=claude_dir))
+
+
+def build_local_health_arguments(*, claude_dir: str | None = None) -> list[str]:
     command = [
         sys.executable,
         "-m",
@@ -33,7 +37,7 @@ def build_local_health_command(*, claude_dir: str | None = None) -> str:
     ]
     if claude_dir:
         command.extend(["--claude-dir", claude_dir])
-    return shlex.join(command)
+    return command
 
 
 def default_install_menubar() -> bool:
@@ -59,19 +63,24 @@ def _launchd_plist_path() -> Path:
 def _generate_launchd_plist(
     *,
     launch_path: str,
-    health_command: str,
+    health_arguments: list[str],
     refresh_seconds: int,
     ui_url: str | None,
     claude_dir: str | None,
 ) -> str:
+    if not health_arguments:
+        raise ValueError("health_arguments must include an executable path")
+
     program_arguments = [
         launch_path,
         "--live",
         "--refresh-seconds",
         str(refresh_seconds),
-        "--health-command",
-        health_command,
+        "--health-exec",
+        str(health_arguments[0]),
     ]
+    for argument in health_arguments[1:]:
+        program_arguments.extend(["--health-arg", str(argument)])
     if ui_url:
         program_arguments.extend(["--ui-url", ui_url])
 
@@ -203,7 +212,7 @@ def install_menubar_service(
     plist_path.write_text(
         _generate_launchd_plist(
             launch_path=installed_app.launch_path,
-            health_command=build_local_health_command(claude_dir=claude_dir),
+            health_arguments=build_local_health_arguments(claude_dir=claude_dir),
             refresh_seconds=refresh_seconds,
             ui_url=ui_url,
             claude_dir=claude_dir,

@@ -11,7 +11,7 @@ from pathlib import Path
 import typer
 
 from zerg.services.local_health import collect_local_health
-from zerg.services.local_health_ui import build_local_health_command
+from zerg.services.local_health_ui import build_local_health_arguments
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 from zerg.services.shipper import get_zerg_url
@@ -147,6 +147,7 @@ def _launch_desktop_surface(
     allow_source_fallback: bool = False,
 ) -> None:
     ui_url = get_zerg_url(Path(claude_dir) if claude_dir else None)
+    health_arguments = build_local_health_arguments(claude_dir=claude_dir)
 
     prebuilt_artifact = _prebuilt_runtime_artifact(component) if component is not None else None
     if prebuilt_artifact is not None:
@@ -155,9 +156,11 @@ def _launch_desktop_surface(
             "--live",
             "--refresh-seconds",
             str(refresh_seconds),
-            "--health-command",
-            build_local_health_command(claude_dir=claude_dir),
+            "--health-exec",
+            health_arguments[0],
         ]
+        for argument in health_arguments[1:]:
+            command.extend(["--health-arg", argument])
         if ui_url:
             command.extend(["--ui-url", ui_url])
         cwd = Path(prebuilt_artifact.path) if component == RuntimeComponent.LOCAL_HEALTH_APP else Path(prebuilt_artifact.launch_path).parent
@@ -178,9 +181,11 @@ def _launch_desktop_surface(
                 "--live",
                 "--refresh-seconds",
                 str(refresh_seconds),
-                "--health-command",
-                build_local_health_command(claude_dir=claude_dir),
+                "--health-exec",
+                health_arguments[0],
             ]
+            for argument in health_arguments[1:]:
+                command.extend(["--health-arg", argument])
             if ui_url:
                 command.extend(["--ui-url", ui_url])
             cwd = package_path
