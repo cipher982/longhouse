@@ -319,6 +319,33 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "\(minutes)m"
     }
 
+    public var recentActivitySummaryLabel: String {
+        let count = activitySummary?.sessionsRecent ?? 0
+        let minutes = activitySummary?.recentWindowMinutes ?? 15
+        return count == 1 ? "1 active in \(minutes)m" : "\(count) active in \(minutes)m"
+    }
+
+    public var recentTouches: [ActivityTouchSnapshot] {
+        (activitySummary?.recentTouches ?? [])
+            .filter { !($0.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    public func recentTouchAgeLabel(_ touch: ActivityTouchSnapshot, relativeTo referenceDate: Date) -> String {
+        guard let raw = touch.lastUpdated,
+              let parsed = Self.parseISO8601(raw) else {
+            return "-"
+        }
+        return Self.compactRelativeLabel(for: parsed, relativeTo: referenceDate)
+    }
+
+    public func recentTouchTitle(_ touch: ActivityTouchSnapshot) -> String {
+        let provider = (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if provider.isEmpty {
+            return "Unknown"
+        }
+        return Self.providerDisplayName(provider)
+    }
+
     public var providerCountsToday: [(provider: String, count: Int)] {
         sortedProviderCounts(activitySummary?.providerCountsToday)
     }
@@ -495,9 +522,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if recent > 0 {
             parts.append("\(recent) active")
         }
-        if pipelineValueLabel != "Clear" {
-            parts.append("Queue \(pipelineSentenceLabel)")
-        }
         if launchValueLabel != "Unavailable" {
             parts.append(launchValueLabel)
         }
@@ -619,7 +643,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return formatter.localizedString(for: date, relativeTo: referenceDate)
     }
 
-    private static func providerDisplayName(_ raw: String) -> String {
+    static func providerDisplayName(_ raw: String) -> String {
         switch raw.lowercased() {
         case "claude":
             return "Claude"
@@ -718,6 +742,7 @@ public struct ActivitySummarySnapshot: Codable, Equatable, Sendable {
     public let providerCountsToday: [String: Int]?
     public let providerCountsRecent: [String: Int]?
     public let sessionRecencyBands: [ActivityRecencyBandSnapshot]?
+    public let recentTouches: [ActivityTouchSnapshot]?
     public let latestActivityAt: String?
     public let recentWindowMinutes: Int?
 }
@@ -725,6 +750,11 @@ public struct ActivitySummarySnapshot: Codable, Equatable, Sendable {
 public struct ActivityRecencyBandSnapshot: Codable, Equatable, Sendable {
     public let label: String
     public let sessionCount: Int?
+}
+
+public struct ActivityTouchSnapshot: Codable, Equatable, Sendable {
+    public let provider: String?
+    public let lastUpdated: String?
 }
 
 public struct LaunchReadinessSnapshot: Codable, Equatable, Sendable {

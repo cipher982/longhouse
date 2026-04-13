@@ -264,6 +264,11 @@ def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: P
         {"label": "1-6h", "session_count": 1},
         {"label": "6h+", "session_count": 0},
     ]
+    assert activity["recent_touches"] == [
+        {"provider": "claude", "last_updated": recent.isoformat()},
+        {"provider": "codex", "last_updated": earlier_today.isoformat()},
+        {"provider": "gemini", "last_updated": before_today.isoformat()},
+    ]
 
 
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):

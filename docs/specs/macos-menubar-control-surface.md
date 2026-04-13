@@ -30,26 +30,30 @@ This spec replaces the current "status sheet" shape with a denser, native-feelin
 - Render immediately from cached state.
 - Make the healthy 99% case feel useful, not empty.
 - Use structured telemetry, not explanatory paragraphs, as the default visual language.
+- Optimize for recognition before density. The user should not have to decode our internal model to understand the panel.
 - Keep repair verbs and diagnostics available without spending prime healthy-state real estate on them.
 - Feel native to modern macOS: restrained controls, system typography, material-backed chrome, minimal color.
 - Keep icon silhouette, padding, and detail stable.
 
 ## Chosen Direction
 
-Build a compact telemetry control surface with a `Now` section, a `Today` section, and one lightweight trend surface.
+Build a compact mission console organized around the user's first-open questions, not around our internal telemetry buckets.
 
-This is a hybrid of:
+The healthy-state scan order is explicitly:
 
-- `Telemetry Strip + Grid` for core machine health
-- `Now / Today Split` for proving the machine is doing useful work, not merely "green"
+1. Is shipping healthy?
+2. Is it doing work right now?
+3. Is anything backing up?
+4. Where is it connected?
+5. What recent activity proves it is alive?
 
 Healthy-state hierarchy is now explicitly:
 
 1. headline + status + small accessory controls
-2. one full-width flight strip for instant orientation
-3. one compact transport rail
-4. one session-traffic bank with fixed recency buckets and provider mix
-5. one dense ops ledger for launch identity and runtime topology
+2. one primary `Right now` board with the four highest-signal answers
+3. one `Recent activity` feed that reads like live motion, not a chart to decode
+4. one `Today` provider distribution section
+5. one compact `Connected` summary
 6. one primary exit action, with diagnostics behind a secondary menu
 
 ## Healthy State
@@ -62,20 +66,24 @@ The healthy/default state should show:
    - status badge
    - snapshot age
    - refresh affordance
-2. `Now`
+2. `Right now`
    - last ship
-   - launch readiness
-   - engine freshness
-   - queue / outbox / dead counts as compact telemetry, not big cards
-   - disk free only when it is approaching thresholds
-3. `Today`
-   - sessions touched today
    - active now
+   - sessions today
+   - queue state
+   - one short support line for launch readiness, engine freshness, and disk free
+3. `Recent activity`
+   - the most recent distinct session touches, shown as a live feed with provider + age
+   - recent activity is allowed to look busy, but it must read immediately as time-ordered activity
+4. `Today`
    - provider mix
-4. `Session Traffic`
-   - fixed recency buckets for distinct sessions touched in `0-1m`, `1-5m`, `5-15m`, `15-60m`, `1-6h`, and `6h+`
-   - recent provider mix and today provider mix as compact rails with exact counts
-5. Actions
+   - total sessions touched today
+   - recent provider mix only if it helps scanning, not as a second chart to decode
+5. `Connected`
+   - launch target
+   - runtime mode
+   - host / app identity
+6. Actions
    - primary: `Open Longhouse`
    - secondary: `Details`
    - refresh stays icon-only
@@ -89,6 +97,9 @@ Healthy-state layout rules:
 - values right-aligned and preferably monospaced
 - healthy-state secondary verbs stay in a menu, not a visible button wall
 - the surface should read like a compact utility console, not a dashboard webpage
+- user-facing labels should be plain language, not themed control-room jargon
+- no section may require learning our bucket definitions to be useful
+- charts and bars are only allowed when the unit and meaning are obvious on first read
 
 Healthy state must not show:
 
@@ -123,6 +134,7 @@ Phase 1 adds a machine-local ambient activity summary to `local-health`:
 - `provider_counts_recent`
 - `latest_activity_at`
 - `session_recency_bands`
+- `recent_touches`
 
 Phase 1 does not add:
 
@@ -171,6 +183,7 @@ Rules:
 - Reserve visual emphasis for telemetry changes, not for buttons.
 - Prefer one unified strip or section shell over repeated inset rounded cards in the healthy path.
 - Keep SF Symbols sparse: status glyph plus small action glyphs only.
+- Theme should come from rhythm, typography, and motion cues, not from obscure labels like `rail`, `ledger`, or other control-room metaphors.
 
 ## Icon Rules
 

@@ -53,6 +53,12 @@
       "claude": 2,
       "codex": 1
     },
+    "recent_touches": [
+      { "provider": "claude", "last_updated": "2026-04-08T01:51:58Z" },
+      { "provider": "codex", "last_updated": "2026-04-08T01:49:12Z" },
+      { "provider": "claude", "last_updated": "2026-04-08T01:46:03Z" },
+      { "provider": "gemini", "last_updated": "2026-04-08T01:34:11Z" }
+    ],
     "session_recency_bands": [
       { "label": "0-1m", "session_count": 0 },
       { "label": "1-5m", "session_count": 0 },

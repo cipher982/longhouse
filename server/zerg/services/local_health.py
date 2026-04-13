@@ -37,6 +37,7 @@ ACTIVITY_RECENCY_BANDS = [
     ("15-60m", timedelta(hours=1)),
     ("1-6h", timedelta(hours=6)),
 ]
+RECENT_TOUCH_LIMIT = 4
 
 
 def _utc_now() -> datetime:
@@ -354,6 +355,7 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
         "provider_counts_today": {},
         "provider_counts_recent": {},
         "session_recency_bands": [],
+        "recent_touches": [],
         "latest_activity_at": None,
         "recent_window_minutes": ACTIVITY_RECENT_MINUTES,
     }
@@ -463,6 +465,34 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
                 }
                 for index, spec in enumerate(band_specs)
             ]
+
+        recent_touches: list[dict[str, Any]] = []
+        for provider, last_updated in conn.execute(
+            f"""
+            SELECT provider, last_updated
+            FROM (
+                SELECT
+                    provider,
+                    {provider_session_expr} AS session_key,
+                    MAX(last_updated) AS last_updated
+                FROM file_state
+                GROUP BY provider, session_key
+            )
+            ORDER BY julianday(last_updated) DESC
+            LIMIT ?
+            """,
+            (RECENT_TOUCH_LIMIT,),
+        ):
+            provider_name = str(provider or "").strip()
+            if not provider_name or not last_updated:
+                continue
+            recent_touches.append(
+                {
+                    "provider": provider_name,
+                    "last_updated": str(last_updated),
+                }
+            )
+        summary["recent_touches"] = recent_touches
         return summary
     except sqlite3.Error as exc:
         summary["error"] = str(exc)
