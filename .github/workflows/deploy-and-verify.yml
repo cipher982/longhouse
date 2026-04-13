@@ -62,6 +62,25 @@ jobs:
             echo "runtime_image_ref=ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Detect frontend-only change
+        id: scope
+        if: ${{ github.event_name == 'push' && steps.meta.outputs.predecessor_sha != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Compare changed files between predecessor and current SHA
+          CHANGED=$(gh api repos/${{ github.repository }}/compare/${{ steps.meta.outputs.predecessor_sha }}...${{ github.sha }} \
+            --jq '.files[].filename' 2>/dev/null || echo "UNKNOWN")
+
+          if [[ "$CHANGED" == "UNKNOWN" ]]; then
+            echo "frontend_only=false" >> "$GITHUB_OUTPUT"
+          elif echo "$CHANGED" | grep -qvE '^(web/|\.github/|Makefile$|docs/|\.claude/|CLAUDE\.md$|VISION\.md$|README\.md$|\.agents/)'; then
+            echo "frontend_only=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "frontend_only=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Frontend-only change detected — skipping CI gate"
+          fi
+
       - name: Wait for previous main deploy to clear
         if: ${{ github.event_name == 'push' && steps.meta.outputs.predecessor_sha != '' }}
         uses: ./.github/actions/wait-for-ci
@@ -76,7 +95,7 @@ jobs:
           timeout_seconds: "7200"
 
       - name: Wait for full CI gate
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' && steps.scope.outputs.frontend_only != 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.head_sha }}
