@@ -337,10 +337,10 @@
 
   .landing-hero-split {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 5fr 7fr;
     gap: var(--space-10);
     align-items: start;
-    max-width: 1200px;
+    max-width: 1440px;
     width: 100%;
     animation: landing-fadeInUp 0.8s ease-out;
   }
@@ -2011,7 +2011,7 @@
    -------------------------------------------------------- */
 
   /* Mid-range: hero stays 2-col but launch flow stacks vertically */
-  @media (width <= 1100px) {
+  @media (width <= 960px) {
     .landing-launch-flow {
       grid-template-columns: 1fr;
       gap: var(--space-4);
