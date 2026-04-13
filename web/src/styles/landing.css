@@ -331,25 +331,16 @@
   .landing-hero {
     display: flex;
     align-items: center;
-    padding: calc(var(--space-16) + var(--space-4)) min(var(--space-6), 4vw) var(--space-16);
+    justify-content: center;
+    padding: calc(var(--space-16) + var(--space-8)) min(var(--space-6), 4vw) var(--space-12);
     position: relative;
   }
 
-  .landing-hero-split {
-    display: grid;
-    grid-template-columns: 5fr 7fr;
-    gap: var(--space-10);
-    align-items: start;
-    max-width: 1440px;
+  .landing-hero-content {
+    max-width: 720px;
     width: 100%;
+    text-align: center;
     animation: landing-fadeInUp 0.8s ease-out;
-  }
-
-  /* Grid items default to min-width:auto which prevents shrinking
-     below content width. Override so they respect the grid track. */
-  .landing-hero-text,
-  .landing-hero-visual {
-    min-width: 0;
   }
 
   @keyframes landing-fadeInUp {
@@ -363,11 +354,6 @@
     }
   }
 
-  .landing-hero-text {
-    text-align: left;
-    padding-top: var(--space-6);
-  }
-
   .landing-hero-kicker {
     margin: 0 0 var(--space-4);
     font-size: var(--font-size-sm);
@@ -379,10 +365,10 @@
 
   .landing-hero-headline {
     font-family: "Fraunces", var(--font-family-display);
-    font-size: clamp(2.5rem, 6vw, 4.75rem);
+    font-size: clamp(2.2rem, 5vw, 4rem);
     font-weight: 600;
     letter-spacing: -0.04em;
-    line-height: 1.02;
+    line-height: 1.05;
     margin-bottom: var(--space-6);
   }
 
@@ -398,242 +384,184 @@
   }
 
   .landing-hero-subhead {
-    font-size: var(--font-size-xl);
+    font-size: var(--font-size-lg);
     color: #e7dcc9;
-    line-height: 1.7;
-    margin-bottom: var(--space-6);
-    max-width: 36rem;
+    line-height: 1.6;
+    margin-bottom: var(--space-8);
+    max-width: 38rem;
+    margin-left: auto;
+    margin-right: auto;
   }
 
-  .landing-hero-note {
-    font-size: var(--font-size-base);
-    color: var(--color-text-secondary);
-    margin: var(--space-6) 0 var(--space-4);
-  }
+  /* ── Hero Install Block ── */
 
-  .landing-hero-ctas {
-    display: flex;
-    gap: var(--space-4);
-    flex-wrap: wrap;
-  }
-
-  .landing-cta-main.ui-button--primary {
-    padding: var(--space-4) var(--space-8) !important;
-    font-size: var(--font-size-lg) !important;
-    font-weight: var(--font-weight-bold) !important;
-    /* Strong prominence: bright glow + solid border to stand out from dark bg */
-    box-shadow:
-      0 0 24px rgba(201, 166, 107, 0.5),
-      0 0 48px rgba(201, 166, 107, 0.25),
-      0 4px 16px rgba(18, 11, 9, 0.4);
-    border: 1px solid rgba(158, 124, 90, 0.70) !important;
-    transition: box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
-                transform var(--motion-duration-fast) var(--motion-easing-standard),
-                border-color var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .landing-cta-main.ui-button--primary:hover {
-    box-shadow:
-      0 0 32px rgba(201, 166, 107, 0.60),
-      0 0 64px rgba(201, 166, 107, 0.35),
-      0 6px 20px rgba(18, 11, 9, 0.5);
-    transform: translateY(-3px);
-    border-color: rgba(158, 124, 90, 0.90) !important;
-  }
-
-  .landing-hero-cta-secondary {
-    margin-top: var(--space-5);
-  }
-
-  .landing-cta-text {
-    color: var(--color-text-secondary);
-    background: transparent;
-  }
-
-  .landing-cta-text:hover {
-    color: var(--color-text-primary);
-  }
-
-  .landing-cta-arrow {
-    display: inline-block;
-    transition: transform var(--motion-duration-fast) var(--motion-easing-standard);
-  }
-
-  .landing-cta-text:hover .landing-cta-arrow {
-    transform: translateY(2px);
-  }
-
-  .landing-hero-visual {
-    display: flex;
-    align-items: stretch;
-  }
-
-  .landing-hero-command-strip {
+  .hero-install {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-1);
-    max-width: 28rem;
-    padding: var(--space-4) var(--space-5);
-    background: rgba(24, 18, 15, 0.92);
-    border: 1px solid rgba(201, 166, 107, 0.14);
-    border-radius: var(--radius-xl);
-    box-shadow: 0 16px 30px rgba(8, 7, 6, 0.2);
-  }
-
-  .landing-hero-command-label {
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--color-text-secondary);
-  }
-
-  .landing-hero-command-code {
-    font-family: var(--font-family-mono);
-    font-size: var(--font-size-base);
-    color: var(--color-text-primary);
-  }
-
-  .landing-launch-panel {
-    display: grid;
-    gap: var(--space-6);
-    padding: var(--space-6);
-    background:
-      radial-gradient(circle at top right, rgba(137, 184, 164, 0.12), transparent 28%),
-      radial-gradient(circle at bottom left, rgba(201, 166, 107, 0.12), transparent 32%),
-      linear-gradient(180deg, rgba(30, 24, 19, 0.97), rgba(17, 14, 12, 0.98));
-    border: 1px solid rgba(201, 166, 107, 0.16);
-    border-radius: 28px;
-    box-shadow: 0 24px 48px rgba(8, 7, 6, 0.28);
-  }
-
-  .landing-launch-panel-header {
-    display: grid;
-    gap: var(--space-2);
-  }
-
-  .landing-launch-panel-label {
-    margin: 0;
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--color-text-secondary);
-  }
-
-  .landing-launch-panel-title {
-    margin: 0;
-    font-family: "Fraunces", var(--font-family-display);
-    font-size: clamp(var(--font-size-xl), 2.5vw, 2rem);
-    font-weight: 600;
-    line-height: 1.15;
-  }
-
-  .landing-launch-flow {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-    gap: var(--space-3);
     align-items: center;
+    gap: var(--space-4);
+    margin-bottom: var(--space-6);
   }
 
-  .landing-launch-node {
-    padding: var(--space-5);
-    background: rgba(255, 248, 239, 0.04);
-    border: 1px solid rgba(255, 235, 204, 0.08);
-    border-radius: var(--radius-xl);
-    min-height: 100%;
+  /* Terminal command row */
+  .hero-install-terminal {
+    width: 100%;
+    max-width: 560px;
   }
 
-  .landing-launch-node.primary {
-    border-color: rgba(201, 166, 107, 0.22);
-    box-shadow: 0 0 0 1px rgba(201, 166, 107, 0.08) inset;
-  }
-
-  .landing-launch-node-eyebrow {
-    margin: 0 0 var(--space-2);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: var(--color-text-secondary);
-  }
-
-  .landing-launch-node-title {
-    margin: 0 0 var(--space-2);
-    font-family: var(--font-family-display);
-    font-size: var(--font-size-xl);
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-text-primary);
-  }
-
-  .landing-launch-node-copy {
-    margin: 0;
-    color: var(--color-text-secondary);
-    line-height: var(--font-line-height-relaxed);
-  }
-
-  .landing-launch-bridge {
+  .hero-install-cmd {
     display: flex;
     align-items: center;
-    gap: var(--space-2);
-    min-width: 120px;
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-    font-weight: var(--font-weight-semibold);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-4) var(--space-5);
+    background: rgba(10, 8, 7, 0.92);
+    border: 1px solid rgba(201, 166, 107, 0.18);
+    border-radius: var(--radius-xl);
+    box-shadow:
+      0 0 20px rgba(201, 166, 107, 0.12),
+      0 8px 24px rgba(8, 7, 6, 0.3);
+    cursor: pointer;
+    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard),
+                box-shadow var(--motion-duration-fast) var(--motion-easing-standard);
   }
 
-  .landing-launch-bridge-line {
+  .hero-install-cmd:hover {
+    border-color: rgba(201, 166, 107, 0.35);
+    box-shadow:
+      0 0 28px rgba(201, 166, 107, 0.2),
+      0 8px 24px rgba(8, 7, 6, 0.3);
+  }
+
+  .hero-install-prompt {
+    color: var(--color-brand-primary);
+    font-family: var(--font-family-mono);
+    font-weight: var(--font-weight-bold);
+    flex-shrink: 0;
+    user-select: none;
+  }
+
+  .hero-install-text {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    color: #f5e6cf;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+    text-align: left;
+  }
+
+  .hero-install-copy {
+    flex-shrink: 0;
+    color: var(--color-text-secondary);
+    transition: color var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .hero-install-copy.copied {
+    color: #89b8a4;
+  }
+
+  .hero-install-note {
+    margin: var(--space-2) 0 0;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+
+  /* Divider */
+  .hero-install-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    max-width: 560px;
+  }
+
+  .hero-install-divider-line {
     flex: 1;
     height: 1px;
-    background: rgba(201, 166, 107, 0.25);
+    background: rgba(201, 166, 107, 0.12);
   }
 
-  .landing-launch-surface {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
-
-  .landing-launch-surface-pill {
-    display: inline-flex;
-    align-items: center;
-    padding: var(--space-2) var(--space-4);
-    border: 1px solid rgba(201, 166, 107, 0.14);
-    border-radius: var(--radius-full);
-    background: rgba(255, 248, 239, 0.03);
-    color: var(--color-text-secondary);
+  .hero-install-divider-label {
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-medium);
-  }
-
-  .landing-launch-truths {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-4);
-  }
-
-  .landing-launch-truth {
-    padding: var(--space-4);
-    background: rgba(255, 248, 239, 0.03);
-    border-radius: var(--radius-lg);
-    border: 1px solid rgba(255, 235, 204, 0.06);
-  }
-
-  .landing-launch-truth-title {
-    display: block;
-    margin-bottom: var(--space-2);
-    font-size: var(--font-size-sm);
-    font-weight: var(--font-weight-semibold);
-    color: var(--color-brand-primary);
-  }
-
-  .landing-launch-truth p {
-    margin: 0;
     color: var(--color-text-secondary);
-    line-height: var(--font-line-height-relaxed);
+    text-transform: lowercase;
+  }
+
+  /* Mac download button */
+  .hero-install-mac {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    width: 100%;
+    max-width: 560px;
+    padding: var(--space-4) var(--space-6);
+    background: linear-gradient(180deg, rgba(32, 24, 20, 0.96), rgba(20, 16, 13, 0.98));
+    border: 1px solid rgba(201, 166, 107, 0.14);
+    border-radius: var(--radius-xl);
+    box-shadow: 0 8px 24px rgba(8, 7, 6, 0.2);
+    text-decoration: none;
+    cursor: pointer;
+    transition: border-color var(--motion-duration-fast) var(--motion-easing-standard),
+                box-shadow var(--motion-duration-fast) var(--motion-easing-standard),
+                transform var(--motion-duration-fast) var(--motion-easing-standard);
+  }
+
+  .hero-install-mac:hover {
+    border-color: rgba(201, 166, 107, 0.3);
+    box-shadow:
+      0 0 20px rgba(201, 166, 107, 0.1),
+      0 8px 24px rgba(8, 7, 6, 0.3);
+    transform: translateY(-1px);
+  }
+
+  .hero-install-mac-icon {
+    flex-shrink: 0;
+    color: var(--color-text-primary);
+    width: 20px;
+    height: 24px;
+  }
+
+  .hero-install-mac-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+  }
+
+  .hero-install-mac-label {
+    font-size: var(--font-size-base);
+    font-weight: var(--font-weight-semibold);
+    color: var(--color-text-primary);
+  }
+
+  .hero-install-mac-detail {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+  }
+
+  /* Extras row */
+  .hero-install-extras {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+  }
+
+  .hero-install-extra {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+  }
+
+  .hero-install-extra code {
+    font-family: var(--font-family-mono);
+    color: var(--color-text-primary);
+    background: rgba(201, 166, 107, 0.08);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
   }
 
   .landing-code-block {
@@ -2031,35 +1959,21 @@
   @media (width <= 768px) {
     .landing-hero {
       padding-top: calc(var(--space-16) + var(--space-2));
+      padding-bottom: var(--space-8);
     }
 
-    .landing-hero-split {
-      grid-template-columns: 1fr;
-      gap: var(--space-8);
-      text-align: center;
+    .landing-hero-headline {
+      font-size: clamp(1.8rem, 7vw, 2.5rem);
     }
 
-    .landing-hero-text {
-      text-align: center;
-      order: 1;
+    .hero-install-cmd {
+      padding: var(--space-3) var(--space-4);
     }
 
-    .landing-hero-visual {
-      order: 2;
+    .hero-install-text {
+      font-size: var(--font-size-xs);
     }
 
-    .landing-hero-subhead {
-      font-size: var(--font-size-lg);
-    }
-
-    .landing-hero-command-strip {
-      margin: 0 auto;
-      width: 100%;
-      max-width: 320px;
-    }
-
-    .landing-launch-flow,
-    .landing-launch-truths,
     .landing-install-grid,
     .landing-install-paths,
     .landing-thesis-grid,
@@ -2068,23 +1982,6 @@
     .landing-providers-grid,
     .landing-pricing-grid {
       grid-template-columns: 1fr;
-    }
-
-    .landing-launch-bridge {
-      min-width: 0;
-      justify-content: center;
-    }
-
-    .landing-hero-ctas {
-      flex-direction: column;
-      align-items: stretch;
-      width: 100%;
-      max-width: 320px;
-      margin: 0 auto;
-    }
-
-    .landing-hero-ctas .ui-button--lg {
-      width: 100%;
     }
 
     .landing-journey-note {
