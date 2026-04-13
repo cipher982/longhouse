@@ -61,7 +61,7 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
         let output = stdout.fileHandleForReading.readDataToEndOfFile()
         let errorOutput = stderr.fileHandleForReading.readDataToEndOfFile()
         guard process.terminationStatus == 0 else {
-            let message = String(data: errorOutput, encoding: .utf8) ?? "longhouse local-health failed"
+            let message = String(data: errorOutput, encoding: .utf8) ?? "Longhouse status snapshot failed"
             if shouldSynthesizeSetupRequiredSnapshot(message: message, terminationStatus: process.terminationStatus) {
                 return HealthSnapshot.setupRequiredSnapshot(detail: message)
             }

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from zerg.cli import doctor
-from zerg.services import local_health_ui
+from zerg.services import desktop_app
 from zerg.services import shipper
 from zerg.services.shipper.service import Platform
 
@@ -56,7 +56,7 @@ def test_check_shipper_reports_ambient_app_bundle(tmp_path, monkeypatch):
     _seed_claude_dir(claude_dir, settings={})
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
     monkeypatch.setattr(shipper, "get_service_status", lambda: "running")
-    monkeypatch.setattr(local_health_ui, "get_menubar_service_info", lambda: {
+    monkeypatch.setattr(desktop_app, "get_desktop_app_service_info", lambda: {
         "status": "running",
         "artifact_path": "/Users/test/Applications/Longhouse.app",
         "runtime_mode": "app-bundle",
@@ -75,7 +75,7 @@ def test_check_shipper_warns_when_ambient_ui_uses_legacy_binary_install(tmp_path
     _seed_claude_dir(claude_dir, settings={})
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
     monkeypatch.setattr(shipper, "get_service_status", lambda: "running")
-    monkeypatch.setattr(local_health_ui, "get_menubar_service_info", lambda: {
+    monkeypatch.setattr(desktop_app, "get_desktop_app_service_info", lambda: {
         "status": "running",
         "artifact_path": "/Users/test/.local/bin/longhouse-local-health-menubar",
         "runtime_mode": "broken-install",

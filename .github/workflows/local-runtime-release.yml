@@ -256,7 +256,7 @@ jobs:
         run: |
           VERSION="${RELEASE_TAG#v}"
           AMBIENT_APP_PATH="$RUNNER_TEMP/macos-app-bundles/Longhouse.app"
-          LEGACY_RUNTIME_ARCHIVE="binaries/longhouse-local-health-app-darwin-arm64.zip"
+          DESKTOP_RUNTIME_ARCHIVE="binaries/Longhouse-macos-arm64.zip"
           PUBLIC_DMG_ARCHIVE="binaries/Longhouse-macos-arm64.dmg"
 
           if [[ "$RELEASE_TIER" == "stable" && ( "$NOTARY_ENABLED" != "true" || -z "${NOTARY_PROFILE:-}" ) ]]; then
@@ -270,7 +270,7 @@ jobs:
             NOTARIZATION_STATUS="awaiting-submission"
             PUBLIC_DOWNLOAD_NOTARIZATION_STATUS="awaiting-build"
           else
-            ditto -c -k --sequesterRsrc --keepParent "$AMBIENT_APP_PATH" "$LEGACY_RUNTIME_ARCHIVE"
+            ditto -c -k --sequesterRsrc --keepParent "$AMBIENT_APP_PATH" "$DESKTOP_RUNTIME_ARCHIVE"
           fi
 
           NOTARIZATION_STATUS="$NOTARIZATION_STATUS" \
@@ -296,8 +296,8 @@ jobs:
                       "component": "desktop-app",
                       "bundle_id": "ai.longhouse.app",
                       "app_name": "Longhouse",
-                      "runtime_archive": "longhouse-local-health-app-darwin-arm64.zip",
-                      "public_archive": "Longhouse-macos-arm64.dmg",
+                      "app_archive": "Longhouse-macos-arm64.zip",
+                      "disk_image": "Longhouse-macos-arm64.dmg",
                   }
               ],
           }
@@ -317,7 +317,7 @@ jobs:
           SUBMISSION_FILE="$RUNNER_TEMP/local-runtime-macos-notary-submission.txt"
           scripts/release/macos-notarize-app.sh \
             --app "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
-            --archive binaries/longhouse-local-health-app-darwin-arm64.zip \
+            --archive binaries/Longhouse-macos-arm64.zip \
             --keychain-profile "$NOTARY_PROFILE" \
             --keychain "$KEYCHAIN_PATH" \
             --submission-id-file "$SUBMISSION_FILE" \
@@ -345,7 +345,7 @@ jobs:
           SUBMISSION_ID="$(cat "$RUNNER_TEMP/local-runtime-macos-notary-submission.txt")"
           scripts/release/macos-notarize-app.sh \
             --app "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
-            --archive binaries/longhouse-local-health-app-darwin-arm64.zip \
+            --archive binaries/Longhouse-macos-arm64.zip \
             --keychain-profile "$NOTARY_PROFILE" \
             --keychain "$KEYCHAIN_PATH" \
             --submission-id "$SUBMISSION_ID"
@@ -576,6 +576,6 @@ jobs:
             binaries/longhouse-engine-linux-x64
             binaries/longhouse-engine-linux-arm64
             binaries/Longhouse-macos-arm64.dmg
-            binaries/longhouse-local-health-app-darwin-arm64.zip
+            binaries/Longhouse-macos-arm64.zip
             binaries/local-runtime-macos-packaging.json
             binaries/local-runtime-checksums.txt

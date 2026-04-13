@@ -14,9 +14,9 @@ from pathlib import Path
 import httpx
 import typer
 
-from zerg.services.local_health_ui import default_install_menubar
-from zerg.services.local_health_ui import get_menubar_service_info
-from zerg.services.local_health_ui import uninstall_menubar_service
+from zerg.services.desktop_app import default_install_desktop_app
+from zerg.services.desktop_app import get_desktop_app_service_info
+from zerg.services.desktop_app import uninstall_desktop_app_service
 from zerg.services.local_runtime_installer import install_local_runtime
 from zerg.services.shipper import clear_token
 from zerg.services.shipper import clear_zerg_url
@@ -458,7 +458,7 @@ def connect(
         help="Name for this machine in session labels (skips interactive prompt when using --install)",
     ),
     menubar: bool = typer.Option(
-        default_install_menubar(),
+        default_install_desktop_app(),
         "--menubar/--no-menubar",
         help="Install Longhouse.app in the macOS menu bar when available.",
     ),
@@ -751,7 +751,7 @@ def _handle_status() -> None:
         typer.echo(f"Logs: {info['log_path']}")
 
     if detect_platform() == Platform.MACOS:
-        menubar = get_menubar_service_info()
+        menubar = get_desktop_app_service_info()
         typer.echo("")
         typer.echo(f"Desktop App: {menubar.get('service_name', 'N/A')}")
         menubar_status = menubar["status"]
@@ -788,7 +788,7 @@ def _handle_uninstall() -> None:
         raise typer.Exit(code=1)
 
     if detect_platform() == Platform.MACOS:
-        menubar_result = uninstall_menubar_service()
+        menubar_result = uninstall_desktop_app_service()
         typer.secho(f"[OK] {menubar_result['message']}", fg=typer.colors.GREEN)
 
 

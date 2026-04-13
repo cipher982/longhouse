@@ -704,8 +704,6 @@ def onboard(
     typer.echo("Repair tools (only if you need them later):")
     typer.echo("  longhouse doctor            Diagnose local setup issues")
     typer.echo("  longhouse connect --install Repair the machine agent, desktop app, and automatic imports")
-    if _has_launchd():
-        typer.echo("  longhouse local-health       Check the same local machine status from the CLI")
     typer.echo("")
     typer.echo("Advanced:")
     typer.echo("  longhouse ship               Import existing sessions once")

@@ -37,17 +37,33 @@ RELEASE_CHECKSUMS_FILENAME = "local-runtime-checksums.txt"
 
 class RuntimeComponent(str, Enum):
     ENGINE = "engine"
-    LOCAL_HEALTH_APP = "local-health-app"
-    LOCAL_HEALTH_WINDOW = "local-health-window"
+    DESKTOP_APP = "desktop-app"
+    DESKTOP_WINDOW = "desktop-window"
+    LOCAL_HEALTH_APP = "desktop-app"
+    LOCAL_HEALTH_WINDOW = "desktop-window"
+
+    @classmethod
+    def _missing_(cls, value: object) -> RuntimeComponent | None:
+        legacy_values = {
+            "local-health-app": cls.DESKTOP_APP,
+            "local-health-window": cls.DESKTOP_WINDOW,
+        }
+        if isinstance(value, str):
+            return legacy_values.get(value)
+        return None
 
 
 CANONICAL_BINARY_NAMES: dict[RuntimeComponent, str] = {
     RuntimeComponent.ENGINE: "longhouse-engine",
-    RuntimeComponent.LOCAL_HEALTH_WINDOW: "longhouse-local-health-window",
+    RuntimeComponent.DESKTOP_WINDOW: "longhouse-desktop-window",
 }
 
 CANONICAL_APP_BUNDLE_NAMES: dict[RuntimeComponent, str] = {
-    RuntimeComponent.LOCAL_HEALTH_APP: "Longhouse.app",
+    RuntimeComponent.DESKTOP_APP: "Longhouse.app",
+}
+
+LEGACY_BINARY_NAMES: dict[RuntimeComponent, tuple[str, ...]] = {
+    RuntimeComponent.DESKTOP_WINDOW: ("longhouse-local-health-window",),
 }
 
 
@@ -58,18 +74,18 @@ class RuntimeArtifactKind(str, Enum):
 
 ARTIFACT_KINDS: dict[RuntimeComponent, RuntimeArtifactKind] = {
     RuntimeComponent.ENGINE: RuntimeArtifactKind.EXECUTABLE,
-    RuntimeComponent.LOCAL_HEALTH_APP: RuntimeArtifactKind.APP_BUNDLE,
-    RuntimeComponent.LOCAL_HEALTH_WINDOW: RuntimeArtifactKind.EXECUTABLE,
+    RuntimeComponent.DESKTOP_APP: RuntimeArtifactKind.APP_BUNDLE,
+    RuntimeComponent.DESKTOP_WINDOW: RuntimeArtifactKind.EXECUTABLE,
 }
 
 APP_BUNDLE_EXECUTABLE_RELATIVE_PATHS: dict[RuntimeComponent, Path] = {
-    RuntimeComponent.LOCAL_HEALTH_APP: Path("Contents") / "MacOS" / "Longhouse",
+    RuntimeComponent.DESKTOP_APP: Path("Contents") / "MacOS" / "Longhouse",
 }
 
 DEFAULT_SOURCE_ENV_VARS: dict[RuntimeComponent, str] = {
     RuntimeComponent.ENGINE: "LONGHOUSE_ENGINE_SOURCE",
-    RuntimeComponent.LOCAL_HEALTH_APP: "LONGHOUSE_LOCAL_HEALTH_APP_SOURCE",
-    RuntimeComponent.LOCAL_HEALTH_WINDOW: "LONGHOUSE_LOCAL_HEALTH_WINDOW_SOURCE",
+    RuntimeComponent.DESKTOP_APP: "LONGHOUSE_DESKTOP_APP_SOURCE",
+    RuntimeComponent.DESKTOP_WINDOW: "LONGHOUSE_DESKTOP_WINDOW_SOURCE",
 }
 
 RELEASE_ASSET_FILENAMES: dict[RuntimeComponent, dict[str, str]] = {
@@ -78,7 +94,18 @@ RELEASE_ASSET_FILENAMES: dict[RuntimeComponent, dict[str, str]] = {
         "linux-x64": "longhouse-engine-linux-x64",
         "linux-arm64": "longhouse-engine-linux-arm64",
     },
-    RuntimeComponent.LOCAL_HEALTH_APP: {
+    RuntimeComponent.DESKTOP_APP: {
+        "darwin-arm64": "Longhouse-macos-arm64.zip",
+    },
+}
+
+LEGACY_SOURCE_ENV_VARS: dict[RuntimeComponent, tuple[str, ...]] = {
+    RuntimeComponent.DESKTOP_APP: ("LONGHOUSE_LOCAL_HEALTH_APP_SOURCE",),
+    RuntimeComponent.DESKTOP_WINDOW: ("LONGHOUSE_LOCAL_HEALTH_WINDOW_SOURCE",),
+}
+
+LEGACY_RELEASE_ASSET_FILENAMES: dict[RuntimeComponent, dict[str, str]] = {
+    RuntimeComponent.DESKTOP_APP: {
         "darwin-arm64": "longhouse-local-health-app-darwin-arm64.zip",
     },
 }
@@ -112,6 +139,16 @@ def _canonical_destination(component: RuntimeComponent) -> Path:
     return _local_bin_dir() / CANONICAL_BINARY_NAMES[component]
 
 
+def _installed_destination_candidates(component: RuntimeComponent) -> tuple[Path, ...]:
+    candidates = [_canonical_destination(component)]
+
+    if ARTIFACT_KINDS[component] == RuntimeArtifactKind.EXECUTABLE:
+        for legacy_name in LEGACY_BINARY_NAMES.get(component, ()):
+            candidates.append(_local_bin_dir() / legacy_name)
+
+    return tuple(candidates)
+
+
 def _artifact_launch_path(component: RuntimeComponent, artifact_path: Path) -> Path:
     kind = ARTIFACT_KINDS[component]
     if kind == RuntimeArtifactKind.APP_BUNDLE:
@@ -143,16 +180,27 @@ def _current_release_tag() -> str:
     return f"{RELEASE_TAG_PREFIX}{normalized}"
 
 
-def _default_release_asset_url(component: RuntimeComponent) -> str:
+def _release_asset_filenames(component: RuntimeComponent, target: str) -> tuple[str, ...]:
+    filenames: list[str] = []
+    current = RELEASE_ASSET_FILENAMES.get(component, {}).get(target)
+    legacy = LEGACY_RELEASE_ASSET_FILENAMES.get(component, {}).get(target)
+    for filename in (current, legacy):
+        if filename and filename not in filenames:
+            filenames.append(filename)
+    return tuple(filenames)
+
+
+def _default_release_asset_urls(component: RuntimeComponent) -> tuple[str, ...]:
     target = _platform_target()
-    release_assets = RELEASE_ASSET_FILENAMES.get(component)
-    if not release_assets:
+    asset_names = _release_asset_filenames(component, target)
+    if not asset_names:
         raise RuntimeError(f"{component.value} is a local-only runtime artifact and has no published release asset")
-    asset_name = release_assets.get(target)
-    if not asset_name:
-        raise RuntimeError(f"No released {component.value} binary for platform target {target}")
     tag = _current_release_tag()
-    return f"https://github.com/{RELEASE_REPO}/releases/download/{tag}/{asset_name}"
+    return tuple(f"https://github.com/{RELEASE_REPO}/releases/download/{tag}/{asset_name}" for asset_name in asset_names)
+
+
+def _default_release_asset_url(component: RuntimeComponent) -> str:
+    return _default_release_asset_urls(component)[0]
 
 
 def _release_download_info(url: str) -> tuple[str, str] | None:
@@ -215,14 +263,15 @@ def _verify_download_checksum(url: str, downloaded_path: Path) -> None:
 
 
 def resolve_installed_runtime_artifact(component: RuntimeComponent) -> InstalledRuntimeArtifact | None:
-    canonical_path = _canonical_destination(component)
-    if canonical_path.exists():
-        launch_path = _artifact_launch_path(component, canonical_path)
+    for installed_path in _installed_destination_candidates(component):
+        if not installed_path.exists():
+            continue
+        launch_path = _artifact_launch_path(component, installed_path)
         if launch_path.exists():
             source = "local-runtime-app" if ARTIFACT_KINDS[component] == RuntimeArtifactKind.APP_BUNDLE else "local-runtime-bin"
             return InstalledRuntimeArtifact(
                 component=component,
-                path=str(canonical_path),
+                path=str(installed_path),
                 launch_path=str(launch_path),
                 source=source,
                 installed_now=False,
@@ -338,6 +387,16 @@ def _install_artifact_from_remote_source(
         temp_path.unlink(missing_ok=True)
 
 
+def _resolve_source_override(component: RuntimeComponent, source_override: str | None) -> str:
+    candidates = [source_override, os.getenv(DEFAULT_SOURCE_ENV_VARS[component])]
+    candidates.extend(os.getenv(env_var) for env_var in LEGACY_SOURCE_ENV_VARS.get(component, ()))
+    for candidate in candidates:
+        raw = (candidate or "").strip()
+        if raw:
+            return raw
+    return ""
+
+
 def ensure_runtime_artifact(
     component: RuntimeComponent,
     *,
@@ -353,7 +412,7 @@ def ensure_runtime_artifact(
     4. released GitHub asset for the current Longhouse version
     """
 
-    raw_override = (source_override or os.getenv(DEFAULT_SOURCE_ENV_VARS[component]) or "").strip()
+    raw_override = _resolve_source_override(component, source_override)
     destination_path = _canonical_destination(component)
 
     if not raw_override and not overwrite:
@@ -369,9 +428,21 @@ def ensure_runtime_artifact(
             _install_artifact_from_local_source(component, Path(raw_override), destination_path)
             source = str(Path(raw_override).expanduser())
     else:
-        release_url = _default_release_asset_url(component)
-        _install_artifact_from_remote_source(component, release_url, destination_path)
-        source = release_url
+        source = None
+        last_http_error: httpx.HTTPError | None = None
+        for release_url in _default_release_asset_urls(component):
+            try:
+                _install_artifact_from_remote_source(component, release_url, destination_path)
+                source = release_url
+                break
+            except httpx.HTTPError as exc:
+                last_http_error = exc
+        if source is None:
+            if last_http_error is not None:
+                raise RuntimeError(
+                    f"No released {component.value} artifact is available for platform target {_platform_target()}"
+                ) from last_http_error
+            raise RuntimeError(f"Unable to install released runtime artifact for {component.value}")
 
     return InstalledRuntimeArtifact(
         component=component,

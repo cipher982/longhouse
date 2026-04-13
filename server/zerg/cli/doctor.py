@@ -431,12 +431,12 @@ def _check_shipper() -> list[CheckResult]:
         pass
 
     try:
-        from zerg.services.local_health_ui import get_menubar_service_info
+        from zerg.services.desktop_app import get_desktop_app_service_info
         from zerg.services.shipper.service import Platform
         from zerg.services.shipper.service import detect_platform
 
         if detect_platform() == Platform.MACOS:
-            ambient = get_menubar_service_info()
+            ambient = get_desktop_app_service_info()
             ambient_status = ambient.get("status")
             if ambient_status == "running":
                 results.append(CheckResult(PASS, "Desktop App running"))

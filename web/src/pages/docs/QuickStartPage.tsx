@@ -78,8 +78,7 @@ longhouse codex     # Codex CLI with control channel`}
       </p>
       <CodeBlock title="terminal">
         {`longhouse doctor            # diagnose issues
-longhouse connect --install  # repair onboarding and automatic imports
-longhouse local-health       # check local status`}
+longhouse connect --install  # repair onboarding and automatic imports`}
       </CodeBlock>
       <p>
         On macOS, the menu bar app shows the same health information in ambient

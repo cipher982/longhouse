@@ -1,6 +1,6 @@
 """Local Longhouse engine health snapshot helpers.
 
-This module is the canonical local-health classifier for the CLI and future
+This module is the canonical local status classifier for the CLI and future
 desktop surfaces. It combines raw local probes with a small derived state model
 without hiding the underlying signals.
 """

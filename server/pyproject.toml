@@ -82,8 +82,8 @@ packages = ["zerg"]
 # Bundle the frontend dist into the package for pip install deployment
 # This allows `longhouse serve` to serve the UI without needing the repo
 "../web/dist" = "zerg/_frontend_dist"
-# Bundle the shared local-health Swift package so source/wheel installs can
-# still launch the desktop surface when a prebuilt binary is unavailable.
+# Bundle the shared desktop Swift package so source/wheel installs can
+# still launch the macOS surface when a prebuilt binary is unavailable.
 "../desktop/LonghouseMenuBarHarness/Package.swift" = "zerg/_desktop/LonghouseMenuBarHarness/Package.swift"
 "../desktop/LonghouseMenuBarHarness/Sources" = "zerg/_desktop/LonghouseMenuBarHarness/Sources"
 "../desktop/LonghouseMenuBarHarness/Fixtures" = "zerg/_desktop/LonghouseMenuBarHarness/Fixtures"

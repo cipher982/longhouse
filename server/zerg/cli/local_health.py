@@ -10,15 +10,15 @@ from pathlib import Path
 
 import typer
 
+from zerg.services.desktop_app import build_snapshot_arguments
 from zerg.services.local_health import collect_local_health
-from zerg.services.local_health_ui import build_local_health_arguments
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 from zerg.services.shipper import get_zerg_url
 
 app = typer.Typer(
     name="local-health",
-    help="Inspect local Longhouse shipping health and launch the ambient macOS UI.",
+    help="Inspect local Longhouse shipping health and launch the Longhouse desktop app.",
     invoke_without_command=True,
     no_args_is_help=False,
 )
@@ -147,7 +147,7 @@ def _launch_desktop_surface(
     allow_source_fallback: bool = False,
 ) -> None:
     ui_url = get_zerg_url(Path(claude_dir) if claude_dir else None)
-    health_arguments = build_local_health_arguments(claude_dir=claude_dir)
+    health_arguments = build_snapshot_arguments(claude_dir=claude_dir)
 
     prebuilt_artifact = _prebuilt_runtime_artifact(component) if component is not None else None
     if prebuilt_artifact is not None:
@@ -163,7 +163,7 @@ def _launch_desktop_surface(
             command.extend(["--health-arg", argument])
         if ui_url:
             command.extend(["--ui-url", ui_url])
-        cwd = Path(prebuilt_artifact.path) if component == RuntimeComponent.LOCAL_HEALTH_APP else Path(prebuilt_artifact.launch_path).parent
+        cwd = Path(prebuilt_artifact.path) if component == RuntimeComponent.DESKTOP_APP else Path(prebuilt_artifact.launch_path).parent
     else:
         if not allow_source_fallback:
             typer.secho(
@@ -196,7 +196,7 @@ def _launch_desktop_surface(
                 typer.secho(f"Missing required tool: {exc.filename}", fg=typer.colors.RED)
                 raise typer.Exit(code=1) from exc
             except subprocess.CalledProcessError as exc:
-                typer.secho(f"Desktop local-health UI failed with exit code {exc.returncode}.", fg=typer.colors.RED)
+                typer.secho(f"Longhouse desktop UI failed with exit code {exc.returncode}.", fg=typer.colors.RED)
                 raise typer.Exit(code=exc.returncode or 1) from exc
 
     try:
@@ -205,7 +205,7 @@ def _launch_desktop_surface(
         typer.secho(f"Missing required tool: {exc.filename}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
     except subprocess.CalledProcessError as exc:
-        typer.secho(f"Desktop local-health UI failed with exit code {exc.returncode}.", fg=typer.colors.RED)
+        typer.secho(f"Longhouse desktop UI failed with exit code {exc.returncode}.", fg=typer.colors.RED)
         raise typer.Exit(code=exc.returncode or 1) from exc
 
 
@@ -231,11 +231,11 @@ def local_health_window(
     ctx: typer.Context,
     refresh_seconds: int = typer.Option(10, "--refresh-seconds", min=2, help="Live refresh cadence in seconds."),
 ) -> None:
-    """Launch the developer window-host for local-health UI debugging."""
+    """Launch the developer window-host for desktop UI debugging."""
     claude_dir = (ctx.obj or {}).get("claude_dir")
     _launch_desktop_surface(
         product="LonghouseMenuBarHarnessApp",
-        component=RuntimeComponent.LOCAL_HEALTH_WINDOW,
+        component=RuntimeComponent.DESKTOP_WINDOW,
         claude_dir=claude_dir,
         refresh_seconds=refresh_seconds,
         allow_source_fallback=True,
@@ -247,11 +247,11 @@ def local_health_menubar(
     ctx: typer.Context,
     refresh_seconds: int = typer.Option(10, "--refresh-seconds", min=2, help="Live refresh cadence in seconds."),
 ) -> None:
-    """Launch the ambient macOS menu bar UI for local shipping health."""
+    """Launch the Longhouse desktop app in menu bar mode."""
     claude_dir = (ctx.obj or {}).get("claude_dir")
     _launch_desktop_surface(
         product="LonghouseMenuBarHarnessMenuBar",
-        component=RuntimeComponent.LOCAL_HEALTH_APP,
+        component=RuntimeComponent.DESKTOP_APP,
         claude_dir=claude_dir,
         refresh_seconds=refresh_seconds,
     )

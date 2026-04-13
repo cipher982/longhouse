@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from zerg.services.local_health_ui import install_menubar_service
+from zerg.services.desktop_app import install_desktop_app_service
 from zerg.services.runtime_artifacts import InstalledRuntimeBinary
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import ensure_runtime_binary
@@ -76,7 +76,7 @@ def install_local_runtime(
 
     desktop_app_result = None
     if menubar:
-        desktop_app_result = install_menubar_service(
+        desktop_app_result = install_desktop_app_service(
             ui_url=url,
             claude_dir=claude_dir,
         )

@@ -37,7 +37,7 @@ def test_ensure_runtime_binary_uses_existing_engine_on_path(monkeypatch, tmp_pat
 def test_ensure_runtime_binary_copies_window_host_from_local_override(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
-    source = tmp_path / "build" / "longhouse-local-health-window"
+    source = tmp_path / "build" / "longhouse-desktop-window"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("window")
     source.chmod(0o755)
@@ -46,11 +46,11 @@ def test_ensure_runtime_binary_copies_window_host_from_local_override(monkeypatc
     monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
 
     result = runtime_artifacts.ensure_runtime_binary(
-        runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_WINDOW,
+        runtime_artifacts.RuntimeComponent.DESKTOP_WINDOW,
         source_override=str(source),
     )
 
-    destination = home / ".local" / "bin" / "longhouse-local-health-window"
+    destination = home / ".local" / "bin" / "longhouse-desktop-window"
     assert destination.exists()
     assert destination.read_text() == "window"
     assert result.path == str(destination)
@@ -71,7 +71,7 @@ def test_ensure_runtime_artifact_copies_app_bundle_from_local_override(monkeypat
     monkeypatch.setattr(runtime_artifacts, "_local_applications_dir", lambda: home / "Applications")
 
     result = runtime_artifacts.ensure_runtime_artifact(
-        runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_APP,
+        runtime_artifacts.RuntimeComponent.DESKTOP_APP,
         source_override=str(source_app),
     )
 
@@ -136,7 +136,7 @@ def test_ensure_runtime_artifact_uses_release_url_for_app_bundle(monkeypatch, tm
     monkeypatch.setattr(runtime_artifacts, "_platform_target", lambda: "darwin-arm64")
     monkeypatch.setattr(runtime_artifacts.metadata, "version", lambda package: "0.1.9")
 
-    result = runtime_artifacts.ensure_runtime_artifact(runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_APP)
+    result = runtime_artifacts.ensure_runtime_artifact(runtime_artifacts.RuntimeComponent.DESKTOP_APP)
 
     expected_path = home / "Applications" / "Longhouse.app"
     assert result.path == str(expected_path)
@@ -145,16 +145,47 @@ def test_ensure_runtime_artifact_uses_release_url_for_app_bundle(monkeypatch, tm
     assert result.kind == runtime_artifacts.RuntimeArtifactKind.APP_BUNDLE
     assert downloads == [
         (
-            runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_APP,
-            "https://github.com/cipher982/longhouse/releases/download/v0.1.9/longhouse-local-health-app-darwin-arm64.zip",
+            runtime_artifacts.RuntimeComponent.DESKTOP_APP,
+            "https://github.com/cipher982/longhouse/releases/download/v0.1.9/Longhouse-macos-arm64.zip",
             expected_path,
         )
     ]
 
 
-def test_local_health_window_has_no_published_release_asset():
+def test_desktop_window_has_no_published_release_asset():
     with pytest.raises(RuntimeError, match="local-only runtime artifact"):
-        runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.LOCAL_HEALTH_WINDOW)
+        runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.DESKTOP_WINDOW)
+
+
+def test_ensure_runtime_artifact_falls_back_to_legacy_release_asset_when_canonical_zip_missing(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    attempted_urls: list[str] = []
+
+    def fake_install_remote(component: runtime_artifacts.RuntimeComponent, url: str, destination_path: Path) -> None:
+        attempted_urls.append(url)
+        if url.endswith("Longhouse-macos-arm64.zip"):
+            request = runtime_artifacts.httpx.Request("GET", url)
+            response = runtime_artifacts.httpx.Response(404, request=request)
+            raise runtime_artifacts.httpx.HTTPStatusError("missing", request=request, response=response)
+        executable = destination_path / "Contents" / "MacOS" / "Longhouse"
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text("app")
+        executable.chmod(0o755)
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(runtime_artifacts, "_local_applications_dir", lambda: home / "Applications")
+    monkeypatch.setattr(runtime_artifacts, "_install_artifact_from_remote_source", fake_install_remote)
+    monkeypatch.setattr(runtime_artifacts, "_platform_target", lambda: "darwin-arm64")
+    monkeypatch.setattr(runtime_artifacts.metadata, "version", lambda package: "0.1.9")
+
+    result = runtime_artifacts.ensure_runtime_artifact(runtime_artifacts.RuntimeComponent.DESKTOP_APP)
+
+    assert result.source == "https://github.com/cipher982/longhouse/releases/download/v0.1.9/longhouse-local-health-app-darwin-arm64.zip"
+    assert attempted_urls == [
+        "https://github.com/cipher982/longhouse/releases/download/v0.1.9/Longhouse-macos-arm64.zip",
+        "https://github.com/cipher982/longhouse/releases/download/v0.1.9/longhouse-local-health-app-darwin-arm64.zip",
+    ]
 
 
 def test_verify_download_checksum_accepts_matching_release_asset(monkeypatch, tmp_path: Path):

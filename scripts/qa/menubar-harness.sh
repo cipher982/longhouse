@@ -194,7 +194,7 @@ capture_window_render() {
   "$app_bin" --input "$input_json" --quit-after 30 >/dev/null 2>&1 &
   pid=$!
 
-  if ! window_id="$(wait_for_window_id "LonghouseMenuBarHarnessApp" "Longhouse Local Health")"; then
+  if ! window_id="$(wait_for_window_id "LonghouseMenuBarHarnessApp" "Longhouse Desktop")"; then
     capture_status=$?
   fi
 

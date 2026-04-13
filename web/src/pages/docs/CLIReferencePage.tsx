@@ -119,10 +119,6 @@ longhouse sessions continue SESSION_ID`}
       <p>Diagnose common issues with the local installation and environment.</p>
       <CodeBlock title="terminal">{`longhouse doctor`}</CodeBlock>
 
-      <h3>longhouse local-health</h3>
-      <p>Detailed local health check. On macOS, the menu bar app shows this in ambient form.</p>
-      <CodeBlock title="terminal">{`longhouse local-health`}</CodeBlock>
-
       <h3>longhouse connect</h3>
       <p>Manage the background session shipping service.</p>
       <CodeBlock title="terminal">

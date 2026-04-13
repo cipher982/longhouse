@@ -71,7 +71,7 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
     monkeypatch.setattr(installer, "install_hooks", lambda **kwargs: ["hooks installed"])
     monkeypatch.setattr(
         installer,
-        "install_menubar_service",
+        "install_desktop_app_service",
         lambda **kwargs: calls.append(("desktop", kwargs)) or {
             "message": "desktop app installed",
             "plist_path": "/tmp/menubar.plist",

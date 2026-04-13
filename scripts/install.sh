@@ -527,9 +527,6 @@ print_success() {
     echo "Repair tools (only if you need them later):"
     echo "  longhouse doctor            Diagnose local setup issues"
     echo "  longhouse connect --install Repair the machine agent, desktop app, and automatic imports"
-    if [[ "$is_macos" == "1" ]]; then
-        echo "  longhouse local-health      Check the same local machine status from the CLI"
-    fi
     echo ""
     echo "Advanced:"
     echo "  longhouse ship              Import existing sessions once"
