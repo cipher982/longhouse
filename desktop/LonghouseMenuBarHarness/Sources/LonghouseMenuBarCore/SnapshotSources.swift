@@ -34,7 +34,13 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
     public let launchPath: String
     public let arguments: [String]
 
-    public init(launchPath: String = "/bin/zsh", arguments: [String] = ["-lc", "longhouse local-health --json"]) {
+    public init() {
+        let invocation = LonghouseCLI.defaultHealthInvocation()
+        self.launchPath = invocation.launchPath
+        self.arguments = invocation.arguments
+    }
+
+    public init(launchPath: String, arguments: [String]) {
         self.launchPath = launchPath
         self.arguments = arguments
     }
@@ -43,6 +49,7 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
         process.arguments = arguments
+        process.environment = LonghouseCLI.environment(prependingExecutablePath: launchPath)
 
         let stdout = Pipe()
         let stderr = Pipe()
@@ -55,9 +62,25 @@ public struct CLIHealthSnapshotSource: HealthSnapshotSource {
         let errorOutput = stderr.fileHandleForReading.readDataToEndOfFile()
         guard process.terminationStatus == 0 else {
             let message = String(data: errorOutput, encoding: .utf8) ?? "longhouse local-health failed"
+            if shouldSynthesizeSetupRequiredSnapshot(message: message, terminationStatus: process.terminationStatus) {
+                return HealthSnapshot.setupRequiredSnapshot(detail: message)
+            }
             throw SnapshotSourceError.commandFailed(message)
         }
         return try HealthSnapshotDecoder.decode(data: output)
+    }
+
+    private func shouldSynthesizeSetupRequiredSnapshot(message: String, terminationStatus: Int32) -> Bool {
+        guard terminationStatus == 127 else {
+            return false
+        }
+
+        let attemptedCommand = ([launchPath] + arguments).joined(separator: " ").lowercased()
+        guard attemptedCommand.contains("longhouse") else {
+            return false
+        }
+
+        return message.lowercased().contains("command not found")
     }
 }
 
@@ -268,8 +291,11 @@ public struct HarnessRuntimeConfig {
             if let healthExecutablePath {
                 source = CLIHealthSnapshotSource(launchPath: healthExecutablePath, arguments: healthArguments)
             } else {
-                let liveArguments = healthCommand.map { ["-lc", $0] } ?? ["-lc", "longhouse local-health --json"]
-                source = CLIHealthSnapshotSource(arguments: liveArguments)
+                if let healthCommand {
+                    source = CLIHealthSnapshotSource(launchPath: "/bin/zsh", arguments: ["-lc", healthCommand])
+                } else {
+                    source = CLIHealthSnapshotSource()
+                }
             }
         } else {
             throw SnapshotSourceError.invalidArguments("Pass either --input <file> or --live")
