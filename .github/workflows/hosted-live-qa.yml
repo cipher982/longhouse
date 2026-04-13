@@ -1,18 +1,9 @@
 name: Hosted Live QA
 
 on:
-  workflow_run:
-    workflows: ["Deploy and Verify"]
-    types: [completed]
-    branches: [main]
   schedule:
     - cron: '41 10 * * *'
   workflow_dispatch: {}
-
-concurrency:
-  group: ${{ (github.event_name == 'workflow_dispatch' || github.event.workflow_run.event == 'workflow_dispatch') && format('hosted-live-qa-manual-{0}', github.event_name == 'workflow_dispatch' && github.run_id || github.event.workflow_run.id) || format('hosted-live-qa-{0}', github.event.workflow_run.head_branch || github.ref_name) }}
-  # Run hosted QA for every deployed main commit in order.
-  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -20,9 +11,8 @@ permissions:
 jobs:
   hosted-live-qa:
     name: "hosted-live-qa"
-    runs-on: ubuntu-latest
+    runs-on: cube-deploy
     timeout-minutes: 25
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
       QA_INSTANCE_SUBDOMAIN: david010
@@ -31,8 +21,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Restore Bun download cache
         uses: actions/cache@v4
@@ -112,7 +100,7 @@ jobs:
             echo ""
             echo "- Instance: \`$QA_INSTANCE_SUBDOMAIN\`"
             echo "- Trigger: \`${{ github.event_name }}\`"
-            echo "- Commit: \`${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}\`"
+            echo "- Commit: \`${{ github.sha }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
             echo "- qa-live-chat: \`${{ steps.qa_live_chat.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"

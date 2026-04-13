@@ -7,11 +7,6 @@ on:
 
 run-name: push-pr-ci--${{ github.ref_name }}--${{ github.sha }}
 
-concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('push-pr-ci-manual-{0}', github.run_id) || (github.event_name == 'pull_request' && format('push-pr-ci-pr-{0}', github.event.pull_request.number)) || format('push-pr-ci-branch-{0}', github.ref_name) }}
-  # Keep PR dedupe, but never preempt default-branch pushes; every main SHA must clear CI.
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' && !(github.event_name == 'push' && github.ref_name == github.event.repository.default_branch) }}
-
 env:
   # Self-hosted runners can have global pip config pointing at private indexes.
   # Force public PyPI for CI so setup-python's pip step doesn't fail.

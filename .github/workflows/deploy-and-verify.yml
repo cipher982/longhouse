@@ -1,21 +1,14 @@
 name: Deploy and Verify
 
 on:
-  workflow_run:
-    workflows: ["Publish Runtime Image"]
-    types: [completed]
+  push:
     branches: [main]
   workflow_dispatch:
     inputs:
       runtime_image_tag:
-        description: "Override runtime image tag for manual deploys (defaults to latest for recovery runs)"
+        description: "Override runtime image tag for manual deploys (defaults to the current SHA)"
         required: false
         type: string
-
-concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('deploy-and-verify-manual-{0}', github.run_id) || format('deploy-and-verify-{0}', github.event.workflow_run.head_branch || github.ref_name) }}
-  # Deploy main in commit order; never preempt an already-approved SHA.
-  cancel-in-progress: false
 
 permissions:
   actions: read
@@ -24,10 +17,10 @@ permissions:
 
 jobs:
   gate:
-    name: "Gate deploy on full CI"
+    name: "Queue deploy behind earlier main SHAs + green CI"
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
+      predecessor_sha: ${{ steps.meta.outputs.predecessor_sha }}
       head_sha: ${{ steps.meta.outputs.head_sha }}
       head_branch: ${{ steps.meta.outputs.head_branch }}
       runtime_image_name: ${{ steps.meta.outputs.runtime_image_name }}
@@ -42,18 +35,26 @@ jobs:
       - name: Resolve target commit
         id: meta
         run: |
-          HEAD_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
-          HEAD_BRANCH="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}"
+          HEAD_SHA="${{ github.sha }}"
+          HEAD_BRANCH="${{ github.ref_name }}"
+          PREDECESSOR_SHA=""
           IMAGE_TAG=""
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            PREDECESSOR_SHA="${{ github.event.before }}"
+            if [[ "$PREDECESSOR_SHA" =~ ^0+$ ]]; then
+              PREDECESSOR_SHA=""
+            fi
+          else
             IMAGE_TAG="${{ github.event.inputs.runtime_image_tag || '' }}"
           fi
-          if [[ -z "$IMAGE_TAG" && "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            IMAGE_TAG="latest"
-          elif [[ -z "$IMAGE_TAG" ]]; then
+
+          if [[ -z "$IMAGE_TAG" ]]; then
             IMAGE_TAG="$HEAD_SHA"
           fi
+
           {
+            echo "predecessor_sha=$PREDECESSOR_SHA"
             echo "head_sha=$HEAD_SHA"
             echo "head_branch=$HEAD_BRANCH"
             echo "runtime_image_name=ghcr.io/${{ github.repository_owner }}/longhouse-runtime"
@@ -61,29 +62,96 @@ jobs:
             echo "runtime_image_ref=ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Wait for previous main deploy to clear
+        if: ${{ github.event_name == 'push' && steps.meta.outputs.predecessor_sha != '' }}
+        uses: ./.github/actions/wait-for-ci
+        with:
+          head_sha: ${{ steps.meta.outputs.predecessor_sha }}
+          head_branch: ${{ steps.meta.outputs.head_branch }}
+          github_token: ${{ github.token }}
+          workflow_id: deploy-and-verify.yml
+          event: push
+          require_success: "false"
+          allow_missing: "true"
+          timeout_seconds: "7200"
+
       - name: Wait for full CI gate
-        if: ${{ github.event_name != 'workflow_dispatch' }}
+        if: ${{ github.event_name == 'push' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.head_sha }}
           head_branch: ${{ steps.meta.outputs.head_branch }}
           github_token: ${{ github.token }}
 
-  deploy-demo:
-    name: "Deploy public demo runtime"
-    runs-on: cube-deploy
-    timeout-minutes: 20
-    needs: gate
+      - name: Wait for runtime image publish
+        if: ${{ github.event_name == 'push' }}
+        uses: ./.github/actions/wait-for-ci
+        with:
+          head_sha: ${{ steps.meta.outputs.head_sha }}
+          head_branch: ${{ steps.meta.outputs.head_branch }}
+          github_token: ${{ github.token }}
+          workflow_id: runtime-image.yml
+          event: workflow_run
+          timeout_seconds: "3600"
 
+  deploy-and-verify:
+    name: "Deploy demo + canary + hosted live QA"
+    runs-on: cube-deploy
+    timeout-minutes: 60
+    needs: gate
     env:
+      CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+      CONTROL_PLANE_URL: https://control.longhouse.ai
       PUBLIC_DEMO_URL: https://longhouse.ai
       INSTANCE_SUBDOMAIN: david010
+      QA_HOME: /tmp/hosted-live-qa-${{ github.run_id }}-${{ github.run_attempt }}
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
       ZERG_HOST: 100.120.197.80
 
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.gate.outputs.head_sha }}
+
+      - name: Restore Bun download cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: longhouse-bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            longhouse-bun-${{ runner.os }}-
+
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: longhouse-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            longhouse-playwright-${{ runner.os }}-
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.2.20'
+
+      - name: Install JS deps
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers + deps
+        run: cd e2e && bunx playwright install --with-deps chromium
+
+      - name: Prepare isolated QA home
+        run: mkdir -p "$QA_HOME" "$PLAYWRIGHT_BROWSERS_PATH"
 
       - name: Setup SSH
         env:
@@ -108,32 +176,11 @@ jobs:
             --docker-tag "${{ needs.gate.outputs.runtime_image_tag }}" \
             --timeout 900
 
-  reprovision-canary:
-    name: "Reprovision hosted canary"
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    needs: gate
-    outputs:
-      instance_id: ${{ steps.instance.outputs.instance_id }}
-      instance_url: ${{ steps.instance.outputs.instance_url }}
-      frontend_url: ${{ steps.instance.outputs.frontend_url }}
-      api_url: ${{ steps.instance.outputs.api_url }}
-    env:
-      CONTROL_PLANE_URL: https://control.longhouse.ai
-      INSTANCE_SUBDOMAIN: david010
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.gate.outputs.head_sha }}
-
       - name: Wait for control plane
         run: ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
 
       - name: Resolve hosted canary instance
         id: instance
-        env:
-          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
         run: |
           . scripts/lib/hosted-instance.sh
           lh_hosted_prepare_target "$INSTANCE_SUBDOMAIN" "" ""
@@ -145,54 +192,54 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Reprovision hosted canary
-        env:
-          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
         run: |
           . scripts/lib/hosted-instance.sh
           lh_hosted_reprovision "${{ steps.instance.outputs.instance_id }}" "${{ needs.gate.outputs.runtime_image_ref }}"
 
-  verify:
-    name: "Verify demo + hosted canary"
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs:
-      - gate
-      - deploy-demo
-      - reprovision-canary
-    if: ${{ always() && needs.gate.result == 'success' }}
-    env:
-      PUBLIC_DEMO_URL: https://longhouse.ai
-      CONTROL_PLANE_URL: https://control.longhouse.ai
-      INSTANCE_SUBDOMAIN: david010
-      INSTANCE_URL: ${{ needs.reprovision-canary.outputs.instance_url }}
-      FRONTEND_URL: ${{ needs.reprovision-canary.outputs.frontend_url }}
-      API_URL: ${{ needs.reprovision-canary.outputs.api_url }}
-
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.gate.outputs.head_sha }}
-
-      - name: Fail if deploy prerequisites failed
-        if: ${{ needs.deploy-demo.result != 'success' || needs.reprovision-canary.result != 'success' }}
-        run: |
-          echo "Deploy prerequisites failed:"
-          echo "  deploy-demo=${{ needs.deploy-demo.result }}"
-          echo "  reprovision-canary=${{ needs.reprovision-canary.result }}"
-          exit 1
-
       - name: Wait for public demo, control plane, and hosted canary
-        if: ${{ needs.deploy-demo.result == 'success' && needs.reprovision-canary.result == 'success' }}
+        env:
+          API_URL: ${{ steps.instance.outputs.api_url }}
         run: |
           ./scripts/ci/wait-for-http.sh "$PUBLIC_DEMO_URL/api/health" "Public demo runtime"
           ./scripts/ci/wait-for-http.sh "$CONTROL_PLANE_URL/health" "Control plane"
           ./scripts/ci/wait-for-http.sh "$API_URL/api/health" "Hosted canary"
 
       - name: Run smoke tests
-        if: ${{ needs.deploy-demo.result == 'success' && needs.reprovision-canary.result == 'success' }}
         env:
-          CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}
+          API_URL: ${{ steps.instance.outputs.api_url }}
+          FRONTEND_URL: ${{ steps.instance.outputs.frontend_url }}
+          INSTANCE_URL: ${{ steps.instance.outputs.instance_url }}
         run: ./scripts/qa/smoke-prod.sh --no-llm
+
+      - name: Run hosted live QA
+        id: qa_live
+        env:
+          HOME: ${{ env.QA_HOME }}
+        run: |
+          attempts=0
+          until make qa-live; do
+            attempts=$((attempts + 1))
+            if [[ "$attempts" -ge 2 ]]; then
+              exit 1
+            fi
+            echo "qa-live failed; retrying once after 5s..." >&2
+            sleep 5
+          done
+
+      - name: Run hosted chat QA
+        id: qa_live_chat
+        env:
+          HOME: ${{ env.QA_HOME }}
+        run: |
+          attempts=0
+          until make qa-live-chat; do
+            attempts=$((attempts + 1))
+            if [[ "$attempts" -ge 2 ]]; then
+              exit 1
+            fi
+            echo "qa-live-chat failed; retrying once after 5s..." >&2
+            sleep 5
+          done
 
       - name: Summary
         if: always()
@@ -201,17 +248,29 @@ jobs:
             echo "## Runtime Deploy + Verify Results"
             echo ""
             echo "- **Hosted canary:** $INSTANCE_SUBDOMAIN"
-            echo "- **Hosted canary URL:** $INSTANCE_URL"
+            echo "- **Hosted canary URL:** ${{ steps.instance.outputs.instance_url || 'unresolved' }}"
             echo "- **Public demo:** $PUBLIC_DEMO_URL"
             echo "- **Control plane:** $CONTROL_PLANE_URL"
             echo "- **Commit:** ${{ needs.gate.outputs.head_sha }}"
             echo "- **Demo image:** \`${{ needs.gate.outputs.runtime_image_name }}:${{ needs.gate.outputs.runtime_image_tag }}\`"
-            echo "- **Demo deploy job:** \`${{ needs.deploy-demo.result }}\`"
-            echo "- **Canary reprovision job:** \`${{ needs.reprovision-canary.result }}\`"
+            echo "- **qa-live:** \`${{ steps.qa_live.outcome || 'skipped' }}\`"
+            echo "- **qa-live-chat:** \`${{ steps.qa_live_chat.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Upload live QA artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: hosted-live-qa-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            /tmp/qa-live-fail-*.png
+            e2e/test-results
+            e2e/playwright-report
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Create GitHub issue on failure
-        if: ${{ failure() || needs.deploy-demo.result != 'success' || needs.reprovision-canary.result != 'success' }}
+        if: failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -220,16 +279,17 @@ jobs:
             exit 0
           fi
           COMMIT_SHA="${{ needs.gate.outputs.head_sha }}"
+          INSTANCE_URL="${{ steps.instance.outputs.instance_url }}"
           gh issue create \
             --title "Runtime deploy smoke failed for ${COMMIT_SHA:0:7}" \
             --body "$(cat <<EOF_BODY
-          Smoke tests failed after deploying runtime commit ${COMMIT_SHA}.
+          Runtime deploy and/or hosted QA failed for commit ${COMMIT_SHA}.
 
-          - Hosted canary: $INSTANCE_URL
+          - Hosted canary: ${INSTANCE_URL:-unresolved}
           - Public demo: $PUBLIC_DEMO_URL
           - Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
-          Check the workflow logs for which checks failed.
+          Check the workflow logs for which step failed.
           EOF_BODY
           )" \
             --label "deploy-failure"
