@@ -698,7 +698,7 @@
 
   .landing-surface-note {
     max-width: 760px;
-    margin: var(--space-8) 0 0;
+    margin: var(--space-8) auto 0;
     padding: var(--space-5) var(--space-6);
     background: rgba(201, 166, 107, 0.08);
     border: 1px solid rgba(201, 166, 107, 0.14);
@@ -714,6 +714,15 @@
   .landing-surface-note p + p {
     margin-top: var(--space-2);
     color: var(--color-text-secondary);
+  }
+
+  .landing-surface-note a {
+    color: var(--color-brand-primary);
+    text-decoration: none;
+  }
+
+  .landing-surface-note a:hover {
+    text-decoration: underline;
   }
 
 
@@ -836,7 +845,7 @@
     grid-template-columns: repeat(2, 1fr);
     gap: var(--space-6);
     max-width: 960px;
-    margin: 0;
+    margin: 0 auto;
   }
 
   .landing-pricing-card {
