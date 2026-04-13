@@ -1,770 +1,116 @@
-# Swarm Platform (Oikos + Zerg Monorepo)
+# Longhouse
 
-# ---------------------------------------------------------------------------
-# Load environment variables from .env
-# ---------------------------------------------------------------------------
 -include .env
 export $(shell sed 's/=.*//' .env 2>/dev/null || true)
 
-# Compose helpers (keep flags consistent across targets)
 COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/docker-compose.dev.yml
 
-.PHONY: help dev dev-demo demo-db stop import-smoke dev-docker dev-docker-bg stop-docker logs logs-app logs-db doctor dev-reset-db reset test test-readmes test-autonomy-journeys run-autonomy-journeys ensure-js-deps ensure-playwright-browser test-control-plane test-e2e-cp test-integration test-e2e test-e2e-core test-full test-chat-e2e test-e2e-single test-e2e-continuation-provider test-e2e-ui test-e2e-verbose test-e2e-errors test-e2e-query test-e2e-grep test-e2e-a11y test-e2e-onboarding qa-ui qa-ui-visual qa-ui-smoke qa-ui-smoke-update qa-ui-baseline qa-ui-baseline-update qa-ui-baseline-mobile qa-ui-baseline-mobile-update qa-ui-full qa-oss qa-live qa-live-chat qa-live-conversations qa-live-perf menubar-harness-test menubar-harness-fixtures menubar-harness-live menubar-harness-smoke menubar-harness-xcuitest menubar-harness-full menubar-harness-window menubar-harness-menubar reprovision deploy-status qa-visual-compare qa-visual-compare-fast test-perf test-zerg-ops-backup test-frontend test-hatch-agent test-runner test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runner-vm-canary test-install test-install-first-run test-install-first-run-fresh test-install-e2e-browser test-install-wheel test-install-macos-ambient test-runtime-packaging-macos test-wheel-package test-install-remote test-install-upgrade test-provision-e2e test-provision-e2e-extended test-prompts test-ci test-shipper-e2e shipper-e2e-prereqs shipper-smoke-test test-hooks eval eval-compare eval-tool-selection generate-sdk seed-agents seed-credentials marketing-screenshots marketing-validate marketing-list validate validate-sdk validate-ws regen-ws validate-sse regen-sse validate-makefile lint-test-patterns env-check verify-prod perf-landing perf-gpu perf-gpu-dashboard debug-thread debug-validate debug-inspect debug-batch debug-trace trace-coverage onboarding-funnel onboarding-smoke onboarding-sqlite launch-gate-local ui-capture video-studio video-remotion video-remotion-web video-remotion-preview vibetest vibetest-local install-engine test-engine test-shipper-premerge test-codex-bridge-e2e
+E2E_BACKEND_PORT ?=
+E2E_FRONTEND_PORT ?=
 
+.PHONY: help dev dev-demo stop test test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine validate validate-ws validate-sse validate-sdk validate-makefile regen-ws regen-sse generate-sdk qa-live qa-live-chat reprovision deploy-status ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval
 
 # ---------------------------------------------------------------------------
-# Help – `make` or `make help` (auto-generated from ## comments)
+# Help
 # ---------------------------------------------------------------------------
 help: ## Show this help message
-	@echo "\n🌐 Swarm Platform (Oikos + Zerg)"
-	@echo "=================================="
+	@echo "\nLonghouse"
+	@echo "========="
 	@echo ""
-	@grep -B0 '## ' Makefile | grep -E '^[a-zA-Z0-9_-]+:' | grep -v '## @internal' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-24s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
+	@grep -E '^[a-zA-Z0-9_-]+:.*## ' Makefile | grep -v '## @internal' | sed 's/:.*## /: /' | column -t -s ':' | awk '{printf "  %-28s %s\n", $$1":", substr($$0, index($$0,$$2))}' | sort
 	@echo ""
 
 # ---------------------------------------------------------------------------
-# Environment Validation
+# Development
 # ---------------------------------------------------------------------------
-env-check: ## Validate required environment variables (Docker mode)
-	@missing=0; \
-	warn=0; \
-	echo "🔍 Checking Docker environment variables..."; \
-	\
-	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB APP_PUBLIC_URL; do \
-		if [ -z "$$$(printenv $$var)" ]; then \
-			echo "❌ Missing required: $$var"; \
-			missing=1; \
-		fi; \
-	done; \
-	\
-		if [ -z "$$OPENAI_API_KEY" ]; then \
-			echo "⚠️  Warning: OPENAI_API_KEY not set (LLM features disabled)"; \
-			warn=1; \
-		fi; \
-	\
-		if [ $$missing -eq 1 ]; then \
-			echo ""; \
-			echo "💡 Copy .env.example to .env and fill in required values"; \
-		exit 1; \
-		fi; \
-	\
-		if [ $$warn -eq 0 ]; then \
-			echo "✅ All required environment variables set"; \
-		else \
-			echo "✅ Required variables set (warnings above are optional)"; \
-		fi
-
-# ---------------------------------------------------------------------------
-# Core Development Commands
-# ---------------------------------------------------------------------------
-dev: ## ⭐ Start development environment (SQLite native, no Docker)
-	@echo "🚀 Starting development environment (SQLite)..."
+dev: ## Start dev environment (SQLite, no Docker)
 	@env -u DATABASE_URL ./scripts/dev.sh
 
 dev-demo: ## Start demo environment (seeded SQLite DB)
-	@echo "Starting demo environment (SQLite demo DB)..."
 	@env -u DATABASE_URL ./scripts/dev-demo.sh
 
 demo-db: ## Build demo SQLite database
 	@uv run python server/scripts/build_demo_db.py
 
-stop: ## Stop development services
-	@echo "Stopping development services..."
+stop: ## Stop dev services
 	@pkill -f "uvicorn zerg.main:app" 2>/dev/null || true
 	@pkill -f "vite" 2>/dev/null || true
-	@echo "✅ Stopped"
-
-# Legacy Docker targets (for CI or Postgres-specific testing)
-dev-docker: env-check ## Start Docker development environment (legacy)
-	@echo "🚀 Starting Docker environment..."
-	@./scripts/dev-docker.sh
-
-dev-docker-bg: env-check ## Start Docker environment in background (legacy)
-	@echo "🚀 Starting Docker environment (background)..."
-	$(COMPOSE_DEV) --profile dev up -d --build --wait
-	$(COMPOSE_DEV) --profile dev ps
-
-stop-docker: ## Stop Docker services
-	@./scripts/stop-docker.sh
-
-dev-reset-db: ## Destroy dev DB volume (data loss)
-	@echo "⚠️  Resetting dev database (THIS DELETES LOCAL DB DATA)..."
-	@$(COMPOSE_DEV) --profile dev down -v --remove-orphans 2>/dev/null || true
-	@echo "✅ DB reset. Start with 'make dev' and then run 'make seed-agents' if needed."
-
-logs: ## View logs from running services
-	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
-		$(COMPOSE_DEV) logs -f; \
-	else \
-		echo "❌ No services running. Start with 'make dev'"; \
-		exit 1; \
-	fi
-
-logs-app: ## View logs for app services (excludes Postgres)
-	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
-		$(COMPOSE_DEV) logs -f reverse-proxy backend frontend; \
-	else \
-		echo "❌ No services running. Start with 'make dev'"; \
-		exit 1; \
-	fi
-
-logs-db: ## View logs for Postgres only
-	@if $(COMPOSE_DEV) ps -q 2>/dev/null | grep -q .; then \
-		$(COMPOSE_DEV) logs -f postgres; \
-	else \
-		echo "❌ No services running. Start with 'make dev'"; \
-		exit 1; \
-	fi
-
-doctor: ## Print quick diagnostics for dev stack
-	@echo "🔎 Swarm dev diagnostics"
-	@echo "  - Repo:   $$(pwd)"
-	@echo "  - Branch: $$(git rev-parse --abbrev-ref HEAD)"
-	@echo ""
-	@echo "📄 .env (presence + required vars)"
-	@test -f .env && echo "  ✅ .env exists" || (echo "  ❌ missing .env" && exit 1)
-	@missing=0; \
-	for var in POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB; do \
-		if [ -z "$$$(printenv $$var)" ]; then \
-			echo "  ❌ $$var is empty"; \
-			missing=1; \
-		else \
-			echo "  ✅ $$var is set"; \
-		fi; \
-	done; \
-	if [ $$missing -eq 1 ]; then exit 1; fi
-	@echo ""
-	@echo "🐳 Docker"
-	@docker version >/dev/null 2>&1 && echo "  ✅ docker is reachable" || (echo "  ❌ docker not reachable" && exit 1)
-	@echo ""
-	@echo "🧩 Compose config (resolved env interpolation)"
-	@$(COMPOSE_DEV) config >/dev/null && echo "  ✅ compose config renders" || (echo "  ❌ compose config failed" && exit 1)
-	@echo ""
-	@echo "📦 Running services (zerg project)"
-	@$(COMPOSE_DEV) ps
-
-reset: ## Reset database (destroys all data)
-	@echo "⚠️  Resetting database..."
-	@$(COMPOSE_DEV) down -v 2>/dev/null || true
-	@$(COMPOSE_DEV) --profile dev up -d
-	@echo "✅ Database reset. Run 'make seed-agents' to populate."
+	@echo "Stopped"
 
 # ---------------------------------------------------------------------------
-# Testing
-# ---------------------------------------------------------------------------
-#  Run the tier that matches your change — don't run more than needed.
+# Testing — run the tier that matches your change
 #
-#  Tier           Target                       Changed what?              Time
-#  ─────────────────────────────────────────────────────────────────────────────
-#  backend        make test                    server/zerg/, tests_lite/  ~10s
-#  engine         make test-engine             engine/                    ~20s
-#  frontend       make test-frontend           web/                       ~15s
-#  control-plane  make test-control-plane      control-plane/             ~10s
-#  runner         make test-runner             runner/                    ~5s
-#  e2e            make test-e2e                UI changes, before PR      ~2min
-#  pre-PR CI      make test-ci                 before pushing             ~3min
-#  full suite     make test-full               pre-deploy, full verify    ~8min
-#  post-deploy    make qa-live                 after deploy               ~60s
+#  make test              backend (server/)          ~10s
+#  make test-frontend     frontend (web/)            ~15s
+#  make test-engine       engine (engine/)           ~20s
+#  make test-runner       runner (runner/)           ~5s
+#  make test-control-plane                           ~10s
+#  make test-e2e          browser E2E                ~2min
+#  make test-ci           pre-push                   ~3min
+#  make test-full         everything                 ~8min
 # ---------------------------------------------------------------------------
-
-# Playwright E2E should run against an isolated frontend/backend pair by default.
-# Ports are randomized unless explicitly pinned:
-#   make test-e2e E2E_BACKEND_PORT=47300 E2E_FRONTEND_PORT=47200
-E2E_BACKEND_PORT ?=
-E2E_FRONTEND_PORT ?=
-SHIPPER_E2E_URL ?= http://localhost:47300
-
-test: ## ⭐ Python backend unit tests (tests_lite/, SQLite in-memory, ~10s)
-	@echo "🐍 Running Python backend tests..."
+test: ## Backend unit tests (tests_lite/, ~10s)
 	@cd server && ./run_backend_tests_lite.sh
 
-test-readmes: ## Run README contract tests (MODE=smoke[default] or full)
-	@python3 scripts/qa/run-readme-tests.py --mode $(or $(MODE),smoke) $(FILES)
+test-frontend: ## Frontend unit tests + type-check (~15s)
+	@cd web && bun run validate:types && bun run test -- --run
 
-test-autonomy-journeys: ## Run deterministic Oikos autonomy journey harness tests
-	@echo "🧪 Running Oikos autonomy journey harness tests..."
-	cd server && ./run_backend_tests_lite.sh tests_lite/test_oikos_autonomy_journeys.py tests_lite/test_session_loop_mode.py tests_lite/test_oikos_operator_loop_canary.py
-
-run-autonomy-journeys: ## Run Oikos autonomy journey fixtures and save artifacts to .tmp/
-	@echo "🧪 Running Oikos autonomy journeys with durable artifacts..."
-	cd server && uv run python scripts/run_oikos_autonomy_journeys.py
-
-test-control-plane: ## Fast control-plane unit tests (no Docker)
-	@echo "🧪 Running control-plane tests..."; \
-	cd control-plane && \
-	uv sync --extra dev --frozen >/dev/null && \
-	uv run --extra dev pytest tests -q
-
-test-e2e-cp: ## Control plane E2E (Playwright, local server, no Docker)
-	@echo "🎭 Running control-plane E2E tests..."; \
-	cd control-plane && \
-	uv sync --extra dev --frozen >/dev/null && \
-	uv run --extra dev playwright install chromium --with-deps >/dev/null 2>&1 || true && \
-	uv run --extra dev pytest e2e/ -v
-
-install-engine: ## Build + sign the Rust engine binary (run after any engine source change)
-	cd engine && cargo build --release
-	codesign -s - engine/target/release/longhouse-engine
-	@mkdir -p $$HOME/.local/bin
-	@ln -sf "$(CURDIR)/engine/target/release/longhouse-engine" "$$HOME/.local/bin/longhouse-engine"
-	@echo "longhouse-engine installed (~/.local/bin/longhouse-engine -> $(CURDIR)/engine/target/release/longhouse-engine)"
-
-test-engine: ## Rust engine unit + golden + adversarial tests (use when changing engine/)
-	@echo "🦀 Running engine unit + golden + adversarial tests..."
+test-engine: ## Rust engine tests (~20s)
 	cd engine && cargo build --release
 	cd engine && cargo test --bin longhouse-engine --test golden_parser_contract --test adversarial_parser
 
-test-zerg-ops-backup: ## Backup/restore retention contract test for scripts/zerg-ops.sh
-	@bash scripts/qa/test-zerg-ops.sh
+test-runner: ## Runner unit tests (~5s)
+	@cd runner && bun test
 
-test-shipper-e2e: ## Full pipeline E2E: fixture → longhouse-engine ship → API → DB (uses repo-local binary)
-	@echo "🚀 Running shipper E2E tests (Claude/Gemini/Codex + schema-drift)..."
-	@echo "🦀 Building release engine binary (avoids stale-binary false confidence)..."
-	cd engine && cargo build --release
-	cd server && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
+test-control-plane: ## Control-plane tests
+	@cd control-plane && uv sync --extra dev --frozen >/dev/null && uv run --extra dev pytest tests -q
 
-test-shipper-premerge: ## Full shipper QA: engine tests + pipeline E2E (run before merging engine changes)
-	$(MAKE) test-engine
-	$(MAKE) test-shipper-e2e
-
-test-codex-bridge-e2e: ## Codex bridge E2E: real user journey (bridge start → send → continue → interrupt)
-	@bash scripts/qa/test-codex-bridge-e2e.sh
-
-ensure-js-deps: ## @internal Install workspace JS deps when a clean clone needs them
-	@if [ ! -f node_modules/@playwright/test/package.json ]; then \
-		echo "📦 Installing JS workspace dependencies..."; \
-		bun install --frozen-lockfile; \
-	fi
-
-ensure-playwright-browser: ## @internal Install Playwright Chromium when missing
-	@$(MAKE) ensure-js-deps
-	@cd e2e && bunx playwright install chromium >/dev/null
-
-test-e2e: ## Run launch-surface E2E tests (timeline/session detail + a11y)
-	@echo "🎭 Running launch-surface E2E tests (core + a11y)..."
+test-e2e: ## Launch-surface E2E (core + a11y)
 	$(MAKE) test-e2e-core
 	$(MAKE) test-e2e-a11y
 
-test-e2e-core: ## Run launch-surface core E2E only — no retries, must pass 100% (called by test-e2e)
+test-e2e-core: ## @internal Core E2E — no retries
 	@$(MAKE) ensure-playwright-browser
-	@echo "🔴 Running CORE E2E tests (no retries, must pass 100%)..."
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
 		bunx playwright test --project=core --retries=0 --workers=1
 
-test-full: ## Full suite: all tiers — backend + engine + frontend + runner + control-plane + shipper + e2e + visual (~8min)
-	@echo "🧪 Running full test suite (all tiers)..."
-	$(MAKE) test
-	$(MAKE) test-control-plane
-	$(MAKE) test-frontend
-	$(MAKE) test-runner
-	$(MAKE) test-engine
-	$(MAKE) test-shipper-e2e
-	$(MAKE) test-e2e-core
-	$(MAKE) test-e2e-a11y
-	$(MAKE) qa-ui-baseline
-	$(MAKE) qa-ui-baseline-mobile
-	$(MAKE) qa-visual-compare-fast
-
-test-chat-e2e: ## Run Oikos chat E2E tests (inside unified SPA)
+test-e2e-a11y: ## @internal Accessibility checks
 	@$(MAKE) ensure-playwright-browser
-	@echo "🧪 Running chat E2E tests (unified SPA)..."
-	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/unified-frontend.spec.ts
+	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
 
-test-e2e-single: ## @internal Run a single E2E test (usage: make test-e2e-single TEST=tests/unified-frontend.spec.ts)
+test-e2e-cp: ## Control plane E2E (Playwright)
+	@cd control-plane && uv sync --extra dev --frozen >/dev/null && \
+		uv run --extra dev playwright install chromium --with-deps >/dev/null 2>&1 || true && \
+		uv run --extra dev pytest e2e/ -v
+
+test-e2e-single: ## @internal Run one E2E spec (TEST=tests/foo.spec.ts)
 	@$(MAKE) ensure-playwright-browser
-	@test -n "$(TEST)" || (echo "❌ Usage: make test-e2e-single TEST=<spec-or-args>" && exit 1)
+	@test -n "$(TEST)" || (echo "Usage: make test-e2e-single TEST=<spec>" && exit 1)
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test $(TEST)
 
-test-e2e-continuation-provider: ## Run the real provider-backed continuation smoke (requires ANTHROPIC_API_KEY + claude CLI; optional PROVIDER_SMOKE_ARTIFACT_DIR)
+test-e2e-continuation-provider: ## @internal Provider-backed continuation smoke
 	@$(MAKE) ensure-js-deps
 	cd web && bun run build
 	cd e2e && E2E_BACKEND_PORT=$(E2E_BACKEND_PORT) node scripts/provider-continuation-smoke.mjs
 
-test-e2e-ui: ## @internal Run Playwright E2E tests with interactive UI
-	@$(MAKE) ensure-playwright-browser
-	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --ui
+test-e2e-onboarding: ## @internal Onboarding browser ring
+	@ONBOARDING_PLAYWRIGHT_PROJECT="$(PROJECT)" ./scripts/qa/qa-oss.sh --workdir $(CURDIR) --no-unit --no-e2e
 
-test-e2e-verbose: ## @internal Run E2E tests with full verbose output (for debugging)
-	@$(MAKE) ensure-playwright-browser
-	cd e2e && VERBOSE=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium
+test-shipper-e2e: ## Shipper pipeline E2E (engine → API → DB)
+	cd engine && cargo build --release
+	cd server && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
-test-e2e-errors: ## @internal Show detailed errors from last E2E run
-	@if [ -f e2e/test-results/errors.txt ]; then \
-		cat e2e/test-results/errors.txt; \
-	else \
-		echo "No errors.txt found. Run 'make test-e2e' first."; \
-	fi
+test-shipper-premerge: ## Engine + shipper E2E (run before merging engine changes)
+	$(MAKE) test-engine
+	$(MAKE) test-shipper-e2e
 
-test-e2e-query: ## @internal Query last E2E results (usage: make test-e2e-query Q='.failed[]')
-	@if [ -f e2e/test-results/summary.json ]; then \
-		jq '$(Q)' e2e/test-results/summary.json; \
-	else \
-		echo "No summary.json found. Run 'make test-e2e' first."; \
-	fi
+test-codex-bridge-e2e: ## Codex bridge E2E
+	@bash scripts/qa/test-codex-bridge-e2e.sh
 
-test-e2e-grep: ## @internal Run E2E tests by name (usage: make test-e2e-grep GREP="test name")
-	@$(MAKE) ensure-playwright-browser
-	@test -n "$(GREP)" || (echo "❌ Usage: make test-e2e-grep GREP='test name'" && exit 1)
-	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium --grep "$(GREP)"
-
-test-e2e-a11y: ## Accessibility UI/UX checks — axe + heuristics (called by test-e2e)
-	@$(MAKE) ensure-playwright-browser
-	@echo "🧪 Running accessibility UI/UX checks..."
-	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/accessibility.spec.ts
-
-qa-ui: ## Quick UI QA (accessibility checks)
-	$(MAKE) test-e2e-a11y
-
-qa-ui-visual: ## Visual UI analysis (screenshots + AI) (usage: make qa-ui-visual ARGS="--pages=dashboard,chat")
-	@./scripts/qa/run-visual-analysis.sh $(ARGS)
-
-qa-ui-smoke: ## Visual smoke snapshots for core app pages (glass)
-	$(MAKE) test-e2e-single TEST="--project=chromium tests/visual_smoke_glass.spec.ts"
-
-qa-ui-smoke-update: ## @internal Update visual smoke snapshots for core app pages (glass)
-	$(MAKE) test-e2e-single TEST="--project=chromium --update-snapshots tests/visual_smoke_glass.spec.ts"
-
-qa-ui-baseline: ## Visual baselines for app + public pages
-	$(MAKE) test-e2e-single TEST=tests/ui_baseline_public.spec.ts
-	$(MAKE) test-e2e-single TEST=tests/ui_baseline_app.spec.ts
-
-qa-ui-baseline-update: ## @internal Update visual baselines for app + public pages
-	$(MAKE) test-e2e-single TEST="--update-snapshots=all tests/ui_baseline_public.spec.ts"
-	$(MAKE) test-e2e-single TEST="--update-snapshots=all tests/ui_baseline_app.spec.ts"
-
-qa-ui-baseline-mobile: ## Visual baselines for mobile viewport pages
-	$(MAKE) test-e2e-single TEST="--project=mobile tests/mobile/ui_baseline_mobile.spec.ts"
-	$(MAKE) test-e2e-single TEST="--project=mobile-small tests/mobile/ui_baseline_mobile.spec.ts"
-
-qa-ui-baseline-mobile-update: ## @internal Update visual baselines for mobile viewport pages
-	$(MAKE) test-e2e-single TEST="--project=mobile --update-snapshots=all tests/mobile/ui_baseline_mobile.spec.ts"
-	$(MAKE) test-e2e-single TEST="--project=mobile-small --update-snapshots=all tests/mobile/ui_baseline_mobile.spec.ts"
-
-qa-visual-compare: ## Visual comparison with LLM triage (catches color/layout catastrophes)
-	$(MAKE) test-e2e-single TEST="--project=chromium tests/visual_compare.spec.ts"
-
-qa-visual-compare-fast: ## Visual comparison without LLM (pixelmatch only, faster)
-	SKIP_LLM=1 $(MAKE) test-e2e-single TEST="--project=chromium tests/visual_compare.spec.ts"
-
-qa-ui-full: ## Full UI regression sweep (a11y + desktop + mobile baselines + visual compare)
-	$(MAKE) qa-ui
-	$(MAKE) qa-ui-baseline
-	$(MAKE) qa-ui-baseline-mobile
-	$(MAKE) qa-visual-compare-fast
-
-test-perf: ## Run performance evaluation tests (chat latency profiling)
-	@$(MAKE) ensure-js-deps
-	@echo "🧪 Running performance evaluation tests..."
-	cd e2e && RUN_PERF=1 BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) bunx playwright test --project=chromium tests/chat_performance_eval.spec.ts
-	@echo "✅ Performance tests complete. Metrics exported to e2e/metrics/"
-
-test-frontend: ## Frontend unit tests + TypeScript type-check (use when changing web/)
-	@echo "⚛️  Running frontend unit + type-check..."
-	cd web && bun run validate:types && bun run test -- --run
-
-test-hatch-agent: ## @internal Run hatch-agent package tests from sibling repo
-	@if [ ! -d ../hatch ]; then \
-		echo "❌ hatch repo not found at ../hatch"; \
-		echo "Clone it with: gh repo clone cipher982/hatch ../hatch"; \
-		exit 1; \
-	fi
-	@if [ "$(MINIMAL)" = "1" ]; then \
-		echo "🧪 Running hatch-agent tests (minimal)..."; \
-		cd ../hatch && uv run --extra dev pytest tests/ --ignore=tests/test_integration.py -q; \
-	else \
-		echo "🧪 Running hatch-agent tests..."; \
-		cd ../hatch && uv run --extra dev pytest tests/ --ignore=tests/test_integration.py; \
-	fi
-
-test-runner: ## Runner unit tests — Bun (use when changing runner/)
-	@echo "🏃 Running runner unit tests..."
-	cd runner && bun test
-
-test-install-runner: ## @internal Run install-runner script tests
-	@echo "🧪 Running install-runner script tests..."
-	bash scripts/tests/install-runner.test.sh
-
-test-hosted-instance: ## @internal Run hosted-instance helper script tests
-	@echo "🧪 Running hosted-instance helper tests..."
-	bash scripts/tests/hosted-instance-auth.test.sh
-	bash scripts/tests/hosted-loop-debug.test.sh
-
-test-coolify-deploy: ## @internal Run Coolify deploy helper script tests
-	@echo "🧪 Running Coolify deploy helper tests..."
-	bash scripts/tests/coolify-deploy.test.sh
-
-test-web-entrypoint: ## @internal Run web runtime entrypoint tests
-	@echo "🧪 Running web runtime entrypoint tests..."
-	bash scripts/tests/web-docker-entrypoint.test.sh
-
-test-runner-vm-canary: ## Run disposable VM runner canary against a hosted instance
-	@echo "🧪 Running disposable VM runner canary..."
-	bash scripts/qa/runner-vm-canary.sh
-
-test-install: ## Test Longhouse installer + first-run onboarding smoke
-	@echo "🧪 Testing Longhouse installer..."
-	@bash -n scripts/install.sh
-	@echo "✅ Syntax OK"
-	@$(MAKE) test-install-first-run
-
-test-install-first-run: ## Run disposable first-run installer smoke in a temp HOME (light local path)
-	@./scripts/ci/installer-first-run.sh
-
-test-install-first-run-fresh: ## Run disposable first-run installer smoke and force a fresh frontend build
-	@./scripts/ci/installer-first-run.sh --rebuild-frontend
-
-test-install-e2e-browser: ## Run installer smoke with Playwright browser verification of timeline
-	@./scripts/ci/installer-first-run.sh --e2e-browser
-
-test-install-wheel: ## Run installer-owned wheel smoke with released runtime artifacts + browser verification
-	@./scripts/ci/installer-first-run.sh --wheel --installer-onboard --runtime-artifact-smoke --e2e-browser
-
-test-install-macos-ambient: ## Run explicit local macOS installer smoke with ambient menu bar enabled (heavy)
-	@./scripts/ci/installer-first-run.sh --shell /bin/zsh --menubar
-
-test-runtime-packaging-macos: ## Build/sign/zip the canonical Longhouse.app bundle locally on macOS
-	@./scripts/qa/test-local-runtime-packaging.sh
-
-test-wheel-package: ## Build the CLI wheel and verify the archive has no duplicate ZIP entries
-	@./scripts/qa/test-wheel-package.sh
-
-test-install-remote: ## Run public installer smoke against the published get.longhouse.ai script
-	@./scripts/ci/installer-first-run.sh --installer remote --installer-onboard --runtime-artifact-smoke
-
-test-install-upgrade: ## Rehearse CLI install -> upgrade in a disposable temp HOME
-	@bash ./scripts/qa/test-cli-upgrade.sh
-
-launch-gate-local: test-install onboarding-funnel ## Run the local launch onboarding gate
-
-test-provision-e2e: ## Provision an instance via control plane and verify the core hosted ready path
-	@./scripts/ci/provision-e2e.sh --mode core
-
-test-provision-e2e-extended: ## Run the extended hosted canary (image backfill + rolling deploy)
-	@./scripts/ci/provision-e2e.sh --mode extended
-
-test-integration: ## @internal Run integration tests (REAL API calls, requires API keys)
-	@echo "🧪 Running integration tests (real API calls)..."
-	@echo "   Note: Requires OPENAI_API_KEY and/or GROQ_API_KEY"
-	cd server && EVAL_MODE=live uv run --extra dev pytest tests/integration/ -v -m integration
-
-shipper-e2e-prereqs: ## Shipper E2E prerequisites (migrations + table check)
-	@./scripts/qa/shipper-e2e-prereqs.sh
-
-## Note: test-shipper-e2e is defined earlier in this file (self-contained, no make dev required)
-
-shipper-smoke-test: ## Run shipper live smoke test script (requires backend running)
-	@./scripts/qa/shipper-smoke-test.sh
-
-test-hooks: ## E2E test for hook outbox pipeline (requires daemon running)
+test-hooks: ## Hook outbox pipeline E2E (requires daemon running)
 	@./scripts/qa/test-hooks-e2e.sh
 
-test-prompts: ## @internal Run live prompt quality tests (requires backend running + --live-token)
-	@echo "🧪 Running prompt quality tests (requires backend running)..."
-	@echo "   Example: make test-prompts TOKEN=your-jwt-token"
-	@if [ -z "$(TOKEN)" ]; then \
-		echo "❌ Missing TOKEN. Usage: make test-prompts TOKEN=<jwt-token>"; \
-		exit 1; \
-	fi
-	@echo "   Using http://localhost:30080 (dev nginx entry)"
-	@echo "   Setting LLM_REQUEST_LOG=1 for debugging..."
-	cd server && \
-		LLM_REQUEST_LOG=1 \
-		LONGHOUSE_DATA_PATH=$${LONGHOUSE_DATA_PATH:-/tmp/longhouse} \
-		uv run --extra dev pytest tests/live/test_prompt_quality.py \
-		--live-url http://localhost:30080 \
-		--live-token $(TOKEN) \
-		--timeout=120 \
-		-v
-
-# ---------------------------------------------------------------------------
-# Eval Tests (AI Quality - REAL LLM calls, costs money)
-# ---------------------------------------------------------------------------
-# NOTE: Evals use REAL OpenAI API calls. Not run in CI.
-# Use for manual quality testing or scheduled jobs.
-EVAL_VARIANT ?= baseline
-
-eval: ## 🔴 Run AI evals (REAL LLM - costs $$$)
-	@echo "🔴 Running AI evals (REAL OpenAI API calls)..."
-	@echo "   This costs money. Press Ctrl+C to cancel."
-	@sleep 2
-	cd server && env EVAL_MODE=live uv run --extra dev pytest evals/ -v --variant=$(EVAL_VARIANT) --timeout=120
-
-eval-compare: ## @internal Compare two eval result files (usage: make eval-compare BASELINE=file1 VARIANT=file2)
-	@test -n "$(BASELINE)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
-	@test -n "$(VARIANT)" || (echo "❌ Usage: make eval-compare BASELINE=<file> VARIANT=<file>" && exit 1)
-	@echo "📊 Comparing eval results..."
-	cd server && uv run python -m evals.compare evals/results/$(BASELINE) evals/results/$(VARIANT)
-
-eval-tool-selection: ## @internal Run tool selection evals (tests tool picking quality)
-	@echo "🎯 Running tool selection evals (REAL LLM)..."
-	cd server && env EVAL_MODE=live uv run --extra dev pytest evals/ -v -k tool_selection --timeout=120
-
-# ---------------------------------------------------------------------------
-# SDK & Integration
-# ---------------------------------------------------------------------------
-generate-sdk: ## Generate OpenAPI types from backend schema
-	@echo "🔄 Generating SDK..."
-	@$(MAKE) ensure-js-deps
-	@cd server && uv run python scripts/export_openapi.py >/dev/null
-	@cd web && bun run openapi-typescript ../openapi.json --output src/generated/openapi-types.ts
-	@echo "✅ SDK generation complete"
-
-seed-agents: ## Seed baseline Zerg agents for Oikos
-	@echo "🌱 Seeding agents..."
-	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
-	if [ -z "$$BACKEND" ]; then \
-		echo "❌ Backend not running. Start with 'make dev'"; \
-		exit 1; \
-	fi
-	@docker exec $$BACKEND uv run python scripts/seed_oikos_agents.py
-	@echo "✅ Agents seeded"
-
-seed-credentials: ## Seed personal tool credentials (Traccar, WHOOP, Obsidian)
-	@echo "🔑 Seeding personal credentials..."
-	@BACKEND=$$(docker ps --format "{{.Names}}" | grep "backend" | head -1); \
-	if [ -z "$$BACKEND" ]; then \
-		echo "❌ Backend not running. Start with 'make dev'"; \
-		exit 1; \
-	fi
-	@docker exec $$BACKEND uv run python scripts/seed_personal_credentials.py $(ARGS)
-	@echo "✅ Credentials seeded"
-
-marketing-screenshots: ## Capture marketing screenshots (self-contained: starts+stops dev stack automatically)
-	@echo "📸 Capturing marketing screenshots..."
-	@bash scripts/marketing-screenshots.sh $(NAME)
-
-marketing-validate: ## Validate all marketing screenshots exist and have reasonable size
-	@uv run --with pyyaml scripts/capture_marketing.py --validate
-
-marketing-list: ## List available marketing screenshots
-	@uv run --with pyyaml scripts/capture_marketing.py --list
-
-# ---------------------------------------------------------------------------
-# Video Generation (Remotion)
-# Canonical pipeline: make video-remotion-web
-# ---------------------------------------------------------------------------
-SCENARIO ?= product-demo
-.PHONY: video-audio video-studio video-remotion video-remotion-web video-remotion-preview
-
-video-audio: ## Generate voiceover audio. Override: SCENARIO=timeline-demo
-	@echo "🎙️  Generating voiceover audio for $(SCENARIO)..."
-	@uv run --with openai --with mutagen --with pyyaml scripts/generate/generate_voiceover.py $(SCENARIO)
-	@echo "✅ Audio generated. Check videos/$(SCENARIO)/audio/"
-
-video-studio: ## Open Remotion Studio for video editing
-	@cd video && bunx remotion studio
-
-video-remotion: ## Render timeline demo via Remotion
-	@echo "🎬 Rendering TimelineDemo via Remotion..."
-	@cd video && bunx remotion render TimelineDemo out/timeline-demo.mp4 --codec h264 --crf 18
-	@echo "✅ Rendered: video/out/timeline-demo.mp4"
-
-video-remotion-web: ## Render + compress for web (CRF 23)
-	@echo "🎬 Rendering TimelineDemo for web..."
-	@cd video && bunx remotion render TimelineDemo out/timeline-demo.mp4 --codec h264 --crf 23
-	@cp video/out/timeline-demo.mp4 web/public/videos/timeline-demo.mp4
-	@echo "✅ Copied to frontend public/videos/"
-
-video-remotion-preview: ## Render single frame for quick preview
-	@cd video && bunx remotion still TimelineDemo out/preview.jpg --frame 150
-	@echo "✅ Preview: video/out/preview.jpg"
-
-# ---------------------------------------------------------------------------
-# UI Capture (Debug Bundles for Agents)
-# ---------------------------------------------------------------------------
-ui-capture: ## Capture local dev UI debug bundle (requires dev running)
-	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,)
-
-# ---------------------------------------------------------------------------
-# Validation
-# ---------------------------------------------------------------------------
-validate: ## Run all validation checks
-	@printf '\n🔍 Running all validation checks...\n\n'
-	@printf '1️⃣  Validating WebSocket code...\n'
-	@$(MAKE) validate-ws
-	@printf '\n2️⃣  Validating SSE code...\n'
-	@$(MAKE) validate-sse
-	@printf '\n3️⃣  Validating OpenAPI/SDK drift...\n'
-	@$(MAKE) validate-sdk
-	@printf '\n4️⃣  Validating Makefile structure...\n'
-	@$(MAKE) validate-makefile
-	@printf '\n5️⃣  Checking for test anti-patterns...\n'
-	@$(MAKE) lint-test-patterns
-	@printf '\n✅ All validations passed\n'
-
-validate-ws: ## Check WebSocket code is in sync (for CI)
-	@cd server && \
-		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
-		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml >/dev/null 2>&1
-	@# Only check for drift in generated files to avoid false positives from unrelated changes
-	@if ! git diff --quiet \
-		server/zerg/generated/ws_messages.py \
-		web/src/generated/ws-messages.ts \
-		schemas/ws-protocol.schema.json \
-		schemas/ws-protocol-v1.json; then \
-		echo "❌ WebSocket code out of sync"; \
-		echo "   Run 'make regen-ws' and commit changes"; \
-		git diff \
-			server/zerg/generated/ws_messages.py \
-			web/src/generated/ws-messages.ts \
-			schemas/ws-protocol.schema.json \
-			schemas/ws-protocol-v1.json; \
-		exit 1; \
-	fi
-	@echo "✅ WebSocket code in sync"
-
-regen-ws: ## Regenerate WebSocket contract code
-	@echo "🔄 Regenerating WebSocket code..."
-	@cd server && \
-		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
-		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml
-	@echo "✅ WebSocket code regenerated"
-
-validate-sse: ## Check SSE code is in sync (for CI)
-	@cd server && \
-		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
-		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml >/dev/null 2>&1
-	@# Only check for drift in generated files to avoid false positives from unrelated changes
-	@if ! git diff --quiet \
-		server/zerg/generated/sse_events.py \
-		web/src/generated/sse-events.ts \
-		schemas/sse-events.asyncapi.yml; then \
-		echo "❌ SSE code out of sync"; \
-		echo "   Run 'make regen-sse' and commit changes"; \
-		git diff \
-			server/zerg/generated/sse_events.py \
-			web/src/generated/sse-events.ts \
-			schemas/sse-events.asyncapi.yml; \
-		exit 1; \
-	fi
-	@echo "✅ SSE code in sync"
-
-regen-sse: ## Regenerate SSE event contract code
-	@echo "🔄 Regenerating SSE code..."
-	@cd server && \
-		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
-		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
-		uv run --no-project --with pyyaml python ../scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml
-	@echo "✅ SSE code regenerated"
-
-validate-sdk: ## Check OpenAPI export and generated frontend SDK types are in sync
-	@$(MAKE) generate-sdk >/dev/null
-	@if ! git diff --quiet -- openapi.json web/src/generated/openapi-types.ts; then \
-		echo "❌ OpenAPI/SDK code out of sync"; \
-		echo "   Run 'make generate-sdk' and commit changes"; \
-		git diff -- openapi.json web/src/generated/openapi-types.ts; \
-		exit 1; \
-	fi
-	@echo "✅ OpenAPI/SDK code in sync"
-
-lint-test-patterns: ## Check for test anti-patterns (window.confirm, alert, waitForTimeout)
-	@bash scripts/qa/lint-test-patterns.sh
-
-# ---------------------------------------------------------------------------
-# Makefile Validation
-# ---------------------------------------------------------------------------
-validate-makefile: ## Verify .PHONY targets match documented targets
-	@failed=0; \
-	\
-	for t in $$(grep -E '^\.PHONY:' Makefile \
-		  | sed -E 's/^\.PHONY:[[:space:]]*//; s/\\//g' \
-		  | tr ' ' '\n' \
-		  | sed '/^$$/d'); do \
-	    case $$t in \
-		help|validate-makefile) continue ;; \
-	    esac; \
-	    if ! grep -Eq "^$$t:.*##" Makefile; then \
-	        echo "❌ Missing help comment (##) for .PHONY target: $$t"; \
-	        failed=1; \
-	    fi; \
-	done; \
-	\
-	for t in $$(grep -E '^[a-zA-Z0-9_-]+:.*##' Makefile \
-		  | sed -E 's/:.*##.*$$//'); do \
-	    if ! grep -Eq "^\.PHONY:.*\\b$$t\\b" Makefile; then \
-		echo "❌ Target has help but is not in .PHONY: $$t"; \
-		failed=1; \
-	    fi; \
-	done; \
-	\
-	if [ $$failed -eq 0 ]; then \
-	    echo "✅ Makefile validation passed"; \
-	fi; \
-	exit $$failed
-
-# ---------------------------------------------------------------------------
-# Production Verification
-# ---------------------------------------------------------------------------
-verify-prod: ## Full prod validation: API + browser tests (~80s, requires hosted auth env)
-	@echo "🔍 Verifying production..."
-	@./scripts/qa/smoke-prod.sh --wait --full
-	@echo ""
-	@./scripts/qa/run-prod-e2e.sh
-	@echo ""
-	@./scripts/ops/check-cp-credentials.sh
-	@echo "✅ Production verified"
-
-qa-live: ## Run live QA against hosted instance (~60s, default subdomain david010)
-	@$(MAKE) ensure-js-deps
-	@./scripts/qa/qa-live.sh
-
-qa-live-chat: ## Run hosted live chat smoke against the current instance
-	@$(MAKE) ensure-js-deps
-	@./scripts/qa/run-prod-e2e.sh tests/live/live_chat_smoke.spec.ts --timeout=120000 --reporter=line
-
-qa-live-conversations: ## Backcompat alias; prefer qa-live-chat
-	@$(MAKE) qa-live-chat
-
-reprovision: ## Reprovision hosted instance — SUBDOMAIN=david010 (default), optional IMAGE=ghcr.io/...:<tag>. Waits for health.
-	@bash -c 'source scripts/lib/hosted-instance.sh && \
-	  lh_hosted_prepare_control_plane_auth && \
-	  lh_hosted_resolve_instance "$(or $(SUBDOMAIN),david010)" && \
-	  lh_hosted_reprovision "$$LH_INSTANCE_ID" "$(IMAGE)" && \
-	  echo "Reprovisioned $$LH_INSTANCE_SUBDOMAIN — waiting for health..." && \
-	  ./scripts/ci/wait-for-http.sh "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" "$$LH_INSTANCE_SUBDOMAIN health" 30 2 && \
-	  curl -sf "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" | \
-	    python3 -c "import sys,json; print(json.load(sys.stdin)[\"status\"])"'
-
-deploy-status: ## Show deployed SHA, health, and uptime for all Longhouse surfaces
-	@./scripts/ops/deploy-status.sh
-
-qa-live-perf: ## Profile hosted timeline -> session detail journey on the live instance
-	@$(MAKE) ensure-js-deps
-	@./scripts/qa/run-prod-e2e.sh tests/live/user-instance-perf.spec.ts --timeout=90000 --reporter=line
-
-menubar-harness-test: ## Build/test the local macOS menu bar harness package
-	@./scripts/qa/menubar-harness.sh test
-
-menubar-harness-fixtures: ## Render healthy/degraded/broken menu bar harness fixture PNGs
-	@./scripts/qa/menubar-harness.sh render-fixtures
-
-menubar-harness-live: ## Render a live local-health harness PNG to artifacts/menubar-harness/live.png
-	@./scripts/qa/menubar-harness.sh snapshot-live
-
-menubar-harness-smoke: ## Boot both harness app shells, dry-run every control action, and assert action logs
-	@./scripts/qa/menubar-harness.sh smoke
-
-menubar-harness-xcuitest: ## Generate the native Xcode wrapper and run macOS XCUITests against the shared panel
-	@./scripts/qa/menubar-harness.sh xcuitest
-
-menubar-harness-full: ## Run the full harness loop: tests, fixture/live renders, shell smoke, native UI tests, and manifest
-	@./scripts/qa/menubar-harness.sh full
-
-menubar-harness-window: ## Launch the harness as a normal macOS window against live local-health data
-	@./scripts/qa/menubar-harness.sh window-live
-
-menubar-harness-menubar: ## Launch the harness as a real menu bar extra against live local-health data
-	@./scripts/qa/menubar-harness.sh menubar-live
-
-
-import-smoke: ## Fast import + CSS reference smoke test (<5s)
-	@cd server && uv run python ../scripts/ci/import-smoke.py
-
-test-ci: ## Simulate push/PR CI locally — run this before pushing (~3min)
-	@echo "🤖 Simulating push/PR CI (matches contract-first-ci.yml)..."
+test-ci: ## Pre-push CI check (~3min)
 	$(MAKE) validate
 	$(MAKE) import-smoke
 	$(MAKE) test-coolify-deploy
@@ -777,121 +123,179 @@ test-ci: ## Simulate push/PR CI locally — run this before pushing (~3min)
 	$(MAKE) test-wheel-package
 	$(MAKE) test-shipper-e2e
 
-# ---------------------------------------------------------------------------
-# Performance Profiling
-# ---------------------------------------------------------------------------
-perf-landing: ## Profile landing page rendering events (Chrome trace analysis)
-	@echo "🔬 Profiling landing page rendering..."
-	@echo "   Ensure 'make dev' is running first!"
-	@echo ""
-	cd e2e && bun run scripts/profile-landing.ts \
-		--url=http://localhost:30080 \
-		--duration=10 \
-		--output=./perf-results \
-		$(ARGS)
-	@echo ""
-	@echo "📊 Results in e2e/perf-results/"
-	@echo "   - report.md: Human-readable summary"
-	@echo "   - trace-*.json: Open in Chrome DevTools or https://ui.perfetto.dev"
+test-full: ## Full suite — all tiers (~8min)
+	$(MAKE) test
+	$(MAKE) test-control-plane
+	$(MAKE) test-frontend
+	$(MAKE) test-runner
+	$(MAKE) test-engine
+	$(MAKE) test-shipper-e2e
+	$(MAKE) test-e2e
 
-perf-gpu: ## Measure actual GPU utilization % for landing page effects (macOS)
-	@echo "🔬 Measuring GPU utilization..."
-	@echo "   Ensure 'make dev' is running first!"
-	@echo "   This measures actual GPU % from macOS (same as Activity Monitor)"
-	@echo ""
-	cd e2e && bun run scripts/gpu-profiler.ts \
-		--url=http://localhost:30080 \
-		--duration=10 \
-		--output=./perf-results \
-		$(ARGS)
-	@echo ""
-	@echo "📊 Results in e2e/perf-results/"
-	@echo "   - gpu-report.md: Human-readable summary"
-	@echo "   - gpu-summary.json: Stats per variant"
-	@echo "   - gpu-samples.json: Raw sample data"
+# CI-referenced test helpers (keep for workflow compatibility)
+test-install: ## Installer syntax + first-run smoke
+	@bash -n scripts/install.sh
+	@$(MAKE) test-install-first-run
 
-perf-gpu-dashboard: ## Measure actual GPU utilization % for dashboard ui-effects on/off (macOS)
-	@echo "🔬 Measuring GPU utilization (dashboard)..."
-	@echo "   Ensure 'make dev' is running first!"
-	@echo "   This measures actual GPU % from macOS (same as Activity Monitor)"
-	@echo ""
-	cd e2e && bun run scripts/gpu-profiler-dashboard.ts \
-		--url=http://localhost:30080 \
-		--duration=10 \
-		--output=./perf-results \
-		$(ARGS)
-	@echo ""
-	@echo "📊 Results in e2e/perf-results/"
-	@echo "   - gpu-dashboard-report.md: Human-readable summary"
-	@echo "   - gpu-dashboard-summary.json: Stats per variant"
-	@echo "   - gpu-dashboard-samples.json: Raw sample data"
+test-install-first-run: ## @internal Disposable first-run installer smoke
+	@./scripts/ci/installer-first-run.sh
+
+test-install-runner: ## @internal Install-runner script tests
+	@bash scripts/tests/install-runner.test.sh
+
+test-hosted-instance: ## @internal Hosted-instance helper tests
+	@bash scripts/tests/hosted-instance-auth.test.sh
+	@bash scripts/tests/hosted-loop-debug.test.sh
+
+test-coolify-deploy: ## @internal Coolify deploy helper tests
+	@bash scripts/tests/coolify-deploy.test.sh
+
+test-web-entrypoint: ## @internal Web runtime entrypoint tests
+	@bash scripts/tests/web-docker-entrypoint.test.sh
+
+test-wheel-package: ## @internal CLI wheel packaging smoke
+	@./scripts/qa/test-wheel-package.sh
+
+test-runtime-packaging-macos: ## @internal Build/sign/zip Longhouse.app locally
+	@./scripts/qa/test-local-runtime-packaging.sh
+
+test-readmes: ## @internal README contract tests (MODE=smoke|full)
+	@python3 scripts/qa/run-readme-tests.py --mode $(or $(MODE),smoke) $(FILES)
 
 # ---------------------------------------------------------------------------
-# LangGraph Debug Commands (AI-optimized, minimal tokens)
+# Engine
 # ---------------------------------------------------------------------------
-debug-thread: ## @internal Inspect DB ThreadMessages (usage: make debug-thread THREAD_ID=1)
-	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-thread THREAD_ID=<id>" && exit 1)
-	@cd server && uv run python scripts/debug_langgraph.py thread $(THREAD_ID)
+install-engine: ## Build + install Rust engine binary
+	cd engine && cargo build --release
+	codesign -s - engine/target/release/longhouse-engine
+	@mkdir -p $$HOME/.local/bin
+	@ln -sf "$(CURDIR)/engine/target/release/longhouse-engine" "$$HOME/.local/bin/longhouse-engine"
+	@echo "longhouse-engine installed"
 
-debug-validate: ## @internal Validate message integrity (usage: make debug-validate THREAD_ID=1)
-	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-validate THREAD_ID=<id>" && exit 1)
-	@cd server && uv run python scripts/debug_langgraph.py validate $(THREAD_ID)
+# ---------------------------------------------------------------------------
+# Validation (contract drift checks)
+# ---------------------------------------------------------------------------
+validate: ## Run all contract checks
+	@$(MAKE) validate-ws
+	@$(MAKE) validate-sse
+	@$(MAKE) validate-sdk
+	@$(MAKE) validate-makefile
+	@$(MAKE) lint-test-patterns
 
-debug-inspect: ## @internal Inspect LangGraph checkpoint state (usage: make debug-inspect THREAD_ID=1)
-	@test -n "$(THREAD_ID)" || (echo "❌ Usage: make debug-inspect THREAD_ID=<id>" && exit 1)
-	@cd server && uv run python scripts/debug_langgraph.py inspect $(THREAD_ID)
-
-debug-batch: ## @internal Run batch queries from stdin JSON (usage: echo '{"queries":[...]}' | make debug-batch)
-	@cd server && uv run python scripts/debug_langgraph.py batch --stdin
-
-debug-trace: ## @internal Debug a trace end-to-end (usage: make debug-trace TRACE=abc-123 or make debug-trace RECENT=1)
-	@if [ -n "$(RECENT)" ]; then \
-		cd server && uv run python scripts/debug_trace.py --recent; \
-	elif [ -n "$(TRACE)" ]; then \
-		cd server && uv run python scripts/debug_trace.py $(TRACE) $(if $(LEVEL),--level $(LEVEL),); \
-	else \
-		echo "❌ Usage: make debug-trace TRACE=<uuid> [LEVEL=summary|full|errors]"; \
-		echo "         make debug-trace RECENT=1"; \
+validate-ws: ## @internal WebSocket contract check
+	@cd server && \
+		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
+		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
+		uv run --no-project --with pyyaml python ../scripts/generate/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml >/dev/null 2>&1
+	@if ! git diff --quiet server/zerg/generated/ws_messages.py web/src/generated/ws-messages.ts schemas/ws-protocol.schema.json schemas/ws-protocol-v1.json; then \
+		echo "WebSocket code out of sync — run 'make regen-ws'"; \
 		exit 1; \
 	fi
 
-trace-coverage: ## @internal Trace coverage report (usage: make trace-coverage [SINCE_HOURS=24] [MIN=95] [MIN_EVENTS=90] [JSON=1])
-	@cd server && uv run python scripts/trace_coverage.py \
-		$(if $(SINCE_HOURS),--since-hours $(SINCE_HOURS),) \
-		$(if $(MIN),--min-percent $(MIN),) \
-		$(if $(MIN_EVENTS),--min-event-percent $(MIN_EVENTS),) \
-		$(if $(JSON),--json,) \
-		$(if $(NO_EVENTS),--no-events,)
-
-test-e2e-onboarding: ## @internal Run onboarding browser ring (Playwright + local serve)
-	@echo "🎭 Running onboarding browser ring..."
-	@ONBOARDING_PLAYWRIGHT_PROJECT="$(PROJECT)" ./scripts/qa/qa-oss.sh --workdir $(CURDIR) --no-unit --no-e2e
-
-# ---------------------------------------------------------------------------
-# Onboarding Funnel (docs-as-source)
-# ---------------------------------------------------------------------------
-onboarding-funnel: ## Run onboarding funnel from README contract (fresh clone)
-	@./scripts/ops/run-onboarding-funnel.sh
-
-onboarding-smoke: ## Quick onboarding smoke (uses current workspace, Docker)
-	@./scripts/ops/run-onboarding-funnel.sh --workdir $(CURDIR)
-
-onboarding-sqlite: ## SQLite-only onboarding smoke test (no Docker)
-	@echo "Testing SQLite-only onboarding..."
+validate-sse: ## @internal SSE contract check
 	@cd server && \
-	uv run --extra dev pytest tests_lite/test_onboarding_sqlite.py -v --tb=short -p no:warnings
-	@echo "SQLite onboarding smoke test passed"
+		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
+		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
+		uv run --no-project --with pyyaml python ../scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml >/dev/null 2>&1
+	@if ! git diff --quiet server/zerg/generated/sse_events.py web/src/generated/sse-events.ts schemas/sse-events.asyncapi.yml; then \
+		echo "SSE code out of sync — run 'make regen-sse'"; \
+		exit 1; \
+	fi
 
-qa-oss: ## Full OSS QA (isolated clone + onboarding UI gate)
+validate-sdk: ## @internal OpenAPI/SDK drift check
+	@$(MAKE) generate-sdk >/dev/null
+	@if ! git diff --quiet -- openapi.json web/src/generated/openapi-types.ts; then \
+		echo "OpenAPI/SDK out of sync — run 'make generate-sdk'"; \
+		exit 1; \
+	fi
+
+validate-makefile: ## @internal Verify .PHONY vs documented targets
+	@failed=0; \
+	for t in $$(grep -E '^\.PHONY:' Makefile | sed -E 's/^\.PHONY:[[:space:]]*//; s/\\//g' | tr ' ' '\n' | sed '/^$$/d'); do \
+		case $$t in help|validate-makefile) continue ;; esac; \
+		if ! grep -Eq "^$$t:.*##" Makefile; then echo "Missing ## for .PHONY: $$t"; failed=1; fi; \
+	done; \
+	for t in $$(grep -E '^[a-zA-Z0-9_-]+:.*##' Makefile | sed -E 's/:.*##.*$$//'); do \
+		if ! grep -Eq "^\.PHONY:.*\\b$$t\\b" Makefile; then echo "Not in .PHONY: $$t"; failed=1; fi; \
+	done; \
+	exit $$failed
+
+lint-test-patterns: ## @internal Check for test anti-patterns
+	@bash scripts/qa/lint-test-patterns.sh
+
+regen-ws: ## Regenerate WebSocket contract code
+	@cd server && \
+		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
+		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
+		uv run --no-project --with pyyaml python ../scripts/generate/generate-ws-types-modern.py schemas/ws-protocol-asyncapi.yml
+
+regen-sse: ## Regenerate SSE contract code
+	@cd server && \
+		export XDG_CACHE_HOME="$$PWD/.uv_cache" TMPDIR="$$PWD/.uv_tmp"; \
+		mkdir -p "$$XDG_CACHE_HOME" "$$TMPDIR"; \
+		uv run --no-project --with pyyaml python ../scripts/generate/generate-sse-types.py schemas/sse-events.asyncapi.yml
+
+generate-sdk: ## Regenerate OpenAPI types
+	@$(MAKE) ensure-js-deps
+	@cd server && uv run python scripts/export_openapi.py >/dev/null
+	@cd web && bun run openapi-typescript ../openapi.json --output src/generated/openapi-types.ts
+
+import-smoke: ## @internal Fast import + CSS reference smoke (<5s)
+	@cd server && uv run python ../scripts/ci/import-smoke.py
+
+# ---------------------------------------------------------------------------
+# Production / QA
+# ---------------------------------------------------------------------------
+qa-live: ## Post-deploy QA against hosted instance (~60s)
+	@$(MAKE) ensure-js-deps
+	@./scripts/qa/qa-live.sh
+
+qa-live-chat: ## Hosted live chat smoke
+	@$(MAKE) ensure-js-deps
+	@./scripts/qa/run-prod-e2e.sh tests/live/live_chat_smoke.spec.ts --timeout=120000 --reporter=line
+
+reprovision: ## Reprovision hosted instance (SUBDOMAIN=david010, optional IMAGE=...)
+	@bash -c 'source scripts/lib/hosted-instance.sh && \
+		lh_hosted_prepare_control_plane_auth && \
+		lh_hosted_resolve_instance "$(or $(SUBDOMAIN),david010)" && \
+		lh_hosted_reprovision "$$LH_INSTANCE_ID" "$(IMAGE)" && \
+		echo "Reprovisioned $$LH_INSTANCE_SUBDOMAIN — waiting for health..." && \
+		./scripts/ci/wait-for-http.sh "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" "$$LH_INSTANCE_SUBDOMAIN health" 30 2 && \
+		curl -sf "https://$$LH_INSTANCE_SUBDOMAIN.longhouse.ai/api/health" | \
+			python3 -c "import sys,json; print(json.load(sys.stdin)[\"status\"])"'
+
+deploy-status: ## Show deployed SHA + health for all surfaces
+	@./scripts/ops/deploy-status.sh
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+ui-capture: ## Capture local dev UI debug bundle
+	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,)
+
+menubar-harness: ## macOS menu bar harness (MODE=test|fixtures|live|smoke|full|window|menubar)
+	@./scripts/qa/menubar-harness.sh $(or $(MODE),test)
+
+qa-oss: ## Full OSS QA (isolated clone + onboarding)
 	@./scripts/qa/qa-oss.sh $(ARGS)
 
-# ---------------------------------------------------------------------------
-# Vibetest (LLM-powered browser QA — advisory only, never blocks CI)
-# ---------------------------------------------------------------------------
-VIBETEST_AGENTS ?= 3
+onboarding-funnel: ## @internal Onboarding funnel from README contract
+	@./scripts/ops/run-onboarding-funnel.sh
 
-vibetest: ## Run vibetest against isolated server (advisory, needs GOOGLE_API_KEY)
-	@./scripts/qa/run-vibetest.sh --agents $(VIBETEST_AGENTS)
+launch-gate-local: test-install onboarding-funnel ## @internal Local launch gate
 
-vibetest-local: ## Run vibetest against running dev server (make dev)
-	@./scripts/qa/run-vibetest.sh --use-running http://localhost:47200 --agents $(VIBETEST_AGENTS)
+vibetest: ## LLM-powered browser QA (advisory, needs GOOGLE_API_KEY)
+	@./scripts/qa/run-vibetest.sh --agents $(or $(AGENTS),3)
+
+eval: ## AI evals (REAL LLM calls, costs $$$)
+	@cd server && env EVAL_MODE=live uv run --extra dev pytest evals/ -v --variant=$(or $(VARIANT),baseline) --timeout=120
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+ensure-js-deps: ## @internal Install JS deps if missing
+	@if [ ! -f node_modules/@playwright/test/package.json ]; then bun install --frozen-lockfile; fi
+
+ensure-playwright-browser: ## @internal Install Playwright Chromium if missing
+	@$(MAKE) ensure-js-deps
+	@cd e2e && bunx playwright install chromium >/dev/null
