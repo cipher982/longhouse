@@ -250,6 +250,7 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Control-plane admin calls are user-agent sensitive. Use the existing scripts and curl patterns before improvising custom Python clients.
 - Hosted tenant data on `zerg` lives under `/var/app-data/longhouse/<subdomain>` and mounts to `/data` in the container.
 - macOS menu bar surfaces should open from cached/loading state and refresh off the main thread; SwiftUI menu hosts are prone to size and open-latency regressions, so prefer explicit AppKit popover control for fixed panels.
+- Public macOS onboarding should talk about `Longhouse.app` / the desktop app only; keep `local-health` as internal diagnostic terminology, not public copy or artifact naming.
 - For macOS menu bar UI changes, PNG harness renders are required QA; inspect the literal full-frame images before reinstalling `Longhouse.app`.
 - The tight master logo SVG is not enough proof for the macOS status item; the generated menu bar glyph still needs menu-bar-specific optical framing and a live installed-app capture check before ship.
 - Timeline card `mouseenter` prefetch can turn scrolling under a stationary cursor into accidental workspace-request churn; treat hover prefetch as scroll-sensitive, not as free.

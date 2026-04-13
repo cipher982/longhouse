@@ -1,7 +1,7 @@
 # Distribution And Update Loop
 
 Status: Active Buildout
-Last updated: 2026-04-10
+Last updated: 2026-04-13
 
 ## Goal
 
@@ -30,6 +30,7 @@ For local users, "Longhouse installed" means:
 - macOS users also have a real `Longhouse.app` product surface, not just a helper binary on disk
 
 The launch product decision for macOS lives in `docs/specs/macos-launch-product-shape.md`.
+The app-first onboarding and naming cleanup plan lives in `docs/specs/local-app-product-unification.md`.
 
 ## Current State
 
@@ -111,13 +112,14 @@ The shell installer remains the thin bootstrap wrapper around the same package s
 Canonical product shape:
 
 - notarized `Longhouse.app`
-- direct download packaging around the app bundle
+- signed and notarized disk image around the app bundle
 
 Behavior contract:
 
 - opening the app directly must show setup, status, repair, or Longhouse in the browser
 - the app may stay quiet in the menu bar after setup
 - the app should delegate runtime repair to the same CLI/runtime seams instead of inventing a second installer stack
+- public macOS artifact names must use `Longhouse`, not internal component names
 
 ### Canonical local runtime
 
@@ -148,7 +150,11 @@ The local runtime now has three published artifact classes:
 
 - Python wheel: `longhouse`
 - engine binary: `longhouse-engine-<platform>`
-- macOS ambient app bundle archive: `longhouse-local-health-app-darwin-arm64.zip`
+- transitional macOS app archive: `longhouse-local-health-app-darwin-arm64.zip`
+
+Target public macOS artifact:
+
+- `Longhouse-macos-<arch>.dmg`
 
 Artifact policy:
 
@@ -157,6 +163,7 @@ Artifact policy:
 - local/dev validation may override artifact sources explicitly
 - on macOS, `connect --install` should install the ambient helper as `~/Applications/Longhouse.app`
 - raw menu bar/window executables are repo-local harness artifacts, not consumer release assets
+- ZIP is transitional transport only; the website-facing macOS download should move to DMG
 
 ## macOS Trust Lane
 

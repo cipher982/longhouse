@@ -2,11 +2,13 @@
 
 Status: Active
 Owner: launch product
-Updated: 2026-04-10
+Updated: 2026-04-13
 
 ## Goal
 
 Define the clean macOS product shape for launch without breaking the existing machine contract or the CLI-first power-user path.
+
+Detailed onboarding, packaging, and naming cleanup planning lives in `docs/specs/local-app-product-unification.md`.
 
 ## Decision
 
@@ -23,6 +25,7 @@ That does **not** mean the CLI goes away. It means the macOS human story stops t
   - open the status or setup window
   - open Longhouse in the browser
   - show the repair path clearly
+- Public macOS copy and artifact names must describe `Longhouse.app`, not internal diagnostic components.
 - The app should be quiet by default:
   - no Dock icon required
   - persistent menu bar presence is valid
