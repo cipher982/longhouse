@@ -30,6 +30,7 @@ TIMEOUT="${COOLIFY_TIMEOUT:-900}"
 COOLIFY_API_HOST="${COOLIFY_API_HOST:-clifford}"
 COOLIFY_API_BASE="${COOLIFY_API_BASE:-http://localhost:8000/api/v1}"
 POLL_INTERVAL=5
+STATUS_POLL_ERROR_BUDGET="${COOLIFY_STATUS_POLL_ERROR_BUDGET:-6}"
 DOCKER_IMAGE=""
 DOCKER_TAG=""
 
@@ -211,6 +212,67 @@ update_app_source_if_requested() {
   api_patch_json "/applications/${APP_UUID}" "$payload" >/dev/null
 }
 
+wait_for_deployment_completion() {
+  local deploy_uuid="$1"
+  local start_epoch elapsed status_response status
+  local status_error_file status_error consecutive_status_errors
+
+  status_error_file="$(mktemp)"
+  consecutive_status_errors=0
+  start_epoch="$(date +%s)"
+
+  while true; do
+    elapsed="$(( $(date +%s) - start_epoch ))"
+    if (( elapsed >= TIMEOUT )); then
+      rm -f "$status_error_file"
+      echo "Timed out waiting for Coolify deployment ${deploy_uuid}" >&2
+      return 2
+    fi
+
+    : >"$status_error_file"
+    if ! status_response="$(api_get "/deployments/${deploy_uuid}" 2>"$status_error_file")"; then
+      status_error="$(tr '\r\n' '  ' <"$status_error_file" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+      consecutive_status_errors="$(( consecutive_status_errors + 1 ))"
+      echo ""
+      echo "Coolify status poll failed (${consecutive_status_errors}/${STATUS_POLL_ERROR_BUDGET}) while waiting for deployment ${deploy_uuid}: ${status_error:-unknown error}" >&2
+      if (( consecutive_status_errors >= STATUS_POLL_ERROR_BUDGET )); then
+        rm -f "$status_error_file"
+        echo "Aborting after ${consecutive_status_errors} consecutive Coolify status poll failures." >&2
+        return 1
+      fi
+      sleep "$POLL_INTERVAL"
+      continue
+    fi
+
+    consecutive_status_errors=0
+    status="$(deployment_status <<<"$status_response")"
+
+    case "$status" in
+      finished)
+        rm -f "$status_error_file"
+        echo ""
+        echo "Coolify deploy finished in ${elapsed}s"
+        return 0
+        ;;
+      failed|cancelled*)
+        rm -f "$status_error_file"
+        echo ""
+        echo "Coolify deploy ${status} after ${elapsed}s" >&2
+        print_recent_logs <<<"$status_response" >&2 || true
+        return 1
+        ;;
+      queued|in_progress)
+        printf "\r  status=%-12s elapsed=%ss" "$status" "$elapsed"
+        sleep "$POLL_INTERVAL"
+        ;;
+      *)
+        printf "\r  status=%-12s elapsed=%ss" "$status" "$elapsed"
+        sleep "$POLL_INTERVAL"
+        ;;
+    esac
+  done
+}
+
 main() {
   parse_args "$@"
 
@@ -228,40 +290,7 @@ main() {
 
   echo "Deployment UUID: ${DEPLOY_UUID}"
   echo "Waiting for Coolify deployment completion (timeout: ${TIMEOUT}s)..."
-
-  start_epoch="$(date +%s)"
-  while true; do
-    elapsed="$(( $(date +%s) - start_epoch ))"
-    if (( elapsed >= TIMEOUT )); then
-      echo "Timed out waiting for Coolify deployment ${DEPLOY_UUID}" >&2
-      exit 2
-    fi
-
-    STATUS_RESPONSE="$(api_get "/deployments/${DEPLOY_UUID}")"
-    STATUS="$(deployment_status <<<"$STATUS_RESPONSE")"
-
-    case "$STATUS" in
-      finished)
-        echo ""
-        echo "Coolify deploy finished in ${elapsed}s"
-        exit 0
-        ;;
-      failed|cancelled*)
-        echo ""
-        echo "Coolify deploy ${STATUS} after ${elapsed}s" >&2
-        print_recent_logs <<<"$STATUS_RESPONSE" >&2 || true
-        exit 1
-        ;;
-      queued|in_progress)
-        printf "\r  status=%-12s elapsed=%ss" "$STATUS" "$elapsed"
-        sleep "$POLL_INTERVAL"
-        ;;
-      *)
-        printf "\r  status=%-12s elapsed=%ss" "$STATUS" "$elapsed"
-        sleep "$POLL_INTERVAL"
-        ;;
-    esac
-  done
+  wait_for_deployment_completion "$DEPLOY_UUID"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
