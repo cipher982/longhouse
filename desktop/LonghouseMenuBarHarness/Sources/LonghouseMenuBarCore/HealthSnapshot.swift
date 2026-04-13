@@ -305,6 +305,10 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         String(activitySummary?.sessionsRecent ?? 0)
     }
 
+    public var hotSessionsLabel: String {
+        String(sessionRecencyBands.first?.sessionCount ?? 0)
+    }
+
     public var recentWindowLabel: String {
         let minutes = activitySummary?.recentWindowMinutes ?? 15
         return "Last \(minutes)m"
@@ -316,26 +320,11 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var providerCountsToday: [(provider: String, count: Int)] {
-        guard let providerCounts = activitySummary?.providerCountsToday,
-              !providerCounts.isEmpty else {
-            return []
-        }
+        sortedProviderCounts(activitySummary?.providerCountsToday)
+    }
 
-        let preferredOrder = ["claude", "codex", "gemini"]
-        return providerCounts
-            .filter { !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.value > 0 }
-            .sorted { lhs, rhs in
-                if lhs.value != rhs.value {
-                    return lhs.value > rhs.value
-                }
-                let lhsIndex = preferredOrder.firstIndex(of: lhs.key.lowercased()) ?? preferredOrder.count
-                let rhsIndex = preferredOrder.firstIndex(of: rhs.key.lowercased()) ?? preferredOrder.count
-                if lhsIndex != rhsIndex {
-                    return lhsIndex < rhsIndex
-                }
-                return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending
-            }
-            .map { ($0.key, $0.value) }
+    public var providerCountsRecent: [(provider: String, count: Int)] {
+        sortedProviderCounts(activitySummary?.providerCountsRecent)
     }
 
     public var providerMixLabel: String {
@@ -346,6 +335,21 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return entries
             .map { "\(Self.providerDisplayName($0.provider)) \($0.count)" }
             .joined(separator: " · ")
+    }
+
+    public var recentProviderMixLabel: String {
+        let entries = providerCountsRecent
+        guard !entries.isEmpty else {
+            return "No recent provider traffic"
+        }
+        return entries
+            .map { "\(Self.providerDisplayName($0.provider)) \($0.count)" }
+            .joined(separator: " · ")
+    }
+
+    public var sessionRecencyBands: [ActivityRecencyBandSnapshot] {
+        (activitySummary?.sessionRecencyBands ?? [])
+            .filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
     public var updateBadgeLabel: String? {
@@ -360,6 +364,22 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "-"
         }
         return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary)
+    }
+
+    public var diskFreeCompactLabel: String {
+        guard let bytes = engineStatus?.payload?.diskFreeBytes else {
+            return "-"
+        }
+        let gib = Double(bytes) / Double(1024 * 1024 * 1024)
+        return "\(Int(gib.rounded()))G"
+    }
+
+    public var parseErrorCountLabel: String {
+        String(engineStatus?.payload?.parseErrorCount1H ?? 0)
+    }
+
+    public var consecutiveFailuresLabel: String {
+        String(engineStatus?.payload?.consecutiveShipFailures ?? 0)
     }
 
     public var launchStateLabel: String {
@@ -399,6 +419,51 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         }
 
         return state.prefix(1).uppercased() + state.dropFirst()
+    }
+
+    public var runnerNameValueLabel: String {
+        if let runnerName = launchReadiness?.runner?.runnerName,
+           !runnerName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return runnerName
+        }
+        if let machineName = launchReadiness?.machineName,
+           !machineName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return machineName
+        }
+        return "-"
+    }
+
+    public var installModeValueLabel: String {
+        let raw = launchReadiness?.runner?.installMode ?? "unknown"
+        return raw
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .capitalized
+    }
+
+    public var hostValueLabel: String {
+        let rawURL = launchReadiness?.storedURL ?? launchReadiness?.runner?.runnerURLs?.first
+        guard let rawURL,
+              let parsedURL = URL(string: rawURL),
+              let host = parsedURL.host,
+              !host.isEmpty else {
+            return "-"
+        }
+        if let shortHost = host.split(separator: ".").first, !shortHost.isEmpty {
+            return String(shortHost)
+        }
+        return host
+    }
+
+    public var installedVersionLabel: String {
+        updateInfo?.installedVersion ?? "-"
+    }
+
+    public var installedVersionDetailLabel: String {
+        if updateInfo?.updateAvailable == true, let latest = updateInfo?.latestVersion {
+            return "Upd \(latest)"
+        }
+        return "Current"
     }
 
     public var machineNameLabel: String {
@@ -503,6 +568,29 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return 0
         }
         return max(0, Int(referenceDate.timeIntervalSince(collectedAtDate)))
+    }
+
+    private func sortedProviderCounts(_ providerCounts: [String: Int]?) -> [(provider: String, count: Int)] {
+        guard let providerCounts,
+              !providerCounts.isEmpty else {
+            return []
+        }
+
+        let preferredOrder = ["claude", "codex", "gemini"]
+        return providerCounts
+            .filter { !$0.key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.value > 0 }
+            .sorted { lhs, rhs in
+                if lhs.value != rhs.value {
+                    return lhs.value > rhs.value
+                }
+                let lhsIndex = preferredOrder.firstIndex(of: lhs.key.lowercased()) ?? preferredOrder.count
+                let rhsIndex = preferredOrder.firstIndex(of: rhs.key.lowercased()) ?? preferredOrder.count
+                if lhsIndex != rhsIndex {
+                    return lhsIndex < rhsIndex
+                }
+                return lhs.key.localizedCaseInsensitiveCompare(rhs.key) == .orderedAscending
+            }
+            .map { ($0.key, $0.value) }
     }
 
     private func dynamicEngineAgeSeconds(relativeTo referenceDate: Date, fallback: Int) -> Int {
@@ -628,8 +716,15 @@ public struct ActivitySummarySnapshot: Codable, Equatable, Sendable {
     public let sessionsToday: Int?
     public let sessionsRecent: Int?
     public let providerCountsToday: [String: Int]?
+    public let providerCountsRecent: [String: Int]?
+    public let sessionRecencyBands: [ActivityRecencyBandSnapshot]?
     public let latestActivityAt: String?
     public let recentWindowMinutes: Int?
+}
+
+public struct ActivityRecencyBandSnapshot: Codable, Equatable, Sendable {
+    public let label: String
+    public let sessionCount: Int?
 }
 
 public struct LaunchReadinessSnapshot: Codable, Equatable, Sendable {

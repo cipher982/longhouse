@@ -46,10 +46,11 @@ This is a hybrid of:
 Healthy-state hierarchy is now explicitly:
 
 1. headline + status + small accessory controls
-2. one compact metric strip for the four numbers that matter at a glance
-3. one dense operations table with right-aligned values
-4. one lightweight trend zone, but only when the sampled window contains real signal
-5. one primary exit action, with diagnostics behind a secondary menu
+2. one full-width flight strip for instant orientation
+3. one compact transport rail
+4. one session-traffic bank with fixed recency buckets and provider mix
+5. one dense ops ledger for launch identity and runtime topology
+6. one primary exit action, with diagnostics behind a secondary menu
 
 ## Healthy State
 
@@ -71,9 +72,9 @@ The healthy/default state should show:
    - sessions touched today
    - active now
    - provider mix
-4. `Pulse`
-   - one compact chart driven by cached snapshot history in the running app
-   - phase 1 target: ship cadence / freshness pulse
+4. `Session Traffic`
+   - fixed recency buckets for distinct sessions touched in `0-1m`, `1-5m`, `5-15m`, `15-60m`, `1-6h`, and `6h+`
+   - recent provider mix and today provider mix as compact rails with exact counts
 5. Actions
    - primary: `Open Longhouse`
    - secondary: `Details`
@@ -119,7 +120,9 @@ Phase 1 adds a machine-local ambient activity summary to `local-health`:
 - `sessions_today`
 - `sessions_recent`
 - `provider_counts_today`
+- `provider_counts_recent`
 - `latest_activity_at`
+- `session_recency_bands`
 
 Phase 1 does not add:
 
