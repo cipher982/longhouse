@@ -1,5 +1,6 @@
 import AppKit
 
+@MainActor
 public enum MenuBarBrandIcon {
     public static let image: NSImage = {
         guard let url = Bundle.module.url(forResource: "LonghouseMenuIcon", withExtension: "png"),
