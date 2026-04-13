@@ -31,14 +31,12 @@ private final class HarnessMenuBarAppDelegate: NSObject, NSApplicationDelegate {
         statusWindowController = StatusWindowController(
             store: store,
             actionSink: actionSink,
-            refreshIntervalSeconds: config.refreshIntervalSeconds,
-            healthyConcept: config.healthyConcept
+            refreshIntervalSeconds: config.refreshIntervalSeconds
         )
         menuBarController = MenuBarStatusController(
             store: store,
             actionSink: actionSink,
-            refreshIntervalSeconds: config.refreshIntervalSeconds,
-            healthyConcept: config.healthyConcept
+            refreshIntervalSeconds: config.refreshIntervalSeconds
         )
 
         if config.showStatusWindowOnLaunch {
