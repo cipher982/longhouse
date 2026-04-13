@@ -718,11 +718,13 @@
 
   .landing-surface-note a {
     color: var(--color-brand-primary);
-    text-decoration: none;
+    text-decoration: underline;
+    text-decoration-thickness: 0.08em;
+    text-underline-offset: 0.18em;
   }
 
   .landing-surface-note a:hover {
-    text-decoration: underline;
+    color: var(--color-brand-primary-strong);
   }
 
 
