@@ -17,6 +17,10 @@ if (!inputPath || !outputPath || !widthRaw || !heightRaw) {
 
 const width = Number(widthRaw);
 const height = Number(heightRaw);
+const opticalInsetPx = Math.max(1, Math.round(Math.min(width, height) * 0.03));
+const verticalOffsetPx = opticalInsetPx;
+const innerWidth = width - opticalInsetPx * 2;
+const innerHeight = height - opticalInsetPx * 2;
 
 if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
   usage();
@@ -42,8 +46,8 @@ function deriveBrightMonochromeMenubarSvg(svg) {
   derived = derived.replace('fill="#ffffff" opacity="0.14"', 'fill="rgba(255,255,255,0.18)"');
 
   // The master viewBox is already tight to content bounds.
-  // For the menu bar, nudge slightly if needed for optical centering.
-  // Currently the master crop works well for the menu bar slot.
+  // The menu bar needs a tiny optical inset and downward nudge so the
+  // helmet reads centered at 18pt without clipping the crown.
 
   return derived;
 }
@@ -76,9 +80,10 @@ try {
           }
 
           .asset-frame > svg {
-            width: 100%;
-            height: 100%;
+            width: ${innerWidth}px;
+            height: ${innerHeight}px;
             display: block;
+            transform: translateY(${verticalOffsetPx}px);
           }
         </style>
         <div class="asset-frame">

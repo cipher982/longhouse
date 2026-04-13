@@ -10,6 +10,7 @@ public enum SnapshotRenderer {
     ) throws {
         let view = MenuBarPanelView(
             snapshot: snapshot,
+            history: [],
             actionSink: actionSink,
             isRefreshing: false,
             refresh: {}
@@ -25,7 +26,7 @@ public enum SnapshotRenderer {
         }
 
         let rep = NSBitmapImageRep(cgImage: cgImage)
-        guard let pngData = rep.representation(using: .png, properties: [:]) else {
+        guard let pngData = rep.representation(using: NSBitmapImageRep.FileType.png, properties: [:]) else {
             throw SnapshotSourceError.commandFailed("Failed to encode PNG snapshot")
         }
 

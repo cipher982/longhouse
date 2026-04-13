@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import sqlite3
 import time
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -103,6 +107,33 @@ def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
 
 
+def _write_shipper_db(tmp_path: Path, rows: list[tuple[str, str, str | None, str | None, str]]) -> None:
+    db_path = tmp_path / "longhouse-shipper.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE file_state (
+            path TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            queued_offset INTEGER NOT NULL DEFAULT 0,
+            acked_offset INTEGER NOT NULL DEFAULT 0,
+            session_id TEXT,
+            provider_session_id TEXT,
+            last_updated TEXT NOT NULL
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO file_state (path, provider, session_id, provider_session_id, last_updated)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
 def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
@@ -114,6 +145,7 @@ def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
     assert snapshot["severity"] == "green"
     assert snapshot["headline"] == "Longhouse shipping healthy"
     assert snapshot["engine_status"]["fresh"] is True
+    assert snapshot["activity_summary"]["exists"] is False
     assert snapshot["launch_readiness"]["state"] == "unconfigured"
 
 
@@ -187,7 +219,42 @@ def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
     assert payload["health_state"] == "healthy"
     assert payload["service"]["status"] == "running"
     assert payload["engine_status"]["exists"] is True
+    assert "activity_summary" in payload
     assert payload["launch_readiness"]["state"] == "unconfigured"
+
+
+def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    now = datetime(2026, 4, 12, 18, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+    local_now = now.astimezone()
+    start_of_day_local = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    recent = now - timedelta(minutes=4)
+    earlier_today = now - timedelta(hours=2)
+    before_today = start_of_day_local.astimezone(timezone.utc) - timedelta(minutes=5)
+
+    _write_shipper_db(
+        tmp_path,
+        [
+            ("/tmp/claude-a.jsonl", "claude", "claude-a", None, recent.isoformat()),
+            ("/tmp/codex-b.jsonl", "codex", None, "codex-b", earlier_today.isoformat()),
+            ("/tmp/gemini-c.jsonl", "gemini", "gemini-c", None, before_today.isoformat()),
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+    activity = snapshot["activity_summary"]
+
+    assert activity["exists"] is True
+    assert activity["error"] is None
+    assert activity["sessions_today"] == 2
+    assert activity["sessions_recent"] == 1
+    assert activity["provider_counts_today"] == {"claude": 1, "codex": 1}
+    assert activity["latest_activity_at"] == recent.isoformat()
+    assert activity["recent_window_minutes"] == local_health_service.ACTIVITY_RECENT_MINUTES
 
 
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):

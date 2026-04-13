@@ -17,7 +17,7 @@ final class LonghouseMenuBarWindowHostUITests: XCTestCase {
         let window = app.windows.firstMatch
         XCTAssertTrue(window.waitForExistence(timeout: 5), "Window host did not appear")
         XCTAssertEqual(window.title, "Longhouse Local Health")
-        XCTAssertTrue(app.staticTexts["Longhouse engine service is stopped"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["Engine service is stopped"].waitForExistence(timeout: 5))
         let repairButton = try XCTUnwrap(
             findButton(in: app, candidates: [AccessibilityID.Button.repair, "Repair"], container: window),
             "Repair button was not found"

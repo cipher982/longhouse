@@ -2,18 +2,14 @@ import AppKit
 import SwiftUI
 
 public enum MenuBarPanelLayout {
-    public static let panelWidth: CGFloat = 336
-    public static let loadingHeight: CGFloat = 154
-    public static let failureHeight: CGFloat = 190
-    public static let healthyHeight: CGFloat = 196
-    public static let attentionHeight: CGFloat = 368
+    public static let panelWidth: CGFloat = 372
+    public static let loadingHeight: CGFloat = 170
+    public static let failureHeight: CGFloat = 198
+    public static let healthyHeight: CGFloat = 452
+    public static let attentionHeight: CGFloat = 564
 
     public static func preferredHeight(for snapshot: HealthSnapshot) -> CGFloat {
-        var height = snapshot.parsedSeverity == .green ? healthyHeight : attentionHeight
-        if snapshot.updateInfo?.updateAvailable == true {
-            height += 44
-        }
-        return height
+        snapshot.parsedSeverity == .green ? healthyHeight : attentionHeight
     }
 }
 
@@ -21,25 +17,29 @@ public struct MenuBarLoadingView: View {
     public init() {}
 
     public var body: some View {
-        PanelChrome(height: MenuBarPanelLayout.loadingHeight) {
-            VStack(alignment: .leading, spacing: 12) {
-                statusEmblem(color: .gray, systemImage: "arrow.trianglehead.clockwise")
+        PanelChrome(height: MenuBarPanelLayout.loadingHeight, accent: .gray) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 12) {
+                    statusEmblem(color: .gray, systemImage: "arrow.trianglehead.clockwise")
 
-                Text("Checking local shipping")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.primary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Refreshing local shipping")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                        Text("Longhouse is collecting the latest machine snapshot.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.secondary)
+                    }
+                }
 
-                Text("Longhouse is refreshing the latest machine health snapshot.")
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                HStack(spacing: 8) {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Loading")
-                        .font(.system(size: 12, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Color.secondary)
+                PanelSection(title: "Snapshot") {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Loading cached health and telemetry")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.primary)
+                    }
                 }
             }
         }
@@ -56,21 +56,30 @@ public struct MenuBarFailureView: View {
     }
 
     public var body: some View {
-        PanelChrome(height: MenuBarPanelLayout.failureHeight) {
-            VStack(alignment: .leading, spacing: 12) {
-                statusEmblem(color: .red, systemImage: "xmark.circle.fill")
-                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Error.headline)
-                    .accessibilityLabel(Text("Longhouse could not load local health"))
+        PanelChrome(height: MenuBarPanelLayout.failureHeight, accent: .red) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .center, spacing: 12) {
+                    statusEmblem(color: .red, systemImage: "xmark.circle.fill")
+                        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Error.headline)
+                        .accessibilityLabel(Text("Longhouse could not load local health"))
 
-                Text("Longhouse could not load local health")
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.primary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Health snapshot unavailable")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                        Text("The local menu bar surface could not load its latest snapshot.")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Color.secondary)
+                    }
+                }
 
-                Text(message)
-                    .font(.system(size: 12, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Error.message)
+                PanelSection(title: "Failure") {
+                    Text(message)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Error.message)
+                }
 
                 Button(action: retry) {
                     Label("Retry", systemImage: "arrow.clockwise")
@@ -87,6 +96,7 @@ public struct MenuBarFailureView: View {
 
 public struct MenuBarPanelView: View {
     private let snapshot: HealthSnapshot
+    private let history: [SnapshotHistorySample]
     private let actionSink: any HealthActionSink
     private let isRefreshing: Bool
     private let refresh: () -> Void
@@ -95,11 +105,13 @@ public struct MenuBarPanelView: View {
 
     public init(
         snapshot: HealthSnapshot,
+        history: [SnapshotHistorySample],
         actionSink: any HealthActionSink,
         isRefreshing: Bool,
         refresh: @escaping () -> Void
     ) {
         self.snapshot = snapshot
+        self.history = history
         self.actionSink = actionSink
         self.isRefreshing = isRefreshing
         self.refresh = refresh
@@ -107,20 +119,15 @@ public struct MenuBarPanelView: View {
     }
 
     public var body: some View {
-        PanelChrome(height: MenuBarPanelLayout.preferredHeight(for: snapshot)) {
-            VStack(alignment: .leading, spacing: 12) {
+        PanelChrome(height: MenuBarPanelLayout.preferredHeight(for: snapshot), accent: snapshot.parsedSeverity.accentColor) {
+            VStack(alignment: .leading, spacing: 14) {
                 header
 
-                if snapshot.updateInfo?.updateAvailable == true {
-                    updateBanner
-                }
-
                 if isHealthy {
-                    healthyDetails
-                    healthyActions
+                    healthyTelemetryDeck
                 } else {
-                    issueDetails
-                    attentionCallout
+                    blockerSection
+                    runbookSection
                     issueActions
                 }
             }
@@ -147,29 +154,75 @@ public struct MenuBarPanelView: View {
             statusEmblem(color: snapshot.parsedSeverity.accentColor, systemImage: snapshot.parsedSeverity.symbolName)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text(snapshot.headline)
-                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+            VStack(alignment: .leading, spacing: 7) {
+                Text("LONGHOUSE LOCAL")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+                    .tracking(0.9)
+
+                Text(displayHeadline)
+                    .font(.system(size: 20, weight: .semibold))
                     .foregroundStyle(Color.primary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
                     .harnessAccessibility(
                         identifier: LonghouseMenuBarAccessibilityID.Header.headline,
-                        label: snapshot.headline
+                        label: displayHeadline
                     )
 
-                Text(snapshot.ambientStatusLabel)
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(snapshot.parsedSeverity.accentColor)
-                    .harnessAccessibility(
-                        identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge,
-                        label: snapshot.ambientStatusLabel
+                HStack(spacing: 8) {
+                    statusChip(
+                        title: snapshot.ambientStatusLabel.uppercased(),
+                        color: snapshot.parsedSeverity.accentColor,
+                        identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
                     )
+
+                    subtleChip(title: "Snapshot \(snapshot.snapshotAgeCompactLabel)")
+
+                    if let updateBadge = snapshot.updateBadgeLabel {
+                        subtleChip(title: updateBadge, tint: .blue)
+                    }
+                }
             }
 
             Spacer(minLength: 0)
 
-            refreshControl
+            HStack(spacing: 8) {
+                if isHealthy {
+                    Button {
+                        perform(.openLonghouse)
+                    } label: {
+                        Image(systemName: "arrow.up.forward.square")
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .fill(Color.white.opacity(0.05))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLonghouse)
+                    .accessibilityLabel(Text("Open Longhouse"))
+
+                    healthyToolsMenu
+                }
+
+                refreshControl
+            }
         }
+    }
+
+    private var displayHeadline: String {
+        let trimmed = snapshot.headline.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.lowercased().hasPrefix("longhouse ") else {
+            return trimmed
+        }
+
+        let dropped = String(trimmed.dropFirst("Longhouse ".count))
+        guard let first = dropped.first else {
+            return trimmed
+        }
+        return first.uppercased() + dropped.dropFirst()
     }
 
     private var refreshControl: some View {
@@ -177,79 +230,178 @@ public struct MenuBarPanelView: View {
             perform(.refresh)
         } label: {
             ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+
                 if isRefreshing {
                     ProgressView()
                         .controlSize(.small)
                 } else {
                     Image(systemName: "arrow.clockwise")
                         .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.primary)
                 }
             }
-            .frame(width: 18, height: 18)
+            .frame(width: 28, height: 28)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
+        .buttonStyle(.plain)
         .disabled(isRefreshing)
         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.refresh)
         .accessibilityLabel(Text(isRefreshing ? "Refreshing" : "Refresh"))
     }
 
-    private var updateBanner: some View {
-        let latest = snapshot.updateInfo?.latestVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let installed = snapshot.updateInfo?.installedVersion ?? ""
-        let label = if let latest, !latest.isEmpty {
-            "Version \(latest) is ready. Installed: \(installed)."
-        } else {
-            "A Longhouse update is ready."
-        }
+    private var healthyTelemetryDeck: some View {
+        TelemetryDeck {
+            HStack(alignment: .top, spacing: 14) {
+                healthyNowColumn
 
-        return HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "arrow.down.circle.fill")
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Color.blue)
+                Rectangle()
+                    .fill(Color.white.opacity(0.06))
+                    .frame(width: 1)
 
-            Text(label)
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.primary)
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.UpdateBanner.label)
-
-            Spacer(minLength: 0)
-
-            Button {
-                feedback = actionSink.handle(.upgradeNow, snapshot: snapshot)
-            } label: {
-                Text("Upgrade")
+                healthyTodayColumn
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.blue)
-            .controlSize(.small)
-            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.upgradeNow)
-            .accessibilityLabel(Text("Upgrade"))
+
+            sectionDivider
+
+            VStack(alignment: .leading, spacing: 9) {
+                HStack(alignment: .center, spacing: 8) {
+                    deckColumnTitle("Recent Pulse")
+
+                    Spacer(minLength: 8)
+
+                    Text(pulseTrailingLabel)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                        .monospacedDigit()
+                }
+
+                if history.count > 1 {
+                    PulseChart(history: history)
+                } else {
+                    Text("Collecting live shipping samples")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 10)
+                }
+            }
         }
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
-                .fill(Color.blue.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
-                .stroke(Color.blue.opacity(0.16), lineWidth: 1)
-        )
-        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.UpdateBanner.container)
     }
 
-    private var healthyDetails: some View {
-        PanelSection {
-            PanelValueRow(
+    private var healthyNowColumn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            deckColumnTitle("Now")
+
+            TelemetryRow(
                 label: "Last ship",
                 value: snapshot.lastShipValueLabel,
                 valueIdentifier: LonghouseMenuBarAccessibilityID.Header.lastShip
             )
 
-            Divider()
+            sectionDivider
 
-            PanelValueRow(
+            TelemetryRow(label: "Engine", value: snapshot.engineFreshnessValueLabel)
+
+            sectionDivider
+
+            TelemetryRow(
+                label: "Launch",
+                value: snapshot.launchValueLabel,
+                labelIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.label,
+                valueIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.value
+            )
+
+            sectionDivider
+
+            TelemetryRow(
+                label: "Queue",
+                value: snapshot.pipelineValueLabel,
+                valueColor: pipelineColor
+            )
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var healthyTodayColumn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            deckColumnTitle("Today")
+
+            HStack(alignment: .top, spacing: 10) {
+                MissionStat(
+                    label: "Synced",
+                    value: snapshot.sessionsTodayLabel,
+                    detail: "Today"
+                )
+
+                MissionStat(
+                    label: "Active",
+                    value: snapshot.sessionsRecentLabel,
+                    detail: snapshot.recentWindowLabel
+                )
+            }
+
+            sectionDivider
+
+            TelemetryRow(label: "Last activity", value: snapshot.latestActivityLabel)
+
+            sectionDivider
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Provider mix")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.secondary)
+
+                Text(snapshot.providerMixLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.84)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                ProviderMixBar(entries: snapshot.providerCountsToday)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var pulseTrailingLabel: String {
+        if let latest = history.last {
+            if latest.sessionsRecent > 0 {
+                return "\(latest.sessionsRecent) active"
+            }
+            if latest.spoolPendingCount > 0 || latest.outboxCount > 0 {
+                return "Queue busy"
+            }
+        }
+        return "Idle"
+    }
+
+    private var blockerSection: some View {
+        PanelSection(title: "Blocking Signals") {
+            TelemetryRow(
+                label: "Service",
+                value: snapshot.serviceStatusTitle,
+                valueColor: snapshot.serviceStatusLabel == "running" ? snapshot.parsedSeverity.accentColor : .red,
+                labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.title,
+                valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.value
+            )
+
+            sectionDivider
+
+            TelemetryRow(label: "Last ship", value: snapshot.lastShipValueLabel)
+
+            sectionDivider
+
+            TelemetryRow(
+                label: "Queue",
+                value: snapshot.pipelineValueLabel,
+                valueColor: pipelineColor
+            )
+
+            sectionDivider
+
+            TelemetryRow(
                 label: "Launch",
                 value: snapshot.launchValueLabel,
                 labelIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.label,
@@ -258,166 +410,139 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private var issueDetails: some View {
-        PanelSection {
-            PanelValueRow(
-                label: "Service",
-                value: snapshot.serviceStatusTitle,
-                valueColor: snapshot.serviceStatusLabel == "running" ? snapshot.parsedSeverity.accentColor : .red,
-                labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.title,
-                valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.value
-            )
-
-            if snapshot.outboxCount > 0 || snapshot.parsedSeverity != .green {
-                Divider()
-
-                PanelValueRow(
-                    label: "Outbox",
-                    value: "\(snapshot.outboxCount)",
-                    valueColor: snapshot.outboxCount == 0 ? Color.primary : .orange,
-                    labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.outbox.title,
-                    valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.outbox.value
-                )
-            }
-
-            if snapshot.spoolDeadLabel != "0" || snapshot.parsedSeverity == .red {
-                Divider()
-
-                PanelValueRow(
-                    label: "Dead",
-                    value: snapshot.spoolDeadLabel,
-                    valueColor: snapshot.spoolDeadLabel == "0" ? Color.primary : .red,
-                    labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.dead.title,
-                    valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.dead.value
-                )
-            }
-        }
-    }
-
-    private var attentionCallout: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Needs attention")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                .foregroundStyle(snapshot.parsedSeverity.accentColor)
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Section.next.title)
-
+    private var runbookSection: some View {
+        PanelSection(title: "Next") {
             Text(snapshot.attentionSummaryLabel)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Section.next.tag(0))
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
-                .fill(snapshot.parsedSeverity.accentColor.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
-                .stroke(snapshot.parsedSeverity.accentColor.opacity(0.16), lineWidth: 1)
-        )
-    }
 
-    private var healthyActions: some View {
-        primaryButton(
-            title: "Open Longhouse",
-            systemImage: "arrow.up.forward.square",
-            identifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
-            tint: Color.accentColor
-        ) {
-            perform(.openLonghouse)
+            if !snapshot.reasons.isEmpty {
+                sectionDivider
+
+                FlowLayout(spacing: 6, rowSpacing: 6) {
+                    ForEach(Array(snapshot.reasons.prefix(4).enumerated()), id: \.offset) { index, reason in
+                        Text(snapshotReason(reason))
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(snapshot.parsedSeverity.accentColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(
+                                Capsule(style: .continuous)
+                                    .fill(snapshot.parsedSeverity.accentColor.opacity(0.12))
+                            )
+                            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Section.reasons.tag(index))
+                    }
+                }
+            }
         }
     }
 
     private var issueActions: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                primaryButton(
-                    title: "Repair",
-                    systemImage: "wrench.and.screwdriver",
-                    identifier: LonghouseMenuBarAccessibilityID.Button.repair,
-                    tint: .red
-                ) {
+                Button {
                     perform(.repairInstall)
+                } label: {
+                    Label("Repair", systemImage: "wrench.and.screwdriver")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.large)
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.repair)
+                .accessibilityLabel(Text("Repair"))
 
-                secondaryButton(
-                    title: "Open Longhouse",
-                    systemImage: "arrow.up.forward.square",
-                    identifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse
-                ) {
+                Button {
                     perform(.openLonghouse)
+                } label: {
+                    Label("Open", systemImage: "arrow.up.forward.square")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLonghouse)
+                .accessibilityLabel(Text("Open Longhouse"))
             }
 
             HStack(spacing: 8) {
-                compactButton(
-                    title: "Logs",
-                    systemImage: "doc.text.magnifyingglass",
-                    identifier: LonghouseMenuBarAccessibilityID.Button.openLogs
-                ) {
+                Button {
                     perform(.openLogs)
+                } label: {
+                    Label("Logs", systemImage: "doc.text.magnifyingglass")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
+                .accessibilityLabel(Text("Logs"))
 
-                compactButton(
-                    title: "Copy JSON",
-                    systemImage: "doc.on.doc",
-                    identifier: LonghouseMenuBarAccessibilityID.Button.copyDiagnostics
-                ) {
+                Button {
                     perform(.copyDiagnostics)
+                } label: {
+                    Label("Copy JSON", systemImage: "doc.on.doc")
+                        .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
+                .accessibilityLabel(Text("Copy JSON"))
             }
         }
     }
 
-    private func primaryButton(
-        title: String,
-        systemImage: String,
-        identifier: String,
-        tint: Color,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity)
+    private var healthyToolsMenu: some View {
+        Menu {
+            if snapshot.updateInfo?.updateAvailable == true {
+                Button("Upgrade") {
+                    feedback = actionSink.handle(.upgradeNow, snapshot: snapshot)
+                }
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.upgradeNow)
+            }
+
+            Button("Doctor") {
+                feedback = actionSink.handle(.runDoctor, snapshot: snapshot)
+            }
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.doctor)
+
+            Button("Logs") {
+                feedback = actionSink.handle(.openLogs, snapshot: snapshot)
+            }
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
+
+            Button("Copy JSON") {
+                feedback = actionSink.handle(.copyDiagnostics, snapshot: snapshot)
+            }
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 28, height: 28)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                )
         }
-        .buttonStyle(.borderedProminent)
-        .tint(tint)
-        .controlSize(.large)
-        .accessibilityIdentifier(identifier)
-        .accessibilityLabel(Text(title))
+        .menuStyle(.borderlessButton)
+        .controlSize(.regular)
     }
 
-    private func secondaryButton(
-        title: String,
-        systemImage: String,
-        identifier: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity)
+    private var pipelineColor: Color {
+        if snapshot.spoolDeadLabel != "0" {
+            return .red
         }
-        .buttonStyle(.bordered)
-        .controlSize(.large)
-        .accessibilityIdentifier(identifier)
-        .accessibilityLabel(Text(title))
+        if snapshot.spoolPendingLabel != "0" || snapshot.outboxCount > 0 {
+            return .orange
+        }
+        return snapshot.parsedSeverity == .green ? Color.primary : snapshot.parsedSeverity.accentColor
     }
 
-    private func compactButton(
-        title: String,
-        systemImage: String,
-        identifier: String,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity)
+    private func perform(_ action: HarnessAction) {
+        feedback = actionSink.handle(action, snapshot: snapshot)
+        if action == .refresh {
+            refresh()
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .accessibilityIdentifier(identifier)
-        .accessibilityLabel(Text(title))
     }
 
     private func feedbackBanner(_ feedback: HealthActionFeedback) -> some View {
@@ -430,12 +555,12 @@ public struct MenuBarPanelView: View {
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(feedback.title)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(Color.primary)
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.title)
 
                 Text(feedback.detail)
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Color.secondary)
                     .lineLimit(2)
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.detail)
@@ -445,21 +570,14 @@ public struct MenuBarPanelView: View {
         .padding(.vertical, 8)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
+                .fill(Color.black.opacity(0.28))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
                 .stroke(tint.opacity(0.24), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 6)
+        .shadow(color: Color.black.opacity(0.24), radius: 10, x: 0, y: 6)
         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.container)
-    }
-
-    private func perform(_ action: HarnessAction) {
-        feedback = actionSink.handle(action, snapshot: snapshot)
-        if action == .refresh {
-            refresh()
-        }
     }
 
     private func feedbackColor(for style: HealthActionFeedbackStyle) -> Color {
@@ -487,37 +605,115 @@ public struct MenuBarPanelView: View {
             return "xmark.circle.fill"
         }
     }
+
+    private func snapshotReason(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .capitalized
+    }
 }
 
-private let panelCornerRadius: CGFloat = 18
-private let sectionCornerRadius: CGFloat = 12
+private let panelCornerRadius: CGFloat = 20
+private let sectionCornerRadius: CGFloat = 14
 
 private struct PanelChrome<Content: View>: View {
     let height: CGFloat
+    let accent: Color
     let content: Content
 
-    init(height: CGFloat, @ViewBuilder content: () -> Content) {
+    init(height: CGFloat, accent: Color, @ViewBuilder content: () -> Content) {
         self.height = height
+        self.accent = accent
         self.content = content()
     }
 
     var body: some View {
-        content
-            .padding(16)
-            .frame(width: MenuBarPanelLayout.panelWidth, height: height, alignment: .topLeading)
-            .background(
-                RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor))
+        ZStack(alignment: .topLeading) {
+            PanelMaterialBackground()
+
+            LinearGradient(
+                colors: [accent.opacity(0.07), Color.clear],
+                startPoint: .top,
+                endPoint: .bottom
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-            )
-            .shadow(color: Color.black.opacity(0.12), radius: 12, x: 0, y: 8)
+
+            content
+                .padding(16)
+        }
+        .frame(width: MenuBarPanelLayout.panelWidth, height: height, alignment: .topLeading)
+        .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
+        )
+        .overlay(alignment: .top) {
+            Capsule(style: .continuous)
+                .fill(accent.opacity(0.7))
+                .frame(height: 3)
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+        }
+        .shadow(color: Color.black.opacity(0.22), radius: 14, x: 0, y: 8)
     }
 }
 
+private struct PanelMaterialBackground: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.material = .hudWindow
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
 private struct PanelSection<Content: View>: View {
+    let title: String
+    let trailing: String?
+    let content: Content
+
+    init(title: String, trailing: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.trailing = trailing
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(title.uppercased())
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Color.secondary)
+                    .tracking(0.6)
+
+                Spacer(minLength: 8)
+
+                if let trailing {
+                    Text(trailing)
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.secondary)
+                        .monospacedDigit()
+                }
+            }
+
+            content
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+                .fill(Color.black.opacity(0.15))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+}
+
+private struct TelemetryDeck<Content: View>: View {
     let content: Content
 
     init(@ViewBuilder content: () -> Content) {
@@ -525,22 +721,22 @@ private struct PanelSection<Content: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 14) {
             content
         }
-        .padding(12)
+        .padding(14)
         .background(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color.black.opacity(0.15))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.04), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 1)
         )
     }
 }
 
-private struct PanelValueRow: View {
+private struct TelemetryRow: View {
     let label: String
     let value: String
     var valueColor: Color = .primary
@@ -550,19 +746,230 @@ private struct PanelValueRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(label)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
+                .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.secondary)
                 .applyHarnessAccessibility(identifier: labelIdentifier, label: label)
 
             Spacer(minLength: 12)
 
             Text(value)
-                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(valueColor)
+                .monospacedDigit()
                 .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
                 .applyHarnessAccessibility(identifier: valueIdentifier, label: value)
         }
     }
+}
+
+private struct MissionStat: View {
+    let label: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label.uppercased())
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.secondary)
+                .tracking(0.5)
+
+            Text(value)
+                .font(.system(size: 23, weight: .bold))
+                .foregroundStyle(Color.primary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+
+            Text(detail.uppercased())
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.secondary)
+                .tracking(0.45)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct ProviderMixBar: View {
+    let entries: [(provider: String, count: Int)]
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Color.white.opacity(0.05))
+
+            GeometryReader { geometry in
+                let total = max(entries.map(\.count).reduce(0, +), 1)
+
+                HStack(spacing: 4) {
+                    ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(providerColor(entry.provider))
+                            .frame(width: max(24, geometry.size.width * CGFloat(entry.count) / CGFloat(total)))
+                            .overlay(alignment: .center) {
+                                if geometry.size.width > 180 {
+                                    Text(providerAbbreviation(entry.provider))
+                                        .font(.system(size: 10, weight: .bold))
+                                        .foregroundStyle(Color.white.opacity(0.9))
+                                }
+                            }
+                    }
+                }
+                .padding(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(height: 16)
+    }
+
+    private func providerAbbreviation(_ raw: String) -> String {
+        switch raw.lowercased() {
+        case "claude":
+            return "C"
+        case "codex":
+            return "X"
+        case "gemini":
+            return "G"
+        default:
+            return String(raw.prefix(1)).uppercased()
+        }
+    }
+
+    private func providerColor(_ raw: String) -> Color {
+        switch raw.lowercased() {
+        case "claude":
+            return Color(red: 0.39, green: 0.72, blue: 0.56)
+        case "codex":
+            return Color(red: 0.33, green: 0.57, blue: 0.88)
+        case "gemini":
+            return Color(red: 0.82, green: 0.64, blue: 0.26)
+        default:
+            return Color.secondary
+        }
+    }
+}
+
+private struct PulseChart: View {
+    let history: [SnapshotHistorySample]
+
+    var body: some View {
+        GeometryReader { geometry in
+            let samples = reducedSamples(from: history, maxPoints: 24)
+            let maxValue = max(samples.map(activityValue(for:)).max() ?? 0, 1)
+            let barWidth = max(4, (geometry.size.width - CGFloat(max(samples.count - 1, 0)) * 3) / CGFloat(max(samples.count, 1)))
+
+            ZStack(alignment: .bottomLeading) {
+                VStack(spacing: geometry.size.height / 3) {
+                    Rectangle().fill(Color.white.opacity(0.04)).frame(height: 1)
+                    Rectangle().fill(Color.white.opacity(0.04)).frame(height: 1)
+                    Rectangle().fill(Color.white.opacity(0.04)).frame(height: 1)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+                HStack(alignment: .bottom, spacing: 3) {
+                    ForEach(Array(samples.enumerated()), id: \.offset) { _, sample in
+                        let value = max(activityValue(for: sample), 0)
+                        let normalized = CGFloat(value) / CGFloat(maxValue)
+                        Capsule(style: .continuous)
+                            .fill(color(for: sample))
+                            .frame(width: barWidth, height: max(6, normalized * geometry.size.height))
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+            }
+        }
+        .frame(height: 36)
+    }
+
+    private func reducedSamples(from samples: [SnapshotHistorySample], maxPoints: Int) -> [SnapshotHistorySample] {
+        guard samples.count > maxPoints else {
+            return samples
+        }
+
+        let stride = Double(samples.count) / Double(maxPoints)
+        return (0..<maxPoints).compactMap { index in
+            let sourceIndex = Int((Double(index) * stride).rounded(.down))
+            guard sourceIndex < samples.count else {
+                return nil
+            }
+            return samples[sourceIndex]
+        }
+    }
+
+    private func activityValue(for sample: SnapshotHistorySample) -> Int {
+        max(sample.sessionsRecent, sample.spoolPendingCount + sample.outboxCount)
+    }
+
+    private func color(for sample: SnapshotHistorySample) -> Color {
+        switch sample.severity {
+        case .green:
+            return Color(red: 0.29, green: 0.77, blue: 0.47)
+        case .yellow:
+            return Color(red: 0.92, green: 0.74, blue: 0.28)
+        case .red:
+            return Color(red: 0.90, green: 0.34, blue: 0.28)
+        case .gray:
+            return Color.secondary
+        }
+    }
+}
+
+private struct FlowLayout<Content: View>: View {
+    let spacing: CGFloat
+    let rowSpacing: CGFloat
+    let content: Content
+
+    init(spacing: CGFloat, rowSpacing: CGFloat, @ViewBuilder content: () -> Content) {
+        self.spacing = spacing
+        self.rowSpacing = rowSpacing
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+@MainActor
+private func statusChip(title: String, color: Color, identifier: String? = nil) -> some View {
+    Text(title)
+        .font(.system(size: 10, weight: .bold, design: .monospaced))
+        .foregroundStyle(color)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(color.opacity(0.14))
+        )
+        .applyHarnessAccessibility(identifier: identifier, label: title)
+}
+
+private func subtleChip(title: String, tint: Color = Color.secondary) -> some View {
+    Text(title)
+        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+        .foregroundStyle(tint)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.05))
+        )
+}
+
+private var sectionDivider: some View {
+    Rectangle()
+        .fill(Color.white.opacity(0.06))
+        .frame(height: 1)
+}
+
+private func deckColumnTitle(_ title: String) -> some View {
+    Text(title.uppercased())
+        .font(.system(size: 10, weight: .bold, design: .monospaced))
+        .foregroundStyle(Color.secondary)
+        .tracking(0.7)
 }
 
 private func statusEmblem(color: Color, systemImage: String) -> some View {

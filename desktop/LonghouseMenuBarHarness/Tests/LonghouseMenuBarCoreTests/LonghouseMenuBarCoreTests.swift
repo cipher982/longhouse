@@ -83,6 +83,7 @@ struct LonghouseMenuBarCoreTests {
             service: nil,
             engineStatus: nil,
             outbox: nil,
+            activitySummary: nil,
             launchReadiness: LaunchReadinessSnapshot(
                 state: "ready",
                 headline: nil,
@@ -118,6 +119,7 @@ struct LonghouseMenuBarCoreTests {
             service: nil,
             engineStatus: nil,
             outbox: nil,
+            activitySummary: nil,
             launchReadiness: nil
         )
 
@@ -142,6 +144,7 @@ struct LonghouseMenuBarCoreTests {
             service: nil,
             engineStatus: nil,
             outbox: nil,
+            activitySummary: nil,
             launchReadiness: nil
         )
 
