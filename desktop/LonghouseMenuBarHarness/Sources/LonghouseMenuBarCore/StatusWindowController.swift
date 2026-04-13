@@ -14,15 +14,25 @@ public final class StatusWindowController: NSWindowController {
         )
         let hostingController = NSHostingController(rootView: rootView)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 640),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(
+                x: 0,
+                y: 0,
+                width: MenuBarPanelLayout.panelWidth,
+                height: MenuBarPanelLayout.attentionHeight
+            ),
+            styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
         window.title = "Longhouse"
         window.center()
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 460, height: 640))
+        window.setContentSize(
+            NSSize(
+                width: MenuBarPanelLayout.panelWidth,
+                height: MenuBarPanelLayout.attentionHeight
+            )
+        )
         window.contentViewController = hostingController
 
         super.init(window: window)

@@ -8,8 +8,13 @@ public enum SnapshotRenderer {
         actionSink: any HealthActionSink,
         outputURL: URL
     ) throws {
-        let view = MenuBarPanelView(snapshot: snapshot, actionSink: actionSink, refresh: {})
-            .background(Color.white)
+        let view = MenuBarPanelView(
+            snapshot: snapshot,
+            actionSink: actionSink,
+            isRefreshing: false,
+            refresh: {}
+        )
+        .background(Color.white)
 
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2
