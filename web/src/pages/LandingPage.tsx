@@ -18,7 +18,6 @@ import { DemoSection } from "../components/landing/DemoSection";
 import { IntegrationsSection } from "../components/landing/IntegrationsSection";
 import { PricingSection } from "../components/landing/PricingSection";
 import { TrustSection } from "../components/landing/TrustSection";
-import { InstallSection } from "../components/landing/InstallSection";
 import { FooterCTA } from "../components/landing/FooterCTA";
 import { LandingPerfHud } from "../components/landing/LandingPerfHud";
 
@@ -108,10 +107,6 @@ export default function LandingPage() {
     return <Navigate to="/timeline" replace />;
   }
 
-  const scrollToHowItWorks = () => {
-    document.getElementById("journey")?.scrollIntoView({ behavior: "smooth" });
-  };
-
   const scrollToInstall = () => {
     document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
@@ -149,16 +144,11 @@ export default function LandingPage() {
       <div className="landing-glow-orb" />
 
       <main className="landing-main">
-        <HeroSection
-          onScrollToHowItWorks={scrollToHowItWorks}
-          heroAnimationsEnabled={heroAnimationsEnabled}
-          screenshotTheme={screenshotTheme}
-        />
+        <HeroSection />
+        <DemoSection screenshotTheme={screenshotTheme} />
         <KernelThesisSection />
         <HowItWorksSection />
-        <InstallSection className="landing-install-standalone" />
         <MachineSurfaceSection />
-        <DemoSection screenshotTheme={screenshotTheme} />
         <IntegrationsSection />
         <PricingSection />
         <TrustSection />

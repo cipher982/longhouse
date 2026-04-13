@@ -1,125 +1,122 @@
+import { useState } from "react";
 import { Button } from "../ui";
 import config from "../../lib/config";
 import { useNavigate } from "react-router-dom";
 
-interface HeroSectionProps {
-  onScrollToHowItWorks: () => void;
-  heroAnimationsEnabled: boolean;
-  screenshotTheme: "warm" | "cool-pop";
-}
+const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
+const MAC_DOWNLOAD_URL =
+  "https://github.com/cipher982/longhouse/releases/latest/download/longhouse-local-health-app-darwin-arm64.zip";
 
-export function HeroSection({
-  onScrollToHowItWorks,
-  heroAnimationsEnabled: _heroAnimationsEnabled,
-  screenshotTheme: _screenshotTheme,
-}: HeroSectionProps) {
+export function HeroSection() {
   const navigate = useNavigate();
+  const [copied, setCopied] = useState(false);
 
-  const handleStartFree = () => {
-    document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
-  };
-
-  const handleHostedLater = () => {
-    document.getElementById("pricing")?.scrollIntoView({ behavior: "smooth" });
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(INSTALL_COMMAND);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = INSTALL_COMMAND;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <section className="landing-hero">
-      <div className="landing-hero-split">
-        <div className="landing-hero-text">
-          <p className="landing-hero-kicker">Self-hosted session control</p>
+    <section className="landing-hero" id="landing-install">
+      <div className="landing-hero-content">
+        <p className="landing-hero-kicker">Self-hosted session control</p>
 
-          <h1 className="landing-hero-headline">
-            Mission control for your <span className="gradient-text">AI coding sessions.</span>
-          </h1>
+        <h1 className="landing-hero-headline">
+          Mission control for your{" "}
+          <span className="gradient-text">AI coding sessions.</span>
+        </h1>
 
-          <p className="landing-hero-subhead">
-            Bring Claude, Codex, and Gemini sessions into one timeline. Find past work fast,
-            inspect the raw session, and steer live work later from browser, CLI, or API.
-          </p>
+        <p className="landing-hero-subhead">
+          One timeline for Claude, Codex, and Gemini sessions. Find past work
+          fast, inspect the raw session, and steer live work from browser, CLI,
+          or API.
+        </p>
 
-          <div className="landing-hero-ctas">
-            <Button variant="primary" size="lg" className="landing-cta-main" onClick={handleStartFree}>
-              Self-Host Free &rarr;
-            </Button>
-            <Button variant="secondary" size="lg" onClick={handleHostedLater}>
-              Hosted Later
-            </Button>
-            {config.demoMode && (
-              <Button variant="ghost" size="lg" onClick={() => navigate("/timeline")}>
-                Try Live Demo
-              </Button>
-            )}
+        {/* ── Install paths ── */}
+        <div className="hero-install">
+          {/* Terminal path */}
+          <div className="hero-install-terminal">
+            <button
+              type="button"
+              className="hero-install-cmd"
+              onClick={handleCopy}
+              aria-label={`Copy install command: ${INSTALL_COMMAND}`}
+            >
+              <span className="hero-install-prompt" aria-hidden="true">
+                $
+              </span>
+              <code className="hero-install-text">{INSTALL_COMMAND}</code>
+              <span className={`hero-install-copy ${copied ? "copied" : ""}`}>
+                {copied ? (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" />
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 010 1.5h-1.5a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-1.5a.75.75 0 011.5 0v1.5A1.75 1.75 0 019.25 16h-7.5A1.75 1.75 0 010 14.25v-7.5z" />
+                    <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0114.25 11h-7.5A1.75 1.75 0 015 9.25v-7.5zm1.75-.25a.25.25 0 00-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 00.25-.25v-7.5a.25.25 0 00-.25-.25h-7.5z" />
+                  </svg>
+                )}
+              </span>
+            </button>
+            <p className="hero-install-note">
+              macOS, Linux, or WSL. No account required.
+            </p>
           </div>
 
-          <p className="landing-hero-note">
-            Works on your laptop. Shines on a machine that stays on.
-          </p>
-
-          <div className="landing-hero-command-strip" aria-label="Longhouse launch example">
-            <span className="landing-hero-command-label">Launch through Longhouse</span>
-            <code className="landing-hero-command-code">longhouse claude</code>
+          {/* Divider */}
+          <div className="hero-install-divider" aria-hidden="true">
+            <span className="hero-install-divider-line" />
+            <span className="hero-install-divider-label">or</span>
+            <span className="hero-install-divider-line" />
           </div>
 
-          <div className="landing-hero-cta-secondary">
-            <Button variant="ghost" size="lg" className="landing-cta-text" onClick={onScrollToHowItWorks}>
-              See the launch story <span className="landing-cta-arrow">&darr;</span>
-            </Button>
-          </div>
+          {/* Mac download path */}
+          <a
+            href={MAC_DOWNLOAD_URL}
+            className="hero-install-mac"
+            download
+          >
+            <svg
+              className="hero-install-mac-icon"
+              width="20"
+              height="24"
+              viewBox="0 0 814 1000"
+              fill="currentColor"
+            >
+              <path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z" />
+            </svg>
+            <div className="hero-install-mac-text">
+              <span className="hero-install-mac-label">Download for macOS</span>
+              <span className="hero-install-mac-detail">Apple Silicon &middot; Signed &amp; Notarized</span>
+            </div>
+          </a>
         </div>
 
-        <div className="landing-hero-visual">
-          <div className="landing-launch-panel">
-            <div className="landing-launch-panel-header">
-              <p className="landing-launch-panel-label">How it runs</p>
-              <h2 className="landing-launch-panel-title">
-                Work stays on your machine. Durability lives where you keep Longhouse online.
-              </h2>
-            </div>
-
-            <div className="landing-launch-flow">
-              <article className="landing-launch-node primary">
-                <p className="landing-launch-node-eyebrow">Where work runs</p>
-                <h3 className="landing-launch-node-title">Your dev machine</h3>
-                <p className="landing-launch-node-copy">
-                  Claude, Codex, or Gemini sessions run where you already work. The Machine Agent ships
-                  the archive and keeps Longhouse in the launch path.
-                </p>
-              </article>
-
-              <div className="landing-launch-bridge" aria-hidden="true">
-                <span className="landing-launch-bridge-line" />
-                <span className="landing-launch-bridge-label">ships sessions</span>
-                <span className="landing-launch-bridge-line" />
-              </div>
-
-              <article className="landing-launch-node">
-                <p className="landing-launch-node-eyebrow">Where durability lives</p>
-                <h3 className="landing-launch-node-title">Runtime Host</h3>
-                <p className="landing-launch-node-copy">
-                  Run it on your laptop to try it. Move it to a VPS, Mac mini, or homelab box when you
-                  want search and control later without depending on an awake laptop.
-                </p>
-              </article>
-            </div>
-
-            <div className="landing-launch-surface">
-              <span className="landing-launch-surface-pill">Browser</span>
-              <span className="landing-launch-surface-pill">CLI</span>
-              <span className="landing-launch-surface-pill">/api/agents/*</span>
-            </div>
-
-            <div className="landing-launch-truths">
-              <div className="landing-launch-truth">
-                <span className="landing-launch-truth-title">Archive first</span>
-                <p>Import existing sessions immediately and find prior work without changing workflow first.</p>
-              </div>
-              <div className="landing-launch-truth">
-                <span className="landing-launch-truth-title">Control later</span>
-                <p>Start through Longhouse when the session should stay reachable after launch.</p>
-              </div>
-            </div>
-          </div>
+        {/* ── Secondary links ── */}
+        <div className="hero-install-extras">
+          <span className="hero-install-extra">
+            Or: <code>uv tool install longhouse</code>
+          </span>
+          {config.demoMode && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => navigate("/timeline")}
+            >
+              Try Live Demo
+            </Button>
+          )}
         </div>
       </div>
     </section>
