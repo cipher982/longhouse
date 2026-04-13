@@ -10,11 +10,6 @@ on:
       - '.github/workflows/deploy-control-plane.yml'
   workflow_dispatch: {}
 
-concurrency:
-  group: ${{ github.event_name == 'workflow_dispatch' && format('deploy-control-plane-manual-{0}', github.run_id) || format('deploy-control-plane-{0}', github.ref_name) }}
-  # Deploy main in commit order; never preempt an already-approved SHA.
-  cancel-in-progress: false
-
 jobs:
   gate:
     name: "Gate control-plane deploy on full CI"

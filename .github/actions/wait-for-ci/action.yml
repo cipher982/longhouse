@@ -1,5 +1,5 @@
-name: Wait for CI gate
-description: Poll contract-first-ci.yml until it passes for the target SHA (20 min timeout)
+name: Wait for workflow gate
+description: Poll a workflow run for the target SHA until it reaches an accepted terminal state
 
 inputs:
   head_sha:
@@ -11,6 +11,26 @@ inputs:
   github_token:
     description: Token for GitHub API calls
     required: true
+  workflow_id:
+    description: Workflow filename or ID to poll
+    required: false
+    default: contract-first-ci.yml
+  event:
+    description: Workflow event type to filter on
+    required: false
+    default: push
+  require_success:
+    description: When true, require the workflow to conclude successfully
+    required: false
+    default: "true"
+  allow_missing:
+    description: When true, succeed if no matching workflow run appears before timeout
+    required: false
+    default: "false"
+  timeout_seconds:
+    description: Maximum time to wait before failing
+    required: false
+    default: "1200"
 
 runs:
   using: composite
@@ -19,13 +39,30 @@ runs:
       env:
         HEAD_SHA: ${{ inputs.head_sha }}
         HEAD_BRANCH: ${{ inputs.head_branch }}
+        WORKFLOW_ID: ${{ inputs.workflow_id }}
+        WORKFLOW_EVENT: ${{ inputs.event }}
+        REQUIRE_SUCCESS: ${{ inputs.require_success }}
+        ALLOW_MISSING: ${{ inputs.allow_missing }}
+        TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
       with:
         github-token: ${{ inputs.github_token }}
         script: |
-          const sha = process.env.HEAD_SHA;
-          const branch = process.env.HEAD_BRANCH;
-          const maxAttempts = 120;
+          const sha = (process.env.HEAD_SHA || '').trim();
+          const branch = (process.env.HEAD_BRANCH || '').trim();
+          const workflowId = (process.env.WORKFLOW_ID || 'contract-first-ci.yml').trim();
+          const workflowEvent = (process.env.WORKFLOW_EVENT || '').trim();
+          const requireSuccess = (process.env.REQUIRE_SUCCESS || 'true') === 'true';
+          const allowMissing = (process.env.ALLOW_MISSING || 'false') === 'true';
           const delayMs = 10000;
+          const timeoutSeconds = Number(process.env.TIMEOUT_SECONDS || '1200');
+          const maxAttempts = Math.max(1, Math.ceil((timeoutSeconds * 1000) / delayMs));
+          const missingGraceAttempts = 6;
+
+          if (!sha) {
+            core.info('No head_sha supplied; skipping wait');
+            return;
+          }
+
           // When CI concludes with a non-success, wait one interval and re-check
           // before failing. A rerun transitions the same run back to in_progress,
           // so a single extra poll is enough to detect it without burning the
@@ -33,40 +70,59 @@ runs:
           let sawFailure = false;
 
           for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-            const { data } = await github.rest.actions.listWorkflowRuns({
+            const params = {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'contract-first-ci.yml',
-              event: 'push',
+              workflow_id: workflowId,
               branch,
               head_sha: sha,
               per_page: 10,
-            });
+            };
+
+            if (workflowEvent) {
+              params.event = workflowEvent;
+            }
+
+            const { data } = await github.rest.actions.listWorkflowRuns(params);
 
             const run = data.workflow_runs.find((c) => c.head_sha === sha);
             if (run) {
-              core.info(`push-pr-ci run ${run.id}: status=${run.status} conclusion=${run.conclusion}`);
+              core.info(`${workflowId} run ${run.id}: status=${run.status} conclusion=${run.conclusion}`);
               if (run.status === 'completed') {
-                if (run.conclusion === 'success') {
+                if (!requireSuccess || run.conclusion === 'success') {
                   return;
                 }
                 if (sawFailure) {
                   // Still failed after one rerun grace period — give up
-                  core.setFailed(`push-pr-ci concluded ${run.conclusion} for ${sha}`);
+                  core.setFailed(`${workflowId} concluded ${run.conclusion} for ${sha}`);
                   return;
                 }
-                core.warning(`push-pr-ci concluded ${run.conclusion} — waiting one interval to detect rerun`);
+                core.warning(`${workflowId} concluded ${run.conclusion} — waiting one interval to detect rerun`);
                 sawFailure = true;
               } else if (sawFailure) {
                 // Run transitioned back to in_progress — a rerun was queued; reset and keep waiting
-                core.info(`push-pr-ci run ${run.id} is back in_progress (rerun detected) — continuing to wait`);
+                core.info(`${workflowId} run ${run.id} is back in_progress (rerun detected) — continuing to wait`);
                 sawFailure = false;
               }
             } else {
-              core.info(`No push-pr-ci run found yet for ${sha} on ${branch} (attempt ${attempt}/${maxAttempts})`);
+              if (allowMissing && attempt >= missingGraceAttempts) {
+                core.warning(`No ${workflowId} run appeared for ${sha} after ${attempt} attempts; continuing because allow_missing=true`);
+                return;
+              }
+              core.info(`No ${workflowId} run found yet for ${sha} on ${branch} (attempt ${attempt}/${maxAttempts})`);
             }
 
             await new Promise((resolve) => setTimeout(resolve, delayMs));
           }
 
-          core.setFailed(`Timed out waiting for push-pr-ci to pass for ${sha}`);
+          if (allowMissing) {
+            core.warning(`Timed out waiting for ${workflowId} run for ${sha}; continuing because allow_missing=true`);
+            return;
+          }
+
+          if (requireSuccess) {
+            core.setFailed(`Timed out waiting for ${workflowId} to pass for ${sha}`);
+            return;
+          }
+
+          core.setFailed(`Timed out waiting for ${workflowId} to complete for ${sha}`);
