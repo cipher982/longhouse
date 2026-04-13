@@ -135,6 +135,30 @@ If we later want message counts or true activity timelines, add a dedicated back
 - Trend charts must use cached in-memory snapshot history, not extra subprocesses on open.
 - Healthy-state layout must have deterministic sizing and no scrolling.
 
+## Refresh Architecture
+
+Sampling and presentation must be treated as separate loops.
+
+- `Health sampling` is the slower machine-truth loop. It reads local state and produces a new snapshot.
+- `Presentation ticking` is the cheap UI loop. It only advances relative labels such as `Updated`, `Ship`, and `Heartbeat` while the panel is visible.
+
+Rules:
+
+- Opening the panel must never trigger or wait on a full health sample.
+- Background polling must stay silent in the visible UI unless the machine state materially changes.
+- Manual refresh is a user verb, not the same thing as background polling. It may show a subtle inline spinner, but not a toast or full-panel loading state.
+- `Updated` must advance locally between samples instead of staying frozen until the next snapshot lands.
+- Normal healthy-state refresh must not look like a page reload.
+
+## Success Criteria
+
+- `Updated` increments while the panel is open even if no new sample has landed yet.
+- Background polling does not disable the refresh control or show a toast/banner.
+- Manual refresh shows only a small inline affordance and never collapses the panel into a loading surface when a cached snapshot exists.
+- If a background poll is in flight and the user clicks refresh, the manual request is not silently lost.
+- Rapid open/close toggle latency stays in the current low-hundreds-of-milliseconds range on the installed app.
+- Fixture, live render, harness smoke, packaging smoke, and installed-bundle verification all pass after the change.
+
 ## Visual Rules
 
 - Prefer system text styles and monospaced digits for telemetry values.

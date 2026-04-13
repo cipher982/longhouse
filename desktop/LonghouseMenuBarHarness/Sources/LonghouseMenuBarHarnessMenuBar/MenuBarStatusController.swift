@@ -25,7 +25,8 @@ final class MenuBarStatusController: NSObject {
             rootView: HarnessRootView(
                 store: store,
                 actionSink: actionSink,
-                refreshIntervalSeconds: nil
+                refreshIntervalSeconds: nil,
+                managePresentationUpdates: false
             ),
             initialSize: MenuBarStatusController.preferredPanelSize(for: store)
         )
@@ -83,7 +84,7 @@ final class MenuBarStatusController: NSObject {
 
         refreshTimer = Timer.scheduledTimer(withTimeInterval: refreshIntervalSeconds, repeats: true) { [weak store] _ in
             Task { @MainActor in
-                store?.refresh()
+                store?.refresh(reason: .background)
             }
         }
 
@@ -95,7 +96,7 @@ final class MenuBarStatusController: NSObject {
     private func observeStore() {
         Publishers.Merge3(
             store.$snapshot.map { _ in () },
-            store.$isLoading.map { _ in () },
+            store.$isInitialLoading.map { _ in () },
             store.$loadError.map { _ in () }
         )
             .sink { [weak self] _ in
@@ -106,6 +107,7 @@ final class MenuBarStatusController: NSObject {
 
     private func openPanel(relativeTo button: NSStatusBarButton) {
         panelGeneration &+= 1
+        store.beginPresentationUpdates()
         panelController.updateContentSize(Self.preferredPanelSize(for: store))
         panelController.show(relativeTo: button)
         installEventMonitors(for: panelGeneration)
@@ -113,6 +115,7 @@ final class MenuBarStatusController: NSObject {
 
     private func closePanel() {
         panelGeneration &+= 1
+        store.endPresentationUpdates()
         panelController.hide()
         removeEventMonitors()
     }
@@ -202,7 +205,7 @@ final class MenuBarStatusController: NSObject {
         if let snapshot = store.snapshot {
             return NSSize(width: width, height: MenuBarPanelLayout.preferredHeight(for: snapshot))
         }
-        if store.isLoading {
+        if store.isInitialLoading {
             return NSSize(width: width, height: MenuBarPanelLayout.loadingHeight)
         }
         return NSSize(width: width, height: MenuBarPanelLayout.failureHeight)

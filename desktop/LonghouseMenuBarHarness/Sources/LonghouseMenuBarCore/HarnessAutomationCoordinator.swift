@@ -31,7 +31,7 @@ public enum HarnessAutomationCoordinator {
         Task { @MainActor in
             if !exerciseActions.isEmpty || toggleProfile != nil {
                 let deadline = Date().addingTimeInterval(5)
-                while store.snapshot == nil, store.isLoading, Date() < deadline {
+                while store.snapshot == nil, store.isInitialLoading, Date() < deadline {
                     try? await Task.sleep(for: .milliseconds(50))
                 }
             }
@@ -42,7 +42,7 @@ public enum HarnessAutomationCoordinator {
                         let snapshot = store.snapshot ?? initialSnapshot
                         actionSink.handle(action, snapshot: snapshot)
                         if action == .refresh {
-                            store.refresh()
+                            store.refresh(reason: .manual)
                         }
                     }
                 }

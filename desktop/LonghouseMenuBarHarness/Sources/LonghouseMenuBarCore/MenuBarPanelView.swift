@@ -96,8 +96,9 @@ public struct MenuBarFailureView: View {
 public struct MenuBarPanelView: View {
     private let snapshot: HealthSnapshot
     private let history: [SnapshotHistorySample]
+    private let presentationDate: Date
     private let actionSink: any HealthActionSink
-    private let isRefreshing: Bool
+    private let isManualRefreshing: Bool
     private let refresh: () -> Void
 
     @State private var feedback: HealthActionFeedback?
@@ -105,14 +106,16 @@ public struct MenuBarPanelView: View {
     public init(
         snapshot: HealthSnapshot,
         history: [SnapshotHistorySample],
+        presentationDate: Date,
         actionSink: any HealthActionSink,
-        isRefreshing: Bool,
+        isManualRefreshing: Bool,
         refresh: @escaping () -> Void
     ) {
         self.snapshot = snapshot
         self.history = history
+        self.presentationDate = presentationDate
         self.actionSink = actionSink
-        self.isRefreshing = isRefreshing
+        self.isManualRefreshing = isManualRefreshing
         self.refresh = refresh
         _feedback = State(initialValue: nil)
     }
@@ -189,14 +192,14 @@ public struct MenuBarPanelView: View {
                         identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
                     )
 
-                    subtleChip(title: "Updated \(snapshot.snapshotAgeCompactLabel)")
+                    subtleChip(title: "Updated \(snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate))")
 
                     if let updateBadge = snapshot.updateBadgeLabel {
                         subtleChip(title: updateBadge, tint: .blue)
                     }
                 }
 
-                Text(snapshot.missionSummaryLabel)
+                Text(snapshot.missionSummaryLabel(relativeTo: presentationDate))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Color.secondary)
                     .lineLimit(1)
@@ -230,12 +233,11 @@ public struct MenuBarPanelView: View {
     private var refreshControl: some View {
         headerAccessoryButton(
             accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.refresh,
-            accessibilityLabel: isRefreshing ? "Refreshing" : "Refresh",
-            isDisabled: isRefreshing
+            accessibilityLabel: isManualRefreshing ? "Refreshing" : "Refresh"
         ) {
             perform(.refresh)
         } label: {
-            if isRefreshing {
+            if isManualRefreshing {
                 ProgressView()
                     .controlSize(.small)
                     .frame(width: 28, height: 28)
@@ -299,8 +301,8 @@ public struct MenuBarPanelView: View {
 
     private var healthyReadouts: [PanelReadout] {
         [
-            PanelReadout(label: "Ship", value: snapshot.lastShipCompactLabel, detail: "Last ship"),
-            PanelReadout(label: "Beat", value: snapshot.engineAgeLabel, detail: snapshot.engineFreshnessLabel),
+            PanelReadout(label: "Ship", value: snapshot.lastShipCompactLabel(relativeTo: presentationDate), detail: "Last ship"),
+            PanelReadout(label: "Beat", value: snapshot.engineAgeLabel(relativeTo: presentationDate), detail: snapshot.engineFreshnessLabel(relativeTo: presentationDate)),
             PanelReadout(label: "Today", value: snapshot.sessionsTodayLabel, detail: "Sessions"),
             PanelReadout(label: snapshot.recentWindowCompactLabel, value: snapshot.sessionsRecentLabel, detail: "Active"),
         ]
@@ -314,13 +316,13 @@ public struct MenuBarPanelView: View {
                 labelIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.label,
                 valueIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.value
             ),
-            PanelTelemetryEntry(label: "Heartbeat", value: snapshot.engineFreshnessValueLabel),
+            PanelTelemetryEntry(label: "Heartbeat", value: snapshot.engineFreshnessValueLabel(relativeTo: presentationDate)),
             PanelTelemetryEntry(
                 label: "Buffers",
                 value: "OUT \(snapshot.outboxCount) · Q \(snapshot.spoolPendingLabel) · DEAD \(snapshot.spoolDeadLabel)",
                 valueColor: pipelineColor
             ),
-            PanelTelemetryEntry(label: "Latest", value: snapshot.latestActivityLabel),
+            PanelTelemetryEntry(label: "Latest", value: snapshot.latestActivityLabel(relativeTo: presentationDate)),
         ]
 
         if let updateBadge = snapshot.updateBadgeLabel {
@@ -352,7 +354,7 @@ public struct MenuBarPanelView: View {
                     labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.title,
                     valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.value
                 ),
-                PanelTelemetryEntry(label: "Last ship", value: snapshot.lastShipValueLabel),
+                PanelTelemetryEntry(label: "Last ship", value: snapshot.lastShipValueLabel(relativeTo: presentationDate)),
                 PanelTelemetryEntry(label: "Queue", value: snapshot.pipelineValueLabel, valueColor: pipelineColor),
                 PanelTelemetryEntry(
                     label: "Launch",

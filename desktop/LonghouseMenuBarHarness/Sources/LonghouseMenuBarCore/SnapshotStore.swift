@@ -1,6 +1,12 @@
 import Foundation
 import SwiftUI
 
+public enum SnapshotRefreshReason: Sendable {
+    case initial
+    case background
+    case manual
+}
+
 @MainActor
 public final class SnapshotStore: ObservableObject {
     public static let historyRetentionMinutes = 30
@@ -8,19 +14,27 @@ public final class SnapshotStore: ObservableObject {
     @Published public private(set) var snapshot: HealthSnapshot?
     @Published public private(set) var history: [SnapshotHistorySample]
     @Published public private(set) var loadError: String?
-    @Published public private(set) var isLoading: Bool
+    @Published public private(set) var isInitialLoading: Bool
+    @Published public private(set) var isManualRefreshActive: Bool
+    @Published public private(set) var presentationDate: Date
 
     private let source: any HealthSnapshotSource
     private var refreshTask: Task<Void, Never>?
+    private var activeRefreshReason: SnapshotRefreshReason?
+    private var queuedManualRefresh = false
+    private var presentationTimer: Timer?
+    private var presentationConsumerCount = 0
     private static let historyRetentionSeconds: TimeInterval = Double(historyRetentionMinutes * 60)
     private static let maxHistorySamples = 180
 
     public init(source: any HealthSnapshotSource) {
         self.source = source
         self.history = []
-        self.isLoading = false
+        self.isInitialLoading = false
+        self.isManualRefreshActive = false
+        self.presentationDate = Date()
         if source is CLIHealthSnapshotSource {
-            refresh()
+            refresh(reason: .initial)
         } else {
             do {
                 let loadedSnapshot = try source.load()
@@ -37,12 +51,57 @@ public final class SnapshotStore: ObservableObject {
         refreshTask?.cancel()
     }
 
-    public func refresh() {
-        guard !isLoading else {
+    public func refresh(reason: SnapshotRefreshReason = .background) {
+        if let activeRefreshReason {
+            if reason == .manual && activeRefreshReason != .manual {
+                queuedManualRefresh = true
+                isManualRefreshActive = true
+            }
             return
         }
 
-        isLoading = true
+        startRefresh(reason: reason)
+    }
+
+    public func beginPresentationUpdates() {
+        presentationConsumerCount += 1
+        presentationDate = Date()
+        guard presentationTimer == nil else {
+            return
+        }
+
+        let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.presentationConsumerCount > 0 else {
+                    return
+                }
+                self.presentationDate = Date()
+            }
+        }
+        timer.tolerance = 0.2
+        RunLoop.main.add(timer, forMode: .common)
+        presentationTimer = timer
+    }
+
+    public func endPresentationUpdates() {
+        presentationConsumerCount = max(0, presentationConsumerCount - 1)
+        guard presentationConsumerCount == 0 else {
+            return
+        }
+
+        presentationTimer?.invalidate()
+        presentationTimer = nil
+    }
+
+    private func startRefresh(reason: SnapshotRefreshReason) {
+        activeRefreshReason = reason
+        if snapshot == nil {
+            isInitialLoading = true
+        }
+        if reason == .manual {
+            isManualRefreshActive = true
+        }
+
         let source = self.source
         refreshTask = Task { [weak self] in
             let result = await Self.loadSnapshot(from: source)
@@ -59,7 +118,22 @@ public final class SnapshotStore: ObservableObject {
                 self.loadError = message
             }
 
-            self.isLoading = false
+            self.completeRefresh(reason: reason)
+        }
+    }
+
+    private func completeRefresh(reason: SnapshotRefreshReason) {
+        activeRefreshReason = nil
+        isInitialLoading = false
+
+        if queuedManualRefresh {
+            queuedManualRefresh = false
+            startRefresh(reason: .manual)
+            return
+        }
+
+        if reason == .manual {
+            isManualRefreshActive = false
         }
     }
 

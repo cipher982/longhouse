@@ -11,8 +11,9 @@ public enum SnapshotRenderer {
         let view = MenuBarPanelView(
             snapshot: snapshot,
             history: [],
+            presentationDate: Date(),
             actionSink: actionSink,
-            isRefreshing: false,
+            isManualRefreshing: false,
             refresh: {}
         )
         .environment(\.colorScheme, .dark)

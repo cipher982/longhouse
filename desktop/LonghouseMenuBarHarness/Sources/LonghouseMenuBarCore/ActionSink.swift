@@ -188,12 +188,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 detail: command
             )
         case .refresh:
-            return feedback(
-                for: action,
-                style: .info,
-                title: "Refreshing local health",
-                detail: "Longhouse is reloading the latest local status snapshot."
-            )
+            return nil
         }
     }
 
@@ -253,7 +248,7 @@ public struct SpyHealthActionSink: HealthActionSink {
         return error == nil
     }
 
-    private func dryRunFeedback(for action: HarnessAction) -> HealthActionFeedback {
+    private func dryRunFeedback(for action: HarnessAction) -> HealthActionFeedback? {
         switch action {
         case .runDoctor:
             return feedback(
@@ -298,12 +293,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 detail: "The harness logged the upgrade action without opening Terminal."
             )
         case .refresh:
-            return feedback(
-                for: action,
-                style: .info,
-                title: "Refreshing local health",
-                detail: "Longhouse is reloading the latest local status snapshot."
-            )
+            return nil
         }
     }
 
