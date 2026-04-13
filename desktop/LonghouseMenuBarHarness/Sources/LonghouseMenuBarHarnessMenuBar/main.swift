@@ -77,7 +77,7 @@ let parsed: HarnessRuntimeConfig
 do {
     parsed = try HarnessRuntimeConfig.parse(arguments: Array(CommandLine.arguments.dropFirst()))
 } catch {
-    fputs("LonghouseLocalHealthMenuBar: \(error.localizedDescription)\n", stderr)
+    fputs("LonghouseDesktopMenuBar: \(error.localizedDescription)\n", stderr)
     exit(2)
 }
 

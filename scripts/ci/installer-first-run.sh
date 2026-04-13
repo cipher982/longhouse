@@ -105,7 +105,7 @@ ensure_frontend_dist() {
   )
 }
 
-build_local_health_app_bundle() {
+build_desktop_app_bundle() {
   local bundle_root="$1"
   local package_path="$ROOT_DIR/desktop/LonghouseMenuBarHarness"
   local app_path="$bundle_root/Longhouse.app"
@@ -645,11 +645,11 @@ fi
 if [[ "$ENABLE_MENUBAR_SMOKE" == "1" && "$(uname -s)" == "Darwin" ]]; then
   log "⚠️  macOS ambient smoke enabled. This is the heavy local path; prefer GitHub Actions unless you are debugging menu bar install behavior."
   APP_BUNDLE_STAGE_DIR="$HOME/.longhouse-app-build"
-  LONGHOUSE_APP_BUNDLE="$(build_local_health_app_bundle "$APP_BUNDLE_STAGE_DIR")"
-  export LONGHOUSE_LOCAL_HEALTH_APP_SOURCE="$LONGHOUSE_APP_BUNDLE"
+  LONGHOUSE_APP_BUNDLE="$(build_desktop_app_bundle "$APP_BUNDLE_STAGE_DIR")"
+  export LONGHOUSE_DESKTOP_APP_SOURCE="$LONGHOUSE_APP_BUNDLE"
   export LONGHOUSE_INSTALL_MENUBAR=1
   export LONGHOUSE_INSTALL_SERVICES_IN_CI=1
-  env_vars+=("LONGHOUSE_LOCAL_HEALTH_APP_SOURCE=$LONGHOUSE_APP_BUNDLE")
+  env_vars+=("LONGHOUSE_DESKTOP_APP_SOURCE=$LONGHOUSE_APP_BUNDLE")
   env_vars+=("LONGHOUSE_INSTALL_MENUBAR=1")
   env_vars+=("LONGHOUSE_INSTALL_SERVICES_IN_CI=1")
   EXPECT_SERVICE_INSTALL=1
@@ -705,7 +705,7 @@ if [[ "$ENABLE_RUNTIME_ARTIFACT_SMOKE" == "1" ]]; then
   log "🧱 Verifying released runtime artifacts..."
   smoke_runtime_artifact engine
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    smoke_runtime_artifact local-health-app
+    smoke_runtime_artifact desktop-app
   fi
 fi
 
@@ -739,20 +739,20 @@ elif [[ -n "${CI:-}" ]]; then
   log "ℹ️  Skipping service-manager status assertion in CI."
 fi
 
-LOCAL_HEALTH_JSON="$(mktemp -t longhouse-local-health.XXXXXX.json)"
-longhouse local-health --json > "$LOCAL_HEALTH_JSON"
-python3 - "$LOCAL_HEALTH_JSON" <<'PY'
+DESKTOP_STATUS_JSON="$(mktemp -t longhouse-status.XXXXXX.json)"
+longhouse local-health --json > "$DESKTOP_STATUS_JSON"
+python3 - "$DESKTOP_STATUS_JSON" <<'PY'
 import json
 import sys
 from pathlib import Path
 
 payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 if payload.get("schema_version") != 1:
-    raise SystemExit("unexpected local-health schema version")
+    raise SystemExit("unexpected local status schema version")
 if payload.get("service", {}).get("status") not in {"running", "stopped", "not-installed"}:
-    raise SystemExit("unexpected local-health service status")
+    raise SystemExit("unexpected local status service state")
 PY
-rm -f "$LOCAL_HEALTH_JSON"
+rm -f "$DESKTOP_STATUS_JSON"
 
 log "🧪 Starting local server from onboarded config..."
 longhouse serve --stop >/dev/null 2>&1 || true

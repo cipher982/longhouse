@@ -11,8 +11,10 @@ from zerg.services.runtime_artifacts import ensure_runtime_artifact
 
 class RuntimeArtifactName(str, Enum):
     ENGINE = RuntimeComponent.ENGINE.value
-    LOCAL_HEALTH_APP = RuntimeComponent.LOCAL_HEALTH_APP.value
-    LOCAL_HEALTH_WINDOW = RuntimeComponent.LOCAL_HEALTH_WINDOW.value
+    DESKTOP_APP = RuntimeComponent.DESKTOP_APP.value
+    DESKTOP_WINDOW = RuntimeComponent.DESKTOP_WINDOW.value
+    LOCAL_HEALTH_APP = "local-health-app"
+    LOCAL_HEALTH_WINDOW = "local-health-window"
 
 
 def runtime_artifact_smoke_command(

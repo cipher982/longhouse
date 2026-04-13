@@ -12,6 +12,7 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
 from zerg.main import app
 from zerg.services import public_downloads
+from zerg.services.runtime_artifacts import LEGACY_RELEASE_ASSET_FILENAMES
 from zerg.services.runtime_artifacts import RELEASE_ASSET_FILENAMES
 from zerg.services.runtime_artifacts import RuntimeComponent
 
@@ -88,19 +89,20 @@ def test_download_macos_route_prefers_public_dmg_when_available(monkeypatch):
 
 
 def test_macos_desktop_download_tracks_runtime_artifact_config():
-    asset_name = RELEASE_ASSET_FILENAMES[RuntimeComponent.LOCAL_HEALTH_APP]["darwin-arm64"]
+    asset_name = RELEASE_ASSET_FILENAMES[RuntimeComponent.DESKTOP_APP]["darwin-arm64"]
     candidates = public_downloads.macos_desktop_download().candidates
-    assert candidates[-1].asset_name == asset_name
+    assert candidates[1].asset_name == asset_name
+    assert candidates[2].asset_name == LEGACY_RELEASE_ASSET_FILENAMES[RuntimeComponent.DESKTOP_APP]["darwin-arm64"]
 
 
-def test_download_macos_route_falls_back_to_legacy_zip(monkeypatch):
+def test_download_macos_route_falls_back_to_canonical_zip(monkeypatch):
     dmg_request = _FakeUpstreamResponse(b"", status_code=404)
-    legacy_zip = _FakeUpstreamResponse(b"zip-bytes", headers={"Content-Length": "9"})
-    legacy_asset = RELEASE_ASSET_FILENAMES[RuntimeComponent.LOCAL_HEALTH_APP]["darwin-arm64"]
+    desktop_zip = _FakeUpstreamResponse(b"zip-bytes", headers={"Content-Length": "9"})
+    desktop_asset = RELEASE_ASSET_FILENAMES[RuntimeComponent.DESKTOP_APP]["darwin-arm64"]
     fake_client = _FakeAsyncClient(
         {
             public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"): dmg_request,
-            public_downloads._latest_release_asset_url(legacy_asset): legacy_zip,
+            public_downloads._latest_release_asset_url(desktop_asset): desktop_zip,
         }
     )
 
@@ -115,9 +117,41 @@ def test_download_macos_route_falls_back_to_legacy_zip(monkeypatch):
     assert response.headers["content-disposition"] == 'attachment; filename="Longhouse-macos-arm64.zip"'
     assert [str(request.url) for request in fake_client.requests] == [
         public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"),
+        public_downloads._latest_release_asset_url(desktop_asset),
+    ]
+    assert dmg_request.closed is True
+    assert desktop_zip.closed is True
+    assert fake_client.closed is True
+
+
+def test_download_macos_route_falls_back_to_legacy_zip(monkeypatch):
+    dmg_request = _FakeUpstreamResponse(b"", status_code=404)
+    canonical_zip_request = _FakeUpstreamResponse(b"", status_code=404)
+    legacy_zip = _FakeUpstreamResponse(b"zip-bytes", headers={"Content-Length": "9"})
+    canonical_asset = RELEASE_ASSET_FILENAMES[RuntimeComponent.DESKTOP_APP]["darwin-arm64"]
+    legacy_asset = LEGACY_RELEASE_ASSET_FILENAMES[RuntimeComponent.DESKTOP_APP]["darwin-arm64"]
+    fake_client = _FakeAsyncClient(
+        {
+            public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"): dmg_request,
+            public_downloads._latest_release_asset_url(canonical_asset): canonical_zip_request,
+            public_downloads._latest_release_asset_url(legacy_asset): legacy_zip,
+        }
+    )
+
+    monkeypatch.setattr(public_downloads.httpx, "AsyncClient", lambda **kwargs: fake_client)
+
+    with TestClient(app) as client:
+        response = client.get("/download/macos")
+
+    assert response.status_code == 200
+    assert response.content == b"zip-bytes"
+    assert [str(request.url) for request in fake_client.requests] == [
+        public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"),
+        public_downloads._latest_release_asset_url(canonical_asset),
         public_downloads._latest_release_asset_url(legacy_asset),
     ]
     assert dmg_request.closed is True
+    assert canonical_zip_request.closed is True
     assert legacy_zip.closed is True
     assert fake_client.closed is True
 
@@ -151,7 +185,7 @@ def test_download_macos_route_returns_502_when_upstream_fails(monkeypatch):
 
 
 def test_download_macos_route_falls_back_after_transient_dmg_error(monkeypatch):
-    legacy_asset = RELEASE_ASSET_FILENAMES[RuntimeComponent.LOCAL_HEALTH_APP]["darwin-arm64"]
+    desktop_asset = RELEASE_ASSET_FILENAMES[RuntimeComponent.DESKTOP_APP]["darwin-arm64"]
 
     class _TransientFailingClient:
         def __init__(self):
@@ -184,6 +218,6 @@ def test_download_macos_route_falls_back_after_transient_dmg_error(monkeypatch):
     assert response.content == b"zip-bytes"
     assert [str(request.url) for request in fake_client.requests] == [
         public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"),
-        public_downloads._latest_release_asset_url(legacy_asset),
+        public_downloads._latest_release_asset_url(desktop_asset),
     ]
     assert fake_client.closed is True

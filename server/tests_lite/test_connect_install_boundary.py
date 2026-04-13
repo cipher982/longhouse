@@ -152,10 +152,10 @@ def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
     monkeypatch.setattr(connect, "detect_platform", lambda: Platform.MACOS)
     monkeypatch.setattr(
         connect,
-        "get_menubar_service_info",
+        "get_desktop_app_service_info",
         lambda: {
             "status": "running",
-            "service_name": "com.longhouse.local-health-menubar",
+            "service_name": "ai.longhouse.app",
             "service_file": "/tmp/menubar.plist",
             "log_path": "/tmp/menubar.log",
             "artifact_path": "/Users/test/Applications/Longhouse.app",
@@ -167,7 +167,7 @@ def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
     connect._handle_status()
 
     output = capsys.readouterr().out
-    assert "Desktop App: com.longhouse.local-health-menubar" in output
+    assert "Desktop App: ai.longhouse.app" in output
     assert "App: /Users/test/Applications/Longhouse.app" in output
     assert "Launch: /Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse" in output
 

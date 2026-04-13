@@ -6,6 +6,7 @@ import httpx
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
+from zerg.services.runtime_artifacts import LEGACY_RELEASE_ASSET_FILENAMES
 from zerg.services.runtime_artifacts import RELEASE_ASSET_FILENAMES
 from zerg.services.runtime_artifacts import RELEASE_REPO
 from zerg.services.runtime_artifacts import RuntimeComponent
@@ -35,7 +36,8 @@ def _latest_release_asset_url(asset_name: str) -> str:
 
 
 def macos_desktop_download() -> PublicDownload:
-    legacy_runtime_asset = RELEASE_ASSET_FILENAMES[RuntimeComponent.LOCAL_HEALTH_APP]["darwin-arm64"]
+    desktop_archive_asset = RELEASE_ASSET_FILENAMES[RuntimeComponent.DESKTOP_APP]["darwin-arm64"]
+    legacy_archive_asset = LEGACY_RELEASE_ASSET_FILENAMES[RuntimeComponent.DESKTOP_APP]["darwin-arm64"]
     return PublicDownload(
         slug="macOS",
         candidates=(
@@ -45,7 +47,12 @@ def macos_desktop_download() -> PublicDownload:
                 media_type="application/x-apple-diskimage",
             ),
             PublicDownloadCandidate(
-                asset_name=legacy_runtime_asset,
+                asset_name=desktop_archive_asset,
+                filename="Longhouse-macos-arm64.zip",
+                media_type="application/zip",
+            ),
+            PublicDownloadCandidate(
+                asset_name=legacy_archive_asset,
                 filename="Longhouse-macos-arm64.zip",
                 media_type="application/zip",
             ),
