@@ -70,7 +70,13 @@ if [[ ! -d "$PACKAGE_PATH" ]]; then
 fi
 
 if [[ "$BUILD_PRODUCT" == "1" ]]; then
-  swift build --package-path "$PACKAGE_PATH" -c "$CONFIGURATION" --product "$PRODUCT_NAME" >/dev/null
+  BUILD_LOG="$(mktemp -t resolve-swift-build.XXXXXX.log)"
+  if ! swift build --package-path "$PACKAGE_PATH" -c "$CONFIGURATION" --product "$PRODUCT_NAME" >"$BUILD_LOG" 2>&1; then
+    cat "$BUILD_LOG" >&2
+    rm -f "$BUILD_LOG"
+    exit 1
+  fi
+  rm -f "$BUILD_LOG"
 fi
 
 BIN_DIR="$(swift build --package-path "$PACKAGE_PATH" -c "$CONFIGURATION" --show-bin-path)"
@@ -80,7 +86,17 @@ if [[ -x "$PRIMARY_CANDIDATE" ]]; then
   exit 0
 fi
 
-CONFIGURATION_CAPITALIZED="${CONFIGURATION^}"
+case "$CONFIGURATION" in
+  debug)
+    CONFIGURATION_CAPITALIZED="Debug"
+    ;;
+  release)
+    CONFIGURATION_CAPITALIZED="Release"
+    ;;
+  *)
+    CONFIGURATION_CAPITALIZED="$CONFIGURATION"
+    ;;
+esac
 FALLBACK_CANDIDATE="$(
   find "$PACKAGE_PATH/.build" -type f -perm -111 \
     \( -path "*/${CONFIGURATION}*/${PRODUCT_NAME}" -o -path "*/${CONFIGURATION_CAPITALIZED}*/${PRODUCT_NAME}" \) \
@@ -97,5 +113,6 @@ if [[ -n "$ANY_CANDIDATE" ]]; then
   exit 0
 fi
 
+echo "swift build --show-bin-path returned: $BIN_DIR" >&2
 echo "Binary not found: $PRIMARY_CANDIDATE" >&2
 exit 1
