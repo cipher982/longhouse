@@ -7,7 +7,9 @@ ARTIFACT_DIR="$ROOT_DIR/artifacts/runtime-packaging"
 STAGE_DIR="$ARTIFACT_DIR/stage"
 APP_PATH="$STAGE_DIR/Longhouse.app"
 ARCHIVE_PATH="$ARTIFACT_DIR/longhouse-local-health-app-darwin-arm64.zip"
+DISK_IMAGE_PATH="$ARTIFACT_DIR/Longhouse-macos-arm64.dmg"
 MANIFEST_PATH="$ARTIFACT_DIR/manifest.json"
+MOUNT_POINT=""
 
 log() {
   printf '%s\n' "$*"
@@ -29,9 +31,17 @@ fi
 require_cmd swift
 require_cmd codesign
 require_cmd ditto
+require_cmd hdiutil
+
+cleanup() {
+  if [[ -n "$MOUNT_POINT" ]] && mount | grep -F "on $MOUNT_POINT " >/dev/null 2>&1; then
+    hdiutil detach "$MOUNT_POINT" >/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 mkdir -p "$ARTIFACT_DIR"
-rm -rf "$STAGE_DIR" "$ARCHIVE_PATH" "$MANIFEST_PATH"
+rm -rf "$STAGE_DIR" "$ARCHIVE_PATH" "$DISK_IMAGE_PATH" "$MANIFEST_PATH"
 
 log "🏗️  Building macOS menu bar binary..."
 swift build --package-path "$PACKAGE_PATH" -c release --product LonghouseMenuBarHarnessMenuBar >/dev/null
@@ -58,14 +68,42 @@ log "✍️  Ad-hoc signing Longhouse.app..."
 log "🗜️  Creating release archive..."
 ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ARCHIVE_PATH"
 
-python3 - <<'PY' "$APP_PATH/Contents/Info.plist" "$ARCHIVE_PATH" "$MANIFEST_PATH"
+log "💿 Creating public disk image..."
+"$ROOT_DIR/scripts/release/macos-package-dmg.sh" \
+  --app "$APP_PATH" \
+  --output "$DISK_IMAGE_PATH" >/dev/null
+
+log "🔏 Ad-hoc signing public disk image..."
+"$ROOT_DIR/scripts/release/macos-sign-disk-image.sh" \
+  --dmg "$DISK_IMAGE_PATH" \
+  --identity - \
+  --mode adhoc >/dev/null
+
+MOUNT_INFO="$(hdiutil attach -nobrowse -readonly -plist "$DISK_IMAGE_PATH")"
+MOUNT_POINT="$(MOUNT_INFO="$MOUNT_INFO" python3 - <<'PY'
+import os
+import plistlib
+
+payload = plistlib.loads(os.environ["MOUNT_INFO"].encode())
+entities = payload.get("system-entities") or []
+for entity in entities:
+    mount_point = entity.get("mount-point")
+    if mount_point:
+        print(mount_point)
+        break
+else:
+    raise SystemExit("Unable to determine mounted DMG path")
+PY
+)"
+
+python3 - <<'PY' "$APP_PATH/Contents/Info.plist" "$ARCHIVE_PATH" "$DISK_IMAGE_PATH" "$MOUNT_POINT" "$MANIFEST_PATH"
 import json
 import os
 import plistlib
 import sys
 import zipfile
 
-plist_path, archive_path, manifest_path = sys.argv[1:4]
+plist_path, archive_path, dmg_path, mount_point, manifest_path = sys.argv[1:6]
 
 with open(plist_path, "rb") as fh:
     plist = plistlib.load(fh)
@@ -87,12 +125,23 @@ missing = sorted(required_names - names)
 if missing:
     raise SystemExit(f"Archive missing expected paths: {missing}")
 
+disk_image_entries = {
+    "Longhouse.app",
+    "Applications",
+}
+actual_entries = set(os.listdir(mount_point))
+missing_disk_image_entries = sorted(disk_image_entries - actual_entries)
+if missing_disk_image_entries:
+    raise SystemExit(f"Disk image missing expected entries: {missing_disk_image_entries}")
+
 manifest = {
-    "schema_version": 1,
+    "schema_version": 3,
     "app_name": "Longhouse",
     "bundle_id": "ai.longhouse.app",
     "archive": archive_path,
     "archive_size_bytes": os.path.getsize(archive_path),
+    "disk_image": dmg_path,
+    "disk_image_size_bytes": os.path.getsize(dmg_path),
     "info_plist": plist_path,
 }
 with open(manifest_path, "w", encoding="utf-8") as fh:
@@ -100,7 +149,11 @@ with open(manifest_path, "w", encoding="utf-8") as fh:
     fh.write("\n")
 PY
 
+cleanup
+MOUNT_POINT=""
+
 log "✅ Canonical Longhouse.app packaging smoke passed"
 log "   app: $APP_PATH"
 log "   zip: $ARCHIVE_PATH"
+log "   dmg: $DISK_IMAGE_PATH"
 log "   manifest: $MANIFEST_PATH"

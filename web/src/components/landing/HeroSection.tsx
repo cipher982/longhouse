@@ -84,7 +84,6 @@ export function HeroSection() {
           <a
             href={MAC_DOWNLOAD_URL}
             className="hero-install-mac"
-            download="Longhouse-macos-arm64.zip"
           >
             <svg
               className="hero-install-mac-icon"
@@ -97,7 +96,7 @@ export function HeroSection() {
             </svg>
             <div className="hero-install-mac-text">
               <span className="hero-install-mac-label">Download for macOS</span>
-              <span className="hero-install-mac-detail">Apple Silicon &middot; Direct app download</span>
+              <span className="hero-install-mac-detail">Apple Silicon &middot; Signed desktop app</span>
             </div>
           </a>
         </div>
