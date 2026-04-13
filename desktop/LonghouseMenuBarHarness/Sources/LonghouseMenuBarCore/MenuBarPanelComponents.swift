@@ -62,7 +62,10 @@ struct PanelChrome<Content: View>: View {
             )
 
             content
-                .padding(MenuBarPanelLayout.chromePadding)
+                .padding(.leading, MenuBarPanelLayout.chromeHorizontalPadding)
+                .padding(.trailing, MenuBarPanelLayout.chromeHorizontalPadding)
+                .padding(.bottom, MenuBarPanelLayout.chromeBottomPadding)
+                .padding(.top, MenuBarPanelLayout.chromeTopContentInset)
         }
         .frame(width: MenuBarPanelLayout.panelWidth, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
@@ -74,9 +77,9 @@ struct PanelChrome<Content: View>: View {
         .overlay(alignment: .top) {
             Capsule(style: .continuous)
                 .fill(accent.opacity(0.64))
-                .frame(height: 3)
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
+                .frame(height: MenuBarPanelLayout.accentHeight)
+                .padding(.horizontal, MenuBarPanelLayout.accentHorizontalInset)
+                .padding(.top, MenuBarPanelLayout.chromeTopRailInset)
         }
         .shadow(color: Color.black.opacity(0.18), radius: 12, x: 0, y: 8)
     }
