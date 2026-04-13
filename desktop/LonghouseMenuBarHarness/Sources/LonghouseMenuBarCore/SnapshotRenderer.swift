@@ -14,7 +14,8 @@ public enum SnapshotRenderer {
             isRefreshing: false,
             refresh: {}
         )
-        .background(Color.white)
+        .environment(\.colorScheme, .dark)
+        .background(Color.black)
 
         let renderer = ImageRenderer(content: view)
         renderer.scale = 2

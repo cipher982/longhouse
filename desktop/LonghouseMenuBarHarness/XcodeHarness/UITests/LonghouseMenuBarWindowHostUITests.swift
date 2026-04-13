@@ -24,14 +24,14 @@ final class LonghouseMenuBarWindowHostUITests: XCTestCase {
         )
         tapWhenVisible(repairButton, in: window)
 
-        let copyButton = try XCTUnwrap(
-            findButton(in: app, candidates: [AccessibilityID.Button.copyDiagnostics, "Copy Diagnostics", "Copy JSON"], container: window),
-            "Copy diagnostics button was not found"
+        let logsButton = try XCTUnwrap(
+            findButton(in: app, candidates: [AccessibilityID.Button.openLogs, "Logs"], container: window),
+            "Logs button was not found"
         )
-        tapWhenVisible(copyButton, in: window)
+        tapWhenVisible(logsButton, in: window)
 
         let actions = try waitForActionRecords(at: actionLogURL, count: 2)
-        XCTAssertEqual(actions.map(\.action), ["repairInstall", "copyDiagnostics"])
+        XCTAssertEqual(actions.map(\.action), ["repairInstall", "openLogs"])
         XCTAssertEqual(Set(actions.map(\.headline)), ["Longhouse engine service is stopped"])
 
         let attachment = XCTAttachment(screenshot: window.screenshot())
@@ -135,6 +135,6 @@ private struct ActionRecord: Decodable {
 private enum AccessibilityID {
     enum Button {
         static let repair = "LonghouseMenuBar.Button.Repair"
-        static let copyDiagnostics = "LonghouseMenuBar.Button.CopyDiagnostics"
+        static let openLogs = "LonghouseMenuBar.Button.OpenLogs"
     }
 }

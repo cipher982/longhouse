@@ -80,6 +80,9 @@ public struct HarnessRuntimeConfig {
     public let exerciseActions: [HarnessAction]
     public let quitAfterSeconds: TimeInterval?
     public let refreshIntervalSeconds: TimeInterval?
+    public let toggleProfileLogURL: URL?
+    public let toggleProfileCount: Int
+    public let toggleProfileIntervalMilliseconds: Int
     public let healthCommand: String?
     public let healthExecutablePath: String?
     public let healthArguments: [String]
@@ -94,6 +97,9 @@ public struct HarnessRuntimeConfig {
         exerciseActions: [HarnessAction],
         quitAfterSeconds: TimeInterval?,
         refreshIntervalSeconds: TimeInterval?,
+        toggleProfileLogURL: URL?,
+        toggleProfileCount: Int,
+        toggleProfileIntervalMilliseconds: Int,
         healthCommand: String?,
         healthExecutablePath: String?,
         healthArguments: [String],
@@ -107,6 +113,9 @@ public struct HarnessRuntimeConfig {
         self.exerciseActions = exerciseActions
         self.quitAfterSeconds = quitAfterSeconds
         self.refreshIntervalSeconds = refreshIntervalSeconds
+        self.toggleProfileLogURL = toggleProfileLogURL
+        self.toggleProfileCount = toggleProfileCount
+        self.toggleProfileIntervalMilliseconds = toggleProfileIntervalMilliseconds
         self.healthCommand = healthCommand
         self.healthExecutablePath = healthExecutablePath
         self.healthArguments = healthArguments
@@ -123,6 +132,9 @@ public struct HarnessRuntimeConfig {
         var exerciseActions: [HarnessAction] = []
         var quitAfterSeconds: TimeInterval?
         var refreshIntervalSeconds: TimeInterval?
+        var toggleProfileLogURL: URL?
+        var toggleProfileCount = 0
+        var toggleProfileIntervalMilliseconds = 120
         var healthCommand: String?
         var healthExecutablePath: String?
         var healthArguments: [String] = []
@@ -185,6 +197,24 @@ public struct HarnessRuntimeConfig {
                     throw SnapshotSourceError.invalidArguments("Expected numeric seconds after --quit-after")
                 }
                 quitAfterSeconds = parsed
+            case "--toggle-profile-log":
+                index += 1
+                guard index < arguments.count else {
+                    throw SnapshotSourceError.invalidArguments("Expected file path after --toggle-profile-log")
+                }
+                toggleProfileLogURL = URL(fileURLWithPath: arguments[index])
+            case "--toggle-profile-count":
+                index += 1
+                guard index < arguments.count, let parsed = Int(arguments[index]), parsed >= 0 else {
+                    throw SnapshotSourceError.invalidArguments("Expected non-negative integer after --toggle-profile-count")
+                }
+                toggleProfileCount = parsed
+            case "--toggle-profile-interval-ms":
+                index += 1
+                guard index < arguments.count, let parsed = Int(arguments[index]), parsed >= 0 else {
+                    throw SnapshotSourceError.invalidArguments("Expected non-negative integer after --toggle-profile-interval-ms")
+                }
+                toggleProfileIntervalMilliseconds = parsed
             case "--live":
                 useLive = true
                 explicitLiveMode = true
@@ -254,6 +284,9 @@ public struct HarnessRuntimeConfig {
             exerciseActions: exerciseActions,
             quitAfterSeconds: quitAfterSeconds,
             refreshIntervalSeconds: refreshIntervalSeconds,
+            toggleProfileLogURL: toggleProfileLogURL,
+            toggleProfileCount: toggleProfileCount,
+            toggleProfileIntervalMilliseconds: toggleProfileIntervalMilliseconds,
             healthCommand: healthCommand,
             healthExecutablePath: healthExecutablePath,
             healthArguments: healthArguments,

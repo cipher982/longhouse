@@ -1,11 +1,12 @@
+import AppKit
 import SwiftUI
 
 public enum MenuBarPanelLayout {
-    public static let panelWidth: CGFloat = 368
-    public static let loadingHeight: CGFloat = 220
-    public static let failureHeight: CGFloat = 248
-    public static let healthyHeight: CGFloat = 376
-    public static let attentionHeight: CGFloat = 468
+    public static let panelWidth: CGFloat = 336
+    public static let loadingHeight: CGFloat = 154
+    public static let failureHeight: CGFloat = 190
+    public static let healthyHeight: CGFloat = 196
+    public static let attentionHeight: CGFloat = 368
 
     public static func preferredHeight(for snapshot: HealthSnapshot) -> CGFloat {
         var height = snapshot.parsedSeverity == .green ? healthyHeight : attentionHeight
@@ -20,30 +21,28 @@ public struct MenuBarLoadingView: View {
     public init() {}
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            topAccent(.gray)
+        PanelChrome(height: MenuBarPanelLayout.loadingHeight) {
+            VStack(alignment: .leading, spacing: 12) {
+                statusEmblem(color: .gray, systemImage: "arrow.trianglehead.clockwise")
 
-            Spacer(minLength: 0)
-
-            VStack(alignment: .leading, spacing: 10) {
-                ProgressView()
-                    .controlSize(.small)
-
-                Text("Loading local health")
+                Text("Checking local shipping")
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.primary)
 
-                Text("Longhouse is checking shipping status on this Mac.")
+                Text("Longhouse is refreshing the latest machine health snapshot.")
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
 
-            Spacer(minLength: 0)
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(Color.secondary)
+                }
+            }
         }
-        .padding(16)
-        .frame(width: MenuBarPanelLayout.panelWidth, height: MenuBarPanelLayout.loadingHeight, alignment: .topLeading)
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
@@ -57,12 +56,8 @@ public struct MenuBarFailureView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            topAccent(.red)
-
-            Spacer(minLength: 0)
-
-            VStack(alignment: .leading, spacing: 10) {
+        PanelChrome(height: MenuBarPanelLayout.failureHeight) {
+            VStack(alignment: .leading, spacing: 12) {
                 statusEmblem(color: .red, systemImage: "xmark.circle.fill")
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Error.headline)
                     .accessibilityLabel(Text("Longhouse could not load local health"))
@@ -77,21 +72,16 @@ public struct MenuBarFailureView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Error.message)
 
-            PanelActionButton(
-                title: "Retry",
-                systemImage: "arrow.clockwise",
-                tone: .primary,
-                accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Error.retryButton,
-                accessibilityLabel: "Retry",
-                action: retry
-            )
+                Button(action: retry) {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Error.retryButton)
+                .accessibilityLabel(Text("Retry"))
+            }
         }
-
-            Spacer(minLength: 0)
-        }
-        .padding(16)
-        .frame(width: MenuBarPanelLayout.panelWidth, height: MenuBarPanelLayout.failureHeight, alignment: .topLeading)
-        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
@@ -117,38 +107,30 @@ public struct MenuBarPanelView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            topAccent(snapshot.parsedSeverity.accentColor)
-            header
+        PanelChrome(height: MenuBarPanelLayout.preferredHeight(for: snapshot)) {
+            VStack(alignment: .leading, spacing: 12) {
+                header
 
-            if snapshot.updateInfo?.updateAvailable == true {
-                updateBanner
+                if snapshot.updateInfo?.updateAvailable == true {
+                    updateBanner
+                }
+
+                if isHealthy {
+                    healthyDetails
+                    healthyActions
+                } else {
+                    issueDetails
+                    attentionCallout
+                    issueActions
+                }
             }
-
-            summaryLines
-            metrics
-
-            if !isHealthy {
-                attentionCard
-            }
-
-            Spacer(minLength: 0)
-
-            primaryActions
-            secondaryActions
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(16)
-        .frame(
-            width: MenuBarPanelLayout.panelWidth,
-            height: MenuBarPanelLayout.preferredHeight(for: snapshot),
-            alignment: .topLeading
-        )
-        .background(Color(nsColor: .windowBackgroundColor))
-        .overlay(alignment: .top) {
+        .overlay(alignment: .bottomLeading) {
             if let feedback {
                 feedbackBanner(feedback)
                     .padding(.horizontal, 16)
-                    .padding(.top, 68)
+                    .padding(.bottom, 16)
                     .allowsHitTesting(false)
             }
         }
@@ -165,7 +147,7 @@ public struct MenuBarPanelView: View {
             statusEmblem(color: snapshot.parsedSeverity.accentColor, systemImage: snapshot.parsedSeverity.symbolName)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(snapshot.headline)
                     .font(.system(size: 16, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.primary)
@@ -175,273 +157,278 @@ public struct MenuBarPanelView: View {
                         label: snapshot.headline
                     )
 
-                HStack(spacing: 8) {
-                    Text(snapshot.ambientStatusLabel.uppercased())
-                        .font(.system(size: 10, weight: .black, design: .monospaced))
-                        .foregroundStyle(snapshot.parsedSeverity.accentColor)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(snapshot.parsedSeverity.accentColor.opacity(0.12))
-                        .clipShape(Capsule())
-                        .harnessAccessibility(
-                            identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge,
-                            label: snapshot.ambientStatusLabel
-                        )
-
-                    if isRefreshing {
-                        HStack(spacing: 5) {
-                            ProgressView()
-                                .controlSize(.mini)
-                            Text("Refreshing")
-                                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                        }
-                        .foregroundStyle(Color.secondary)
-                    }
-                }
+                Text(snapshot.ambientStatusLabel)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(snapshot.parsedSeverity.accentColor)
+                    .harnessAccessibility(
+                        identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge,
+                        label: snapshot.ambientStatusLabel
+                    )
             }
 
             Spacer(minLength: 0)
+
+            refreshControl
         }
     }
 
+    private var refreshControl: some View {
+        Button {
+            perform(.refresh)
+        } label: {
+            ZStack {
+                if isRefreshing {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 13, weight: .semibold))
+                }
+            }
+            .frame(width: 18, height: 18)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .disabled(isRefreshing)
+        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.refresh)
+        .accessibilityLabel(Text(isRefreshing ? "Refreshing" : "Refresh"))
+    }
+
     private var updateBanner: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Image(systemName: "arrow.up.circle.fill")
-                .font(.system(size: 15, weight: .semibold))
+        let latest = snapshot.updateInfo?.latestVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let installed = snapshot.updateInfo?.installedVersion ?? ""
+        let label = if let latest, !latest.isEmpty {
+            "Version \(latest) is ready. Installed: \(installed)."
+        } else {
+            "A Longhouse update is ready."
+        }
+
+        return HStack(alignment: .center, spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill")
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Color.blue)
 
-            VStack(alignment: .leading, spacing: 2) {
-                let latest = snapshot.updateInfo?.latestVersion?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let installed = snapshot.updateInfo?.installedVersion ?? ""
-                let label = if let latest, !latest.isEmpty {
-                    "Longhouse \(latest) is ready. You have \(installed)."
-                } else {
-                    "A Longhouse update is ready."
-                }
-
-                Text(label)
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.UpdateBanner.label)
-            }
+            Text(label)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.UpdateBanner.label)
 
             Spacer(minLength: 0)
 
-            PanelActionButton(
-                title: "Upgrade",
-                systemImage: "arrow.down",
-                tone: .accent(.blue),
-                compact: true,
-                accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.upgradeNow,
-                accessibilityLabel: "Upgrade"
-            ) {
+            Button {
                 feedback = actionSink.handle(.upgradeNow, snapshot: snapshot)
+            } label: {
+                Text("Upgrade")
             }
+            .buttonStyle(.borderedProminent)
+            .tint(.blue)
+            .controlSize(.small)
+            .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.upgradeNow)
+            .accessibilityLabel(Text("Upgrade"))
         }
-        .padding(12)
+        .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.blue.opacity(0.10))
+            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+                .fill(Color.blue.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+                .stroke(Color.blue.opacity(0.16), lineWidth: 1)
         )
         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.UpdateBanner.container)
     }
 
-    private var summaryLines: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            summaryLine(
-                systemImage: "paperplane.circle.fill",
-                text: snapshot.lastShipSummaryLabel,
-                identifier: LonghouseMenuBarAccessibilityID.Header.lastShip
+    private var healthyDetails: some View {
+        PanelSection {
+            PanelValueRow(
+                label: "Last ship",
+                value: snapshot.lastShipValueLabel,
+                valueIdentifier: LonghouseMenuBarAccessibilityID.Header.lastShip
             )
 
-            summaryLine(
-                systemImage: snapshot.launchStateLabel == "ready" ? "bolt.circle.fill" : "bolt.trianglebadge.exclamationmark.fill",
-                text: snapshot.launchSummaryLabel
+            Divider()
+
+            PanelValueRow(
+                label: "Launch",
+                value: snapshot.launchValueLabel,
+                labelIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.label,
+                valueIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.value
             )
         }
     }
 
-    private var metrics: some View {
-        HStack(spacing: 8) {
-            MetricTile(
-                title: "Service",
+    private var issueDetails: some View {
+        PanelSection {
+            PanelValueRow(
+                label: "Service",
                 value: snapshot.serviceStatusTitle,
-                tint: snapshot.serviceStatusLabel == "running" ? .blue : .red,
-                titleIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.title,
+                valueColor: snapshot.serviceStatusLabel == "running" ? snapshot.parsedSeverity.accentColor : .red,
+                labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.title,
                 valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.value
             )
 
-            MetricTile(
-                title: "Outbox",
-                value: "\(snapshot.outboxCount)",
-                tint: snapshot.outboxCount == 0 ? .teal : snapshot.parsedSeverity.accentColor,
-                titleIdentifier: LonghouseMenuBarAccessibilityID.Metric.outbox.title,
-                valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.outbox.value
-            )
+            if snapshot.outboxCount > 0 || snapshot.parsedSeverity != .green {
+                Divider()
 
-            MetricTile(
-                title: "Dead",
-                value: snapshot.spoolDeadLabel,
-                tint: snapshot.spoolDeadLabel == "0" ? .green : .red,
-                titleIdentifier: LonghouseMenuBarAccessibilityID.Metric.dead.title,
-                valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.dead.value
-            )
+                PanelValueRow(
+                    label: "Outbox",
+                    value: "\(snapshot.outboxCount)",
+                    valueColor: snapshot.outboxCount == 0 ? Color.primary : .orange,
+                    labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.outbox.title,
+                    valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.outbox.value
+                )
+            }
+
+            if snapshot.spoolDeadLabel != "0" || snapshot.parsedSeverity == .red {
+                Divider()
+
+                PanelValueRow(
+                    label: "Dead",
+                    value: snapshot.spoolDeadLabel,
+                    valueColor: snapshot.spoolDeadLabel == "0" ? Color.primary : .red,
+                    labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.dead.title,
+                    valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.dead.value
+                )
+            }
         }
     }
 
-    private var attentionCard: some View {
+    private var attentionCallout: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("NEXT")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+            Text("Needs attention")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
                 .foregroundStyle(snapshot.parsedSeverity.accentColor)
-                .harnessAccessibility(
-                    identifier: LonghouseMenuBarAccessibilityID.Section.next.title,
-                    label: "NEXT"
-                )
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Section.next.title)
 
             Text(snapshot.attentionSummaryLabel)
                 .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.primary)
                 .fixedSize(horizontal: false, vertical: true)
-                .harnessAccessibility(
-                    identifier: LonghouseMenuBarAccessibilityID.Section.next.tag(0),
-                    label: snapshot.attentionSummaryLabel
-                )
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Section.next.tag(0))
         }
         .padding(12)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(snapshot.parsedSeverity.accentColor.opacity(0.12))
+            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+                .fill(snapshot.parsedSeverity.accentColor.opacity(0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+                .stroke(snapshot.parsedSeverity.accentColor.opacity(0.16), lineWidth: 1)
         )
     }
 
-    private var primaryActions: some View {
-        HStack(spacing: 8) {
-            if isHealthy {
-                PanelActionButton(
-                    title: "Open Longhouse",
-                    systemImage: "arrow.up.forward.square",
-                    tone: .primary,
-                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
-                    accessibilityLabel: "Open Longhouse"
-                ) {
-                    perform(.openLonghouse)
-                }
+    private var healthyActions: some View {
+        primaryButton(
+            title: "Open Longhouse",
+            systemImage: "arrow.up.forward.square",
+            identifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
+            tint: Color.accentColor
+        ) {
+            perform(.openLonghouse)
+        }
+    }
 
-                PanelActionButton(
-                    title: isRefreshing ? "Refreshing" : "Refresh",
-                    systemImage: "arrow.clockwise",
-                    tone: .secondary,
-                    isBusy: isRefreshing,
-                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.refresh,
-                    accessibilityLabel: "Refresh"
-                ) {
-                    perform(.refresh)
-                }
-                .disabled(isRefreshing)
-            } else {
-                PanelActionButton(
+    private var issueActions: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                primaryButton(
                     title: "Repair",
                     systemImage: "wrench.and.screwdriver",
-                    tone: .danger,
-                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.repair,
-                    accessibilityLabel: "Repair"
+                    identifier: LonghouseMenuBarAccessibilityID.Button.repair,
+                    tint: .red
                 ) {
                     perform(.repairInstall)
                 }
 
-                PanelActionButton(
-                    title: "Doctor",
-                    systemImage: "stethoscope",
-                    tone: .secondary,
-                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.doctor,
-                    accessibilityLabel: "Doctor"
+                secondaryButton(
+                    title: "Open Longhouse",
+                    systemImage: "arrow.up.forward.square",
+                    identifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse
                 ) {
-                    perform(.runDoctor)
+                    perform(.openLonghouse)
+                }
+            }
+
+            HStack(spacing: 8) {
+                compactButton(
+                    title: "Logs",
+                    systemImage: "doc.text.magnifyingglass",
+                    identifier: LonghouseMenuBarAccessibilityID.Button.openLogs
+                ) {
+                    perform(.openLogs)
+                }
+
+                compactButton(
+                    title: "Copy JSON",
+                    systemImage: "doc.on.doc",
+                    identifier: LonghouseMenuBarAccessibilityID.Button.copyDiagnostics
+                ) {
+                    perform(.copyDiagnostics)
                 }
             }
         }
     }
 
-    private var secondaryActions: some View {
-        VStack(spacing: 8) {
-            if isHealthy {
-                HStack(spacing: 8) {
-                    secondaryButton("Doctor", systemImage: "stethoscope", action: .runDoctor, identifier: LonghouseMenuBarAccessibilityID.Button.doctor)
-                    secondaryButton("Repair", systemImage: "wrench.and.screwdriver", action: .repairInstall, identifier: LonghouseMenuBarAccessibilityID.Button.repair)
-                }
-
-                HStack(spacing: 8) {
-                    secondaryButton("Logs", systemImage: "doc.text.magnifyingglass", action: .openLogs, identifier: LonghouseMenuBarAccessibilityID.Button.openLogs)
-                    secondaryButton("Copy JSON", systemImage: "doc.on.doc", action: .copyDiagnostics, identifier: LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
-                }
-            } else {
-                HStack(spacing: 8) {
-                    secondaryButton("Copy JSON", systemImage: "doc.on.doc", action: .copyDiagnostics, identifier: LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
-                    secondaryButton("Logs", systemImage: "doc.text.magnifyingglass", action: .openLogs, identifier: LonghouseMenuBarAccessibilityID.Button.openLogs)
-                }
-
-                HStack(spacing: 8) {
-                    secondaryButton(
-                        isRefreshing ? "Refreshing" : "Refresh",
-                        systemImage: "arrow.clockwise",
-                        action: .refresh,
-                        identifier: LonghouseMenuBarAccessibilityID.Button.refresh,
-                        isDisabled: isRefreshing,
-                        isBusy: isRefreshing
-                    )
-                    secondaryButton("Open Longhouse", systemImage: "arrow.up.forward.square", action: .openLonghouse, identifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse)
-                }
-            }
+    private func primaryButton(
+        title: String,
+        systemImage: String,
+        identifier: String,
+        tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity)
         }
+        .buttonStyle(.borderedProminent)
+        .tint(tint)
+        .controlSize(.large)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(Text(title))
     }
 
     private func secondaryButton(
-        _ title: String,
+        title: String,
         systemImage: String,
-        action: HarnessAction,
         identifier: String,
-        isDisabled: Bool = false,
-        isBusy: Bool = false
+        action: @escaping () -> Void
     ) -> some View {
-        PanelActionButton(
-            title: title,
-            systemImage: systemImage,
-            tone: .secondary,
-            compact: true,
-            isBusy: isBusy,
-            accessibilityIdentifier: identifier,
-            accessibilityLabel: title
-        ) {
-            perform(action)
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity)
         }
-        .disabled(isDisabled)
+        .buttonStyle(.bordered)
+        .controlSize(.large)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(Text(title))
     }
 
-    private func summaryLine(systemImage: String, text: String, identifier: String? = nil) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: systemImage)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.secondary)
-
-            Text(text)
-                .font(.system(size: 11, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .applyHarnessAccessibility(identifier: identifier, label: text)
+    private func compactButton(
+        title: String,
+        systemImage: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: systemImage)
+                .frame(maxWidth: .infinity)
         }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .accessibilityIdentifier(identifier)
+        .accessibilityLabel(Text(title))
     }
 
     private func feedbackBanner(_ feedback: HealthActionFeedback) -> some View {
         let tint = feedbackColor(for: feedback.style)
 
-        return HStack(alignment: .top, spacing: 8) {
+        return HStack(alignment: .center, spacing: 8) {
             Image(systemName: feedbackIcon(for: feedback.style))
-                .font(.system(size: 13, weight: .semibold))
+                .font(.system(size: 11, weight: .semibold))
                 .foregroundStyle(tint)
 
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(feedback.title)
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
                     .foregroundStyle(Color.primary)
@@ -450,15 +437,21 @@ public struct MenuBarPanelView: View {
                 Text(feedback.detail)
                     .font(.system(size: 10, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(2)
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.detail)
             }
         }
-        .padding(10)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(tint.opacity(0.10))
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor))
         )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(tint.opacity(0.24), lineWidth: 1)
+        )
+        .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 6)
         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.container)
     }
 
@@ -472,13 +465,13 @@ public struct MenuBarPanelView: View {
     private func feedbackColor(for style: HealthActionFeedbackStyle) -> Color {
         switch style {
         case .info:
-            return Color.blue
+            return .blue
         case .success:
-            return Color.green
+            return .green
         case .warning:
-            return Color.orange
+            return .orange
         case .failure:
-            return Color.red
+            return .red
         }
     }
 
@@ -496,103 +489,78 @@ public struct MenuBarPanelView: View {
     }
 }
 
-private struct MetricTile: View {
-    let title: String
-    let value: String
-    let tint: Color
-    let titleIdentifier: String
-    let valueIdentifier: String
+private let panelCornerRadius: CGFloat = 18
+private let sectionCornerRadius: CGFloat = 12
+
+private struct PanelChrome<Content: View>: View {
+    let height: CGFloat
+    let content: Content
+
+    init(height: CGFloat, @ViewBuilder content: () -> Content) {
+        self.height = height
+        self.content = content()
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title.uppercased())
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
+        content
+            .padding(16)
+            .frame(width: MenuBarPanelLayout.panelWidth, height: height, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.12), radius: 12, x: 0, y: 8)
+    }
+}
+
+private struct PanelSection<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            content
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
+                .stroke(Color.white.opacity(0.04), lineWidth: 1)
+        )
+    }
+}
+
+private struct PanelValueRow: View {
+    let label: String
+    let value: String
+    var valueColor: Color = .primary
+    var labelIdentifier: String? = nil
+    var valueIdentifier: String? = nil
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(label)
+                .font(.system(size: 12, weight: .medium, design: .rounded))
                 .foregroundStyle(Color.secondary)
-                .harnessAccessibility(identifier: titleIdentifier, label: title.uppercased())
+                .applyHarnessAccessibility(identifier: labelIdentifier, label: label)
+
+            Spacer(minLength: 12)
 
             Text(value)
-                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                .foregroundStyle(Color.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .harnessAccessibility(identifier: valueIdentifier, label: value)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(tint.opacity(0.10))
-        )
-    }
-}
-
-private struct PanelActionButton: View {
-    let title: String
-    let systemImage: String
-    let tone: PanelActionTone
-    var compact: Bool = false
-    var isBusy: Bool = false
-    var accessibilityIdentifier: String? = nil
-    var accessibilityLabel: String? = nil
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 7) {
-                if isBusy {
-                    ProgressView()
-                        .controlSize(.mini)
-                } else {
-                    Image(systemName: systemImage)
-                        .font(.system(size: compact ? 11 : 12, weight: .semibold))
-                }
-
-                Text(title)
-                    .font(.system(size: compact ? 11 : 12, weight: .semibold, design: .rounded))
-                    .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, compact ? 10 : 12)
-            .padding(.vertical, compact ? 8 : 10)
-        }
-        .buttonStyle(.plain)
-        .applyPanelAccessibility(
-            identifier: accessibilityIdentifier,
-            label: accessibilityLabel ?? title
-        )
-        .foregroundStyle(tone.foregroundColor)
-        .background(
-            RoundedRectangle(cornerRadius: compact ? 10 : 12, style: .continuous)
-                .fill(tone.backgroundColor)
-        )
-    }
-}
-
-private enum PanelActionTone {
-    case primary
-    case secondary
-    case danger
-    case accent(Color)
-
-    var backgroundColor: Color {
-        switch self {
-        case .primary:
-            return Color.accentColor
-        case .secondary:
-            return Color.primary.opacity(0.07)
-        case .danger:
-            return Color.red
-        case let .accent(color):
-            return color
-        }
-    }
-
-    var foregroundColor: Color {
-        switch self {
-        case .primary, .danger, .accent:
-            return Color.white
-        case .secondary:
-            return Color.primary
+                .font(.system(size: 12, weight: .semibold, design: .rounded))
+                .foregroundStyle(valueColor)
+                .multilineTextAlignment(.trailing)
+                .applyHarnessAccessibility(identifier: valueIdentifier, label: value)
         }
     }
 }
@@ -608,40 +576,14 @@ private func statusEmblem(color: Color, systemImage: String) -> some View {
     }
 }
 
-private func topAccent(_ color: Color) -> some View {
-    RoundedRectangle(cornerRadius: 999, style: .continuous)
-        .fill(
-            LinearGradient(
-                colors: [color.opacity(0.85), color.opacity(0.30)],
-                startPoint: .leading,
-                endPoint: .trailing
-            )
-        )
-        .frame(height: 4)
-}
-
 private extension View {
     func harnessAccessibility(identifier: String, label: String) -> some View {
         accessibilityIdentifier(identifier)
             .accessibilityLabel(Text(label))
     }
 
-    func harnessAccessibilityButton(identifier: String, label: String) -> some View {
-        accessibilityIdentifier(identifier)
-            .accessibilityLabel(Text(label))
-    }
-
     @ViewBuilder
     func applyHarnessAccessibility(identifier: String?, label: String) -> some View {
-        if let identifier {
-            harnessAccessibility(identifier: identifier, label: label)
-        } else {
-            self
-        }
-    }
-
-    @ViewBuilder
-    func applyPanelAccessibility(identifier: String?, label: String) -> some View {
         if let identifier {
             accessibilityIdentifier(identifier)
                 .accessibilityLabel(Text(label))
