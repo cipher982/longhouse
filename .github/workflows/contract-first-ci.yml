@@ -7,6 +7,9 @@ on:
 
 run-name: push-pr-ci--${{ github.ref_name }}--${{ github.sha }}
 
+permissions:
+  contents: read
+
 env:
   # Self-hosted runners can have global pip config pointing at private indexes.
   # Force public PyPI for CI so setup-python's pip step doesn't fail.
@@ -14,9 +17,67 @@ env:
   PIP_EXTRA_INDEX_URL: ""
 
 jobs:
+  # -----------------------------------------------------------------------
+  # Path detection — skip jobs whose code hasn't changed
+  # Skipped jobs don't block workflow success, so runtime-image still fires.
+  # -----------------------------------------------------------------------
+  changes:
+    runs-on: ubuntu-latest
+    name: "🔀 detect-changed-paths"
+    outputs:
+      backend:        ${{ steps.filter.outputs.backend }}
+      frontend:       ${{ steps.filter.outputs.frontend }}
+      engine:         ${{ steps.filter.outputs.engine }}
+      schemas:        ${{ steps.filter.outputs.schemas }}
+      control_plane:  ${{ steps.filter.outputs.control_plane }}
+      packaging:      ${{ steps.filter.outputs.packaging }}
+      runner:         ${{ steps.filter.outputs.runner }}
+      e2e:            ${{ steps.filter.outputs.e2e }}
+      models:         ${{ steps.filter.outputs.models }}
+      scripts:        ${{ steps.filter.outputs.scripts }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'server/**'
+              - 'config/**'
+            frontend:
+              - 'web/**'
+              - 'bun.lock'
+              - 'package.json'
+            engine:
+              - 'engine/**'
+            schemas:
+              - 'schemas/**'
+              - 'scripts/generate/**'
+              - 'Makefile'
+            control_plane:
+              - 'control-plane/**'
+            packaging:
+              - 'server/pyproject.toml'
+              - 'server/setup.cfg'
+              - 'web/**'
+              - 'scripts/qa/test-wheel-package.sh'
+            runner:
+              - 'runner/**'
+            e2e:
+              - 'e2e/**'
+              - 'server/**'
+              - 'web/**'
+              - 'config/**'
+            models:
+              - 'config/models.json'
+              - 'server/zerg/llm/**'
+              - 'scripts/qa/smoke_models.py'
+            scripts:
+              - 'scripts/**'
+
   validate:
-    # Public repo safety: do not run untrusted fork PR code on self-hosted runners.
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: changes
+    if: ${{ (needs.changes.outputs.schemas == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube-fast
     name: "🔍 validate--make-validate--ws-sse-sdk-makefile-lints"
 
@@ -43,8 +104,9 @@ jobs:
       run: make validate
 
   sqlite-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    # No dependency on validate - can run immediately on GitHub-hosted runners
     name: "🗃️ sqlite-lite--make-test--install-runner--oss-path"
 
     steps:
@@ -85,7 +147,8 @@ jobs:
       run: make test-web-entrypoint
 
   frontend-tests:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: changes
+    if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube-fast
     name: "⚛️ unit-frontend--bun-validate-types--bun-test--make-test-runner-unit"
 
@@ -123,6 +186,8 @@ jobs:
       run: make test-runner
 
   wheel-package:
+    needs: changes
+    if: ${{ needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     name: "📦 wheel-package--build-verify"
 
@@ -149,7 +214,8 @@ jobs:
       run: make test-wheel-package
 
   e2e:
-    if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
+    needs: changes
+    if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube-browser
     name: "🎭 e2e-core-a11y--make-test-e2e"
     env:
@@ -224,8 +290,9 @@ jobs:
           e2e/playwright-report
 
   control-plane-e2e:
+    needs: changes
+    if: ${{ needs.changes.outputs.control_plane == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    # No dependency on other jobs — runs in parallel with sqlite-tests
     name: "🎭 control-plane-e2e--signup-login-gates"
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright-py
@@ -262,8 +329,9 @@ jobs:
       run: make test-e2e-cp
 
   model-smoke:
+    needs: changes
+    if: ${{ needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    # No dependency — runs in parallel, fast (<5s)
     name: "🔥 model-smoke--ping-all-models-json"
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -282,8 +350,9 @@ jobs:
       run: uv run --with openai --with anthropic python scripts/qa/smoke_models.py --ci
 
   oss-qa:
+    needs: changes
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    # No dependency on validate - can run immediately on GitHub-hosted runners
     name: "📦 oss-qa--fresh-clone--sqlite--onboarding-ui"
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright

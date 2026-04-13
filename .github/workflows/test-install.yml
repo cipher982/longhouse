@@ -1,8 +1,32 @@
 name: Installer Validation Ring
 
 on:
-  push: {}
-  pull_request: {}
+  push:
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/qa/test-cli-upgrade.sh'
+      - 'scripts/qa/test-local-runtime-packaging.sh'
+      - 'server/pyproject.toml'
+      - 'server/zerg/cli/**'
+      - 'server/zerg/__main__.py'
+      - 'engine/**'
+      - 'runner/**'
+      - 'swift/**'
+      - '.github/workflows/test-install.yml'
+  pull_request:
+    paths:
+      - 'scripts/install.sh'
+      - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/qa/test-cli-upgrade.sh'
+      - 'scripts/qa/test-local-runtime-packaging.sh'
+      - 'server/pyproject.toml'
+      - 'server/zerg/cli/**'
+      - 'server/zerg/__main__.py'
+      - 'engine/**'
+      - 'runner/**'
+      - 'swift/**'
+      - '.github/workflows/test-install.yml'
   schedule:
     - cron: '11 9 * * *'
   workflow_dispatch: {}
