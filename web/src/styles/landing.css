@@ -2010,6 +2010,24 @@
    RESPONSIVE
    -------------------------------------------------------- */
 
+  /* Mid-range: hero stays 2-col but launch flow stacks vertically */
+  @media (width <= 1100px) {
+    .landing-launch-flow {
+      grid-template-columns: 1fr;
+      gap: var(--space-4);
+    }
+
+    .landing-launch-bridge {
+      min-width: 0;
+      justify-content: center;
+      flex-direction: row;
+    }
+
+    .landing-launch-truths {
+      grid-template-columns: 1fr;
+    }
+  }
+
   @media (width <= 768px) {
     .landing-hero {
       padding-top: calc(var(--space-16) + var(--space-2));
