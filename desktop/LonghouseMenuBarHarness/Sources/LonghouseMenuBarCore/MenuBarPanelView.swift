@@ -1,5 +1,43 @@
 import SwiftUI
 
+public enum HealthyPanelConcept: String, CaseIterable, Codable, Sendable {
+    case production
+    case launchHorizon = "launch-horizon"
+    case repoDeck = "repo-deck"
+    case missionTimeline = "mission-timeline"
+
+    public var displayName: String {
+        switch self {
+        case .production:
+            return "Current"
+        case .launchHorizon:
+            return "Launch Horizon"
+        case .repoDeck:
+            return "Repo Deck"
+        case .missionTimeline:
+            return "Mission Timeline"
+        }
+    }
+
+    public var panelHeight: CGFloat {
+        switch self {
+        case .production:
+            return MenuBarPanelLayout.healthyHeight
+        case .launchHorizon:
+            return 584
+        case .repoDeck:
+            return 604
+        case .missionTimeline:
+            return 590
+        }
+    }
+}
+
+public enum MenuBarPanelControlMode: Sendable {
+    case interactive
+    case staticSnapshot
+}
+
 public enum MenuBarPanelLayout {
     public static let panelWidth: CGFloat = 376
     public static let loadingHeight: CGFloat = 170
@@ -7,8 +45,11 @@ public enum MenuBarPanelLayout {
     public static let healthyHeight: CGFloat = 572
     public static let attentionHeight: CGFloat = 564
 
-    public static func preferredHeight(for snapshot: HealthSnapshot) -> CGFloat {
-        snapshot.parsedSeverity == .green ? healthyHeight : attentionHeight
+    public static func preferredHeight(
+        for snapshot: HealthSnapshot,
+        healthyConcept: HealthyPanelConcept = .production
+    ) -> CGFloat {
+        snapshot.parsedSeverity == .green ? healthyConcept.panelHeight : attentionHeight
     }
 }
 
@@ -99,6 +140,8 @@ public struct MenuBarPanelView: View {
     private let presentationDate: Date
     private let actionSink: any HealthActionSink
     private let isManualRefreshing: Bool
+    private let healthyConcept: HealthyPanelConcept
+    private let controlMode: MenuBarPanelControlMode
     private let refresh: () -> Void
 
     @State private var feedback: HealthActionFeedback?
@@ -109,6 +152,8 @@ public struct MenuBarPanelView: View {
         presentationDate: Date,
         actionSink: any HealthActionSink,
         isManualRefreshing: Bool,
+        healthyConcept: HealthyPanelConcept = .production,
+        controlMode: MenuBarPanelControlMode = .interactive,
         refresh: @escaping () -> Void
     ) {
         self.snapshot = snapshot
@@ -116,12 +161,17 @@ public struct MenuBarPanelView: View {
         self.presentationDate = presentationDate
         self.actionSink = actionSink
         self.isManualRefreshing = isManualRefreshing
+        self.healthyConcept = healthyConcept
+        self.controlMode = controlMode
         self.refresh = refresh
         _feedback = State(initialValue: nil)
     }
 
     public var body: some View {
-        PanelChrome(height: MenuBarPanelLayout.preferredHeight(for: snapshot), accent: snapshot.parsedSeverity.accentColor) {
+        PanelChrome(
+            height: MenuBarPanelLayout.preferredHeight(for: snapshot, healthyConcept: healthyConcept),
+            accent: snapshot.parsedSeverity.accentColor
+        ) {
             VStack(alignment: .leading, spacing: 14) {
                 header
 
@@ -223,7 +273,11 @@ public struct MenuBarPanelView: View {
                     perform(.openLonghouse)
                 }
 
-                healthyToolsMenu
+                if controlMode == .interactive {
+                    healthyToolsMenu
+                } else {
+                    accessoryGlyph(systemImage: "ellipsis")
+                }
             }
 
             refreshControl
@@ -248,6 +302,21 @@ public struct MenuBarPanelView: View {
     }
 
     private var healthySurface: some View {
+        Group {
+            switch healthyConcept {
+            case .production:
+                productionHealthySurface
+            case .launchHorizon:
+                launchHorizonSurface
+            case .repoDeck:
+                repoDeckSurface
+            case .missionTimeline:
+                missionTimelineSurface
+            }
+        }
+    }
+
+    private var productionHealthySurface: some View {
         VStack(alignment: .leading, spacing: 12) {
             PanelSection(title: "Right now") {
                 MissionReadoutGrid(readouts: primaryReadouts)
@@ -298,6 +367,166 @@ public struct MenuBarPanelView: View {
                     summary: snapshot.providerMixLabel,
                     entries: snapshot.providerCountsToday
                 )
+            }
+        }
+    }
+
+    private var launchHorizonSurface: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            PanelSection(title: "Launch horizon", trailing: snapshot.launchValueLabel) {
+                MissionReadoutGrid(readouts: [
+                    PanelReadout(
+                        label: "Ship",
+                        value: snapshot.lastShipCompactLabel(relativeTo: presentationDate),
+                        detail: "Cadence",
+                        tone: snapshot.parsedSeverity.accentColor
+                    ),
+                    PanelReadout(
+                        label: "Heartbeat",
+                        value: snapshot.engineAgeLabel(relativeTo: presentationDate),
+                        detail: snapshot.engineFreshnessLabel(relativeTo: presentationDate),
+                        tone: snapshot.parsedSeverity.accentColor
+                    ),
+                    PanelReadout(
+                        label: "Active",
+                        value: snapshot.sessionsRecentLabel,
+                        detail: snapshot.recentWindowCompactLabel,
+                        tone: snapshot.providerCountsRecent.isEmpty ? .primary : snapshot.parsedSeverity.accentColor
+                    ),
+                    PanelReadout(
+                        label: "Queue",
+                        value: queueBoardValue,
+                        detail: queueBoardDetail,
+                        tone: queueBoardTone
+                    ),
+                ])
+
+                sectionDivider
+
+                AdaptiveTagGrid {
+                    compactSignalPill(label: "Runner", value: snapshot.runnerNameValueLabel)
+                    compactSignalPill(label: "Today", value: "\(snapshot.sessionsTodayLabel) sessions")
+                    compactSignalPill(label: "Latest", value: snapshot.latestActivityCompactLabel(relativeTo: presentationDate))
+                    compactSignalPill(label: "Free", value: snapshot.diskFreeCompactLabel)
+                }
+            }
+
+            PanelSection(title: "Mission traffic", trailing: workspaceTrafficSummary) {
+                WorkspaceLaneStack(clusters: workspaceClusters)
+
+                if !snapshot.providerCountsRecent.isEmpty {
+                    sectionDivider
+
+                    ProviderMixDeck(
+                        title: "Channels",
+                        summary: snapshot.recentProviderMixLabel,
+                        entries: snapshot.providerCountsRecent
+                    )
+                }
+            }
+
+            PanelSection(title: "Operations rail", trailing: snapshot.hostValueLabel) {
+                TelemetryTable(entries: [
+                    PanelTelemetryEntry(label: "Launch", value: snapshot.launchValueLabel),
+                    PanelTelemetryEntry(label: "Transport", value: queueBoardValue, valueColor: queueBoardTone),
+                    PanelTelemetryEntry(label: "Dead", value: snapshot.spoolDeadLabel, valueColor: snapshot.spoolDeadLabel == "0" ? .primary : .red),
+                    PanelTelemetryEntry(label: "Parse", value: snapshot.parseErrorCountLabel, valueColor: snapshot.parseErrorCountLabel == "0" ? .primary : .orange),
+                    PanelTelemetryEntry(label: "Failures", value: snapshot.consecutiveFailuresLabel, valueColor: snapshot.consecutiveFailuresLabel == "0" ? .primary : .red),
+                    PanelTelemetryEntry(label: "Version", value: snapshot.installedVersionLabel),
+                ])
+            }
+        }
+    }
+
+    private var repoDeckSurface: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            PanelSection(title: "Focus repos", trailing: workspaceTrafficSummary) {
+                WorkspaceCardDeck(clusters: workspaceClusters)
+            }
+
+            PanelSection(title: "Traffic matrix", trailing: snapshot.recentActivitySummaryLabel) {
+                MissionReadoutGrid(readouts: [
+                    PanelReadout(label: "Recent", value: snapshot.sessionsRecentLabel, detail: snapshot.recentWindowCompactLabel, tone: snapshot.parsedSeverity.accentColor),
+                    PanelReadout(label: "Today", value: snapshot.sessionsTodayLabel, detail: "Sessions"),
+                    PanelReadout(label: "Latest", value: snapshot.latestActivityCompactLabel(relativeTo: presentationDate), detail: "Touch"),
+                    PanelReadout(label: "Ship", value: snapshot.lastShipCompactLabel(relativeTo: presentationDate), detail: "Cadence", tone: snapshot.parsedSeverity.accentColor),
+                ])
+
+                sectionDivider
+
+                ProviderMixDeck(
+                    title: "Recent channels",
+                    summary: snapshot.recentProviderMixLabel,
+                    entries: snapshot.providerCountsRecent
+                )
+
+                if !snapshot.providerCountsToday.isEmpty {
+                    ProviderMixDeck(
+                        title: "Today",
+                        summary: snapshot.providerMixLabel,
+                        entries: snapshot.providerCountsToday
+                    )
+                }
+            }
+
+            PanelSection(title: "Ops rail", trailing: snapshot.launchValueLabel) {
+                TelemetryTable(entries: [
+                    PanelTelemetryEntry(label: "Heartbeat", value: snapshot.engineAgeLabel(relativeTo: presentationDate), valueColor: snapshot.parsedSeverity.accentColor),
+                    PanelTelemetryEntry(label: "Disk", value: snapshot.diskFreeCompactLabel),
+                    PanelTelemetryEntry(label: "Transport", value: queueBoardValue, valueColor: queueBoardTone),
+                    PanelTelemetryEntry(label: "Dead", value: snapshot.spoolDeadLabel, valueColor: snapshot.spoolDeadLabel == "0" ? .primary : .red),
+                    PanelTelemetryEntry(label: "Parse", value: snapshot.parseErrorCountLabel, valueColor: snapshot.parseErrorCountLabel == "0" ? .primary : .orange),
+                    PanelTelemetryEntry(label: "Host", value: snapshot.hostValueLabel),
+                ])
+            }
+        }
+    }
+
+    private var missionTimelineSurface: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            PanelSection(title: "Operations", trailing: snapshot.recentActivitySummaryLabel) {
+                HStack(alignment: .top, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        TimelineMetricRow(title: "Launch", value: snapshot.launchValueLabel, detail: "Runner \(snapshot.runnerNameValueLabel)")
+                        TimelineMetricRow(title: "Ship", value: snapshot.lastShipCompactLabel(relativeTo: presentationDate), detail: "Latest cadence")
+                        TimelineMetricRow(title: "Heartbeat", value: snapshot.engineAgeLabel(relativeTo: presentationDate), detail: snapshot.engineFreshnessLabel(relativeTo: presentationDate))
+                        TimelineMetricRow(title: "Transport", value: queueBoardValue, detail: queueBoardDetail)
+                    }
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.06))
+                        .frame(width: 1)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        TimelineMetricRow(title: "Today", value: snapshot.sessionsTodayLabel, detail: "Sessions")
+                        TimelineMetricRow(title: "Latest", value: snapshot.latestActivityCompactLabel(relativeTo: presentationDate), detail: "Touch")
+                        TimelineMetricRow(title: "Channels", value: snapshot.recentProviderMixLabel, detail: snapshot.recentWindowLabel)
+                        TimelineMetricRow(title: "Free", value: snapshot.diskFreeCompactLabel, detail: snapshot.hostValueLabel)
+                    }
+                }
+            }
+
+            PanelSection(title: "Touch ledger", trailing: "\(workspaceClusters.count) repos") {
+                WorkspaceLedger(clusters: workspaceClusters)
+            }
+
+            PanelSection(title: "Today", trailing: snapshot.providerMixLabel) {
+                if !snapshot.providerCountsToday.isEmpty {
+                    ProviderMixDeck(
+                        title: "Providers",
+                        summary: snapshot.providerMixLabel,
+                        entries: snapshot.providerCountsToday
+                    )
+                }
+
+                sectionDivider
+
+                Text(currentSupportLine)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
         }
     }
@@ -360,6 +589,105 @@ public struct MenuBarPanelView: View {
                 age: snapshot.recentTouchAgeLabel(touch, relativeTo: presentationDate)
             )
         }
+    }
+
+    private var workspaceClusters: [WorkspaceActivityCluster] {
+        let grouped = Dictionary(grouping: snapshot.recentTouches, by: snapshot.recentTouchWorkspaceLabel)
+        return grouped.compactMap { workspace, touches in
+            let latestTouch = touches.max { lhs, rhs in
+                (parsedTouchDate(lhs) ?? .distantPast) < (parsedTouchDate(rhs) ?? .distantPast)
+            }
+            guard let latestTouch else {
+                return nil
+            }
+
+            var seenProviders: Set<String> = []
+            let providers = touches.compactMap { touch -> String? in
+                let provider = snapshot.recentTouchProviderLabel(touch)
+                guard seenProviders.insert(provider).inserted else {
+                    return nil
+                }
+                return provider
+            }
+
+            let latestDate = parsedTouchDate(latestTouch) ?? .distantPast
+            let branch = touches
+                .compactMap { touch in
+                    touch.branch?.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+                .first { branch in
+                    !branch.isEmpty
+                }
+
+            return WorkspaceActivityCluster(
+                workspace: workspace,
+                providers: providers,
+                branch: branch,
+                latestAge: snapshot.recentTouchAgeLabel(latestTouch, relativeTo: presentationDate),
+                latestDate: latestDate,
+                touchCount: touches.count
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.latestDate != rhs.latestDate {
+                return lhs.latestDate > rhs.latestDate
+            }
+            return lhs.workspace.localizedCaseInsensitiveCompare(rhs.workspace) == .orderedAscending
+        }
+    }
+
+    private var workspaceTrafficSummary: String {
+        let workspaceCount = workspaceClusters.count
+        let activeCount = Int(snapshot.sessionsRecentLabel) ?? workspaceCount
+        if workspaceCount == 0 {
+            return snapshot.recentActivitySummaryLabel
+        }
+        if workspaceCount == 1 {
+            return "\(activeCount) active · 1 repo"
+        }
+        return "\(activeCount) active · \(workspaceCount) repos"
+    }
+
+    private func parsedTouchDate(_ touch: ActivityTouchSnapshot) -> Date? {
+        guard let raw = touch.lastUpdated else {
+            return nil
+        }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let parsed = fractional.date(from: raw) {
+            return parsed
+        }
+
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: raw)
+    }
+
+    private func compactSignalPill(label: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label.uppercased())
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.secondary)
+                .tracking(0.4)
+
+            Text(value)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.74)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+        )
     }
 
     private var queueBoardValue: String {
@@ -666,5 +994,228 @@ public struct MenuBarPanelView: View {
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
             .capitalized
+    }
+}
+
+private struct WorkspaceActivityCluster: Identifiable {
+    let workspace: String
+    let providers: [String]
+    let branch: String?
+    let latestAge: String
+    let latestDate: Date
+    let touchCount: Int
+
+    var id: String { workspace }
+
+    var providerSummary: String {
+        providers.joined(separator: " · ")
+    }
+
+    var touchSummary: String {
+        touchCount == 1 ? "1 touch" : "\(touchCount) touches"
+    }
+}
+
+private struct WorkspaceLaneStack: View {
+    let clusters: [WorkspaceActivityCluster]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if clusters.isEmpty {
+                Text("No active workspaces in the recent window.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.secondary)
+            } else {
+                ForEach(Array(clusters.prefix(4).enumerated()), id: \.element.id) { index, cluster in
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(alignment: .center, spacing: 6) {
+                                Text(cluster.workspace)
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundStyle(Color.primary)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+
+                                if let branch = cluster.branch, !branch.isEmpty {
+                                    Text(branch)
+                                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                        .foregroundStyle(Color.secondary)
+                                        .lineLimit(1)
+                                        .padding(.horizontal, 6)
+                                        .padding(.vertical, 3)
+                                        .background(
+                                            Capsule(style: .continuous)
+                                                .fill(Color.white.opacity(0.05))
+                                        )
+                                }
+                            }
+
+                            Text("\(cluster.providerSummary) · \(cluster.touchSummary)")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Text(cluster.latestAge)
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.primary)
+                            .monospacedDigit()
+                    }
+                    .padding(.vertical, 7)
+
+                    if index < min(clusters.count, 4) - 1 {
+                        sectionDivider
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct WorkspaceCardDeck: View {
+    let clusters: [WorkspaceActivityCluster]
+
+    var body: some View {
+        AdaptiveTagGrid {
+            if clusters.isEmpty {
+                Text("No recent workspaces")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.secondary)
+            } else {
+                ForEach(clusters.prefix(4)) { cluster in
+                    WorkspaceCard(cluster: cluster)
+                }
+            }
+        }
+    }
+}
+
+private struct WorkspaceCard: View {
+    let cluster: WorkspaceActivityCluster
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top, spacing: 6) {
+                Text(cluster.workspace)
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.76)
+
+                Spacer(minLength: 6)
+
+                Text(cluster.latestAge)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+                    .monospacedDigit()
+            }
+
+            Text(cluster.providerSummary)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
+
+            Text(cluster.branch ?? cluster.touchSummary)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.74)
+
+            Text(cluster.branch == nil ? snapshotStyleTouchLine(cluster) : cluster.touchSummary.uppercased())
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.secondary)
+                .tracking(0.4)
+                .lineLimit(1)
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.white.opacity(0.04))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.white.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    private func snapshotStyleTouchLine(_ cluster: WorkspaceActivityCluster) -> String {
+        cluster.touchSummary.uppercased()
+    }
+}
+
+private struct WorkspaceLedger: View {
+    let clusters: [WorkspaceActivityCluster]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if clusters.isEmpty {
+                Text("No recent touches recorded.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Color.secondary)
+            } else {
+                ForEach(Array(clusters.prefix(5).enumerated()), id: \.element.id) { index, cluster in
+                    HStack(alignment: .top, spacing: 10) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(cluster.workspace)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundStyle(Color.primary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.78)
+
+                            Text("\(cluster.providerSummary) · \(cluster.touchSummary)")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color.secondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.76)
+                        }
+
+                        Spacer(minLength: 8)
+
+                        Text(cluster.latestAge)
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.primary)
+                            .monospacedDigit()
+                    }
+                    .padding(.vertical, 7)
+
+                    if index < min(clusters.count, 5) - 1 {
+                        sectionDivider
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct TimelineMetricRow: View {
+    let title: String
+    let value: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title.uppercased())
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.secondary)
+                .tracking(0.45)
+
+            Text(value)
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.74)
+                .monospacedDigit()
+
+            Text(detail)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.76)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

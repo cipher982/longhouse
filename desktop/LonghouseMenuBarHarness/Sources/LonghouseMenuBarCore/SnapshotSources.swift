@@ -77,6 +77,7 @@ public struct HarnessRuntimeConfig {
     public let actionLogURL: URL?
     public let uiURL: URL?
     public let effectMode: HarnessEffectMode
+    public let healthyConcept: HealthyPanelConcept
     public let exerciseActions: [HarnessAction]
     public let quitAfterSeconds: TimeInterval?
     public let refreshIntervalSeconds: TimeInterval?
@@ -94,6 +95,7 @@ public struct HarnessRuntimeConfig {
         actionLogURL: URL?,
         uiURL: URL?,
         effectMode: HarnessEffectMode,
+        healthyConcept: HealthyPanelConcept,
         exerciseActions: [HarnessAction],
         quitAfterSeconds: TimeInterval?,
         refreshIntervalSeconds: TimeInterval?,
@@ -110,6 +112,7 @@ public struct HarnessRuntimeConfig {
         self.actionLogURL = actionLogURL
         self.uiURL = uiURL
         self.effectMode = effectMode
+        self.healthyConcept = healthyConcept
         self.exerciseActions = exerciseActions
         self.quitAfterSeconds = quitAfterSeconds
         self.refreshIntervalSeconds = refreshIntervalSeconds
@@ -129,6 +132,7 @@ public struct HarnessRuntimeConfig {
         var actionLogURL: URL?
         var uiURL: URL?
         var effectMode: HarnessEffectMode = .live
+        var healthyConcept: HealthyPanelConcept = .production
         var exerciseActions: [HarnessAction] = []
         var quitAfterSeconds: TimeInterval?
         var refreshIntervalSeconds: TimeInterval?
@@ -174,6 +178,12 @@ public struct HarnessRuntimeConfig {
                     throw SnapshotSourceError.invalidArguments("Expected --effect-mode live|log-only")
                 }
                 effectMode = parsed
+            case "--healthy-concept":
+                index += 1
+                guard index < arguments.count, let parsed = HealthyPanelConcept(rawValue: arguments[index]) else {
+                    throw SnapshotSourceError.invalidArguments("Expected --healthy-concept production|launch-horizon|repo-deck|mission-timeline")
+                }
+                healthyConcept = parsed
             case "--exercise-actions":
                 index += 1
                 guard index < arguments.count else {
@@ -281,6 +291,7 @@ public struct HarnessRuntimeConfig {
             actionLogURL: actionLogURL,
             uiURL: uiURL,
             effectMode: effectMode,
+            healthyConcept: healthyConcept,
             exerciseActions: exerciseActions,
             quitAfterSeconds: quitAfterSeconds,
             refreshIntervalSeconds: refreshIntervalSeconds,
