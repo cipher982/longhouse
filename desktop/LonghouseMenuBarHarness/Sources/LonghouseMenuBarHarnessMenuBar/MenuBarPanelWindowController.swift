@@ -12,8 +12,11 @@ private final class MenuBarPanelWindow: NSPanel {
 final class MenuBarPanelWindowController: NSWindowController {
     private let hostingController: NSHostingController<HarnessRootView>
 
-    init(rootView: HarnessRootView, initialSize: NSSize) {
+    init(rootView: HarnessRootView, initialSize: NSSize = MenuBarPanelSizing.defaultSize()) {
         self.hostingController = NSHostingController(rootView: rootView)
+        if #available(macOS 13.0, *) {
+            hostingController.sizingOptions = [.preferredContentSize, .intrinsicContentSize]
+        }
 
         let window = MenuBarPanelWindow(
             contentRect: NSRect(origin: .zero, size: initialSize),
@@ -46,16 +49,22 @@ final class MenuBarPanelWindowController: NSWindowController {
         window?.isVisible == true
     }
 
-    func updateContentSize(_ size: NSSize) {
+    @discardableResult
+    func updateContentSizeToFit() -> NSSize {
         guard let window else {
-            return
+            return MenuBarPanelSizing.defaultSize()
         }
-        window.setContentSize(size)
+
+        let size = MenuBarPanelSizing.measuredSize(for: hostingController.view)
+        if window.contentRect(forFrameRect: window.frame).size != size {
+            window.setContentSize(size)
+        }
         hostingController.view.frame = NSRect(origin: .zero, size: size)
-        hostingController.preferredContentSize = size
+        return size
     }
 
     func show(relativeTo button: NSStatusBarButton) {
+        updateContentSizeToFit()
         reposition(relativeTo: button)
         window?.orderFrontRegardless()
     }
