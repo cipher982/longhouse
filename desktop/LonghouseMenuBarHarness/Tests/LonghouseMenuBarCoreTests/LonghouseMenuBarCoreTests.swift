@@ -248,6 +248,7 @@ struct LonghouseMenuBarCoreTests {
                 providerCountsToday: ["codex": 4],
                 providerCountsRecent: ["codex": 2],
                 sessionRecencyBands: nil,
+                recentTouches: nil,
                 latestActivityAt: "2026-04-08T01:51:30Z",
                 recentWindowMinutes: 15
             ),
@@ -274,7 +275,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func decodesActivityBandsAndRecentProviderMix() throws {
+    func decodesRecentTouchesAndRecentProviderMix() throws {
         let data = Data("""
         {
           "health_state": "healthy",
@@ -293,6 +294,10 @@ struct LonghouseMenuBarCoreTests {
               "codex": 1,
               "claude": 3
             },
+            "recent_touches": [
+              { "provider": "claude", "last_updated": "2026-04-11T10:00:00Z" },
+              { "provider": "codex", "last_updated": "2026-04-11T09:57:00Z" }
+            ],
             "session_recency_bands": [
               { "label": "0-1m", "session_count": 2 },
               { "label": "1-5m", "session_count": 1 },
@@ -309,11 +314,11 @@ struct LonghouseMenuBarCoreTests {
 
         let snapshot = try HealthSnapshotDecoder.decode(data: data)
 
-        #expect(snapshot.hotSessionsLabel == "2")
         #expect(snapshot.providerCountsRecent.map(\.provider) == ["claude", "codex"])
         #expect(snapshot.recentProviderMixLabel == "Claude 3 · Codex 1")
-        #expect(snapshot.sessionRecencyBands.count == 6)
-        #expect(snapshot.sessionRecencyBands.first?.label == "0-1m")
-        #expect(snapshot.sessionRecencyBands.first?.sessionCount == 2)
+        #expect(snapshot.recentActivitySummaryLabel == "4 active in 15m")
+        #expect(snapshot.recentTouches.count == 2)
+        #expect(snapshot.recentTouches.first?.provider == "claude")
+        #expect(snapshot.recentTouches.first?.lastUpdated == "2026-04-11T10:00:00Z")
     }
 }

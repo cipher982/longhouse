@@ -4,7 +4,7 @@ public enum MenuBarPanelLayout {
     public static let panelWidth: CGFloat = 376
     public static let loadingHeight: CGFloat = 170
     public static let failureHeight: CGFloat = 198
-    public static let healthyHeight: CGFloat = 648
+    public static let healthyHeight: CGFloat = 572
     public static let attentionHeight: CGFloat = 564
 
     public static func preferredHeight(for snapshot: HealthSnapshot) -> CGFloat {
@@ -249,102 +249,145 @@ public struct MenuBarPanelView: View {
 
     private var healthySurface: some View {
         VStack(alignment: .leading, spacing: 12) {
-            FlightStrip(segments: flightStripSegments, accent: snapshot.parsedSeverity.accentColor)
+            PanelSection(title: "Right now") {
+                MissionReadoutGrid(readouts: primaryReadouts)
 
-            PanelSection(title: "Transport Rail") {
-                SignalGrid(signals: transportSignals, columns: 6)
+                sectionDivider
+
+                Text(currentSupportLine)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
 
-            PanelSection(title: "Session Traffic", trailing: snapshot.recentWindowCompactLabel) {
-                SignalGrid(signals: trafficSignals, columns: 6)
+            PanelSection(title: "Recent activity", trailing: snapshot.recentActivitySummaryLabel) {
+                if recentActivityEntries.isEmpty {
+                    Text("No recent session touches recorded yet.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                } else {
+                    ActivityFeed(entries: recentActivityEntries)
+                }
 
-                if !snapshot.providerCountsRecent.isEmpty || !snapshot.providerCountsToday.isEmpty {
+                if !snapshot.providerCountsRecent.isEmpty {
                     sectionDivider
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        if !snapshot.providerCountsRecent.isEmpty {
-                            ProviderMixDeck(
-                                title: "Recent Mix",
-                                summary: snapshot.recentProviderMixLabel,
-                                entries: snapshot.providerCountsRecent
-                            )
-                        }
+                    HStack(alignment: .center, spacing: 8) {
+                        Text("Active now")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.secondary)
+                            .tracking(0.55)
 
-                        if !snapshot.providerCountsRecent.isEmpty, !snapshot.providerCountsToday.isEmpty {
-                            sectionDivider
-                        }
+                        Spacer(minLength: 8)
 
-                        if !snapshot.providerCountsToday.isEmpty {
-                            ProviderMixDeck(
-                                title: "Today Mix",
-                                summary: snapshot.providerMixLabel,
-                                entries: snapshot.providerCountsToday
-                            )
-                        }
+                        Text(snapshot.recentProviderMixLabel)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                            .monospacedDigit()
                     }
                 }
             }
 
-            PanelSection(title: "Ops Ledger", trailing: snapshot.machineNameLabel) {
-                SignalGrid(signals: controlSignals, columns: 3)
+            PanelSection(title: "Today", trailing: "\(snapshot.sessionsTodayLabel) sessions") {
+                ProviderMixDeck(
+                    title: "Providers",
+                    summary: snapshot.providerMixLabel,
+                    entries: snapshot.providerCountsToday
+                )
             }
         }
     }
 
-    private var flightStripSegments: [FlightStripSegment] {
+    private var primaryReadouts: [PanelReadout] {
         [
-            FlightStripSegment(label: "State", value: snapshot.ambientStatusLabel.uppercased(), tone: snapshot.parsedSeverity.accentColor),
-            FlightStripSegment(label: "Ship", value: snapshot.lastShipCompactLabel(relativeTo: presentationDate)),
-            FlightStripSegment(label: "Beat", value: snapshot.engineAgeLabel(relativeTo: presentationDate)),
-            FlightStripSegment(label: "Launch", value: snapshot.launchStateLabel.uppercased()),
+            PanelReadout(
+                label: "Last ship",
+                value: snapshot.lastShipCompactLabel(relativeTo: presentationDate),
+                detail: "Shipped",
+                tone: snapshot.parsedSeverity.accentColor
+            ),
+            PanelReadout(
+                label: "Active",
+                value: snapshot.sessionsRecentLabel,
+                detail: snapshot.recentWindowCompactLabel,
+                tone: snapshot.providerCountsRecent.isEmpty ? .primary : snapshot.parsedSeverity.accentColor
+            ),
+            PanelReadout(
+                label: "Today",
+                value: snapshot.sessionsTodayLabel,
+                detail: "Sessions"
+            ),
+            PanelReadout(
+                label: "Queue",
+                value: queueBoardValue,
+                detail: queueBoardDetail,
+                tone: queueBoardTone
+            ),
         ]
     }
 
-    private var transportSignals: [SignalCell] {
+    private var currentSupportLine: String {
         [
-            SignalCell(label: "Out", value: "\(snapshot.outboxCount)", detail: "Outbox", tone: snapshot.outboxCount > 0 ? pipelineColor : .primary),
-            SignalCell(label: "Q", value: snapshot.spoolPendingLabel, detail: "Spool", tone: snapshot.spoolPendingLabel == "0" ? .primary : pipelineColor),
-            SignalCell(label: "Dead", value: snapshot.spoolDeadLabel, detail: "Letters", tone: snapshot.spoolDeadLabel == "0" ? .primary : .red),
-            SignalCell(label: "Parse", value: snapshot.parseErrorCountLabel, detail: "1h", tone: snapshot.parseErrorCountLabel == "0" ? .primary : .yellow),
-            SignalCell(label: "Fail", value: snapshot.consecutiveFailuresLabel, detail: "Ships", tone: snapshot.consecutiveFailuresLabel == "0" ? .primary : .red),
-            SignalCell(label: "Free", value: snapshot.diskFreeCompactLabel, detail: "Disk"),
+            snapshot.launchValueLabel,
+            "Heartbeat \(snapshot.engineAgeLabel(relativeTo: presentationDate))",
+            "\(snapshot.diskFreeCompactLabel) free",
         ]
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0 != "Unavailable" && $0 != "-" }
+            .joined(separator: " · ")
     }
 
-    private var trafficSignals: [SignalCell] {
-        let bands = snapshot.sessionRecencyBands
-        if bands.isEmpty {
-            return [
-                SignalCell(label: "0-1m", value: snapshot.hotSessionsLabel, detail: "Hot"),
-                SignalCell(label: "1-5m", value: "0", detail: "Warm"),
-                SignalCell(label: "5-15m", value: snapshot.sessionsRecentLabel, detail: "Recent"),
-            ]
-        }
-        return bands.map { band in
-            let count = band.sessionCount ?? 0
-            return SignalCell(
-                label: band.label,
-                value: "\(count)",
-                tone: count > 0 ? snapshot.parsedSeverity.accentColor : .primary
+    private var recentActivityEntries: [ActivityFeedEntry] {
+        snapshot.recentTouches.map { touch in
+            let provider = (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return ActivityFeedEntry(
+                provider: provider,
+                title: snapshot.recentTouchTitle(touch),
+                age: snapshot.recentTouchAgeLabel(touch, relativeTo: presentationDate)
             )
         }
     }
 
-    private var controlSignals: [SignalCell] {
-        var signals = [
-            SignalCell(label: "Launch", value: snapshot.launchStateLabel.uppercased(), detail: snapshot.machineNameLabel),
-            SignalCell(label: "Runner", value: snapshot.runnerNameValueLabel),
-            SignalCell(label: "Mode", value: snapshot.installModeValueLabel),
-            SignalCell(label: "Host", value: snapshot.hostValueLabel),
-            SignalCell(label: "Latest", value: snapshot.latestActivityCompactLabel(relativeTo: presentationDate), detail: "Touch"),
-            SignalCell(label: "App", value: snapshot.installedVersionLabel, detail: snapshot.installedVersionDetailLabel)
-        ]
+    private var queueBoardValue: String {
+        let dead = Int(snapshot.spoolDeadLabel) ?? 0
+        let pending = Int(snapshot.spoolPendingLabel) ?? 0
+        let outbox = snapshot.outboxCount
 
-        if let updateBadge = snapshot.updateBadgeLabel {
-            signals.append(SignalCell(label: "Update", value: updateBadge, tone: .blue))
+        if dead > 0 {
+            return "\(dead)"
         }
+        let waiting = pending + outbox
+        if waiting > 0 {
+            return "\(waiting)"
+        }
+        return "Clear"
+    }
 
-        return signals
+    private var queueBoardDetail: String {
+        let dead = Int(snapshot.spoolDeadLabel) ?? 0
+        if dead > 0 {
+            return "Dead"
+        }
+        let pending = Int(snapshot.spoolPendingLabel) ?? 0
+        if pending > 0 || snapshot.outboxCount > 0 {
+            return "Waiting"
+        }
+        return "Transport"
+    }
+
+    private var queueBoardTone: Color {
+        let dead = Int(snapshot.spoolDeadLabel) ?? 0
+        let pending = Int(snapshot.spoolPendingLabel) ?? 0
+        if dead > 0 {
+            return .red
+        }
+        if pending > 0 || snapshot.outboxCount > 0 {
+            return pipelineColor
+        }
+        return .primary
     }
 
     private var blockerSection: some View {

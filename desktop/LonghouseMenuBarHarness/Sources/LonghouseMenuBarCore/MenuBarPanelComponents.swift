@@ -209,7 +209,7 @@ private struct MissionReadoutCell: View {
                 .tracking(0.55)
 
             Text(readout.value)
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: 20, weight: .bold))
                 .foregroundStyle(readout.tone)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -225,6 +225,70 @@ private struct MissionReadoutCell: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
+    }
+}
+
+struct ActivityFeedEntry: Identifiable {
+    let id: String
+    let provider: String
+    let title: String
+    let age: String
+    let tone: Color
+
+    init(id: String? = nil, provider: String, title: String, age: String, tone: Color = .primary) {
+        self.id = id ?? "\(provider)-\(age)-\(title)"
+        self.provider = provider
+        self.title = title
+        self.age = age
+        self.tone = tone
+    }
+}
+
+struct ActivityFeed: View {
+    let entries: [ActivityFeedEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                HStack(alignment: .center, spacing: 10) {
+                    Circle()
+                        .fill(providerColor(entry.provider))
+                        .frame(width: 7, height: 7)
+
+                    Text(entry.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(entry.tone)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.84)
+
+                    Spacer(minLength: 8)
+
+                    Text(entry.age)
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.primary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+                .padding(.vertical, 7)
+
+                if index < entries.count - 1 {
+                    sectionDivider
+                }
+            }
+        }
+    }
+
+    private func providerColor(_ raw: String) -> Color {
+        switch raw.lowercased() {
+        case "claude":
+            return Color(red: 0.39, green: 0.72, blue: 0.56)
+        case "codex":
+            return Color(red: 0.33, green: 0.57, blue: 0.88)
+        case "gemini":
+            return Color(red: 0.82, green: 0.64, blue: 0.26)
+        default:
+            return Color.secondary
+        }
     }
 }
 
@@ -264,131 +328,6 @@ struct ProviderMixBar: View {
         default:
             return Color.secondary
         }
-    }
-}
-
-struct FlightStripSegment: Identifiable {
-    let id: String
-    let label: String
-    let value: String
-    let tone: Color
-
-    init(id: String? = nil, label: String, value: String, tone: Color = .primary) {
-        self.id = id ?? label
-        self.label = label
-        self.value = value
-        self.tone = tone
-    }
-}
-
-struct FlightStrip: View {
-    let segments: [FlightStripSegment]
-    let accent: Color
-
-    var body: some View {
-        HStack(alignment: .center, spacing: 0) {
-            ForEach(Array(segments.enumerated()), id: \.element.id) { index, segment in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(segment.label.uppercased())
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color.secondary)
-                        .tracking(0.5)
-                    Text(segment.value)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(segment.tone)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.74)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-
-                if index < segments.count - 1 {
-                    Rectangle()
-                        .fill(Color.white.opacity(0.07))
-                        .frame(width: 1)
-                        .padding(.vertical, 8)
-                }
-            }
-        }
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(accent.opacity(0.08))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.07), lineWidth: 1)
-        )
-    }
-}
-
-struct SignalCell: Identifiable {
-    let id: String
-    let label: String
-    let value: String
-    let detail: String?
-    let tone: Color
-
-    init(id: String? = nil, label: String, value: String, detail: String? = nil, tone: Color = .primary) {
-        self.id = id ?? label
-        self.label = label
-        self.value = value
-        self.detail = detail
-        self.tone = tone
-    }
-}
-
-struct SignalGrid: View {
-    let signals: [SignalCell]
-    let columns: Int
-
-    var body: some View {
-        LazyVGrid(columns: gridColumns, alignment: .leading, spacing: 8) {
-            ForEach(signals) { signal in
-                signalCell(signal)
-            }
-        }
-    }
-
-    private var gridColumns: [GridItem] {
-        Array(repeating: GridItem(.flexible(minimum: 0, maximum: .infinity), spacing: 8), count: max(columns, 1))
-    }
-
-    @ViewBuilder
-    private func signalCell(_ signal: SignalCell) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(signal.label.uppercased())
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .foregroundStyle(Color.secondary)
-                .tracking(0.45)
-
-            Text(signal.value)
-                .font(.system(size: 14, weight: .bold, design: .monospaced))
-                .foregroundStyle(signal.tone)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-
-            if let detail = signal.detail {
-                Text(detail.uppercased())
-                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
-                    .tracking(0.4)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-            }
-        }
-        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-        .padding(.horizontal, 7)
-        .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.white.opacity(0.03))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.white.opacity(0.05), lineWidth: 1)
-        )
     }
 }
 
