@@ -4,8 +4,7 @@ import config from "../../lib/config";
 import { useNavigate } from "react-router-dom";
 
 const INSTALL_COMMAND = "curl -fsSL https://get.longhouse.ai/install.sh | bash";
-const MAC_DOWNLOAD_URL =
-  "https://github.com/cipher982/longhouse/releases/latest/download/longhouse-local-health-app-darwin-arm64.zip";
+const MAC_DOWNLOAD_URL = "/download/macos";
 
 export function HeroSection() {
   const navigate = useNavigate();
@@ -85,7 +84,7 @@ export function HeroSection() {
           <a
             href={MAC_DOWNLOAD_URL}
             className="hero-install-mac"
-            download
+            download="Longhouse-macos-arm64.zip"
           >
             <svg
               className="hero-install-mac-icon"
@@ -98,7 +97,7 @@ export function HeroSection() {
             </svg>
             <div className="hero-install-mac-text">
               <span className="hero-install-mac-label">Download for macOS</span>
-              <span className="hero-install-mac-detail">Apple Silicon &middot; Signed &amp; Notarized</span>
+              <span className="hero-install-mac-detail">Apple Silicon &middot; Direct app download</span>
             </div>
           </a>
         </div>

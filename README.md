@@ -56,6 +56,12 @@ Open `http://localhost:8080`. This runs both the Machine Agent and the Runtime H
 
 On macOS the installer also adds `Longhouse.app` to your menu bar.
 
+### macOS app download (Apple Silicon)
+
+If you want the non-terminal path on a modern Mac, download the desktop app directly:
+
+[Download Longhouse for macOS](https://longhouse.ai/download/macos)
+
 ### Self-host for durability (always-on machine)
 
 For durable session storage, run the Runtime Host on an always-on box (VPS, homelab, Mac mini) and point your laptop's Machine Agent at it:
@@ -96,6 +102,12 @@ curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
 Installs the `longhouse` CLI, runs onboarding, sets up the Machine Agent, and on macOS adds `Longhouse.app`. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard.
+
+### macOS desktop app
+
+For a click-first install on Apple Silicon Macs, use the direct desktop download:
+
+[Download Longhouse for macOS](https://longhouse.ai/download/macos)
 
 ### With `uv`
 ```bash
