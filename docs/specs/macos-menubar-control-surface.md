@@ -48,7 +48,7 @@ Healthy-state hierarchy is now explicitly:
 1. headline + status + small accessory controls
 2. one compact metric strip for the four numbers that matter at a glance
 3. one dense operations table with right-aligned values
-4. one lightweight trend zone
+4. one lightweight trend zone, but only when the sampled window contains real signal
 5. one primary exit action, with diagnostics behind a secondary menu
 
 ## Healthy State
@@ -133,6 +133,7 @@ If we later want message counts or true activity timelines, add a dedicated back
 - Click/open must never wait on `longhouse local-health --json`.
 - Any activity aggregation must run in the existing background refresh path only.
 - Trend charts must use cached in-memory snapshot history, not extra subprocesses on open.
+- Trend charts must only render when they carry real variance or a second contrasting signal. Flat windows should collapse to an explicit steady-state summary.
 - Healthy-state layout must have deterministic sizing and no scrolling.
 
 ## Refresh Architecture
