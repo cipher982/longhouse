@@ -132,6 +132,29 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func refreshDoesNotReturnVisibleFeedback() throws {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.refresh, snapshot: snapshot)
+
+        #expect(feedback == nil)
+    }
+
+    @Test
     func repairDryRunReturnsVisibleFeedback() throws {
         let snapshot = HealthSnapshot(
             schemaVersion: 1,
@@ -182,5 +205,69 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.updateInfo?.updateAvailable == true)
         #expect(snapshot.updateInfo?.upgradeCommand == "uv tool upgrade longhouse")
         #expect(snapshot.updateInfo?.checkedAt == "2026-04-11T10:00:00+00:00")
+    }
+
+    @Test
+    func relativeLabelsAdvanceAgainstPresentationTime() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: EngineStatusSnapshot(
+                path: nil,
+                exists: true,
+                fresh: true,
+                ageSeconds: 4,
+                payload: EngineStatusPayload(
+                    version: nil,
+                    daemonPid: nil,
+                    lastShipAt: "2026-04-08T01:51:20Z",
+                    spoolPendingCount: 0,
+                    spoolDeadCount: 0,
+                    parseErrorCount1H: 0,
+                    consecutiveShipFailures: 0,
+                    diskFreeBytes: nil,
+                    isOffline: false,
+                    recentDeadLetters: nil,
+                    lastUpdated: nil
+                ),
+                error: nil
+            ),
+            outbox: nil,
+            activitySummary: ActivitySummarySnapshot(
+                path: nil,
+                exists: true,
+                error: nil,
+                sessionsToday: 4,
+                sessionsRecent: 2,
+                providerCountsToday: ["codex": 4],
+                latestActivityAt: "2026-04-08T01:51:30Z",
+                recentWindowMinutes: 15
+            ),
+            launchReadiness: LaunchReadinessSnapshot(
+                state: "ready",
+                headline: nil,
+                reasons: nil,
+                suggestedActions: nil,
+                storedURL: nil,
+                machineName: "cinder",
+                serviceMachineName: nil,
+                runner: nil
+            )
+        )
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let referenceDate = formatter.date(from: "2026-04-08T01:53:20Z")!
+
+        #expect(snapshot.snapshotAgeCompactLabel(relativeTo: referenceDate) == "1m")
+        #expect(snapshot.lastShipCompactLabel(relativeTo: referenceDate) == "2m")
+        #expect(snapshot.engineAgeLabel(relativeTo: referenceDate) == "1m")
+        #expect(snapshot.engineFreshnessLabel(relativeTo: referenceDate) == "Aging")
     }
 }

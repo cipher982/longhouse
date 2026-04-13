@@ -124,46 +124,66 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var snapshotAgeLabel: String {
+        snapshotAgeLabel(relativeTo: Date())
+    }
+
+    public func snapshotAgeLabel(relativeTo referenceDate: Date) -> String {
         guard let collectedAtDate else {
             return "Unknown"
         }
-        return Self.relativeLabel(for: collectedAtDate)
+        return Self.relativeLabel(for: collectedAtDate, relativeTo: referenceDate)
     }
 
     public var snapshotAgeCompactLabel: String {
+        snapshotAgeCompactLabel(relativeTo: Date())
+    }
+
+    public func snapshotAgeCompactLabel(relativeTo referenceDate: Date) -> String {
         guard let collectedAtDate else {
             return "Unknown"
         }
-        let seconds = max(0, Int(Date().timeIntervalSince(collectedAtDate)))
+        let seconds = max(0, Int(referenceDate.timeIntervalSince(collectedAtDate)))
         return Self.compactAgeLabel(seconds: seconds)
     }
 
     public var lastShipSummaryLabel: String {
+        lastShipSummaryLabel(relativeTo: Date())
+    }
+
+    public func lastShipSummaryLabel(relativeTo referenceDate: Date) -> String {
         guard let raw = engineStatus?.payload?.lastShipAt else {
             return "No shipments yet"
         }
         guard let parsed = Self.parseISO8601(raw) else {
             return "Last ship \(raw)"
         }
-        return "Last ship \(Self.relativeLabel(for: parsed))"
+        return "Last ship \(Self.relativeLabel(for: parsed, relativeTo: referenceDate))"
     }
 
     public var lastShipValueLabel: String {
+        lastShipValueLabel(relativeTo: Date())
+    }
+
+    public func lastShipValueLabel(relativeTo referenceDate: Date) -> String {
         guard let raw = engineStatus?.payload?.lastShipAt else {
             return "No shipments yet"
         }
         guard let parsed = Self.parseISO8601(raw) else {
             return raw
         }
-        return Self.relativeLabel(for: parsed)
+        return Self.relativeLabel(for: parsed, relativeTo: referenceDate)
     }
 
     public var lastShipCompactLabel: String {
+        lastShipCompactLabel(relativeTo: Date())
+    }
+
+    public func lastShipCompactLabel(relativeTo referenceDate: Date) -> String {
         guard let raw = engineStatus?.payload?.lastShipAt,
               let parsed = Self.parseISO8601(raw) else {
             return "-"
         }
-        return Self.compactRelativeLabel(for: parsed)
+        return Self.compactRelativeLabel(for: parsed, relativeTo: referenceDate)
     }
 
     public var serviceStatusLabel: String {
@@ -186,30 +206,44 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var engineAgeLabel: String {
+        engineAgeLabel(relativeTo: Date())
+    }
+
+    public func engineAgeLabel(relativeTo referenceDate: Date) -> String {
         if let seconds = engineStatus?.ageSeconds {
-            return Self.ageLabel(seconds: seconds)
+            return Self.ageLabel(seconds: dynamicEngineAgeSeconds(relativeTo: referenceDate, fallback: seconds))
         }
         return "-"
     }
 
     public var engineFreshnessLabel: String {
+        engineFreshnessLabel(relativeTo: Date())
+    }
+
+    public func engineFreshnessLabel(relativeTo referenceDate: Date) -> String {
         guard let ageSeconds = engineStatus?.ageSeconds else {
             return "Unknown"
         }
-        if ageSeconds <= 30 {
+        let dynamicAgeSeconds = dynamicEngineAgeSeconds(relativeTo: referenceDate, fallback: ageSeconds)
+        if dynamicAgeSeconds <= 30 {
             return "Fresh"
         }
-        if ageSeconds <= 120 {
+        if dynamicAgeSeconds <= 120 {
             return "Aging"
         }
         return "Stale"
     }
 
     public var engineFreshnessValueLabel: String {
+        engineFreshnessValueLabel(relativeTo: Date())
+    }
+
+    public func engineFreshnessValueLabel(relativeTo referenceDate: Date) -> String {
         guard let ageSeconds = engineStatus?.ageSeconds else {
             return "Unavailable"
         }
-        return "\(engineFreshnessLabel) · \(Self.ageLabel(seconds: ageSeconds))"
+        let dynamicAgeSeconds = dynamicEngineAgeSeconds(relativeTo: referenceDate, fallback: ageSeconds)
+        return "\(engineFreshnessLabel(relativeTo: referenceDate)) · \(Self.ageLabel(seconds: dynamicAgeSeconds))"
     }
 
     public var spoolPendingLabel: String {
@@ -240,19 +274,27 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var latestActivityLabel: String {
+        latestActivityLabel(relativeTo: Date())
+    }
+
+    public func latestActivityLabel(relativeTo referenceDate: Date) -> String {
         guard let raw = activitySummary?.latestActivityAt,
               let parsed = Self.parseISO8601(raw) else {
             return "No recent sessions"
         }
-        return Self.relativeLabel(for: parsed)
+        return Self.relativeLabel(for: parsed, relativeTo: referenceDate)
     }
 
     public var latestActivityCompactLabel: String {
+        latestActivityCompactLabel(relativeTo: Date())
+    }
+
+    public func latestActivityCompactLabel(relativeTo referenceDate: Date) -> String {
         guard let raw = activitySummary?.latestActivityAt,
               let parsed = Self.parseISO8601(raw) else {
             return "-"
         }
-        return Self.compactRelativeLabel(for: parsed)
+        return Self.compactRelativeLabel(for: parsed, relativeTo: referenceDate)
     }
 
     public var sessionsTodayLabel: String {
@@ -377,7 +419,12 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var missionSummaryLabel: String {
-        let shipLead = lastShipCompactLabel == "-" ? "Ship \(lastShipValueLabel)" : "Ship \(lastShipCompactLabel)"
+        missionSummaryLabel(relativeTo: Date())
+    }
+
+    public func missionSummaryLabel(relativeTo referenceDate: Date) -> String {
+        let lastShipCompact = lastShipCompactLabel(relativeTo: referenceDate)
+        let shipLead = lastShipCompact == "-" ? "Ship \(lastShipValueLabel(relativeTo: referenceDate))" : "Ship \(lastShipCompact)"
         var parts = [shipLead]
         let recent = activitySummary?.sessionsRecent ?? 0
         if recent > 0 {
@@ -451,8 +498,19 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "\(seconds / 86_400)d"
     }
 
-    private static func compactRelativeLabel(for date: Date) -> String {
-        compactAgeLabel(seconds: max(0, Int(Date().timeIntervalSince(date))))
+    private func collectionElapsedSeconds(relativeTo referenceDate: Date) -> Int {
+        guard let collectedAtDate else {
+            return 0
+        }
+        return max(0, Int(referenceDate.timeIntervalSince(collectedAtDate)))
+    }
+
+    private func dynamicEngineAgeSeconds(relativeTo referenceDate: Date, fallback: Int) -> Int {
+        max(0, fallback + collectionElapsedSeconds(relativeTo: referenceDate))
+    }
+
+    private static func compactRelativeLabel(for date: Date, relativeTo referenceDate: Date) -> String {
+        compactAgeLabel(seconds: max(0, Int(referenceDate.timeIntervalSince(date))))
     }
 
     private static func parseISO8601(_ raw: String) -> Date? {
@@ -467,10 +525,10 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return plain.date(from: raw)
     }
 
-    private static func relativeLabel(for date: Date) -> String {
+    private static func relativeLabel(for date: Date, relativeTo referenceDate: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return formatter.localizedString(for: date, relativeTo: referenceDate)
     }
 
     private static func providerDisplayName(_ raw: String) -> String {
