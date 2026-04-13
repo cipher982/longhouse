@@ -6,7 +6,8 @@ public enum SnapshotRenderer {
     public static func renderPNG(
         snapshot: HealthSnapshot,
         actionSink: any HealthActionSink,
-        outputURL: URL
+        outputURL: URL,
+        healthyConcept: HealthyPanelConcept = .production
     ) throws {
         let view = MenuBarPanelView(
             snapshot: snapshot,
@@ -14,6 +15,8 @@ public enum SnapshotRenderer {
             presentationDate: Date(),
             actionSink: actionSink,
             isManualRefreshing: false,
+            healthyConcept: healthyConcept,
+            controlMode: .staticSnapshot,
             refresh: {}
         )
         .environment(\.colorScheme, .dark)

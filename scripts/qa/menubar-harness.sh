@@ -17,6 +17,7 @@ Usage:
   scripts/qa/menubar-harness.sh test
   scripts/qa/menubar-harness.sh snapshot-fixture <fixture-name> [output.png]
   scripts/qa/menubar-harness.sh snapshot-live [output.png]
+  scripts/qa/menubar-harness.sh snapshot-json <input.json> [output.png] [healthy-concept]
   scripts/qa/menubar-harness.sh raw-snapshot-fixture <fixture-name> [output.png]
   scripts/qa/menubar-harness.sh raw-snapshot-live [output.png]
   scripts/qa/menubar-harness.sh render-fixtures
@@ -186,12 +187,13 @@ capture_window_render() {
   local app_bin="$1"
   local input_json="$2"
   local output_png="$3"
+  local healthy_concept="${4:-production}"
   local pid=""
   local capture_status=0
   local window_id=""
 
   rm -f "$output_png"
-  "$app_bin" --input "$input_json" --quit-after 30 >/dev/null 2>&1 &
+  "$app_bin" --input "$input_json" --healthy-concept "$healthy_concept" --quit-after 30 >/dev/null 2>&1 &
   pid=$!
 
   if ! window_id="$(wait_for_window_id "LonghouseMenuBarHarnessApp" "Longhouse Local Health")"; then
@@ -352,6 +354,17 @@ case "$cmd" in
     (cd "$ROOT" && uv run --project server longhouse local-health --json > "$tmp_json")
     app_bin="$(build_app_binary)"
     capture_window_render "$app_bin" "$tmp_json" "$output"
+    ;;
+  snapshot-json)
+    input_json="${1:-}"
+    if [[ -z "$input_json" ]]; then
+      usage
+      exit 2
+    fi
+    output="${2:-$ARTIFACT_DIR/custom.png}"
+    healthy_concept="${3:-production}"
+    app_bin="$(build_app_binary)"
+    capture_window_render "$app_bin" "$input_json" "$output" "$healthy_concept"
     ;;
   raw-snapshot-fixture)
     fixture="${1:-}"
