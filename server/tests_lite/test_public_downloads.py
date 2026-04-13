@@ -37,8 +37,8 @@ class _FakeUpstreamResponse:
 
 
 class _FakeAsyncClient:
-    def __init__(self, response: _FakeUpstreamResponse):
-        self._response = response
+    def __init__(self, responses: dict[str, _FakeUpstreamResponse]):
+        self._responses = responses
         self.closed = False
         self.requests: list[httpx.Request] = []
 
@@ -49,22 +49,60 @@ class _FakeAsyncClient:
 
     async def send(self, request: httpx.Request, *, stream: bool = False) -> _FakeUpstreamResponse:
         assert stream is True
-        return self._response
+        return self._responses[str(request.url)]
 
     async def aclose(self) -> None:
         self.closed = True
 
 
-def test_download_macos_route_streams_clean_filename(monkeypatch):
+def test_download_macos_route_prefers_public_dmg_when_available(monkeypatch):
     upstream = _FakeUpstreamResponse(
-        b"zip-bytes",
+        b"dmg-bytes",
         headers={
             "Content-Length": "9",
             "ETag": '"abc123"',
             "Last-Modified": "Sun, 13 Apr 2026 12:00:00 GMT",
         },
     )
-    fake_client = _FakeAsyncClient(upstream)
+    fake_client = _FakeAsyncClient(
+        {
+            public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"): upstream,
+        }
+    )
+
+    monkeypatch.setattr(public_downloads.httpx, "AsyncClient", lambda **kwargs: fake_client)
+
+    with TestClient(app) as client:
+        response = client.get("/download/macos")
+
+    assert response.status_code == 200
+    assert response.content == b"dmg-bytes"
+    assert response.headers["content-type"] == "application/x-apple-diskimage"
+    assert response.headers["content-disposition"] == 'attachment; filename="Longhouse-macos-arm64.dmg"'
+    assert response.headers["content-length"] == "9"
+    assert response.headers["etag"] == '"abc123"'
+    assert response.headers["last-modified"] == "Sun, 13 Apr 2026 12:00:00 GMT"
+    assert fake_client.requests[0].url == httpx.URL(public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"))
+    assert upstream.closed is True
+    assert fake_client.closed is True
+
+
+def test_macos_desktop_download_tracks_runtime_artifact_config():
+    asset_name = RELEASE_ASSET_FILENAMES[RuntimeComponent.LOCAL_HEALTH_APP]["darwin-arm64"]
+    candidates = public_downloads.macos_desktop_download().candidates
+    assert candidates[-1].asset_name == asset_name
+
+
+def test_download_macos_route_falls_back_to_legacy_zip(monkeypatch):
+    dmg_request = _FakeUpstreamResponse(b"", status_code=404)
+    legacy_zip = _FakeUpstreamResponse(b"zip-bytes", headers={"Content-Length": "9"})
+    legacy_asset = RELEASE_ASSET_FILENAMES[RuntimeComponent.LOCAL_HEALTH_APP]["darwin-arm64"]
+    fake_client = _FakeAsyncClient(
+        {
+            public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"): dmg_request,
+            public_downloads._latest_release_asset_url(legacy_asset): legacy_zip,
+        }
+    )
 
     monkeypatch.setattr(public_downloads.httpx, "AsyncClient", lambda **kwargs: fake_client)
 
@@ -75,17 +113,13 @@ def test_download_macos_route_streams_clean_filename(monkeypatch):
     assert response.content == b"zip-bytes"
     assert response.headers["content-type"] == "application/zip"
     assert response.headers["content-disposition"] == 'attachment; filename="Longhouse-macos-arm64.zip"'
-    assert response.headers["content-length"] == "9"
-    assert response.headers["etag"] == '"abc123"'
-    assert response.headers["last-modified"] == "Sun, 13 Apr 2026 12:00:00 GMT"
-    assert fake_client.requests[0].url == httpx.URL(public_downloads.macos_desktop_download().upstream_url)
-    assert upstream.closed is True
+    assert [str(request.url) for request in fake_client.requests] == [
+        public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"),
+        public_downloads._latest_release_asset_url(legacy_asset),
+    ]
+    assert dmg_request.closed is True
+    assert legacy_zip.closed is True
     assert fake_client.closed is True
-
-
-def test_macos_desktop_download_tracks_runtime_artifact_config():
-    asset_name = RELEASE_ASSET_FILENAMES[RuntimeComponent.LOCAL_HEALTH_APP]["darwin-arm64"]
-    assert public_downloads.macos_desktop_download().upstream_url.endswith(asset_name)
 
 
 def test_download_macos_route_returns_502_when_upstream_fails(monkeypatch):
@@ -113,4 +147,43 @@ def test_download_macos_route_returns_502_when_upstream_fails(monkeypatch):
 
     assert response.status_code == 502
     assert response.json() == {"detail": "macOS download is temporarily unavailable"}
+    assert fake_client.closed is True
+
+
+def test_download_macos_route_falls_back_after_transient_dmg_error(monkeypatch):
+    legacy_asset = RELEASE_ASSET_FILENAMES[RuntimeComponent.LOCAL_HEALTH_APP]["darwin-arm64"]
+
+    class _TransientFailingClient:
+        def __init__(self):
+            self.closed = False
+            self.requests: list[httpx.Request] = []
+
+        def build_request(self, method: str, url: str) -> httpx.Request:
+            request = httpx.Request(method, url)
+            self.requests.append(request)
+            return request
+
+        async def send(self, request: httpx.Request, *, stream: bool = False):
+            assert stream is True
+            if str(request.url).endswith("Longhouse-macos-arm64.dmg"):
+                response = httpx.Response(503, request=request)
+                raise httpx.HTTPStatusError("try later", request=request, response=response)
+            return _FakeUpstreamResponse(b"zip-bytes", headers={"Content-Length": "9"})
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    fake_client = _TransientFailingClient()
+
+    monkeypatch.setattr(public_downloads.httpx, "AsyncClient", lambda **kwargs: fake_client)
+
+    with TestClient(app) as client:
+        response = client.get("/download/macos")
+
+    assert response.status_code == 200
+    assert response.content == b"zip-bytes"
+    assert [str(request.url) for request in fake_client.requests] == [
+        public_downloads._latest_release_asset_url("Longhouse-macos-arm64.dmg"),
+        public_downloads._latest_release_asset_url(legacy_asset),
+    ]
     assert fake_client.closed is True

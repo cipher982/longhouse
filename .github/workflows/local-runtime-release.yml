@@ -256,7 +256,8 @@ jobs:
         run: |
           VERSION="${RELEASE_TAG#v}"
           AMBIENT_APP_PATH="$RUNNER_TEMP/macos-app-bundles/Longhouse.app"
-          AMBIENT_ARCHIVE="binaries/longhouse-local-health-app-darwin-arm64.zip"
+          LEGACY_RUNTIME_ARCHIVE="binaries/longhouse-local-health-app-darwin-arm64.zip"
+          PUBLIC_DMG_ARCHIVE="binaries/Longhouse-macos-arm64.dmg"
 
           if [[ "$RELEASE_TIER" == "stable" && ( "$NOTARY_ENABLED" != "true" || -z "${NOTARY_PROFILE:-}" ) ]]; then
             echo "Stable macOS releases require notarization." >&2
@@ -264,32 +265,39 @@ jobs:
           fi
 
           NOTARIZATION_STATUS="not-configured"
+          PUBLIC_DOWNLOAD_NOTARIZATION_STATUS="not-configured"
           if [[ "$NOTARY_ENABLED" == "true" ]]; then
             NOTARIZATION_STATUS="awaiting-submission"
+            PUBLIC_DOWNLOAD_NOTARIZATION_STATUS="awaiting-build"
           else
-            ditto -c -k --sequesterRsrc --keepParent "$AMBIENT_APP_PATH" "$AMBIENT_ARCHIVE"
+            ditto -c -k --sequesterRsrc --keepParent "$AMBIENT_APP_PATH" "$LEGACY_RUNTIME_ARCHIVE"
           fi
 
-          NOTARIZATION_STATUS="$NOTARIZATION_STATUS" python3 - <<'PY'
+          NOTARIZATION_STATUS="$NOTARIZATION_STATUS" \
+          PUBLIC_DOWNLOAD_NOTARIZATION_STATUS="$PUBLIC_DOWNLOAD_NOTARIZATION_STATUS" \
+          python3 - <<'PY'
           import json
           import os
           from pathlib import Path
 
           payload = {
-              "schema_version": 2,
+              "schema_version": 3,
               "release_tag": os.environ["RELEASE_TAG"],
               "release_tier": os.environ["RELEASE_TIER"],
               "version": os.environ["RELEASE_TAG"].removeprefix("v"),
               "signing_mode": os.environ["SIGNING_MODE"],
               "notarization_status": os.environ["NOTARIZATION_STATUS"],
+              "public_download_notarization_status": os.environ["PUBLIC_DOWNLOAD_NOTARIZATION_STATUS"],
               "notary_wait_timeout": os.environ["LONGHOUSE_NOTARY_WAIT_TIMEOUT"],
               "notarization_submission_id": None,
+              "public_download_submission_id": None,
               "artifacts": [
                   {
-                      "component": "local-health-app",
+                      "component": "desktop-app",
                       "bundle_id": "ai.longhouse.app",
                       "app_name": "Longhouse",
-                      "archive": "longhouse-local-health-app-darwin-arm64.zip",
+                      "runtime_archive": "longhouse-local-health-app-darwin-arm64.zip",
+                      "public_archive": "Longhouse-macos-arm64.dmg",
                   }
               ],
           }
@@ -380,6 +388,112 @@ jobs:
           manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
           PY
 
+      - name: Build public macOS disk image
+        env:
+          SIGNING_MODE: ${{ steps.macos_signing.outputs.signing_mode }}
+          CODESIGN_IDENTITY: ${{ steps.macos_signing.outputs.codesign_identity }}
+        run: |
+          PUBLIC_DMG_ARCHIVE="binaries/Longhouse-macos-arm64.dmg"
+
+          scripts/release/macos-package-dmg.sh \
+            --app "$RUNNER_TEMP/macos-app-bundles/Longhouse.app" \
+            --output "$PUBLIC_DMG_ARCHIVE"
+
+          scripts/release/macos-sign-disk-image.sh \
+            --dmg "$PUBLIC_DMG_ARCHIVE" \
+            --identity "$CODESIGN_IDENTITY" \
+            --mode "$SIGNING_MODE"
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest_path = Path("binaries/local-runtime-macos-packaging.json")
+          payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if payload.get("public_download_notarization_status") == "awaiting-build":
+              payload["public_download_notarization_status"] = "awaiting-submission"
+          manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Submit macOS disk image for notarization
+        if: ${{ steps.macos_notary.outputs.enabled == 'true' }}
+        env:
+          KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
+          NOTARY_PROFILE: ${{ steps.macos_notary.outputs.profile }}
+        run: |
+          SUBMISSION_FILE="$RUNNER_TEMP/local-runtime-macos-dmg-notary-submission.txt"
+          scripts/release/macos-notarize-file.sh \
+            --file binaries/Longhouse-macos-arm64.dmg \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --submission-id-file "$SUBMISSION_FILE" \
+            --submit-only
+
+          SUBMISSION_ID="$(cat "$SUBMISSION_FILE")"
+          SUBMISSION_ID="$SUBMISSION_ID" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest_path = Path("binaries/local-runtime-macos-packaging.json")
+          payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+          payload["public_download_notarization_status"] = "submitted"
+          payload["public_download_submission_id"] = os.environ["SUBMISSION_ID"]
+          manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Wait for Apple notarization and staple disk image
+        if: ${{ steps.macos_notary.outputs.enabled == 'true' }}
+        env:
+          KEYCHAIN_PATH: ${{ steps.macos_signing.outputs.keychain_path }}
+          NOTARY_PROFILE: ${{ steps.macos_notary.outputs.profile }}
+        run: |
+          SUBMISSION_ID="$(cat "$RUNNER_TEMP/local-runtime-macos-dmg-notary-submission.txt")"
+          scripts/release/macos-notarize-file.sh \
+            --file binaries/Longhouse-macos-arm64.dmg \
+            --keychain-profile "$NOTARY_PROFILE" \
+            --keychain "$KEYCHAIN_PATH" \
+            --submission-id "$SUBMISSION_ID" \
+            --staple binaries/Longhouse-macos-arm64.dmg
+
+      - name: Mark macOS disk image notarization complete
+        if: ${{ success() && steps.macos_notary.outputs.enabled == 'true' }}
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest_path = Path("binaries/local-runtime-macos-packaging.json")
+          payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+          payload["public_download_notarization_status"] = "notarized"
+          manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Mark macOS disk image notarization pending
+        if: ${{ failure() && steps.macos_notary.outputs.enabled == 'true' }}
+        run: |
+          if [[ ! -f binaries/local-runtime-macos-packaging.json ]]; then
+            exit 0
+          fi
+
+          SUBMISSION_ID=""
+          if [[ -f "$RUNNER_TEMP/local-runtime-macos-dmg-notary-submission.txt" ]]; then
+            SUBMISSION_ID="$(cat "$RUNNER_TEMP/local-runtime-macos-dmg-notary-submission.txt")"
+          fi
+
+          SUBMISSION_ID="$SUBMISSION_ID" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest_path = Path("binaries/local-runtime-macos-packaging.json")
+          payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+          payload["public_download_notarization_status"] = "pending-apple"
+          if os.environ["SUBMISSION_ID"]:
+              payload["public_download_submission_id"] = os.environ["SUBMISSION_ID"]
+          manifest_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+          PY
+
       - name: Remove temporary signing keychain
         if: ${{ always() && steps.macos_signing.outputs.enabled == 'true' }}
         env:
@@ -405,6 +519,17 @@ jobs:
       GH_TOKEN: ${{ github.token }}
 
     steps:
+      - name: Classify release tier
+        id: release_tier
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+        run: |
+          if [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tier=stable" >> "$GITHUB_OUTPUT"
+          else
+            echo "tier=smoke" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download runtime artifacts
         uses: actions/download-artifact@v5
         with:
@@ -420,20 +545,23 @@ jobs:
           sha256sum * > local-runtime-checksums.txt
 
       - name: Assert stable macOS trust metadata
-        if: ${{ startsWith(env.RELEASE_TAG, 'v') }}
+        if: ${{ steps.release_tier.outputs.tier == 'stable' }}
         run: |
           python3 - <<'PY'
           import json
           from pathlib import Path
 
           payload = json.loads(Path("binaries/local-runtime-macos-packaging.json").read_text())
-          if payload.get("release_tier") != "stable":
-              raise SystemExit(f"Expected stable release tier, got {payload.get('release_tier')!r}")
           if payload.get("signing_mode") != "developer-id":
               raise SystemExit(f"Expected developer-id signing, got {payload.get('signing_mode')!r}")
           if payload.get("notarization_status") != "notarized":
               raise SystemExit(
                   f"Expected notarized macOS packaging, got {payload.get('notarization_status')!r}"
+              )
+          if payload.get("public_download_notarization_status") != "notarized":
+              raise SystemExit(
+                  "Expected notarized public macOS disk image, "
+                  f"got {payload.get('public_download_notarization_status')!r}"
               )
           PY
 
@@ -447,6 +575,7 @@ jobs:
             binaries/longhouse-engine-darwin-arm64
             binaries/longhouse-engine-linux-x64
             binaries/longhouse-engine-linux-arm64
+            binaries/Longhouse-macos-arm64.dmg
             binaries/longhouse-local-health-app-darwin-arm64.zip
             binaries/local-runtime-macos-packaging.json
             binaries/local-runtime-checksums.txt
