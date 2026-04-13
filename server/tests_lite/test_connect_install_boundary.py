@@ -1,6 +1,6 @@
 """Tests for the local install vs workspace MCP boundary."""
 
-from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.exceptions import Exit as ClickExit
@@ -9,84 +9,89 @@ from zerg.cli import connect
 from zerg.services.shipper.service import Platform
 
 
-def test_handle_install_does_not_create_global_mcp_configs(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    claude_dir = home / ".claude"
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(connect, "save_zerg_url", lambda url, config_dir: None)
-    monkeypatch.setattr(connect, "save_token", lambda token, config_dir: None)
-    monkeypatch.setattr(connect, "save_machine_name", lambda machine_name, config_dir: None)
-    monkeypatch.setattr(connect, "sanitize_machine_name", lambda machine_name: machine_name)
-    monkeypatch.setattr(
-        connect,
-        "ensure_runtime_binary",
-        lambda component: type("Result", (), {"path": "/tmp/longhouse-engine", "installed_now": False})(),
-    )
-    monkeypatch.setattr(
-        connect,
-        "install_service",
-        lambda **kwargs: {"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
-    )
-    monkeypatch.setattr(connect, "install_hooks", lambda url, token, claude_dir: ["hooks installed"])
-    monkeypatch.setattr(connect, "_verify_and_warn_path", lambda: None)
+def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsys):
+    calls: list[dict[str, object]] = []
 
-    connect._handle_install(
-        url="https://example.com",
-        token=None,
-        claude_dir=str(claude_dir),
-        interval=1,
-        machine_name="test-box",
-    )
-
-    assert not (home / ".claude.json").exists()
-    assert not (home / ".codex" / "config.toml").exists()
-
-
-def test_handle_install_installs_menubar_when_requested(tmp_path, monkeypatch):
-    home = tmp_path / "home"
-    claude_dir = home / ".claude"
-    calls: list[tuple[str, dict]] = []
-
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(connect, "save_zerg_url", lambda url, config_dir: None)
-    monkeypatch.setattr(connect, "save_token", lambda token, config_dir: None)
-    monkeypatch.setattr(connect, "save_machine_name", lambda machine_name, config_dir: None)
-    monkeypatch.setattr(connect, "sanitize_machine_name", lambda machine_name: machine_name)
-    monkeypatch.setattr(
-        connect,
-        "ensure_runtime_binary",
-        lambda component: type("Result", (), {"path": "/tmp/longhouse-engine", "installed_now": True})(),
-    )
-    monkeypatch.setattr(connect, "install_service", lambda **kwargs: {"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"})
-    monkeypatch.setattr(connect, "install_hooks", lambda url, token, claude_dir: ["hooks installed"])
     monkeypatch.setattr(connect, "_verify_and_warn_path", lambda: None)
     monkeypatch.setattr(
         connect,
-        "install_menubar_service",
-        lambda **kwargs: calls.append(("menubar", kwargs)) or {
-            "message": "ambient installed",
-            "plist_path": "/tmp/menubar.plist",
-            "binary_path": "/tmp/menubar-bin",
-        },
+        "install_local_runtime",
+        lambda **kwargs: calls.append(kwargs)
+        or SimpleNamespace(
+            machine_name="test-box",
+            engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=True),
+            service_result={"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+            hooks=SimpleNamespace(actions=["hooks installed"], warning=None),
+            desktop_app_result={
+                "message": "desktop app installed",
+                "plist_path": "/tmp/menubar.plist",
+                "app_path": "/Users/test/Applications/Longhouse.app",
+                "launch_path": "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            },
+        ),
     )
 
     connect._handle_install(
         url="https://example.com",
         token=None,
-        claude_dir=str(claude_dir),
+        claude_dir="/tmp/.claude",
         interval=1,
         machine_name="test-box",
         menubar=True,
     )
 
+    output = capsys.readouterr().out
     assert calls == [
-        (
-            "menubar",
-            {
-                "ui_url": "https://example.com",
-                "claude_dir": str(claude_dir),
-            },
-        )
+        {
+            "url": "https://example.com",
+            "token": None,
+            "claude_dir": "/tmp/.claude",
+            "machine_name": "test-box",
+            "menubar": True,
+        }
+    ]
+    assert "Machine: test-box" in output
+    assert "Engine binary installed at /tmp/longhouse-engine" in output
+    assert "Longhouse.app:" in output
+    assert "App: /Users/test/Applications/Longhouse.app" in output
+
+
+def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(connect, "_verify_and_warn_path", lambda: None)
+    monkeypatch.setattr(connect.socket, "gethostname", lambda: "fallback-box")
+    monkeypatch.setattr(connect.typer, "prompt", lambda message, default: "   ")
+    monkeypatch.setattr(
+        connect,
+        "install_local_runtime",
+        lambda **kwargs: calls.append(kwargs)
+        or SimpleNamespace(
+            machine_name="fallback-box",
+            engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
+            service_result={"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+            hooks=SimpleNamespace(actions=["hooks installed"], warning=None),
+            desktop_app_result=None,
+        ),
+    )
+
+    connect._handle_install(
+        url="https://example.com",
+        token=None,
+        claude_dir=None,
+        interval=1,
+        machine_name=None,
+        menubar=False,
+    )
+
+    assert calls == [
+        {
+            "url": "https://example.com",
+            "token": None,
+            "claude_dir": None,
+            "machine_name": "fallback-box",
+            "menubar": False,
+        }
     ]
 
 

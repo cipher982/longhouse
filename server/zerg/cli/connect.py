@@ -16,19 +16,13 @@ import typer
 
 from zerg.services.local_health_ui import default_install_menubar
 from zerg.services.local_health_ui import get_menubar_service_info
-from zerg.services.local_health_ui import install_menubar_service
 from zerg.services.local_health_ui import uninstall_menubar_service
-from zerg.services.runtime_artifacts import RuntimeComponent
-from zerg.services.runtime_artifacts import ensure_runtime_binary
+from zerg.services.local_runtime_installer import install_local_runtime
 from zerg.services.shipper import clear_token
 from zerg.services.shipper import clear_zerg_url
 from zerg.services.shipper import get_service_info
 from zerg.services.shipper import get_zerg_url
-from zerg.services.shipper import install_hooks
-from zerg.services.shipper import install_service
 from zerg.services.shipper import load_token
-from zerg.services.shipper import sanitize_machine_name
-from zerg.services.shipper import save_machine_name
 from zerg.services.shipper import save_token
 from zerg.services.shipper import save_zerg_url
 from zerg.services.shipper import uninstall_service
@@ -807,85 +801,62 @@ def _handle_install(
     menubar: bool = False,
 ) -> None:
     """Handle --install flag."""
-    # Persist url/token BEFORE installing the service so the engine
-    # can read them from files on startup (plist/unit don't carry them).
-    config_dir = Path(claude_dir) if claude_dir else None
-    save_zerg_url(url, config_dir)
-    if token:
-        save_token(token, config_dir)
-
     # Determine machine name — prompt interactively unless already provided.
     default_name = socket.gethostname()
     if machine_name:
-        resolved_name = sanitize_machine_name(machine_name)
+        resolved_name = machine_name
     else:
         typer.echo("")
-        raw = (
+        resolved_name = (
             typer.prompt(
                 "Name this machine (used to label your sessions in Longhouse)",
                 default=default_name,
             ).strip()
             or default_name
         )
-        resolved_name = sanitize_machine_name(raw)
-    save_machine_name(resolved_name, config_dir)
-    typer.secho(f"  Machine: {resolved_name}", fg=typer.colors.CYAN)
-
-    typer.echo("Ensuring machine-agent engine runtime is available...")
-    try:
-        engine_runtime = ensure_runtime_binary(RuntimeComponent.ENGINE)
-    except RuntimeError as e:
-        typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
-    if engine_runtime.installed_now:
-        typer.secho(f"  [OK] Engine binary installed at {engine_runtime.path}", fg=typer.colors.GREEN)
-    else:
-        typer.secho(f"  [OK] Engine binary ready at {engine_runtime.path}", fg=typer.colors.GREEN)
-
-    typer.echo("Installing machine agent...")
     typer.echo(f"  URL: {url}")
+    if menubar:
+        typer.echo("  Desktop App: enabled")
 
     try:
-        result = install_service(
+        install_result = install_local_runtime(
             url=url,
             token=token,
             claude_dir=claude_dir,
             machine_name=resolved_name,
+            menubar=menubar,
         )
-        typer.echo("")
-        typer.secho(f"[OK] {result['message']}", fg=typer.colors.GREEN)
-        typer.echo(f"  Machine Agent: {result.get('service', 'N/A')}")
-        typer.echo(f"  Config: {result.get('plist_path') or result.get('unit_path', 'N/A')}")
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
 
-    # Also install Claude Code + Codex hooks
+    typer.echo("")
+    typer.secho(f"  Machine: {install_result.machine_name}", fg=typer.colors.CYAN)
+    if install_result.engine_runtime.installed_now:
+        typer.secho(f"  [OK] Engine binary installed at {install_result.engine_runtime.path}", fg=typer.colors.GREEN)
+    else:
+        typer.secho(f"  [OK] Engine binary ready at {install_result.engine_runtime.path}", fg=typer.colors.GREEN)
+    typer.secho(f"[OK] {install_result.service_result['message']}", fg=typer.colors.GREEN)
+    typer.echo(f"  Machine Agent: {install_result.service_result.get('service', 'N/A')}")
+    typer.echo(f"  Config: {install_result.service_result.get('plist_path') or install_result.service_result.get('unit_path', 'N/A')}")
+
     typer.echo("")
     typer.echo("Installing CLI hooks (Claude Code + Codex)...")
-    try:
-        actions = install_hooks(url=url, token=token, claude_dir=claude_dir)
-        for action in actions:
-            typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
-    except Exception as e:
-        typer.secho(f"  [WARN] Hook installation failed: {e}", fg=typer.colors.YELLOW)
+    for action in install_result.hooks.actions:
+        typer.secho(f"  [OK] {action}", fg=typer.colors.GREEN)
+    if install_result.hooks.warning:
+        typer.secho(f"  [WARN] Hook installation failed: {install_result.hooks.warning}", fg=typer.colors.YELLOW)
 
-    if menubar:
+    if install_result.desktop_app_result:
         typer.echo("")
-        typer.echo("Installing Longhouse.app for macOS menu bar status...")
-        try:
-            menubar_result = install_menubar_service(
-                ui_url=url,
-                claude_dir=claude_dir,
-            )
-            typer.secho(f"  [OK] {menubar_result['message']}", fg=typer.colors.GREEN)
-            typer.echo(f"  Config: {menubar_result.get('plist_path', 'N/A')}")
-            if menubar_result.get("app_path"):
-                typer.echo(f"  App: {menubar_result['app_path']}")
-            typer.echo(f"  Launch: {menubar_result.get('launch_path') or menubar_result.get('binary_path', 'N/A')}")
-        except RuntimeError as e:
-            typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
-            raise typer.Exit(code=1)
+        typer.echo("Longhouse.app:")
+        typer.secho(f"  [OK] {install_result.desktop_app_result['message']}", fg=typer.colors.GREEN)
+        typer.echo(f"  Config: {install_result.desktop_app_result.get('plist_path', 'N/A')}")
+        if install_result.desktop_app_result.get("app_path"):
+            typer.echo(f"  App: {install_result.desktop_app_result['app_path']}")
+        typer.echo(
+            f"  Launch: {install_result.desktop_app_result.get('launch_path') or install_result.desktop_app_result.get('binary_path', 'N/A')}"
+        )
 
     # Verify PATH in a fresh shell
     _verify_and_warn_path()

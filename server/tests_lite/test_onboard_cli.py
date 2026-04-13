@@ -39,9 +39,20 @@ class _DemoClient:
         return self.response
 
 
+def _install_result(*, hook_warning: str | None = None, desktop_app: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(
+        machine_name="test-box",
+        engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=True),
+        service_result={"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+        hooks=SimpleNamespace(actions=["hooks installed"], warning=hook_warning),
+        desktop_app_result={"message": "desktop app installed"} if desktop_app else None,
+    )
+
+
 def test_onboard_quick_imports_existing_sessions_first(monkeypatch, tmp_path):
     runner = CliRunner()
     subprocess_calls: list[list[str]] = []
+    install_calls: list[dict[str, object]] = []
 
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
@@ -51,9 +62,16 @@ def test_onboard_quick_imports_existing_sessions_first(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
     monkeypatch.setattr(onboard_cli, "_emit_test_event", lambda api_url: True)
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
+    monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
+    monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
     monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(
+        onboard_cli,
+        "install_local_runtime",
+        lambda **kwargs: install_calls.append(kwargs) or _install_result(),
+    )
 
     def _fake_run(args: list[str], **kwargs):
         subprocess_calls.append(args)
@@ -73,12 +91,15 @@ def test_onboard_quick_imports_existing_sessions_first(monkeypatch, tmp_path):
     assert "longhouse claude" in result.output
     assert "longhouse wrap --install" not in result.output
     assert "wrapper mode" not in result.output
-    assert any(
-        call[:4] == ["longhouse", "connect", "--install", "--url"]
-        and "--machine-name" in call
-        and "--no-menubar" in call
-        for call in subprocess_calls
-    )
+    assert install_calls == [
+        {
+            "url": "http://127.0.0.1:8080",
+            "token": None,
+            "claude_dir": None,
+            "machine_name": "test-box",
+            "menubar": False,
+        }
+    ]
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
 
 
@@ -86,6 +107,7 @@ def test_onboard_quick_without_cli_seeds_demo_sessions(monkeypatch, tmp_path):
     runner = CliRunner()
     demo_client = _DemoClient(_DemoResponse(200, {"seeded": True, "sessions_created": 7}))
     subprocess_calls: list[list[str]] = []
+    install_calls: list[dict[str, object]] = []
 
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(onboard_cli, "_has_command", lambda _cmd: False)
@@ -95,10 +117,17 @@ def test_onboard_quick_without_cli_seeds_demo_sessions(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
     monkeypatch.setattr(onboard_cli, "_emit_test_event", lambda api_url: True)
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
+    monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
+    monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
     monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
     monkeypatch.setattr(onboard_cli.httpx, "Client", lambda timeout=10: demo_client)
+    monkeypatch.setattr(
+        onboard_cli,
+        "install_local_runtime",
+        lambda **kwargs: install_calls.append(kwargs) or _install_result(),
+    )
 
     def _fake_run(args: list[str], **kwargs):
         subprocess_calls.append(args)
@@ -117,17 +146,21 @@ def test_onboard_quick_without_cli_seeds_demo_sessions(monkeypatch, tmp_path):
     assert "[OK] Seeded 7 demo sessions" in result.output
     assert "Open Longhouse" in result.output
     assert demo_client.calls == ["http://127.0.0.1:8080/api/agents/demo"]
-    assert any(
-        call[:4] == ["longhouse", "connect", "--install", "--url"]
-        and "--machine-name" in call
-        and "--no-menubar" in call
-        for call in subprocess_calls
-    )
+    assert install_calls == [
+        {
+            "url": "http://127.0.0.1:8080",
+            "token": None,
+            "claude_dir": None,
+            "machine_name": "test-box",
+            "menubar": False,
+        }
+    ]
 
 
 def test_onboard_quick_in_ci_skips_service_manager_install(monkeypatch, tmp_path):
     runner = CliRunner()
     subprocess_calls: list[list[str]] = []
+    install_calls: list[dict[str, object]] = []
 
     monkeypatch.setenv("CI", "1")
     monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
@@ -137,9 +170,16 @@ def test_onboard_quick_in_ci_skips_service_manager_install(monkeypatch, tmp_path
     monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
     monkeypatch.setattr(onboard_cli, "_emit_test_event", lambda api_url: True)
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
+    monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
+    monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
     monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(
+        onboard_cli,
+        "install_local_runtime",
+        lambda **kwargs: install_calls.append(kwargs) or _install_result(),
+    )
 
     def _fake_run(args: list[str], **kwargs):
         subprocess_calls.append(args)
@@ -153,13 +193,14 @@ def test_onboard_quick_in_ci_skips_service_manager_install(monkeypatch, tmp_path
     assert "[--] Background machine-agent install is not available in this environment" in result.output
     assert "Use: longhouse connect" in result.output
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
-    assert not any(call[:2] == ["longhouse", "connect"] for call in subprocess_calls)
+    assert install_calls == []
 
 
 def test_onboard_quick_in_ci_can_install_services_when_explicitly_enabled(monkeypatch, tmp_path):
     runner = CliRunner()
     subprocess_calls: list[list[str]] = []
     open_calls: list[str] = []
+    install_calls: list[dict[str, object]] = []
 
     monkeypatch.setenv("CI", "1")
     monkeypatch.setenv("LONGHOUSE_INSTALL_SERVICES_IN_CI", "1")
@@ -171,10 +212,17 @@ def test_onboard_quick_in_ci_can_install_services_when_explicitly_enabled(monkey
     monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
     monkeypatch.setattr(onboard_cli, "_emit_test_event", lambda api_url: True)
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: True)
+    monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
+    monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
     monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
     monkeypatch.setattr(onboard_cli.webbrowser, "open", lambda url: open_calls.append(url) or True)
+    monkeypatch.setattr(
+        onboard_cli,
+        "install_local_runtime",
+        lambda **kwargs: install_calls.append(kwargs) or _install_result(desktop_app=True),
+    )
 
     def _fake_run(args: list[str], **kwargs):
         subprocess_calls.append(args)
@@ -186,12 +234,15 @@ def test_onboard_quick_in_ci_can_install_services_when_explicitly_enabled(monkey
 
     assert result.exit_code == 0, result.output
     assert "[OK] Machine agent installed for automatic imports" in result.output
-    assert any(
-        call[:4] == ["longhouse", "connect", "--install", "--url"]
-        and "--machine-name" in call
-        and "--menubar" in call
-        for call in subprocess_calls
-    )
+    assert install_calls == [
+        {
+            "url": "http://127.0.0.1:8080",
+            "token": None,
+            "claude_dir": None,
+            "machine_name": "test-box",
+            "menubar": True,
+        }
+    ]
     assert open_calls == ["http://127.0.0.1:8080"]
 
 

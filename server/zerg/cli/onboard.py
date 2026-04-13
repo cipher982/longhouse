@@ -29,6 +29,7 @@ from zerg.cli.config_file import get_config_path
 from zerg.cli.config_file import save_config
 from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
+from zerg.services.local_runtime_installer import install_local_runtime
 from zerg.services.shipper import load_token
 from zerg.services.shipper import save_token
 from zerg.services.shipper import save_zerg_url
@@ -538,35 +539,21 @@ def onboard(
 
         if has_service_manager:
             if quick or typer.confirm("Set up the machine agent for automatic imports now?", default=True):
+                install_menubar = sys.platform == "darwin" and _has_gui() and (not os.getenv("CI") or ci_service_install)
                 try:
-                    connect_args = [
-                        "longhouse",
-                        "connect",
-                        "--install",
-                        "--url",
-                        api_url,
-                        "--machine-name",
-                        socket.gethostname(),
-                    ]
-                    if sys.platform == "darwin" and _has_gui() and (not os.getenv("CI") or ci_service_install):
-                        connect_args.append("--menubar")
-                    else:
-                        connect_args.append("--no-menubar")
-                    result = subprocess.run(
-                        connect_args,
-                        capture_output=True,
-                        text=True,
+                    install_result = install_local_runtime(
+                        url=api_url,
+                        token=load_token(),
+                        claude_dir=None,
+                        machine_name=socket.gethostname(),
+                        menubar=install_menubar,
                     )
-
-                    if result.returncode == 0:
-                        typer.secho("  [OK] Machine agent installed for automatic imports", fg=typer.colors.GREEN)
-                    else:
-                        typer.secho("  [WARN] Machine agent setup failed", fg=typer.colors.YELLOW)
-                        typer.echo(f"         {result.stderr.strip()}")
-                        typer.echo("         Run manually: longhouse connect --install")
-
+                    typer.secho("  [OK] Machine agent installed for automatic imports", fg=typer.colors.GREEN)
+                    if install_result.hooks.warning:
+                        typer.secho(f"  [WARN] CLI hook install had issues: {install_result.hooks.warning}", fg=typer.colors.YELLOW)
                 except Exception as e:
                     typer.secho(f"  [WARN] Could not install machine agent: {e}", fg=typer.colors.YELLOW)
+                    typer.echo("         Run manually: longhouse connect --install")
         else:
             typer.secho("  [--] Background machine-agent install is not available in this environment", fg=typer.colors.YELLOW)
             typer.echo("       Use: longhouse connect")
