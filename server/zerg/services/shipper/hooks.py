@@ -410,13 +410,16 @@ def install_hooks(
     """
     config_dir = _resolve_claude_dir(claude_dir)
     hooks_dir = config_dir / "hooks"
+    projects_dir = config_dir / "projects"
     settings_path = config_dir / "settings.json"
     actions: list[str] = []
 
     # ------------------------------------------------------------------
-    # 1. Create hooks directory
+    # 1. Create config directories the engine expects on first install.
     # ------------------------------------------------------------------
     hooks_dir.mkdir(parents=True, exist_ok=True)
+    projects_dir.mkdir(parents=True, exist_ok=True)
+    actions.append(f"Ensured {projects_dir}")
 
     # ------------------------------------------------------------------
     # 2. Write hook scripts (with resolved config dir so token/url reads

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from zerg.services.shipper.hooks import (
     CODEX_HOOK_SCRIPT,
+    install_hooks,
     install_codex_hooks,
     _is_longhouse_codex_hook,
     _merge_codex_hooks_for_event,
@@ -239,8 +240,6 @@ def test_install_hooks_also_installs_codex(tmp_path, monkeypatch):
 
 def test_install_hooks_skips_codex_when_not_installed(tmp_path, monkeypatch):
     """install_hooks() should not fail when ~/.codex doesn't exist."""
-    from zerg.services.shipper.hooks import install_hooks
-
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
     claude_dir = tmp_path / ".claude"
@@ -258,3 +257,19 @@ def test_install_hooks_skips_codex_when_not_installed(tmp_path, monkeypatch):
     # No Codex hooks.json should have been created
     codex_hooks_json = tmp_path / ".codex" / "hooks.json"
     assert not codex_hooks_json.exists()
+
+
+def test_install_hooks_ensures_claude_projects_root(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True)
+
+    actions = install_hooks(
+        url="http://localhost:8080",
+        claude_dir=str(claude_dir),
+        engine_path="/usr/bin/longhouse-engine",
+    )
+
+    assert (claude_dir / "projects").is_dir()
+    assert any(str(claude_dir / "projects") in action for action in actions)
