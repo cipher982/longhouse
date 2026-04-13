@@ -265,9 +265,108 @@ def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: P
         {"label": "6h+", "session_count": 0},
     ]
     assert activity["recent_touches"] == [
-        {"provider": "claude", "last_updated": recent.isoformat()},
-        {"provider": "codex", "last_updated": earlier_today.isoformat()},
-        {"provider": "gemini", "last_updated": before_today.isoformat()},
+        {
+            "provider": "claude",
+            "last_updated": recent.isoformat(),
+            "workspace_label": None,
+            "branch": None,
+            "is_subagent": False,
+        },
+        {
+            "provider": "codex",
+            "last_updated": earlier_today.isoformat(),
+            "workspace_label": None,
+            "branch": None,
+            "is_subagent": False,
+        },
+        {
+            "provider": "gemini",
+            "last_updated": before_today.isoformat(),
+            "workspace_label": None,
+            "branch": None,
+            "is_subagent": False,
+        },
+    ]
+
+
+def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_meta_files(
+    monkeypatch, tmp_path: Path
+):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    now = datetime(2026, 4, 12, 18, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+
+    claude_session = tmp_path / "projects" / "-Users-davidrose-git-crims" / "claude-session.jsonl"
+    claude_session.parent.mkdir(parents=True, exist_ok=True)
+    claude_session.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "system"}),
+                json.dumps({"type": "assistant"}),
+                json.dumps(
+                    {
+                        "type": "user",
+                        "message": {
+                            "cwd": "/Users/davidrose/git/crims",
+                            "gitBranch": "feature/recent-activity",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n"
+    )
+
+    codex_session = tmp_path / "sessions" / "2026" / "04" / "12" / "rollout-zerg.jsonl"
+    codex_session.parent.mkdir(parents=True, exist_ok=True)
+    codex_session.write_text(
+        json.dumps(
+            {
+                "type": "session_meta",
+                "payload": {
+                    "cwd": "/Users/davidrose/git/zerg",
+                    "git": {"branch": "main"},
+                },
+            }
+        )
+        + "\n"
+    )
+
+    ignored_meta = tmp_path / "projects" / "-Users-davidrose-git-crims" / "claude-session.meta.json"
+    ignored_meta.write_text("{}\n")
+
+    _write_shipper_db(
+        tmp_path,
+        [
+            (str(claude_session), "claude", "claude-crims", None, (now - timedelta(minutes=2)).isoformat()),
+            (str(codex_session), "codex", None, "codex-zerg", (now - timedelta(minutes=4)).isoformat()),
+            (str(ignored_meta), "claude", "claude-meta", None, (now - timedelta(minutes=1)).isoformat()),
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+    activity = snapshot["activity_summary"]
+
+    assert activity["sessions_recent"] == 2
+    assert activity["provider_counts_recent"] == {"claude": 1, "codex": 1}
+    assert activity["recent_touches"] == [
+        {
+            "provider": "claude",
+            "last_updated": (now - timedelta(minutes=2)).isoformat(),
+            "workspace_label": "crims",
+            "branch": "feature/recent-activity",
+            "is_subagent": False,
+        },
+        {
+            "provider": "codex",
+            "last_updated": (now - timedelta(minutes=4)).isoformat(),
+            "workspace_label": "zerg",
+            "branch": "main",
+            "is_subagent": False,
+        },
     ]
 
 

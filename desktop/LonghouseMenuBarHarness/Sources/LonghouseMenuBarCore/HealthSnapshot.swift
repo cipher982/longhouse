@@ -338,7 +338,19 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return Self.compactRelativeLabel(for: parsed, relativeTo: referenceDate)
     }
 
-    public func recentTouchTitle(_ touch: ActivityTouchSnapshot) -> String {
+    public func recentTouchWorkspaceLabel(_ touch: ActivityTouchSnapshot) -> String {
+        let workspace = (touch.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !workspace.isEmpty {
+            return workspace
+        }
+        let provider = (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if provider.isEmpty {
+            return "Unknown"
+        }
+        return Self.providerDisplayName(provider)
+    }
+
+    public func recentTouchProviderLabel(_ touch: ActivityTouchSnapshot) -> String {
         let provider = (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if provider.isEmpty {
             return "Unknown"
@@ -755,6 +767,9 @@ public struct ActivityRecencyBandSnapshot: Codable, Equatable, Sendable {
 public struct ActivityTouchSnapshot: Codable, Equatable, Sendable {
     public let provider: String?
     public let lastUpdated: String?
+    public let workspaceLabel: String?
+    public let branch: String?
+    public let isSubagent: Bool?
 }
 
 public struct LaunchReadinessSnapshot: Codable, Equatable, Sendable {

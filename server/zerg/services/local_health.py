@@ -65,6 +65,76 @@ def _read_trimmed_file(path: Path) -> str | None:
     return value or None
 
 
+def _read_session_context(path: Path, *, max_lines: int = 6) -> tuple[str | None, str | None]:
+    """Extract cwd and branch from the first few JSONL records when available."""
+    try:
+        with path.open() as handle:
+            for index, raw_line in enumerate(handle):
+                if index >= max_lines:
+                    break
+                line = raw_line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                cwd = None
+                branch = None
+
+                if isinstance(payload, dict):
+                    if isinstance(payload.get("payload"), dict):
+                        meta = payload["payload"]
+                        cwd = meta.get("cwd") if isinstance(meta.get("cwd"), str) else None
+                        if isinstance(meta.get("git"), dict):
+                            branch = meta["git"].get("branch") if isinstance(meta["git"].get("branch"), str) else None
+                    if isinstance(payload.get("message"), dict):
+                        message = payload["message"]
+                        cwd = cwd or (message.get("cwd") if isinstance(message.get("cwd"), str) else None)
+                        branch = branch or (message.get("gitBranch") if isinstance(message.get("gitBranch"), str) else None)
+
+                if cwd or branch:
+                    return cwd, branch
+    except OSError:
+        return None, None
+
+    return None, None
+
+
+def _derive_workspace_label(source_path: Path, *, cwd: str | None) -> str | None:
+    if cwd:
+        name = Path(cwd).name.strip()
+        if name:
+            return name
+
+    parts = source_path.parts
+    if "projects" in parts:
+        try:
+            encoded = parts[parts.index("projects") + 1]
+        except (ValueError, IndexError):
+            return None
+        encoded = encoded.lstrip("-")
+        if "-git-" in encoded:
+            return encoded.split("-git-", 1)[1] or None
+        if encoded:
+            return encoded.rsplit("-", 1)[-1] or None
+    return None
+
+
+def _recent_touch_entry(source_path: str, provider: str, last_updated: str) -> dict[str, Any]:
+    path = Path(source_path)
+    cwd, branch = _read_session_context(path)
+    workspace_label = _derive_workspace_label(path, cwd=cwd)
+    return {
+        "provider": provider,
+        "last_updated": last_updated,
+        "workspace_label": workspace_label,
+        "branch": branch,
+        "is_subagent": "subagents" in path.parts,
+    }
+
+
 def _collect_local_config(claude_dir: Path) -> dict[str, Any]:
     url_path = claude_dir / "longhouse-url"
     machine_name_path = claude_dir / "longhouse-machine-name"
@@ -371,6 +441,7 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
     band_edges = [_to_rfc3339(now - delta) for _, delta in ACTIVITY_RECENCY_BANDS]
     session_expr = "provider || ':' || COALESCE(NULLIF(session_id, ''), NULLIF(provider_session_id, ''), path)"
     provider_session_expr = "COALESCE(NULLIF(session_id, ''), NULLIF(provider_session_id, ''), path)"
+    session_files_predicate = "path LIKE '%.jsonl'"
 
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
@@ -390,6 +461,7 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
                     WHEN julianday(last_updated) >= julianday(?) THEN {session_expr}
                 END)
             FROM file_state
+            WHERE {session_files_predicate}
             """,
             (today_cutoff, recent_cutoff),
         ).fetchone()
@@ -403,7 +475,8 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
             f"""
             SELECT provider, COUNT(DISTINCT {provider_session_expr})
             FROM file_state
-            WHERE julianday(last_updated) >= julianday(?)
+            WHERE {session_files_predicate}
+              AND julianday(last_updated) >= julianday(?)
             GROUP BY provider
             """,
             (today_cutoff,),
@@ -419,7 +492,8 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
             f"""
             SELECT provider, COUNT(DISTINCT {provider_session_expr})
             FROM file_state
-            WHERE julianday(last_updated) >= julianday(?)
+            WHERE {session_files_predicate}
+              AND julianday(last_updated) >= julianday(?)
             GROUP BY provider
             """,
             (recent_cutoff,),
@@ -454,6 +528,7 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
             f"""
             SELECT {", ".join(band_clauses)}
             FROM file_state
+            WHERE {session_files_predicate}
             """,
             tuple(band_params),
         ).fetchone()
@@ -467,15 +542,17 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
             ]
 
         recent_touches: list[dict[str, Any]] = []
-        for provider, last_updated in conn.execute(
+        for provider, last_updated, path in conn.execute(
             f"""
-            SELECT provider, last_updated
+            SELECT provider, last_updated, path
             FROM (
                 SELECT
                     provider,
                     {provider_session_expr} AS session_key,
+                    path,
                     MAX(last_updated) AS last_updated
                 FROM file_state
+                WHERE {session_files_predicate}
                 GROUP BY provider, session_key
             )
             ORDER BY julianday(last_updated) DESC
@@ -486,12 +563,7 @@ def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, A
             provider_name = str(provider or "").strip()
             if not provider_name or not last_updated:
                 continue
-            recent_touches.append(
-                {
-                    "provider": provider_name,
-                    "last_updated": str(last_updated),
-                }
-            )
+            recent_touches.append(_recent_touch_entry(str(path), provider_name, str(last_updated)))
         summary["recent_touches"] = recent_touches
         return summary
     except sqlite3.Error as exc:
