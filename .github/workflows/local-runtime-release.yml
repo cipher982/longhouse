@@ -98,9 +98,11 @@ jobs:
 
       - name: Build macOS ambient app payload
         run: |
-          swift build --package-path desktop/LonghouseMenuBarHarness -c release --product LonghouseMenuBarHarnessMenuBar
-          BIN_DIR="$(swift build --package-path desktop/LonghouseMenuBarHarness -c release --show-bin-path)"
-          cp "$BIN_DIR/LonghouseMenuBarHarnessMenuBar" "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
+          PRODUCT_PATH="$(scripts/resolve-swift-product-path.sh \
+            --package-path desktop/LonghouseMenuBarHarness \
+            --product LonghouseMenuBarHarnessMenuBar \
+            --configuration release)"
+          cp "$PRODUCT_PATH" "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
           chmod +x "$RUNNER_TEMP/LonghouseMenuBarHarnessMenuBar"
 
       - name: Configure macOS signing keychain

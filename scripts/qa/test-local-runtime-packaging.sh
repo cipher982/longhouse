@@ -44,12 +44,14 @@ mkdir -p "$ARTIFACT_DIR"
 rm -rf "$STAGE_DIR" "$ARCHIVE_PATH" "$DISK_IMAGE_PATH" "$MANIFEST_PATH"
 
 log "🏗️  Building macOS menu bar binary..."
-swift build --package-path "$PACKAGE_PATH" -c release --product LonghouseMenuBarHarnessMenuBar >/dev/null
-BIN_DIR="$(swift build --package-path "$PACKAGE_PATH" -c release --show-bin-path)"
+MENUBAR_BINARY="$("$ROOT_DIR/scripts/resolve-swift-product-path.sh" \
+  --package-path "$PACKAGE_PATH" \
+  --product LonghouseMenuBarHarnessMenuBar \
+  --configuration release)"
 
 log "📦 Packaging Longhouse.app..."
 "$ROOT_DIR/scripts/release/macos-package-app.sh" \
-  --binary "$BIN_DIR/LonghouseMenuBarHarnessMenuBar" \
+  --binary "$MENUBAR_BINARY" \
   --app-name Longhouse \
   --exec-name Longhouse \
   --bundle-id ai.longhouse.app \
