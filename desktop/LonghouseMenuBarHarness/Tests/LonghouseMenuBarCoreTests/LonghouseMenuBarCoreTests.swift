@@ -270,4 +270,36 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.engineAgeLabel(relativeTo: referenceDate) == "1m")
         #expect(snapshot.engineFreshnessLabel(relativeTo: referenceDate) == "Aging")
     }
+
+    @Test
+    func pulseWindowModelCollapsesFlatHistoryToSteadySummary() {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let baseDate = formatter.date(from: "2026-04-08T01:00:00Z")!
+
+        let history = [
+            SnapshotHistorySample(
+                capturedAt: baseDate,
+                sessionsRecent: 4,
+                spoolPendingCount: 0,
+                outboxCount: 0,
+                severity: .green
+            ),
+            SnapshotHistorySample(
+                capturedAt: baseDate.addingTimeInterval(600),
+                sessionsRecent: 4,
+                spoolPendingCount: 0,
+                outboxCount: 0,
+                severity: .green
+            ),
+        ]
+
+        let model = PulseWindowModel(history: history)
+
+        #expect(model.hasEnoughHistory == true)
+        #expect(model.isSteadyState == true)
+        #expect(model.trailingLabel == "Stable")
+        #expect(model.coverageLabel == "Last 10m")
+        #expect(model.steadyHeadline == "4 recent sessions · queue idle")
+    }
 }

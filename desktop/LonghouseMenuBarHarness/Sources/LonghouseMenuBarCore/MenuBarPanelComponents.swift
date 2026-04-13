@@ -267,68 +267,360 @@ struct ProviderMixBar: View {
     }
 }
 
-struct PulseChart: View {
-    let history: [SnapshotHistorySample]
+struct PulseWindowModel {
+    struct SignalSummary {
+        let points: [Int]
+        let currentValue: Int
+        let minimumValue: Int
+        let maximumValue: Int
+
+        var hasVariance: Bool {
+            minimumValue != maximumValue
+        }
+    }
+
+    private enum BucketAggregation {
+        case averageRounded
+        case max
+    }
+
+    private let history: [SnapshotHistorySample]
+    private let retentionMinutes: Int
+    private let maxPoints: Int
+
+    init(
+        history: [SnapshotHistorySample],
+        retentionMinutes: Int = 30,
+        maxPoints: Int = 16
+    ) {
+        self.history = history
+        self.retentionMinutes = retentionMinutes
+        self.maxPoints = maxPoints
+    }
+
+    var hasEnoughHistory: Bool {
+        history.count > 1
+    }
+
+    var coverageLabel: String {
+        guard hasEnoughHistory,
+              let first = history.first?.capturedAt,
+              let last = history.last?.capturedAt else {
+            return "Collecting"
+        }
+        let seconds = max(0, last.timeIntervalSince(first))
+        let minutes = max(1, Int(ceil(seconds / 60.0)))
+        return "Last \(min(minutes, retentionMinutes))m"
+    }
+
+    var latestActivityCount: Int {
+        history.last?.sessionsRecent ?? 0
+    }
+
+    var latestQueueDepth: Int {
+        guard let latest = history.last else {
+            return 0
+        }
+        return latest.spoolPendingCount + latest.outboxCount
+    }
+
+    var activity: SignalSummary {
+        makeSignalSummary(
+            currentValue: latestActivityCount,
+            values: bucketedValues(
+                metric: { $0.sessionsRecent },
+                aggregation: .averageRounded
+            )
+        )
+    }
+
+    var queue: SignalSummary {
+        makeSignalSummary(
+            currentValue: latestQueueDepth,
+            values: bucketedValues(
+                metric: { $0.spoolPendingCount + $0.outboxCount },
+                aggregation: .max
+            )
+        )
+    }
+
+    var isSteadyState: Bool {
+        hasEnoughHistory && !activity.hasVariance && !queue.hasVariance
+    }
+
+    var shouldChartActivity: Bool {
+        hasEnoughHistory && activity.hasVariance
+    }
+
+    var shouldChartQueue: Bool {
+        hasEnoughHistory && (queue.hasVariance || queue.maximumValue > 0)
+    }
+
+    var trailingLabel: String {
+        guard hasEnoughHistory else {
+            return "Collecting"
+        }
+        if isSteadyState {
+            if latestQueueDepth > 0 {
+                return "Steady"
+            }
+            if latestActivityCount > 0 {
+                return "Stable"
+            }
+            return "Idle"
+        }
+        if latestQueueDepth > 0 {
+            return "Queue \(latestQueueDepth)"
+        }
+        if latestActivityCount > 0 {
+            return "\(latestActivityCount) active"
+        }
+        return "Live"
+    }
+
+    var steadyHeadline: String {
+        let sessionSummary = latestActivityCount == 1 ? "1 recent session" : "\(latestActivityCount) recent sessions"
+        let queueSummary = latestQueueDepth == 0 ? "queue idle" : "queue holding at \(latestQueueDepth)"
+        return "\(sessionSummary) · \(queueSummary)"
+    }
+
+    var steadyDetail: String {
+        "No meaningful variance across \(coverageLabel.lowercased())"
+    }
+
+    var activityStatusLabel: String {
+        signalStatusLabel(
+            currentValue: latestActivityCount,
+            minimumValue: activity.minimumValue,
+            maximumValue: activity.maximumValue,
+            emptyLabel: "idle"
+        )
+    }
+
+    var queueStatusLabel: String {
+        signalStatusLabel(
+            currentValue: latestQueueDepth,
+            minimumValue: queue.minimumValue,
+            maximumValue: queue.maximumValue,
+            emptyLabel: "idle"
+        )
+    }
+
+    private func makeSignalSummary(currentValue: Int, values: [Int]) -> SignalSummary {
+        let resolvedValues = values.isEmpty ? [0] : values
+        return SignalSummary(
+            points: resolvedValues,
+            currentValue: currentValue,
+            minimumValue: resolvedValues.min() ?? 0,
+            maximumValue: resolvedValues.max() ?? 0
+        )
+    }
+
+    private func bucketedValues(
+        metric: (SnapshotHistorySample) -> Int,
+        aggregation: BucketAggregation
+    ) -> [Int] {
+        guard !history.isEmpty else {
+            return []
+        }
+        guard history.count > maxPoints else {
+            return history.map { max(0, metric($0)) }
+        }
+
+        let bucketSize = Double(history.count) / Double(maxPoints)
+        return (0..<maxPoints).map { bucketIndex in
+            let lowerBound = Int(floor(Double(bucketIndex) * bucketSize))
+            let upperBound = min(history.count, Int(ceil(Double(bucketIndex + 1) * bucketSize)))
+            let slice = history[lowerBound..<max(lowerBound + 1, upperBound)]
+            let values = slice.map { max(0, metric($0)) }
+
+            switch aggregation {
+            case .averageRounded:
+                let total = values.reduce(0, +)
+                return Int((Double(total) / Double(max(values.count, 1))).rounded())
+            case .max:
+                return values.max() ?? 0
+            }
+        }
+    }
+
+    private func signalStatusLabel(
+        currentValue: Int,
+        minimumValue: Int,
+        maximumValue: Int,
+        emptyLabel: String
+    ) -> String {
+        if maximumValue == 0 {
+            return emptyLabel
+        }
+        if minimumValue == maximumValue {
+            return "steady \(currentValue)"
+        }
+        return "now \(currentValue) · range \(minimumValue)-\(maximumValue)"
+    }
+}
+
+struct PulseWindowView: View {
+    let model: PulseWindowModel
 
     var body: some View {
-        GeometryReader { geometry in
-            let samples = reducedSamples(from: history, maxPoints: 24)
-            let maxValue = max(samples.map(activityValue(for:)).max() ?? 0, 1)
-            let spacing: CGFloat = 3
-            let barWidth = max(4, (geometry.size.width - CGFloat(max(samples.count - 1, 0)) * spacing) / CGFloat(max(samples.count, 1)))
-
-            ZStack(alignment: .bottomLeading) {
-                VStack(spacing: geometry.size.height / 3) {
-                    Rectangle().fill(Color.white.opacity(0.04)).frame(height: 1)
-                    Rectangle().fill(Color.white.opacity(0.04)).frame(height: 1)
-                    Rectangle().fill(Color.white.opacity(0.04)).frame(height: 1)
+        if !model.hasEnoughHistory {
+            Text("Collecting live shipping samples")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 8)
+        } else if model.isSteadyState {
+            steadyStateView
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                if model.shouldChartActivity {
+                    PulseSignalRow(
+                        title: "Sessions",
+                        status: model.activityStatusLabel,
+                        points: model.activity.points,
+                        tint: Color(red: 0.31, green: 0.78, blue: 0.50)
+                    )
+                } else {
+                    PulseSignalSummaryRow(title: "Sessions", status: model.activityStatusLabel)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
 
-                HStack(alignment: .bottom, spacing: spacing) {
-                    ForEach(Array(samples.enumerated()), id: \.offset) { _, sample in
-                        let value = max(activityValue(for: sample), 0)
-                        let normalized = CGFloat(value) / CGFloat(maxValue)
-                        Capsule(style: .continuous)
-                            .fill(color(for: sample))
-                            .frame(width: barWidth, height: max(6, normalized * geometry.size.height))
+                if model.shouldChartQueue {
+                    PulseSignalRow(
+                        title: "Queue",
+                        status: model.queueStatusLabel,
+                        points: model.queue.points,
+                        tint: Color(red: 0.90, green: 0.74, blue: 0.30)
+                    )
+                } else {
+                    PulseSignalSummaryRow(title: "Queue", status: model.queueStatusLabel)
+                }
+
+                HStack {
+                    Text(model.coverageLabel)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                    Spacer()
+                    Text("Now")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                }
+            }
+        }
+    }
+
+    private var steadyStateView: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                steadyMetric(title: "Sessions", value: model.latestActivityCount == 0 ? "Idle" : "\(model.latestActivityCount)")
+                steadyMetric(title: "Queue", value: model.latestQueueDepth == 0 ? "Idle" : "\(model.latestQueueDepth)")
+            }
+
+            Text(model.steadyHeadline)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Text(model.steadyDetail)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func steadyMetric(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.secondary)
+                .tracking(0.45)
+
+            Text(value)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .monospacedDigit()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.white.opacity(0.03))
+        )
+    }
+}
+
+private struct PulseSignalSummaryRow: View {
+    let title: String
+    let status: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.secondary)
+                .tracking(0.45)
+
+            Spacer(minLength: 8)
+
+            Text(status)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .monospacedDigit()
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct PulseSignalRow: View {
+    let title: String
+    let status: String
+    let points: [Int]
+    let tint: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(title.uppercased())
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+                    .tracking(0.45)
+
+                Spacer(minLength: 8)
+
+                Text(status)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .monospacedDigit()
+            }
+
+            GeometryReader { geometry in
+                let maxValue = max(points.max() ?? 0, 1)
+                let spacing: CGFloat = 3
+                let barWidth = max(6, (geometry.size.width - CGFloat(max(points.count - 1, 0)) * spacing) / CGFloat(max(points.count, 1)))
+
+                ZStack(alignment: .bottomLeading) {
+                    Rectangle()
+                        .fill(Color.white.opacity(0.05))
+                        .frame(height: 1)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+                    HStack(alignment: .bottom, spacing: spacing) {
+                        ForEach(Array(points.enumerated()), id: \.offset) { _, value in
+                            let normalized = CGFloat(max(0, value)) / CGFloat(maxValue)
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .fill(tint.opacity(value == 0 ? 0.22 : 0.92))
+                                .frame(width: barWidth, height: max(value == 0 ? 2 : 6, normalized * geometry.size.height))
+                        }
                     }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
-        }
-        .frame(height: 36)
-    }
-
-    private func reducedSamples(from samples: [SnapshotHistorySample], maxPoints: Int) -> [SnapshotHistorySample] {
-        guard samples.count > maxPoints else {
-            return samples
-        }
-
-        let stride = Double(samples.count) / Double(maxPoints)
-        return (0..<maxPoints).compactMap { index in
-            let sourceIndex = Int((Double(index) * stride).rounded(.down))
-            guard sourceIndex < samples.count else {
-                return nil
-            }
-            return samples[sourceIndex]
-        }
-    }
-
-    private func activityValue(for sample: SnapshotHistorySample) -> Int {
-        max(sample.sessionsRecent, sample.spoolPendingCount + sample.outboxCount)
-    }
-
-    private func color(for sample: SnapshotHistorySample) -> Color {
-        switch sample.severity {
-        case .green:
-            return Color(red: 0.31, green: 0.78, blue: 0.50)
-        case .yellow:
-            return Color(red: 0.90, green: 0.74, blue: 0.30)
-        case .red:
-            return Color(red: 0.89, green: 0.34, blue: 0.30)
-        case .gray:
-            return Color.secondary
+            .frame(height: 18)
         }
     }
 }

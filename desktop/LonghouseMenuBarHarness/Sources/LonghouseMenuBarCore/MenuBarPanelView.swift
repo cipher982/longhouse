@@ -275,26 +275,8 @@ public struct MenuBarPanelView: View {
                 }
             }
 
-            PanelSection(title: "Recent Pulse", trailing: pulseTrailingLabel) {
-                if history.count > 1 {
-                    PulseChart(history: history)
-
-                    HStack {
-                        Text("Last \(SnapshotStore.historyRetentionMinutes)m")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.secondary)
-                        Spacer()
-                        Text("Now")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color.secondary)
-                    }
-                } else {
-                    Text("Collecting live shipping samples")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Color.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 8)
-                }
+            PanelSection(title: "Recent Window", trailing: pulseModel.trailingLabel) {
+                PulseWindowView(model: pulseModel)
             }
         }
     }
@@ -332,16 +314,8 @@ public struct MenuBarPanelView: View {
         return entries
     }
 
-    private var pulseTrailingLabel: String {
-        if let latest = history.last {
-            if latest.sessionsRecent > 0 {
-                return "\(latest.sessionsRecent) active"
-            }
-            if latest.spoolPendingCount > 0 || latest.outboxCount > 0 {
-                return "Queue busy"
-            }
-        }
-        return "Idle"
+    private var pulseModel: PulseWindowModel {
+        PulseWindowModel(history: history)
     }
 
     private var blockerSection: some View {
