@@ -3,7 +3,7 @@
 //! Discovers session files across Claude, Codex, and Gemini providers.
 //! Replaces the Claude-only `bench::discover_session_files()`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use walkdir::WalkDir;
@@ -24,11 +24,22 @@ pub struct ProviderConfig {
 pub fn get_providers() -> Vec<ProviderConfig> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
     let home = PathBuf::from(home);
+    let claude_root = std::env::var("CLAUDE_CONFIG_DIR")
+        .ok()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".claude"));
 
-    let candidates = vec![
+    provider_candidates(&home, &claude_root)
+        .into_iter()
+        .filter(|p| p.root.exists())
+        .collect()
+}
+
+fn provider_candidates(home: &Path, claude_root: &Path) -> Vec<ProviderConfig> {
+    vec![
         ProviderConfig {
             name: "claude",
-            root: home.join(".claude").join("projects"),
+            root: claude_root.join("projects"),
             extension: "jsonl",
         },
         ProviderConfig {
@@ -41,9 +52,7 @@ pub fn get_providers() -> Vec<ProviderConfig> {
             root: home.join(".gemini").join("tmp"),
             extension: "json",
         },
-    ];
-
-    candidates.into_iter().filter(|p| p.root.exists()).collect()
+    ]
 }
 
 /// Discover all session files across all providers.
@@ -97,4 +106,22 @@ pub fn provider_for_path(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_candidates_use_claude_config_dir_for_claude_root() {
+        let home = PathBuf::from("/tmp/home");
+        let claude_root = PathBuf::from("/tmp/custom-claude");
+
+        let providers = provider_candidates(&home, &claude_root);
+
+        assert_eq!(providers[0].name, "claude");
+        assert_eq!(providers[0].root, claude_root.join("projects"));
+        assert_eq!(providers[1].root, home.join(".codex").join("sessions"));
+        assert_eq!(providers[2].root, home.join(".gemini").join("tmp"));
+    }
 }
