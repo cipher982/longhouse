@@ -1,11 +1,10 @@
-import AppKit
 import SwiftUI
 
 public enum MenuBarPanelLayout {
-    public static let panelWidth: CGFloat = 372
+    public static let panelWidth: CGFloat = 376
     public static let loadingHeight: CGFloat = 170
     public static let failureHeight: CGFloat = 198
-    public static let healthyHeight: CGFloat = 452
+    public static let healthyHeight: CGFloat = 560
     public static let attentionHeight: CGFloat = 564
 
     public static func preferredHeight(for snapshot: HealthSnapshot) -> CGFloat {
@@ -124,7 +123,7 @@ public struct MenuBarPanelView: View {
                 header
 
                 if isHealthy {
-                    healthyTelemetryDeck
+                    healthySurface
                 } else {
                     blockerSection
                     runbookSection
@@ -149,69 +148,6 @@ public struct MenuBarPanelView: View {
         snapshot.parsedSeverity == .green && snapshot.healthState.lowercased() == "healthy"
     }
 
-    private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            statusEmblem(color: snapshot.parsedSeverity.accentColor, systemImage: snapshot.parsedSeverity.symbolName)
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text("LONGHOUSE LOCAL")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
-                    .tracking(0.9)
-
-                Text(displayHeadline)
-                    .font(.system(size: 20, weight: .semibold))
-                    .foregroundStyle(Color.primary)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.8)
-                    .harnessAccessibility(
-                        identifier: LonghouseMenuBarAccessibilityID.Header.headline,
-                        label: displayHeadline
-                    )
-
-                HStack(spacing: 8) {
-                    statusChip(
-                        title: snapshot.ambientStatusLabel.uppercased(),
-                        color: snapshot.parsedSeverity.accentColor,
-                        identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
-                    )
-
-                    subtleChip(title: "Snapshot \(snapshot.snapshotAgeCompactLabel)")
-
-                    if let updateBadge = snapshot.updateBadgeLabel {
-                        subtleChip(title: updateBadge, tint: .blue)
-                    }
-                }
-            }
-
-            Spacer(minLength: 0)
-
-            HStack(spacing: 8) {
-                if isHealthy {
-                    Button {
-                        perform(.openLonghouse)
-                    } label: {
-                        Image(systemName: "arrow.up.forward.square")
-                            .font(.system(size: 15, weight: .semibold))
-                            .frame(width: 28, height: 28)
-                            .background(
-                                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                    .fill(Color.white.opacity(0.05))
-                            )
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLonghouse)
-                    .accessibilityLabel(Text("Open Longhouse"))
-
-                    healthyToolsMenu
-                }
-
-                refreshControl
-            }
-        }
-    }
-
     private var displayHeadline: String {
         let trimmed = snapshot.headline.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.lowercased().hasPrefix("longhouse ") else {
@@ -225,144 +161,173 @@ public struct MenuBarPanelView: View {
         return first.uppercased() + dropped.dropFirst()
     }
 
-    private var refreshControl: some View {
-        Button {
-            perform(.refresh)
-        } label: {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
+    private var header: some View {
+        HStack(alignment: .top, spacing: 12) {
+            statusEmblem(color: snapshot.parsedSeverity.accentColor, systemImage: snapshot.parsedSeverity.symbolName)
+                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
-                if isRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Image(systemName: "arrow.clockwise")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color.primary)
+            VStack(alignment: .leading, spacing: 8) {
+                Text("LONGHOUSE LOCAL")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+                    .tracking(0.9)
+
+                Text(displayHeadline)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
+                    .harnessAccessibility(
+                        identifier: LonghouseMenuBarAccessibilityID.Header.headline,
+                        label: displayHeadline
+                    )
+
+                HStack(spacing: 8) {
+                    statusChip(
+                        title: snapshot.ambientStatusLabel.uppercased(),
+                        color: snapshot.parsedSeverity.accentColor,
+                        identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
+                    )
+
+                    subtleChip(title: "Updated \(snapshot.snapshotAgeCompactLabel)")
+
+                    if let updateBadge = snapshot.updateBadgeLabel {
+                        subtleChip(title: updateBadge, tint: .blue)
+                    }
                 }
+
+                Text(snapshot.missionSummaryLabel)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.84)
             }
-            .frame(width: 28, height: 28)
+
+            Spacer(minLength: 0)
+
+            headerControlGroup
         }
-        .buttonStyle(.plain)
-        .disabled(isRefreshing)
-        .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.refresh)
-        .accessibilityLabel(Text(isRefreshing ? "Refreshing" : "Refresh"))
     }
 
-    private var healthyTelemetryDeck: some View {
-        TelemetryDeck {
-            HStack(alignment: .top, spacing: 14) {
-                healthyNowColumn
-
-                Rectangle()
-                    .fill(Color.white.opacity(0.06))
-                    .frame(width: 1)
-
-                healthyTodayColumn
-            }
-
-            sectionDivider
-
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(alignment: .center, spacing: 8) {
-                    deckColumnTitle("Recent Pulse")
-
-                    Spacer(minLength: 8)
-
-                    Text(pulseTrailingLabel)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.secondary)
-                        .monospacedDigit()
+    private var headerControlGroup: some View {
+        HStack(spacing: 6) {
+            if isHealthy {
+                headerAccessoryButton(
+                    systemImage: "arrow.up.forward.square",
+                    accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.openLonghouse,
+                    accessibilityLabel: "Open Longhouse"
+                ) {
+                    perform(.openLonghouse)
                 }
 
+                healthyToolsMenu
+            }
+
+            refreshControl
+        }
+    }
+
+    private var refreshControl: some View {
+        headerAccessoryButton(
+            accessibilityIdentifier: LonghouseMenuBarAccessibilityID.Button.refresh,
+            accessibilityLabel: isRefreshing ? "Refreshing" : "Refresh",
+            isDisabled: isRefreshing
+        ) {
+            perform(.refresh)
+        } label: {
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+                    .frame(width: 28, height: 28)
+            } else {
+                accessoryGlyph(systemImage: "arrow.clockwise")
+            }
+        }
+    }
+
+    private var healthySurface: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            MissionReadoutGrid(readouts: healthyReadouts)
+
+            PanelSection(title: "Operations") {
+                TelemetryTable(entries: healthyOperationsEntries)
+
+                if !snapshot.providerCountsToday.isEmpty {
+                    sectionDivider
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("PROVIDER MIX")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(Color.secondary)
+                            .tracking(0.55)
+
+                        Text(snapshot.providerMixLabel)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.76)
+                            .monospacedDigit()
+
+                        ProviderMixBar(entries: snapshot.providerCountsToday)
+                    }
+                }
+            }
+
+            PanelSection(title: "Recent Pulse", trailing: pulseTrailingLabel) {
                 if history.count > 1 {
                     PulseChart(history: history)
+
+                    HStack {
+                        Text("Last \(SnapshotStore.historyRetentionMinutes)m")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color.secondary)
+                        Spacer()
+                        Text("Now")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(Color.secondary)
+                    }
                 } else {
                     Text("Collecting live shipping samples")
                         .font(.system(size: 11, weight: .medium))
                         .foregroundStyle(Color.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 10)
+                        .padding(.vertical, 8)
                 }
             }
         }
     }
 
-    private var healthyNowColumn: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            deckColumnTitle("Now")
+    private var healthyReadouts: [PanelReadout] {
+        [
+            PanelReadout(label: "Ship", value: snapshot.lastShipCompactLabel, detail: "Last ship"),
+            PanelReadout(label: "Beat", value: snapshot.engineAgeLabel, detail: snapshot.engineFreshnessLabel),
+            PanelReadout(label: "Today", value: snapshot.sessionsTodayLabel, detail: "Sessions"),
+            PanelReadout(label: snapshot.recentWindowCompactLabel, value: snapshot.sessionsRecentLabel, detail: "Active"),
+        ]
+    }
 
-            TelemetryRow(
-                label: "Last ship",
-                value: snapshot.lastShipValueLabel,
-                valueIdentifier: LonghouseMenuBarAccessibilityID.Header.lastShip
-            )
-
-            sectionDivider
-
-            TelemetryRow(label: "Engine", value: snapshot.engineFreshnessValueLabel)
-
-            sectionDivider
-
-            TelemetryRow(
+    private var healthyOperationsEntries: [PanelTelemetryEntry] {
+        var entries = [
+            PanelTelemetryEntry(
                 label: "Launch",
                 value: snapshot.launchValueLabel,
                 labelIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.label,
                 valueIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.value
-            )
-
-            sectionDivider
-
-            TelemetryRow(
-                label: "Queue",
-                value: snapshot.pipelineValueLabel,
+            ),
+            PanelTelemetryEntry(label: "Heartbeat", value: snapshot.engineFreshnessValueLabel),
+            PanelTelemetryEntry(
+                label: "Buffers",
+                value: "OUT \(snapshot.outboxCount) · Q \(snapshot.spoolPendingLabel) · DEAD \(snapshot.spoolDeadLabel)",
                 valueColor: pipelineColor
-            )
+            ),
+            PanelTelemetryEntry(label: "Latest", value: snapshot.latestActivityLabel),
+        ]
+
+        if let updateBadge = snapshot.updateBadgeLabel {
+            entries.append(PanelTelemetryEntry(label: "Update", value: updateBadge, valueColor: .blue))
         }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
 
-    private var healthyTodayColumn: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            deckColumnTitle("Today")
-
-            HStack(alignment: .top, spacing: 10) {
-                MissionStat(
-                    label: "Synced",
-                    value: snapshot.sessionsTodayLabel,
-                    detail: "Today"
-                )
-
-                MissionStat(
-                    label: "Active",
-                    value: snapshot.sessionsRecentLabel,
-                    detail: snapshot.recentWindowLabel
-                )
-            }
-
-            sectionDivider
-
-            TelemetryRow(label: "Last activity", value: snapshot.latestActivityLabel)
-
-            sectionDivider
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Provider mix")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.secondary)
-
-                Text(snapshot.providerMixLabel)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.primary)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.84)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                ProviderMixBar(entries: snapshot.providerCountsToday)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        return entries
     }
 
     private var pulseTrailingLabel: String {
@@ -379,34 +344,23 @@ public struct MenuBarPanelView: View {
 
     private var blockerSection: some View {
         PanelSection(title: "Blocking Signals") {
-            TelemetryRow(
-                label: "Service",
-                value: snapshot.serviceStatusTitle,
-                valueColor: snapshot.serviceStatusLabel == "running" ? snapshot.parsedSeverity.accentColor : .red,
-                labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.title,
-                valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.value
-            )
-
-            sectionDivider
-
-            TelemetryRow(label: "Last ship", value: snapshot.lastShipValueLabel)
-
-            sectionDivider
-
-            TelemetryRow(
-                label: "Queue",
-                value: snapshot.pipelineValueLabel,
-                valueColor: pipelineColor
-            )
-
-            sectionDivider
-
-            TelemetryRow(
-                label: "Launch",
-                value: snapshot.launchValueLabel,
-                labelIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.label,
-                valueIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.value
-            )
+            TelemetryTable(entries: [
+                PanelTelemetryEntry(
+                    label: "Service",
+                    value: snapshot.serviceStatusTitle,
+                    valueColor: snapshot.serviceStatusLabel == "running" ? snapshot.parsedSeverity.accentColor : .red,
+                    labelIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.title,
+                    valueIdentifier: LonghouseMenuBarAccessibilityID.Metric.service.value
+                ),
+                PanelTelemetryEntry(label: "Last ship", value: snapshot.lastShipValueLabel),
+                PanelTelemetryEntry(label: "Queue", value: snapshot.pipelineValueLabel, valueColor: pipelineColor),
+                PanelTelemetryEntry(
+                    label: "Launch",
+                    value: snapshot.launchValueLabel,
+                    labelIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.label,
+                    valueIdentifier: LonghouseMenuBarAccessibilityID.Detail.launchState.value
+                ),
+            ])
         }
     }
 
@@ -421,7 +375,7 @@ public struct MenuBarPanelView: View {
             if !snapshot.reasons.isEmpty {
                 sectionDivider
 
-                FlowLayout(spacing: 6, rowSpacing: 6) {
+                AdaptiveTagGrid {
                     ForEach(Array(snapshot.reasons.prefix(4).enumerated()), id: \.offset) { index, reason in
                         Text(snapshotReason(reason))
                             .font(.system(size: 10, weight: .semibold))
@@ -516,16 +470,58 @@ public struct MenuBarPanelView: View {
             }
             .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
         } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.system(size: 16, weight: .semibold))
-                .frame(width: 28, height: 28)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(0.05))
-                )
+            accessoryGlyph(systemImage: "ellipsis")
         }
         .menuStyle(.borderlessButton)
         .controlSize(.regular)
+    }
+
+    private func headerAccessoryButton<Label: View>(
+        accessibilityIdentifier: String,
+        accessibilityLabel: String,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        Button(action: action) {
+            label()
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .accessibilityIdentifier(accessibilityIdentifier)
+        .accessibilityLabel(Text(accessibilityLabel))
+    }
+
+    private func headerAccessoryButton(
+        systemImage: String,
+        accessibilityIdentifier: String,
+        accessibilityLabel: String,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        headerAccessoryButton(
+            accessibilityIdentifier: accessibilityIdentifier,
+            accessibilityLabel: accessibilityLabel,
+            isDisabled: isDisabled,
+            action: action
+        ) {
+            accessoryGlyph(systemImage: systemImage)
+        }
+    }
+
+    private func accessoryGlyph(systemImage: String) -> some View {
+        Image(systemName: systemImage)
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(Color.primary)
+            .frame(width: 28, height: 28)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color.white.opacity(0.05))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
+            )
     }
 
     private var pipelineColor: Color {
@@ -611,391 +607,5 @@ public struct MenuBarPanelView: View {
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
             .capitalized
-    }
-}
-
-private let panelCornerRadius: CGFloat = 20
-private let sectionCornerRadius: CGFloat = 14
-
-private struct PanelChrome<Content: View>: View {
-    let height: CGFloat
-    let accent: Color
-    let content: Content
-
-    init(height: CGFloat, accent: Color, @ViewBuilder content: () -> Content) {
-        self.height = height
-        self.accent = accent
-        self.content = content()
-    }
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            PanelMaterialBackground()
-
-            LinearGradient(
-                colors: [accent.opacity(0.07), Color.clear],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-
-            content
-                .padding(16)
-        }
-        .frame(width: MenuBarPanelLayout.panelWidth, height: height, alignment: .topLeading)
-        .clipShape(RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: panelCornerRadius, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.1), lineWidth: 1)
-        )
-        .overlay(alignment: .top) {
-            Capsule(style: .continuous)
-                .fill(accent.opacity(0.7))
-                .frame(height: 3)
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-        }
-        .shadow(color: Color.black.opacity(0.22), radius: 14, x: 0, y: 8)
-    }
-}
-
-private struct PanelMaterialBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
-
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
-
-private struct PanelSection<Content: View>: View {
-    let title: String
-    let trailing: String?
-    let content: Content
-
-    init(title: String, trailing: String? = nil, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.trailing = trailing
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 8) {
-                Text(title.uppercased())
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(Color.secondary)
-                    .tracking(0.6)
-
-                Spacer(minLength: 8)
-
-                if let trailing {
-                    Text(trailing)
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.secondary)
-                        .monospacedDigit()
-                }
-            }
-
-            content
-        }
-        .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
-                .fill(Color.black.opacity(0.15))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: sectionCornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-}
-
-private struct TelemetryDeck<Content: View>: View {
-    let content: Content
-
-    init(@ViewBuilder content: () -> Content) {
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            content
-        }
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(Color.black.opacity(0.15))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-        )
-    }
-}
-
-private struct TelemetryRow: View {
-    let label: String
-    let value: String
-    var valueColor: Color = .primary
-    var labelIdentifier: String? = nil
-    var valueIdentifier: String? = nil
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(label)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Color.secondary)
-                .applyHarnessAccessibility(identifier: labelIdentifier, label: label)
-
-            Spacer(minLength: 12)
-
-            Text(value)
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(valueColor)
-                .monospacedDigit()
-                .multilineTextAlignment(.trailing)
-                .lineLimit(2)
-                .minimumScaleFactor(0.8)
-                .applyHarnessAccessibility(identifier: valueIdentifier, label: value)
-        }
-    }
-}
-
-private struct MissionStat: View {
-    let label: String
-    let value: String
-    let detail: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased())
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color.secondary)
-                .tracking(0.5)
-
-            Text(value)
-                .font(.system(size: 23, weight: .bold))
-                .foregroundStyle(Color.primary)
-                .monospacedDigit()
-                .lineLimit(1)
-                .minimumScaleFactor(0.75)
-
-            Text(detail.uppercased())
-                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color.secondary)
-                .tracking(0.45)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct ProviderMixBar: View {
-    let entries: [(provider: String, count: Int)]
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.white.opacity(0.05))
-
-            GeometryReader { geometry in
-                let total = max(entries.map(\.count).reduce(0, +), 1)
-
-                HStack(spacing: 4) {
-                    ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(providerColor(entry.provider))
-                            .frame(width: max(24, geometry.size.width * CGFloat(entry.count) / CGFloat(total)))
-                            .overlay(alignment: .center) {
-                                if geometry.size.width > 180 {
-                                    Text(providerAbbreviation(entry.provider))
-                                        .font(.system(size: 10, weight: .bold))
-                                        .foregroundStyle(Color.white.opacity(0.9))
-                                }
-                            }
-                    }
-                }
-                .padding(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-        .frame(height: 16)
-    }
-
-    private func providerAbbreviation(_ raw: String) -> String {
-        switch raw.lowercased() {
-        case "claude":
-            return "C"
-        case "codex":
-            return "X"
-        case "gemini":
-            return "G"
-        default:
-            return String(raw.prefix(1)).uppercased()
-        }
-    }
-
-    private func providerColor(_ raw: String) -> Color {
-        switch raw.lowercased() {
-        case "claude":
-            return Color(red: 0.39, green: 0.72, blue: 0.56)
-        case "codex":
-            return Color(red: 0.33, green: 0.57, blue: 0.88)
-        case "gemini":
-            return Color(red: 0.82, green: 0.64, blue: 0.26)
-        default:
-            return Color.secondary
-        }
-    }
-}
-
-private struct PulseChart: View {
-    let history: [SnapshotHistorySample]
-
-    var body: some View {
-        GeometryReader { geometry in
-            let samples = reducedSamples(from: history, maxPoints: 24)
-            let maxValue = max(samples.map(activityValue(for:)).max() ?? 0, 1)
-            let barWidth = max(4, (geometry.size.width - CGFloat(max(samples.count - 1, 0)) * 3) / CGFloat(max(samples.count, 1)))
-
-            ZStack(alignment: .bottomLeading) {
-                VStack(spacing: geometry.size.height / 3) {
-                    Rectangle().fill(Color.white.opacity(0.04)).frame(height: 1)
-                    Rectangle().fill(Color.white.opacity(0.04)).frame(height: 1)
-                    Rectangle().fill(Color.white.opacity(0.04)).frame(height: 1)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-
-                HStack(alignment: .bottom, spacing: 3) {
-                    ForEach(Array(samples.enumerated()), id: \.offset) { _, sample in
-                        let value = max(activityValue(for: sample), 0)
-                        let normalized = CGFloat(value) / CGFloat(maxValue)
-                        Capsule(style: .continuous)
-                            .fill(color(for: sample))
-                            .frame(width: barWidth, height: max(6, normalized * geometry.size.height))
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-            }
-        }
-        .frame(height: 36)
-    }
-
-    private func reducedSamples(from samples: [SnapshotHistorySample], maxPoints: Int) -> [SnapshotHistorySample] {
-        guard samples.count > maxPoints else {
-            return samples
-        }
-
-        let stride = Double(samples.count) / Double(maxPoints)
-        return (0..<maxPoints).compactMap { index in
-            let sourceIndex = Int((Double(index) * stride).rounded(.down))
-            guard sourceIndex < samples.count else {
-                return nil
-            }
-            return samples[sourceIndex]
-        }
-    }
-
-    private func activityValue(for sample: SnapshotHistorySample) -> Int {
-        max(sample.sessionsRecent, sample.spoolPendingCount + sample.outboxCount)
-    }
-
-    private func color(for sample: SnapshotHistorySample) -> Color {
-        switch sample.severity {
-        case .green:
-            return Color(red: 0.29, green: 0.77, blue: 0.47)
-        case .yellow:
-            return Color(red: 0.92, green: 0.74, blue: 0.28)
-        case .red:
-            return Color(red: 0.90, green: 0.34, blue: 0.28)
-        case .gray:
-            return Color.secondary
-        }
-    }
-}
-
-private struct FlowLayout<Content: View>: View {
-    let spacing: CGFloat
-    let rowSpacing: CGFloat
-    let content: Content
-
-    init(spacing: CGFloat, rowSpacing: CGFloat, @ViewBuilder content: () -> Content) {
-        self.spacing = spacing
-        self.rowSpacing = rowSpacing
-        self.content = content()
-    }
-
-    var body: some View {
-        content
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-@MainActor
-private func statusChip(title: String, color: Color, identifier: String? = nil) -> some View {
-    Text(title)
-        .font(.system(size: 10, weight: .bold, design: .monospaced))
-        .foregroundStyle(color)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(
-            Capsule(style: .continuous)
-                .fill(color.opacity(0.14))
-        )
-        .applyHarnessAccessibility(identifier: identifier, label: title)
-}
-
-private func subtleChip(title: String, tint: Color = Color.secondary) -> some View {
-    Text(title)
-        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-        .foregroundStyle(tint)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color.white.opacity(0.05))
-        )
-}
-
-private var sectionDivider: some View {
-    Rectangle()
-        .fill(Color.white.opacity(0.06))
-        .frame(height: 1)
-}
-
-private func deckColumnTitle(_ title: String) -> some View {
-    Text(title.uppercased())
-        .font(.system(size: 10, weight: .bold, design: .monospaced))
-        .foregroundStyle(Color.secondary)
-        .tracking(0.7)
-}
-
-private func statusEmblem(color: Color, systemImage: String) -> some View {
-    ZStack {
-        Circle()
-            .fill(color.opacity(0.14))
-            .frame(width: 34, height: 34)
-        Image(systemName: systemImage)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundStyle(color)
-    }
-}
-
-private extension View {
-    func harnessAccessibility(identifier: String, label: String) -> some View {
-        accessibilityIdentifier(identifier)
-            .accessibilityLabel(Text(label))
-    }
-
-    @ViewBuilder
-    func applyHarnessAccessibility(identifier: String?, label: String) -> some View {
-        if let identifier {
-            accessibilityIdentifier(identifier)
-                .accessibilityLabel(Text(label))
-        } else {
-            self
-        }
     }
 }

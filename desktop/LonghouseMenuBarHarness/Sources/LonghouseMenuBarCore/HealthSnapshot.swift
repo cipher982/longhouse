@@ -158,6 +158,14 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return Self.relativeLabel(for: parsed)
     }
 
+    public var lastShipCompactLabel: String {
+        guard let raw = engineStatus?.payload?.lastShipAt,
+              let parsed = Self.parseISO8601(raw) else {
+            return "-"
+        }
+        return Self.compactRelativeLabel(for: parsed)
+    }
+
     public var serviceStatusLabel: String {
         service?.status?.replacingOccurrences(of: "-", with: " ") ?? "unknown"
     }
@@ -239,6 +247,14 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return Self.relativeLabel(for: parsed)
     }
 
+    public var latestActivityCompactLabel: String {
+        guard let raw = activitySummary?.latestActivityAt,
+              let parsed = Self.parseISO8601(raw) else {
+            return "-"
+        }
+        return Self.compactRelativeLabel(for: parsed)
+    }
+
     public var sessionsTodayLabel: String {
         String(activitySummary?.sessionsToday ?? 0)
     }
@@ -250,6 +266,11 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public var recentWindowLabel: String {
         let minutes = activitySummary?.recentWindowMinutes ?? 15
         return "Last \(minutes)m"
+    }
+
+    public var recentWindowCompactLabel: String {
+        let minutes = activitySummary?.recentWindowMinutes ?? 15
+        return "\(minutes)m"
     }
 
     public var providerCountsToday: [(provider: String, count: Int)] {
@@ -296,12 +317,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         guard let bytes = engineStatus?.payload?.diskFreeBytes else {
             return "-"
         }
-        let formatter = ByteCountFormatter()
-        formatter.allowedUnits = [.useGB]
-        formatter.countStyle = .binary
-        formatter.includesUnit = true
-        formatter.isAdaptive = true
-        return formatter.string(fromByteCount: Int64(bytes))
+        return ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .binary)
     }
 
     public var launchStateLabel: String {
@@ -341,6 +357,39 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         }
 
         return state.prefix(1).uppercased() + state.dropFirst()
+    }
+
+    public var machineNameLabel: String {
+        let machineName = launchReadiness?.machineName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let machineName, !machineName.isEmpty {
+            return machineName
+        }
+        return "Unknown"
+    }
+
+    public var pipelineSentenceLabel: String {
+        switch pipelineValueLabel {
+        case "Clear":
+            return "clear"
+        default:
+            return pipelineValueLabel.lowercased()
+        }
+    }
+
+    public var missionSummaryLabel: String {
+        let shipLead = lastShipCompactLabel == "-" ? "Ship \(lastShipValueLabel)" : "Ship \(lastShipCompactLabel)"
+        var parts = [shipLead]
+        let recent = activitySummary?.sessionsRecent ?? 0
+        if recent > 0 {
+            parts.append("\(recent) active")
+        }
+        if pipelineValueLabel != "Clear" {
+            parts.append("Queue \(pipelineSentenceLabel)")
+        }
+        if launchValueLabel != "Unavailable" {
+            parts.append(launchValueLabel)
+        }
+        return parts.joined(separator: " · ")
     }
 
     public var attentionSummaryLabel: String {
@@ -402,6 +451,10 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "\(seconds / 86_400)d"
     }
 
+    private static func compactRelativeLabel(for date: Date) -> String {
+        compactAgeLabel(seconds: max(0, Int(Date().timeIntervalSince(date))))
+    }
+
     private static func parseISO8601(_ raw: String) -> Date? {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -414,12 +467,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return plain.date(from: raw)
     }
 
-    private static func relativeLabel(
-        for date: Date,
-        unitsStyle: RelativeDateTimeFormatter.UnitsStyle = .full
-    ) -> String {
+    private static func relativeLabel(for date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = unitsStyle
+        formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
     }
 
