@@ -15,8 +15,9 @@ The inner loop is:
 1. shared SwiftUI core
 2. fixture or live `longhouse local-health --json`
 3. PNG snapshot render
-4. window-host app
-5. menu-bar-host app
+4. full-frame visual inspection of the rendered PNGs
+5. window-host app
+6. menu-bar-host app
 
 ## Commands
 
@@ -69,6 +70,9 @@ desktop/LonghouseMenuBarHarness/
 - Keep the shared UI in `LonghouseMenuBarCore`.
 - Prefer adding accessibility identifiers at the shared view layer.
 - Use fixture PNGs first when changing layout or state presentation.
+- Treat `artifacts/menubar-harness/*.png` as required QA, not a side effect. Inspect the literal full-frame images before touching the installed app.
+- Do not accept “rendered successfully” or image dimensions as proof. Catch spacing, clipping, edge contact, and optical balance in the PNG stage.
+- Reinstall `Longhouse.app` only after the fixture/live PNGs look correct.
 - Prefer `make menubar-harness-full` when you need the whole unattended loop.
 - Treat the Xcode wrapper as generated harness infrastructure; regenerate it via the script instead of hand-editing `.xcodeproj` files.
 - Use live PNG/window/menubar runs only after the fixture loop is stable.
