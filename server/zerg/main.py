@@ -31,6 +31,7 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -140,6 +141,8 @@ from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
 from zerg.routers.waitlist import router as waitlist_router
 from zerg.routers.websocket import router as websocket_router
+from zerg.services.public_downloads import PublicDownloadUnavailable
+from zerg.services.public_downloads import download_macos_desktop_app_response
 
 # ---------------------------------------------------------------------------
 # FastAPI application
@@ -348,6 +351,15 @@ async def read_root():
             )
 
     return {"message": "Longhouse API is running"}
+
+
+@app.get("/download/macos", include_in_schema=False)
+async def download_macos_desktop_app():
+    try:
+        return await download_macos_desktop_app_response()
+    except PublicDownloadUnavailable as exc:
+        logger.warning("Public macOS download unavailable: %s", exc)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 # ---------------------------------------------------------------------------
