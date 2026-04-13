@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: local machine surface
-Updated: 2026-04-10
+Updated: 2026-04-13
 
 ## Goal
 
@@ -16,6 +16,7 @@ This document defines the local health plane that sits beside the transport plan
 
 Packaging and release mechanics for that surface live in `docs/specs/distribution-update-loop.md`.
 The macOS product decision lives in `docs/specs/macos-launch-product-shape.md`.
+The product-facing app/install unification plan lives in `docs/specs/local-app-product-unification.md`.
 
 ## Vision
 
