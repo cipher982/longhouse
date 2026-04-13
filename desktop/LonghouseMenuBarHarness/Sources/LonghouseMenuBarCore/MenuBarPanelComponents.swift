@@ -277,85 +277,94 @@ struct ActivityFeed: View {
             }
         }
     }
-
-    private func providerColor(_ raw: String) -> Color {
-        switch raw.lowercased() {
-        case "claude":
-            return Color(red: 0.39, green: 0.72, blue: 0.56)
-        case "codex":
-            return Color(red: 0.33, green: 0.57, blue: 0.88)
-        case "gemini":
-            return Color(red: 0.82, green: 0.64, blue: 0.26)
-        default:
-            return Color.secondary
-        }
-    }
 }
 
-struct ProviderMixBar: View {
+struct ProviderComparisonRows: View {
     let entries: [(provider: String, count: Int)]
+    let totalCount: Int
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(Color.white.opacity(0.05))
+        let baseline = max(entries.map(\.count).max() ?? 0, 1)
 
-            GeometryReader { geometry in
-                let total = max(entries.map(\.count).reduce(0, +), 1)
+        if entries.isEmpty {
+            Text("No tracked sessions today.")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(Color.secondary)
+        } else {
+            VStack(alignment: .leading, spacing: 9) {
+                ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
+                    ProviderComparisonRow(
+                        provider: entry.provider,
+                        count: entry.count,
+                        totalCount: totalCount,
+                        baselineCount: baseline
+                    )
 
-                HStack(spacing: 4) {
-                    ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(providerColor(entry.provider))
-                            .frame(width: max(24, geometry.size.width * CGFloat(entry.count) / CGFloat(total)))
+                    if index < entries.count - 1 {
+                        sectionDivider
                     }
                 }
-                .padding(1)
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-        }
-        .frame(height: 14)
-    }
-
-    private func providerColor(_ raw: String) -> Color {
-        switch raw.lowercased() {
-        case "claude":
-            return Color(red: 0.39, green: 0.72, blue: 0.56)
-        case "codex":
-            return Color(red: 0.33, green: 0.57, blue: 0.88)
-        case "gemini":
-            return Color(red: 0.82, green: 0.64, blue: 0.26)
-        default:
-            return Color.secondary
         }
     }
 }
 
-struct ProviderMixDeck: View {
-    let title: String
-    let summary: String
-    let entries: [(provider: String, count: Int)]
+private struct ProviderComparisonRow: View {
+    let provider: String
+    let count: Int
+    let totalCount: Int
+    let baselineCount: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 8) {
-                Text(title.uppercased())
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
-                    .tracking(0.45)
+                HStack(alignment: .center, spacing: 7) {
+                    Circle()
+                        .fill(providerColor(provider))
+                        .frame(width: 7, height: 7)
+
+                    Text(HealthSnapshot.providerDisplayName(provider))
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.84)
+                }
 
                 Spacer(minLength: 8)
 
-                Text(summary)
-                    .font(.system(size: 10, weight: .semibold))
+                Text("\(count)")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.primary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.76)
+                    .monospacedDigit()
+
+                Text(shareLabel)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Color.secondary)
+                    .lineLimit(1)
                     .monospacedDigit()
             }
 
-            ProviderMixBar(entries: entries)
+            GeometryReader { geometry in
+                ZStack(alignment: .leading) {
+                    Capsule(style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+
+                    Capsule(style: .continuous)
+                        .fill(providerColor(provider))
+                        .frame(width: max(18, geometry.size.width * CGFloat(count) / CGFloat(max(baselineCount, 1))))
+                }
+            }
+            .frame(height: 12)
         }
+    }
+
+    private var shareLabel: String {
+        guard totalCount > 0 else {
+            return "0%"
+        }
+        let percent = Int((Double(count) / Double(totalCount) * 100).rounded())
+        return "\(percent)%"
     }
 }
 
@@ -424,6 +433,19 @@ func statusEmblem(color: Color, systemImage: String) -> some View {
         Image(systemName: systemImage)
             .font(.system(size: 16, weight: .semibold))
             .foregroundStyle(color)
+    }
+}
+
+func providerColor(_ raw: String) -> Color {
+    switch raw.lowercased() {
+    case "claude":
+        return Color(red: 0.39, green: 0.72, blue: 0.56)
+    case "codex":
+        return Color(red: 0.33, green: 0.57, blue: 0.88)
+    case "gemini":
+        return Color(red: 0.82, green: 0.64, blue: 0.26)
+    default:
+        return Color.secondary
     }
 }
 

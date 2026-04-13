@@ -6,9 +6,15 @@ public enum MenuBarPanelLayout {
     public static let failureHeight: CGFloat = 198
     public static let healthyHeight: CGFloat = 572
     public static let attentionHeight: CGFloat = 564
+    private static let healthyProviderRowIncrement: CGFloat = 44
 
     public static func preferredHeight(for snapshot: HealthSnapshot) -> CGFloat {
-        snapshot.parsedSeverity == .green ? healthyHeight : attentionHeight
+        guard snapshot.parsedSeverity == .green else {
+            return attentionHeight
+        }
+
+        let extraProviderRows = max(snapshot.providerCountsToday.count - 1, 0)
+        return healthyHeight + (CGFloat(extraProviderRows) * healthyProviderRowIncrement)
     }
 }
 
@@ -293,10 +299,9 @@ public struct MenuBarPanelView: View {
             }
 
             PanelSection(title: "Today", trailing: "\(snapshot.sessionsTodayLabel) sessions") {
-                ProviderMixDeck(
-                    title: "Providers",
-                    summary: snapshot.providerMixLabel,
-                    entries: snapshot.providerCountsToday
+                ProviderComparisonRows(
+                    entries: snapshot.providerCountsToday,
+                    totalCount: Int(snapshot.sessionsTodayLabel) ?? snapshot.providerCountsToday.map(\.count).reduce(0, +)
                 )
             }
         }
