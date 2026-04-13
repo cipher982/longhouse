@@ -6,7 +6,7 @@ public enum MenuBarPanelLayout {
     public static let failureHeight: CGFloat = 198
     public static let healthyHeight: CGFloat = 572
     public static let attentionHeight: CGFloat = 564
-    private static let healthyProviderRowIncrement: CGFloat = 52
+    private static let healthyProviderRowIncrement: CGFloat = 64
 
     public static func preferredHeight(for snapshot: HealthSnapshot) -> CGFloat {
         guard snapshot.parsedSeverity == .green else {
