@@ -112,6 +112,9 @@ jobs:
     - name: Run Web Runtime Entrypoint Tests
       run: make test-web-entrypoint
 
+    - name: Run iOS simulator helper tests
+      run: make test-ios-helper
+
   engine-tests:
     needs: changes
     if: ${{ needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' }}
