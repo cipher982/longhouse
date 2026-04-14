@@ -206,9 +206,6 @@ def _env_for(
         env["GOOGLE_CLIENT_ID"] = hosted_google_client_id
         env["GOOGLE_CLIENT_SECRET"] = hosted_google_client_secret
 
-    if settings.instance_google_ios_client_id:
-        env["GOOGLE_IOS_CLIENT_ID"] = settings.instance_google_ios_client_id
-
     if settings.instance_gmail_pubsub_topic:
         env["GMAIL_PUBSUB_TOPIC"] = settings.instance_gmail_pubsub_topic
         env["PUBSUB_AUDIENCE"] = f"https://{_host_for(subdomain)}"

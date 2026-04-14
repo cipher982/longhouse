@@ -653,6 +653,7 @@ class TestEnvGeneration:
 
         assert env["GOOGLE_CLIENT_ID"] == "cp-google-client"
         assert env["GOOGLE_CLIENT_SECRET"] == "cp-google-secret"
+        assert "GOOGLE_IOS_CLIENT_ID" not in env
         assert env["GMAIL_PUBSUB_TOPIC"] == "projects/demo/topics/gmail"
         assert env["PUBSUB_AUDIENCE"] == f"https://testuser.{settings.root_domain}"
         assert env["PUBSUB_SA_EMAIL"] == "pubsub-push@demo.iam.gserviceaccount.com"
