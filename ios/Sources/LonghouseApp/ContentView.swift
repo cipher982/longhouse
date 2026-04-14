@@ -6,8 +6,19 @@ struct ContentView: View {
 
     var body: some View {
         Group {
-            if appState.isAuthenticated {
-                LonghouseWebView(serverURL: appState.serverURL, sessionToken: appState.sessionToken)
+            if appState.isValidating {
+                ZStack {
+                    Color(red: 0.04, green: 0.04, blue: 0.06).ignoresSafeArea()
+                    VStack(spacing: 16) {
+                        Image(systemName: "house.lodge.fill")
+                            .font(.system(size: 36))
+                            .foregroundStyle(.white.opacity(0.6))
+                        ProgressView()
+                            .tint(.white.opacity(0.6))
+                    }
+                }
+            } else if appState.isAuthenticated {
+                LonghouseWebView(serverURL: appState.serverURL)
                     .ignoresSafeArea(.all, edges: .bottom)
                     .overlay(alignment: .topTrailing) {
                         Menu {
