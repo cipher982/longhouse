@@ -14,6 +14,9 @@ export interface EmailStatus {
   configured: boolean;
   source: string | null;
   keys: EmailKeyStatus[];
+  aws_ses_region: string | null;
+  from_email: string | null;
+  notify_email: string | null;
 }
 
 export interface EmailConfigPayload {

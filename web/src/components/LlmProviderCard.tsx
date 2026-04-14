@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import {
   fetchLlmCapabilities,
-  fetchLlmProviders,
+  fetchEffectiveLlmProviders,
   upsertLlmProvider,
   deleteLlmProvider,
   testLlmProvider,
@@ -34,7 +34,7 @@ function CapabilityRow({
   capability,
   label,
   status,
-  dbProviders,
+  providers,
   onConfigure,
   onDelete,
   isConfiguring,
@@ -43,17 +43,23 @@ function CapabilityRow({
   capability: Capability;
   label: string;
   status: { available: boolean; source: string | null; provider_name: string | null; features: string[] };
-  dbProviders: LlmProviderInfo[];
+  providers: LlmProviderInfo[];
   onConfigure: (cap: Capability) => void;
   onDelete: (cap: Capability) => void;
   isConfiguring: Capability | null;
   isSharedPool: boolean;
 }) {
-  const dbConfig = dbProviders.find((p) => p.capability === capability);
+  const effectiveConfig = providers.find((p) => p.capability === capability);
+  const isDbOverride = effectiveConfig?.source === "database";
   const isActive = status.available;
-  // Derive source/provider from authenticated provider list (not public endpoint)
-  const sourceLabel = dbConfig ? "DB" : isActive ? (isSharedPool ? "Shared" : "Env") : null;
-  const providerName = dbConfig?.provider_name ?? null;
+  const sourceLabel = effectiveConfig
+    ? effectiveConfig.source === "database"
+      ? "Custom"
+      : isSharedPool
+        ? "Shared"
+        : "Platform"
+    : null;
+  const providerName = effectiveConfig?.provider_name ?? null;
 
   return (
     <div className="llm-capability-row">
@@ -78,7 +84,7 @@ function CapabilityRow({
         </span>
       </div>
       <div className="llm-capability-actions">
-        {dbConfig && (
+        {isDbOverride && (
           <Button
             variant="ghost"
             size="sm"
@@ -116,8 +122,8 @@ export default function LlmProviderCard() {
   });
 
   const { data: providers = [], isLoading: provLoading, error: provError } = useQuery({
-    queryKey: ["llm-providers"],
-    queryFn: fetchLlmProviders,
+    queryKey: ["llm-providers-effective"],
+    queryFn: fetchEffectiveLlmProviders,
   });
 
   const saveMutation = useMutation({
@@ -126,12 +132,13 @@ export default function LlmProviderCard() {
       data,
     }: {
       capability: string;
-      data: { provider_name: string; api_key: string; base_url: string | null };
+      data: { provider_name: string; api_key?: string | null; base_url: string | null };
     }) => upsertLlmProvider(capability, data),
     onSuccess: () => {
       toast.success("Provider saved");
       queryClient.invalidateQueries({ queryKey: ["llm-capabilities"] });
       queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["llm-providers-effective"] });
       setConfiguringCap(null);
       resetForm();
     },
@@ -146,6 +153,7 @@ export default function LlmProviderCard() {
       toast.success("Provider removed");
       queryClient.invalidateQueries({ queryKey: ["llm-capabilities"] });
       queryClient.invalidateQueries({ queryKey: ["llm-providers"] });
+      queryClient.invalidateQueries({ queryKey: ["llm-providers-effective"] });
     },
     onError: (err: Error) => {
       toast.error(`Failed to remove: ${err.message}`);
@@ -191,13 +199,13 @@ export default function LlmProviderCard() {
   }
 
   async function handleTest() {
-    if (!configuringCap || !form.apiKey) return;
+    if (!configuringCap) return;
     setIsTesting(true);
     setTestResult(null);
     try {
       const result = await testLlmProvider(configuringCap, {
         provider_name: form.providerName,
-        api_key: form.apiKey,
+        api_key: form.apiKey || null,
         base_url: form.baseUrl || null,
       });
       setTestResult(result);
@@ -209,12 +217,18 @@ export default function LlmProviderCard() {
   }
 
   function handleSave() {
-    if (!configuringCap || !form.apiKey) return;
+    if (!configuringCap) return;
+    const existing = providers.find((p) => p.capability === configuringCap);
+    const isDbOverride = existing?.source === "database";
+    if (!isDbOverride && !form.apiKey) {
+      toast.error("Enter an API key to create an override");
+      return;
+    }
     saveMutation.mutate({
       capability: configuringCap,
       data: {
         provider_name: form.providerName,
-        api_key: form.apiKey,
+        api_key: form.apiKey || null,
         base_url: form.baseUrl || null,
       },
     });
@@ -228,10 +242,15 @@ export default function LlmProviderCard() {
 
   const isLoading = capLoading || provLoading;
   const fetchError = capError || provError;
-  const hasTextConfig = providers.some((p) => p.capability === "text");
-  const hasEmbeddingConfig = providers.some((p) => p.capability === "embedding");
+  const hasTextConfig = providers.some((p) => p.capability === "text" && p.source === "database");
+  const hasEmbeddingConfig = providers.some((p) => p.capability === "embedding" && p.source === "database");
   const sharedTextPool = Boolean(capabilities?.text.available && !hasTextConfig);
   const sharedEmbeddingPool = Boolean(capabilities?.embedding.available && !hasEmbeddingConfig);
+  const configuringProvider = configuringCap
+    ? providers.find((p) => p.capability === configuringCap) ?? null
+    : null;
+  const configuringUsesStoredKey = configuringProvider?.source === "database";
+  const canTestCurrentConfig = Boolean(form.apiKey || configuringUsesStoredKey);
 
   return (
     <Card>
@@ -269,7 +288,7 @@ export default function LlmProviderCard() {
                   capability="text"
                   label="Text LLM"
                   status={capabilities.text}
-                  dbProviders={providers}
+                  providers={providers}
                   onConfigure={handleConfigure}
                   onDelete={handleDelete}
                   isConfiguring={configuringCap}
@@ -279,7 +298,7 @@ export default function LlmProviderCard() {
                   capability="embedding"
                   label="Embeddings"
                   status={capabilities.embedding}
-                  dbProviders={providers}
+                  providers={providers}
                   onConfigure={handleConfigure}
                   onDelete={handleDelete}
                   isConfiguring={configuringCap}
@@ -290,6 +309,14 @@ export default function LlmProviderCard() {
 
             {configuringCap && (
               <div className="llm-config-form">
+                <div className="llm-test-result">
+                  {configuringUsesStoredKey
+                    ? "Your current key is hidden. Leave API key blank to keep it, or enter a new key to replace it."
+                    : configuringProvider
+                      ? "This capability is currently active from platform settings. Add your own key here only if you want a personal override."
+                      : "Add your own provider key to enable this capability."}
+                </div>
+
                 <div className="llm-provider-select">
                   {KNOWN_PROVIDERS.map((p) => (
                     <label key={p.id} className="llm-provider-option">
@@ -315,7 +342,11 @@ export default function LlmProviderCard() {
                         setForm({ ...form, apiKey: e.target.value });
                         setTestResult(null);
                       }}
-                      placeholder="sk-..."
+                      placeholder={
+                        configuringUsesStoredKey
+                          ? "Configured. Enter a new key to replace it."
+                          : "sk-..."
+                      }
                     />
                   </div>
 
@@ -346,15 +377,15 @@ export default function LlmProviderCard() {
                     variant="secondary"
                     size="sm"
                     onClick={handleTest}
-                    disabled={!form.apiKey || isTesting}
+                    disabled={!canTestCurrentConfig || isTesting}
                   >
-                    {isTesting ? "Testing..." : "Test Connection"}
+                    {isTesting ? "Testing..." : configuringUsesStoredKey && !form.apiKey ? "Test Current Config" : "Test Connection"}
                   </Button>
                   <Button
                     variant="primary"
                     size="sm"
                     onClick={handleSave}
-                    disabled={!form.apiKey || saveMutation.isPending}
+                    disabled={saveMutation.isPending || (!configuringUsesStoredKey && !form.apiKey)}
                   >
                     {saveMutation.isPending ? "Saving..." : "Save"}
                   </Button>

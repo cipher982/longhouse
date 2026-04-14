@@ -173,6 +173,9 @@ class TestEmailConfigAPI:
             assert resp.status_code == 200
             data = resp.json()
             assert data["configured"] is False
+            assert data["aws_ses_region"] == "us-east-1"
+            assert data["from_email"] is None
+            assert data["notify_email"] is None
 
     def test_save_and_status(self, client):
         """Save config then check status shows configured from DB."""
@@ -200,6 +203,28 @@ class TestEmailConfigAPI:
             data = resp.json()
             assert data["configured"] is True
             assert data["source"] == "db"
+            assert data["aws_ses_region"] == "us-east-1"
+            assert data["from_email"] == "test@example.com"
+            assert data["notify_email"] == "ops@example.com"
+
+    def test_status_exposes_effective_non_secret_env_values(self, client):
+        """Status includes safe resolved values for env-backed email config."""
+        env = {
+            "AWS_SES_ACCESS_KEY_ID": "AKIA_ENV",
+            "AWS_SES_SECRET_ACCESS_KEY": "secret_env",
+            "AWS_SES_REGION": "eu-west-1",
+            "FROM_EMAIL": "from@env.com",
+            "NOTIFY_EMAIL": "notify@env.com",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            resp = client.get("/system/email/status")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["configured"] is True
+            assert data["source"] == "env"
+            assert data["aws_ses_region"] == "eu-west-1"
+            assert data["from_email"] == "from@env.com"
+            assert data["notify_email"] == "notify@env.com"
 
     def test_delete_config(self, client):
         """Delete removes DB overrides."""
