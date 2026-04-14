@@ -459,9 +459,15 @@ print_success() {
     echo -e "${NC}"
     echo ""
     if [[ "$ONBOARD_RESULT" == "completed" ]]; then
-        echo "First run:"
-        echo "  1. Open http://localhost:8080 (the installer already ran the Longhouse local quickstart)"
-        echo "  2. Find one prior session in the timeline"
+        if [[ "$is_macos" == "1" ]]; then
+            echo "First run:"
+            echo "  1. Open Longhouse.app (the installer already ran the Longhouse local quickstart)"
+            echo "  2. Find one prior session in the timeline"
+        else
+            echo "First run:"
+            echo "  1. Open http://localhost:8080 (the installer already ran the Longhouse local quickstart)"
+            echo "  2. Find one prior session in the timeline"
+        fi
     else
         echo "Next:"
         echo "  1. Run longhouse onboard"

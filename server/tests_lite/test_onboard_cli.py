@@ -181,6 +181,8 @@ def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch,
     subprocess_calls: list[list[str]] = []
     open_calls: list[str] = []
     install_calls: list[dict[str, object]] = []
+    app_path = tmp_path / "Applications" / "Longhouse.app"
+    app_path.mkdir(parents=True)
 
     monkeypatch.setenv("CI", "1")
     monkeypatch.setenv("LONGHOUSE_INSTALL_SERVICES_IN_CI", "1")
@@ -198,6 +200,7 @@ def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch,
     monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
     monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
     monkeypatch.setattr(onboard_cli.webbrowser, "open", lambda url: open_calls.append(url) or True)
+    monkeypatch.setattr(onboard_cli, "desktop_app_canonical_bundle_path", lambda: app_path)
     monkeypatch.setattr(
         onboard_cli,
         "install_local_runtime",
@@ -224,7 +227,8 @@ def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch,
             "menubar": True,
         }
     ]
-    assert open_calls == ["http://127.0.0.1:8080"]
+    assert ["open", str(app_path)] in subprocess_calls
+    assert open_calls == []
 
 
 def test_onboard_no_longer_prompts_for_manual_mode(monkeypatch, tmp_path):
