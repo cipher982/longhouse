@@ -6,19 +6,12 @@
 #   curl -fsSL https://get.longhouse.ai/install.sh | bash
 #
 # Environment:
-#   LONGHOUSE_NO_WIZARD=1           Skip the automatic local quickstart
-#   LONGHOUSE_ONBOARD_HOST          Override quickstart host
-#   LONGHOUSE_ONBOARD_PORT          Override quickstart port
-#   LONGHOUSE_ONBOARD_NO_BROWSER=1  Skip auto-opening the browser during quickstart
-#   LONGHOUSE_ONBOARD_NO_SERVER=1   Skip local runtime startup during quickstart
-#   LONGHOUSE_ONBOARD_NO_SHIPPER=1  Skip machine-agent install during quickstart
 #   http_proxy/https_proxy Proxy settings (honored automatically)
 #
 set -euo pipefail
 
 # Track if PATH was updated (for final message)
 PATH_UPDATED=0
-ONBOARD_RESULT="not-run"
 
 # Colors for output
 RED='\033[0;31m'
@@ -170,6 +163,33 @@ install_longhouse() {
     fi
 }
 
+# Install Longhouse.app into /Applications on macOS
+install_macos_app() {
+    if [[ "$(uname -s)" != "Darwin" ]]; then
+        return 0
+    fi
+
+    step "Installing Longhouse.app"
+
+    if ! has_command longhouse; then
+        error "longhouse command not found; cannot install Longhouse.app"
+        exit 1
+    fi
+
+    local install_output=""
+    if install_output=$(longhouse runtime-artifact-install desktop-app 2>&1); then
+        success "Longhouse.app installed in /Applications"
+        if [[ -n "$install_output" ]]; then
+            printf '%s\n' "$install_output"
+        fi
+        return 0
+    fi
+
+    printf '%s\n' "$install_output" >&2
+    error "Could not install Longhouse.app into /Applications"
+    exit 1
+}
+
 # Update shell profile for PATH
 update_shell_profile() {
     step "Updating shell PATH"
@@ -284,6 +304,15 @@ verify_installation() {
         info "claude: not installed (optional)"
     fi
 
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        if [[ -d "/Applications/Longhouse.app" ]]; then
+            success "Longhouse.app: /Applications/Longhouse.app"
+        else
+            error "Longhouse.app not installed in /Applications"
+            all_ok=false
+        fi
+    fi
+
     if ! $all_ok; then
         error "Installation verification failed"
         exit 1
@@ -396,50 +425,6 @@ verify_fresh_shell_path() {
     fi
 }
 
-# Run the default local quickstart
-run_quickstart() {
-    local -a onboard_args=()
-
-    if [[ -n "${LONGHOUSE_ONBOARD_HOST:-}" ]]; then
-        onboard_args+=(--host "$LONGHOUSE_ONBOARD_HOST")
-    fi
-    if [[ -n "${LONGHOUSE_ONBOARD_PORT:-}" ]]; then
-        onboard_args+=(--port "$LONGHOUSE_ONBOARD_PORT")
-    fi
-    if [[ "${LONGHOUSE_ONBOARD_NO_BROWSER:-}" =~ ^(1|true|yes)$ ]]; then
-        onboard_args+=(--no-browser)
-    fi
-    if [[ "${LONGHOUSE_ONBOARD_NO_SERVER:-}" =~ ^(1|true|yes)$ ]]; then
-        onboard_args+=(--no-server)
-    fi
-    if [[ "${LONGHOUSE_ONBOARD_NO_SHIPPER:-}" =~ ^(1|true|yes)$ ]]; then
-        onboard_args+=(--no-shipper)
-    fi
-
-    if [[ "${LONGHOUSE_NO_WIZARD:-}" == "1" ]]; then
-        info "Skipping local quickstart (LONGHOUSE_NO_WIZARD=1)"
-        ONBOARD_RESULT="skipped"
-        return 0
-    fi
-
-    step "Running local quickstart"
-    echo ""
-
-    if ! has_command longhouse; then
-        warn "longhouse command not found, skipping quickstart"
-        ONBOARD_RESULT="skipped"
-        return 0
-    fi
-
-    if longhouse onboard "${onboard_args[@]}"; then
-        ONBOARD_RESULT="completed"
-    else
-        warn "Local quickstart exited with error"
-        warn "You can run it again with: longhouse onboard"
-        ONBOARD_RESULT="failed"
-    fi
-}
-
 # Print final instructions
 print_success() {
     local has_launcher_cli=0
@@ -458,36 +443,29 @@ print_success() {
     echo "============================================"
     echo -e "${NC}"
     echo ""
-    if [[ "$ONBOARD_RESULT" == "completed" ]]; then
-        if [[ "$is_macos" == "1" ]]; then
-            echo "First run:"
-            echo "  1. Open Longhouse.app (the installer already ran the Longhouse local quickstart)"
-            echo "  2. Find one prior session in the timeline"
-        else
-            echo "First run:"
-            echo "  1. Open http://localhost:8080 (the installer already ran the Longhouse local quickstart)"
-            echo "  2. Find one prior session in the timeline"
-        fi
+    if [[ "$is_macos" == "1" ]]; then
+        echo "Next:"
+        echo "  1. Open /Applications/Longhouse.app"
+        echo "  2. Finish setup in the app"
+        echo "  3. Find one prior session in the timeline"
+        echo ""
+        echo "macOS:"
+        echo "  The terminal installer only acquires Longhouse."
+        echo "  Longhouse.app owns first-run setup, repair, and local status."
     else
         echo "Next:"
         echo "  1. Run longhouse onboard"
-        echo "  2. Open http://localhost:8080 and find one prior session"
+        echo "  2. Open http://localhost:8080"
+        echo "  3. Find one prior session in the timeline"
     fi
     if has_command claude; then
-      echo "  3. When you want control after launch"
-      echo "     longhouse claude"
+      echo ""
+      echo "Later, when you want control after launch:"
+      echo "  longhouse claude"
     elif has_command codex; then
-        echo "  3. When you want control after launch"
-        echo "     longhouse codex"
-    fi
-    if [[ "$is_macos" == "1" ]]; then
         echo ""
-        echo "macOS:"
-        if [[ "$ONBOARD_RESULT" == "completed" ]]; then
-            echo "  Look for Longhouse.app in /Applications and the menu bar for local machine status."
-        else
-            echo "  Run longhouse onboard to install the machine agent and Longhouse.app."
-        fi
+        echo "Later, when you want control after launch:"
+        echo "  longhouse codex"
     fi
     if [[ "$has_launcher_cli" == "1" ]]; then
         echo ""
@@ -539,15 +517,13 @@ main() {
     install_uv
     install_python
     install_longhouse
+    install_macos_app
 
     # Update PATH in shell profile
     update_shell_profile
 
     # Verify everything works
     verify_installation
-
-    # Run the default local quickstart
-    run_quickstart
 
     # Done!
     print_success
