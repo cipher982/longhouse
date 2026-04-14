@@ -19,6 +19,61 @@ Users should not have to reverse-engineer the difference between:
 
 Those seams can remain in code. They must stop acting like separate products.
 
+This spec formalizes the onboarding/install reset and should be treated as the
+decision document for:
+
+- local acquisition channels
+- first-run setup behavior
+- repair ownership
+- install destination policy
+- config/state ownership boundaries
+
+It extends the direction in `docs/specs/local-app-product-unification.md` and
+turns that direction into an explicit product contract.
+
+## Scope
+
+In scope:
+
+- macOS human install and first-run behavior
+- CLI-first local install behavior
+- shared local runtime install/repair seams
+- state ownership between app, CLI, runtime host, and machine agent
+- migration from the current organically grown local install model
+
+Out of scope:
+
+- runner enrollment and runner-specific install UX
+- hosted control-plane signup/billing flows
+- Linux desktop packaging
+- final Apple-native helper lifecycle replacement
+
+## Decision Summary
+
+The product decision is:
+
+- `Longhouse.app` is the canonical macOS human entrypoint
+- `longhouse` is the canonical CLI/power-user/automation entrypoint
+- both acquisition lanes must converge on one shared local runtime installer
+- `longhouse connect --install` remains the canonical repair verb
+- the public macOS app lane targets `/Applications/Longhouse.app`
+- trial-mode localhost runtime state must not silently overwrite durable
+  machine-agent target state
+
+## Normative Rules
+
+- macOS human onboarding MUST be valid through direct app launch.
+- CLI onboarding MUST be valid without the app.
+- The app, CLI, and repair flow MUST converge on the same local runtime state.
+- Only one shared installer service may mutate local runtime install state.
+- `onboard` MUST orchestrate; it MUST NOT grow bespoke install logic.
+- `serve` MUST manage runtime-host lifecycle only; it MUST NOT implicitly
+  redefine durable machine-agent target config.
+- The desktop app MUST NOT be marketed as a monitor/helper product.
+- The CLI-first lane MUST NOT silently install a human-facing app into
+  `~/Applications` as if that were equivalent to a normal Mac app install.
+- Repair MUST be able to migrate old install locations and legacy launchd labels.
+
 ## First-Principles Rules
 
 1. One visible owner per audience.
@@ -191,7 +246,142 @@ Meaning:
 - run explicit setup or repair
 - script and automate freely
 
-### Canonical local runtime state
+## Topology Model
+
+The product must treat these as distinct setup intents:
+
+### Try on this Mac
+
+- Runtime Host runs locally
+- Machine Agent runs locally
+- browser opens to localhost
+- user is in explicitly non-durable trial mode
+
+### Connect this Mac to an existing Longhouse host
+
+- Machine Agent runs locally
+- Runtime Host already exists elsewhere
+- browser opens the existing host
+- this flow must not start or reconfigure a local Runtime Host unless the user
+  explicitly asks for that
+
+### Make this machine a durable Longhouse host
+
+- Runtime Host runs here intentionally
+- Machine Agent may also run here if this is a working machine
+- browser/dashboard target and machine-agent target may coincide, but only by
+  explicit setup intent
+
+Product rule:
+
+- setup MUST ask or infer which topology is intended before mutating shared
+  install/config state
+- "localhost trial" is not a hidden fallback for every flow
+
+## Entrypoint Contract
+
+Each entrypoint needs a narrow, explicit job.
+
+### `Longhouse.app`
+
+Job:
+
+- human-facing setup
+- local status
+- repair
+- browser handoff
+
+Must:
+
+- work on first launch without prior shell bootstrap
+- show setup if CLI/runtime are absent
+- show repair if install state is broken
+- show status and open-browser affordances when healthy
+
+Must not:
+
+- assume the CLI/runtime were installed some other way
+- act like a separate diagnostic sidecar product
+
+### `scripts/install.sh`
+
+Job:
+
+- bootstrap the CLI lane
+
+Must:
+
+- install the CLI/tooling
+- record install metadata
+- call the shared orchestration path when appropriate
+
+Must not:
+
+- become a second full installer stack
+- be presented as the primary human macOS story
+
+### `longhouse onboard`
+
+Job:
+
+- choose topology
+- orchestrate first-run setup
+- verify outcome
+- hand off to the next surface
+
+Must:
+
+- delegate all local runtime mutation to the shared installer seam
+- remain explicit about whether it is setting up localhost trial mode,
+  remote-host connection, or durable self-host
+
+Must not:
+
+- directly own service install, hook install, desktop app install, and config
+  mutation as a separate parallel implementation forever
+
+### `longhouse connect --install`
+
+Job:
+
+- idempotent local runtime install/repair
+
+Must:
+
+- restore the canonical local runtime state
+- migrate legacy install locations and labels where needed
+- remain safe to rerun repeatedly
+
+### `longhouse serve`
+
+Job:
+
+- start and manage Runtime Host lifecycle
+
+Must:
+
+- own runtime-host process concerns only
+
+Must not:
+
+- silently redefine machine-agent target config
+- be the hidden owner of app/browser target state outside explicit localhost
+  trial setup
+
+### `longhouse doctor`
+
+Job:
+
+- read-only diagnosis
+
+Must not:
+
+- mutate install state
+
+## Canonical Local Runtime State
+
+The shared installer seam must converge all acquisition channels onto one
+describable machine state.
 
 A healthy local machine should be describable as:
 
@@ -202,10 +392,92 @@ A healthy local machine should be describable as:
 - one runtime artifact state
 - on macOS, one desktop app state
 
+Additionally, the system should know:
+
+- which topology this machine was set up for
+- what browser/dashboard URL should open by default
+- whether the Runtime Host is local, remote, or absent on this machine
+
 No separate notions of "monitor installed", "menu bar helper installed", and
 "real app installed".
 
-### Canonical installer seam
+## Config Ownership
+
+The current reset requires a clean ownership split between state domains.
+
+### Install metadata
+
+Purpose:
+
+- how Longhouse was acquired
+- what version/channel is installed
+- what migration rules apply
+
+### Runtime Host config
+
+Purpose:
+
+- where a local Runtime Host listens
+- whether this machine is running in localhost trial mode or durable host mode
+
+### Machine Agent target config
+
+Purpose:
+
+- where this machine ships and reconnects
+- machine identity and durable target URL
+
+### Desktop app state
+
+Purpose:
+
+- local UI/runtime affordances only
+- never the hidden source of truth for machine target selection
+
+Rule:
+
+- localhost Runtime Host state and durable machine-agent target state MUST be
+  separate concepts, even if some flows initialize them to the same value
+
+## Install Destination Policy
+
+### Human macOS lane
+
+Canonical destination:
+
+- `/Applications/Longhouse.app`
+
+Reason:
+
+- matches user expectation
+- matches drag-install mental model
+- matches Finder/Spotlight conventions
+- makes the product feel like a normal Mac app
+
+### Transitional compatibility
+
+We currently have installs under `~/Applications/Longhouse.app`.
+
+Migration rules:
+
+- repair MUST detect legacy `~/Applications` installs
+- repair MUST rewrite launchd state to the canonical app path
+- migration MAY move the app automatically or prompt, but it may not leave the
+  machine in a split-brain state
+
+### CLI-first lane
+
+CLI-first setup may remain admin-light.
+
+But if the CLI lane installs a desktop app at all, it must either:
+
+- install the real app in its canonical location explicitly, or
+- leave the app absent and tell the user so explicitly
+
+It must not silently install the human-facing app into `~/Applications` and
+pretend that is the normal Mac product path.
+
+## Canonical Installer Seam
 
 Keep one shared installer service under all mutation paths.
 
@@ -224,6 +496,26 @@ Everything else becomes a thin adapter:
 - `onboard`: orchestration only, no custom mutation logic
 - `connect --install`: repair wrapper over installer seam
 - `Longhouse.app`: native setup/repair wrapper over installer seam
+
+## First-Run State Model
+
+For the macOS app lane, first run should collapse to a small explicit state
+machine:
+
+- `setup-required`
+- `installing`
+- `choose-topology`
+- `healthy`
+- `repair-required`
+- `host-unreachable`
+- `auth-required`
+
+Rules:
+
+- every direct app launch must resolve to one of those states
+- every state must have a visible next action
+- no broken status panel should stand in for setup
+- no CLI error text should be the primary first-run UX
 
 ## What Should Change
 
@@ -294,6 +586,17 @@ The code still preserves old `local-health`/helper language in too many places.
 Compatibility aliases are fine. Product ownership logic should stop being built
 on those names.
 
+### 7. Make browser handoff explicit, not magical
+
+The browser is the main working surface, but it is not the owner of setup.
+
+Rules:
+
+- healthy setup should open the correct dashboard target
+- app and CLI should both know which target they intend to open
+- browser handoff should reflect the chosen topology, not a stale localhost
+  assumption
+
 ## Proposed Near-Term Cuts
 
 ### P0: Product truth cleanup
@@ -321,6 +624,51 @@ on those names.
 - revisit launchd ownership
 - keep launchd as implementation detail if needed
 - move toward app-owned lifecycle only after the install story is coherent
+
+## Acceptance Criteria
+
+This reset is only successful if all of these work:
+
+### Fresh macOS human install
+
+- drag `Longhouse.app` to `/Applications`
+- open app
+- app can complete first-run setup without shell bootstrap
+- healthy result opens the right browser target and leaves the app in a healthy state
+
+### Fresh CLI install
+
+- `uv tool install longhouse`
+- run onboarding/setup explicitly
+- machine reaches the same healthy local runtime state as the app lane
+
+### Legacy migration
+
+- machine with `~/Applications/Longhouse.app` upgrades successfully
+- launchd state is rewritten coherently
+- no duplicate app-owner confusion remains after repair
+
+### Trial mode safety
+
+- starting a localhost Runtime Host for trial mode does not silently poison a
+  remote durable machine-agent target
+
+### Repair
+
+- `longhouse connect --install` restores healthy state from broken/missing
+  hooks, service, engine, desktop app path, or stale labels
+
+### Cross-surface agreement
+
+- app, CLI, and browser agree on machine identity, health state, and target URL
+
+## Open Design Constraints
+
+- Public macOS expectations push us toward `/Applications`.
+- Automation and admin-light CLI flows push us away from requiring privileged
+  mutation for every install path.
+- The right answer is not "keep the wrong app path forever"; it is to separate
+  human app install expectations from CLI automation constraints cleanly.
 
 ## What To Keep
 

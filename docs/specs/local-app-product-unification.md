@@ -4,6 +4,9 @@ Status: Proposed
 Owner: onboarding + desktop product
 Updated: 2026-04-13
 
+The formal onboarding/install contract now lives in
+`docs/specs/onboarding-install-reset.md`.
+
 ## Goal
 
 Make Longhouse on macOS read as one installable app and one coherent local product.
