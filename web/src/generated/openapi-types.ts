@@ -586,29 +586,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/admin/bootstrap/context": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Seed Context
-         * @description Seed user context for the admin user.
-         *
-         *     This replaces file-based seeding from ~/.config/zerg/user_context.json.
-         *     Seeds context for all admin users (idempotent - skips users with existing context).
-         */
-        post: operations["seed_context_admin_bootstrap_context_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/admin/bootstrap/runners": {
         parameters: {
             query?: never;
@@ -1742,55 +1719,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/users/me/context": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get User Context
-         * @description Get the authenticated user's context configuration.
-         *
-         *     Returns the user's context JSONB field which contains servers,
-         *     integrations, preferences, and other user-specific data used
-         *     for prompt composition.
-         */
-        get: operations["get_user_context_users_me_context_get"];
-        /**
-         * Replace User Context
-         * @description Replace the authenticated user's entire context.
-         *
-         *     This endpoint replaces the entire context with the provided value.
-         *     To merge with existing context, use PATCH instead.
-         *
-         *     Size limit: 64KB (65536 bytes) enforced.
-         *
-         *     The context is validated against the UserContext schema to catch common
-         *     errors early, but extra fields are allowed for flexibility.
-         */
-        put: operations["replace_user_context_users_me_context_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Update User Context
-         * @description Update (deep merge) the authenticated user's context.
-         *
-         *     This endpoint deep-merges the provided context with the existing context.
-         *     Nested objects (like 'tools') are merged recursively, preserving keys not
-         *     present in the update. To replace the entire context, use PUT instead.
-         *
-         *     Size limit: 64KB (65536 bytes) enforced on the merged result.
-         *
-         *     The merged context is validated against the UserContext schema to catch
-         *     common errors, but extra fields are allowed for flexibility.
-         */
-        patch: operations["update_user_context_users_me_context_patch"];
-        trace?: never;
-    };
     "/api/user/contacts/email": {
         parameters: {
             query?: never;
@@ -2198,6 +2126,26 @@ export interface paths {
          * @description List configured LLM providers for the current user (keys never returned).
          */
         get: operations["list_llm_providers_llm_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/llm/providers/effective": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Effective Llm Providers
+         * @description List effective provider state for settings UI, including env-backed defaults.
+         */
+        get: operations["list_effective_llm_providers_llm_providers_effective_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4705,8 +4653,6 @@ export interface components {
          * @description Response showing what's configured vs missing.
          */
         BootstrapStatusResponse: {
-            /** @description User context status */
-            context: components["schemas"]["BootstrapStatusItem"];
             /** @description Runners status */
             runners: components["schemas"]["BootstrapStatusItem"];
             /** @description Personal credentials status */
@@ -4993,71 +4939,6 @@ export interface components {
             seccomp_profile: string | null;
         };
         /**
-         * ContextResponse
-         * @description Response model for context endpoints.
-         */
-        ContextResponse: {
-            /** Context */
-            context: {
-                [key: string]: unknown;
-            };
-        };
-        /**
-         * ContextSeedRequest
-         * @description Request to seed user context for the admin user.
-         *
-         *     This replaces file-based seeding from ~/.config/zerg/user_context.json.
-         *     The context is stored in the User.context JSONB column.
-         */
-        ContextSeedRequest: {
-            /**
-             * Servers
-             * @description List of servers with name, ip, purpose, ssh_user, etc.
-             */
-            servers?: {
-                [key: string]: unknown;
-            }[];
-            /**
-             * Integrations
-             * @description Integration configs (github, email, etc.)
-             */
-            integrations?: {
-                [key: string]: unknown;
-            };
-            /**
-             * Display Name
-             * @description User's preferred display name
-             */
-            display_name?: string | null;
-            /**
-             * Role
-             * @description User's job role or title
-             */
-            role?: string | null;
-            /**
-             * Location
-             * @description User's primary location
-             */
-            location?: string | null;
-            /**
-             * Custom Instructions
-             * @description Custom instructions for fiche behavior
-             */
-            custom_instructions?: string | null;
-        } & {
-            [key: string]: unknown;
-        };
-        /**
-         * ContextUpdate
-         * @description Request model for updating context.
-         */
-        ContextUpdate: {
-            /** Context */
-            context: {
-                [key: string]: unknown;
-            };
-        };
-        /**
          * CreateTokenRequest
          * @description Request to create a new device token.
          */
@@ -5299,6 +5180,31 @@ export interface components {
             source?: string | null;
             /** Keys */
             keys: components["schemas"]["EmailKeyStatus"][];
+            /**
+             * Aws Ses Access Key Preview
+             * @description Masked preview of the effective SES access key
+             */
+            aws_ses_access_key_preview?: string | null;
+            /**
+             * Aws Ses Secret Access Key Preview
+             * @description Masked preview of the effective SES secret key
+             */
+            aws_ses_secret_access_key_preview?: string | null;
+            /**
+             * Aws Ses Region
+             * @description Effective SES region (defaults to us-east-1)
+             */
+            aws_ses_region?: string | null;
+            /**
+             * From Email
+             * @description Effective from address
+             */
+            from_email?: string | null;
+            /**
+             * Notify Email
+             * @description Effective instance notification address
+             */
+            notify_email?: string | null;
         };
         /** EmailTestRequest */
         EmailTestRequest: {
@@ -5697,6 +5603,8 @@ export interface components {
             provider_name: string;
             /** Base Url */
             base_url?: string | null;
+            /** Api Key Preview */
+            api_key_preview?: string | null;
             /**
              * Source
              * @default database
@@ -5717,7 +5625,7 @@ export interface components {
             /** Provider Name */
             provider_name: string;
             /** Api Key */
-            api_key: string;
+            api_key?: string | null;
             /** Base Url */
             base_url?: string | null;
             /** Model */
@@ -5735,7 +5643,7 @@ export interface components {
             /** Provider Name */
             provider_name: string;
             /** Api Key */
-            api_key: string;
+            api_key?: string | null;
             /** Base Url */
             base_url?: string | null;
         };
@@ -9544,41 +9452,6 @@ export interface operations {
             };
         };
     };
-    seed_context_admin_bootstrap_context_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                authorization?: string | null;
-            };
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ContextSeedRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BootstrapSuccessResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     seed_runners_admin_bootstrap_runners_post: {
         parameters: {
             query?: never;
@@ -11292,92 +11165,6 @@ export interface operations {
             };
         };
     };
-    get_user_context_users_me_context_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ContextResponse"];
-                };
-            };
-        };
-    };
-    replace_user_context_users_me_context_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ContextUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ContextResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_user_context_users_me_context_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ContextUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ContextResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_email_contacts_user_contacts_email_get: {
         parameters: {
             query?: never;
@@ -11937,6 +11724,26 @@ export interface operations {
         };
     };
     list_llm_providers_llm_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LlmProviderInfo"][];
+                };
+            };
+        };
+    };
+    list_effective_llm_providers_llm_providers_effective_get: {
         parameters: {
             query?: never;
             header?: never;
