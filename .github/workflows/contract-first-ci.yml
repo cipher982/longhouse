@@ -1,11 +1,9 @@
-name: push-pr-ci--validate-contracts-and-lints--unit-backend-frontend-runner--e2e-core-a11y
+name: CI
 
 on:
   push:
   pull_request:
   workflow_dispatch: {}
-
-run-name: push-pr-ci--${{ github.ref_name }}--${{ github.sha }}
 
 permissions:
   contents: read
@@ -23,7 +21,7 @@ jobs:
   # -----------------------------------------------------------------------
   changes:
     runs-on: ubuntu-latest
-    name: "🔀 detect-changed-paths"
+    name: "Changed paths"
     outputs:
       backend:        ${{ steps.filter.outputs.backend }}
       frontend:       ${{ steps.filter.outputs.frontend }}
@@ -81,7 +79,7 @@ jobs:
     needs: changes
     if: ${{ (needs.changes.outputs.schemas == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube-fast
-    name: "🔍 validate--make-validate--ws-sse-sdk-makefile-lints"
+    name: "Validation"
 
     steps:
     - uses: actions/checkout@v6
@@ -111,7 +109,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    name: "🗃️ backend--make-test--install-runner--oss-path"
+    name: "Backend tests"
 
     steps:
     - uses: actions/checkout@v6
@@ -150,7 +148,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    name: "⚙️ engine--rust-tests--shipper-e2e"
+    name: "Engine tests"
     env:
       CARGO_PROFILE: ci
 
@@ -196,7 +194,7 @@ jobs:
     needs: changes
     if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube-fast
-    name: "⚛️ unit-frontend--bun-validate-types--bun-test--make-test-runner-unit"
+    name: "Frontend + runner tests"
 
     steps:
     - uses: actions/checkout@v6
@@ -237,7 +235,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.packaging == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    name: "📦 wheel-package--build-verify"
+    name: "CLI wheel packaging"
 
     steps:
     - uses: actions/checkout@v6
@@ -267,7 +265,7 @@ jobs:
     needs: changes
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: cube-browser
-    name: "🎭 e2e-core-a11y--make-test-e2e"
+    name: "End-to-end tests"
     env:
       # E2E tests use per-backend SQLite databases (no Postgres needed)
       FERNET_SECRET: ${{ secrets.FERNET_SECRET }}
@@ -345,7 +343,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.control_plane == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    name: "🎭 control-plane-e2e--signup-login-gates"
+    name: "Control plane E2E"
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright-py
 
@@ -386,7 +384,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.models == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    name: "🔥 model-smoke--ping-all-models-json"
+    name: "Model smoke tests"
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -409,7 +407,7 @@ jobs:
     needs: changes
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.frontend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    name: "📦 oss-qa--fresh-clone--sqlite--onboarding-ui"
+    name: "OSS onboarding smoke"
     env:
       PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
