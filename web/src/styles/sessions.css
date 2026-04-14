@@ -710,17 +710,29 @@
     white-space: nowrap;
   }
 
-  .session-card-capability {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex-wrap: wrap;
+  .session-card-capability-pill {
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: var(--radius-full);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    background: var(--surface-glass-2);
+    color: var(--color-text-muted);
+    border: 1px solid var(--border-glass-1);
   }
 
-  .session-card-capability-text {
-    font-size: var(--font-size-xs);
-    color: var(--color-text-secondary);
-    line-height: var(--font-line-height-snug);
+  .session-card-capability-pill--success {
+    background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
+    color: var(--color-intent-success);
+    border-color: color-mix(in srgb, var(--color-intent-success) 30%, transparent);
+  }
+
+  .session-card-capability-pill--warning {
+    background: color-mix(in srgb, #fbbf24 12%, transparent);
+    color: #fbbf24;
+    border-color: color-mix(in srgb, #fbbf24 28%, transparent);
   }
 
   /* Secondary: what was done — summary title or first user message */

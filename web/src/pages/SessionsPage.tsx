@@ -656,9 +656,6 @@ function SessionCard({
               {thread.continuation_count} continuations
             </span>
           )}
-        </div>
-
-        <div className="session-card-body">
           {runtime.hasSignal && (
             <div className={`session-card-runtime session-card-runtime--${runtime.tone}`}>
               <PresenceBadge
@@ -674,9 +671,12 @@ function SessionCard({
               )}
             </div>
           )}
-          <div className="session-card-capability" data-testid="session-card-capability">
-            <Badge variant={interaction.capabilityVariant}>{interaction.capabilityLabel}</Badge>
-          </div>
+          <span className={`session-card-capability-pill session-card-capability-pill--${interaction.capabilityVariant}`} data-testid="session-card-capability">
+            {interaction.capabilityLabel}
+          </span>
+        </div>
+
+        <div className="session-card-body">
           {title && <div className="session-card-title">{title}</div>}
           {showSummary && (
             <div className="session-card-summary">{session.summary}</div>
