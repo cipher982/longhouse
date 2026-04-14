@@ -14,6 +14,7 @@ import {
 } from "../../lib/sessionWorkspace";
 import { LoopModeSelector } from "./LoopModeSelector";
 import { ContinuationsList } from "./ContinuationsList";
+import { ManagedLaunchHintCard } from "./ManagedLaunchHintCard";
 
 interface SessionContextPaneProps {
   session: AgentSession;
@@ -130,6 +131,12 @@ export function SessionContextPane({
         >
           {interaction.managementDescription}
         </div>
+        {interaction.managedLaunchSuggestion ? (
+          <ManagedLaunchHintCard
+            suggestion={interaction.managedLaunchSuggestion}
+            testId="session-managed-launch-hint"
+          />
+        ) : null}
       </div>
 
       <div className="session-pane-section">

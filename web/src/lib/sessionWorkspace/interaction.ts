@@ -1,15 +1,27 @@
 import type { AgentSession } from "../../services/api/agents";
 import { getProviderLabel } from "../providers";
-import type { SessionInteractionCapabilities, SessionInteractionMode } from "./types";
+import type { ManagedLaunchSuggestion, SessionInteractionCapabilities, SessionInteractionMode } from "./types";
 import { getSessionOriginLabel } from "./formatters";
 
-function getManagedLaunchHint(provider: string, providerLabel: string): string {
+function getManagedLaunchSuggestion(provider: string, providerLabel: string): ManagedLaunchSuggestion | null {
   if (provider === "claude") {
-    return "Restart it with longhouse claude when you want Longhouse to keep it managed and steerable.";
+    return {
+      title: "Start the next Claude session through Longhouse",
+      body: "This session stays searchable here. Use this command when you want the next Claude session to stay steerable from Longhouse.",
+      command: "longhouse claude",
+    };
   }
   if (provider === "codex") {
-    return "Restart it with longhouse codex when you want Longhouse to keep it managed and steerable.";
+    return {
+      title: "Start the next Codex session through Longhouse",
+      body: "This session stays searchable here. Use this command when you want the next Codex session to stay steerable from Longhouse.",
+      command: "longhouse codex",
+    };
   }
+  return null;
+}
+
+function getManagedLaunchHint(providerLabel: string): string {
   return `Launch new ${providerLabel} sessions through Longhouse when you want live control.`;
 }
 
@@ -34,7 +46,7 @@ export function getSessionInteractionCapabilities({
   const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
-  const managedLaunchHint = getManagedLaunchHint(session.provider, providerLabel);
+  const genericLaunchHint = getManagedLaunchHint(providerLabel);
 
   const mode: SessionInteractionMode = liveControlAvailable
     ? "managed_local"
@@ -42,13 +54,25 @@ export function getSessionInteractionCapabilities({
       ? "managed_local_unavailable"
       : "unsupported";
 
+  const managedLaunchSuggestion =
+    mode === "unsupported" ? getManagedLaunchSuggestion(session.provider, providerLabel) : null;
+  const unsupportedCapabilityDescription = managedLaunchSuggestion
+    ? `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer the live session.`
+    : `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer the live session. ${genericLaunchHint}`;
+  const unsupportedDescription = managedLaunchSuggestion
+    ? `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot inject prompts into it.`
+    : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot inject prompts into it. ${genericLaunchHint}`;
+  const unsupportedManagementDescription = managedLaunchSuggestion
+    ? `Longhouse imported this ${providerLabel} session.`
+    : `Longhouse imported this ${providerLabel} session. ${genericLaunchHint}`;
+
   const managementLabel = isManagedLocalSession ? "Managed" : "Unmanaged";
   const managementVariant = isManagedLocalSession ? "success" : "neutral";
   const managementDescription = isManagedLocalSession
     ? liveControlAvailable
       ? "Longhouse owns the live control path for this session."
       : "Longhouse owns this session, but live control currently requires reattaching on the host."
-    : `Longhouse imported this ${providerLabel} session. ${managedLaunchHint}`;
+    : unsupportedManagementDescription;
 
   const submitLabel =
     mode === "managed_local"
@@ -74,7 +98,7 @@ export function getSessionInteractionCapabilities({
       ? `Message this live ${providerLabel} session from Longhouse, or reattach on the host machine.`
       : mode === "managed_local_unavailable"
         ? `This live ${providerLabel} session is visible here, but you need the host terminal to keep driving it.`
-        : `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer the live session. ${managedLaunchHint}`;
+        : unsupportedCapabilityDescription;
 
   const title =
     mode === "managed_local"
@@ -88,7 +112,7 @@ export function getSessionInteractionCapabilities({
       ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
       : mode === "managed_local_unavailable"
         ? `This managed live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts right now. Reattach on the host machine to continue.`
-        : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot inject prompts into it. ${managedLaunchHint}`;
+        : unsupportedDescription;
 
   const placeholder =
     mode === "managed_local"
@@ -106,12 +130,18 @@ export function getSessionInteractionCapabilities({
       : mode === "unsupported"
         ? {
             title: `${providerLabel} session — unmanaged`,
-            body: `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer the live session. ${managedLaunchHint}`,
+            body: unsupportedCapabilityDescription,
           }
         : null;
 
   const composerDisabledReason =
-    mode === "managed_local_unavailable" || mode === "unsupported" ? notice?.body ?? null : null;
+    mode === "managed_local_unavailable"
+      ? notice?.body ?? null
+      : mode === "unsupported"
+        ? managedLaunchSuggestion
+          ? `Live control is unavailable for this unmanaged ${providerLabel} session.`
+          : notice?.body ?? null
+        : null;
 
   return {
     mode,
@@ -126,6 +156,7 @@ export function getSessionInteractionCapabilities({
     managementLabel,
     managementVariant,
     managementDescription,
+    managedLaunchSuggestion,
     capabilityLabel,
     capabilityVariant,
     capabilityDescription,

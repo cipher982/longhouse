@@ -72,6 +72,12 @@ export type SessionInteractionMode =
   | "promote"
   | "branch";
 
+export type ManagedLaunchSuggestion = {
+  title: string;
+  body: string;
+  command: string;
+};
+
 export type SessionInteractionCapabilities = {
   mode: SessionInteractionMode;
   providerLabel: string;
@@ -85,6 +91,7 @@ export type SessionInteractionCapabilities = {
   managementLabel: string;
   managementVariant: "neutral" | "success";
   managementDescription: string;
+  managedLaunchSuggestion: ManagedLaunchSuggestion | null;
   capabilityLabel: string;
   capabilityVariant: "neutral" | "success" | "warning";
   capabilityDescription: string | null;

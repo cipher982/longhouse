@@ -28,12 +28,15 @@ vi.mock("../../services/api/oikos", () => ({
 vi.mock("../../components/SessionChat", () => ({
   SessionChat: ({
     composerDisabledReason,
+    managedLaunchSuggestion,
   }: {
     composerDisabledReason?: string | null;
+    managedLaunchSuggestion?: { command: string } | null;
   }) => (
     <div
       data-testid="session-chat"
       data-disabled-reason={composerDisabledReason ?? ""}
+      data-launch-command={managedLaunchSuggestion?.command ?? ""}
     >
       session-chat
     </div>
@@ -227,6 +230,7 @@ describe("SessionDetailPage", () => {
     ).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute("data-disabled-reason", "");
+    expect(screen.getByTestId("session-chat")).toHaveAttribute("data-launch-command", "");
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();
 
     const toolLabel = screen.getByText("Bash");
@@ -308,12 +312,97 @@ describe("SessionDetailPage", () => {
       "data-disabled-reason",
       "Longhouse can search this unmanaged Gemini session here, but it cannot steer the live session. Launch new Gemini sessions through Longhouse when you want live control.",
     );
+    expect(screen.getByTestId("session-chat")).toHaveAttribute("data-launch-command", "");
     expect(screen.getByTestId("session-management-badge")).toHaveTextContent("Unmanaged");
     expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
       "Longhouse imported this Gemini session. Launch new Gemini sessions through Longhouse when you want live control.",
     );
+    expect(screen.queryByTestId("session-managed-launch-hint")).not.toBeInTheDocument();
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
       "Gemini session — unmanaged",
+    );
+  });
+
+  it("shows a compact managed-launch hint for imported Codex sessions", () => {
+    const session = makeSession({
+      provider: "codex",
+      home_label: null,
+      control: null,
+      continuation_kind: "local",
+      id: "session-unmanaged-codex",
+      capabilities: makeCapabilities({
+        live_control_available: false,
+        host_reattach_available: false,
+        reply_to_live_session_available: false,
+      }),
+    });
+    const model = buildTimelineModel([
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: "2026-03-22T22:00:01Z",
+        event: {
+          id: 1,
+          role: "assistant",
+          content_text: "Transcript row from unmanaged Codex.",
+          tool_name: null,
+          tool_input_json: null,
+          tool_output_text: null,
+          tool_call_id: null,
+          timestamp: "2026-03-22T22:00:01Z",
+          in_active_context: true,
+        },
+      },
+    ]);
+
+    workspaceMocks.useSessionWorkspace.mockImplementation(() => {
+      const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+      return {
+        session,
+        sessionLoading: false,
+        sessionError: null,
+        threadSessions: [session],
+        currentThreadSession: session,
+        headThreadSession: session,
+        isViewingHead: true,
+        totalEntries: model.items.length,
+        loadedEntryCount: model.items.length,
+        items: model.items,
+        eventsLoading: false,
+        eventsError: null,
+        fetchPreviousPage: vi.fn(),
+        hasPreviousPage: false,
+        isFetchingPreviousPage: false,
+        abandonedEvents: 0,
+        showAbandonedBranches: false,
+        setShowAbandonedBranches: vi.fn(),
+        selectedKey,
+        selectedSelection: selectedKey ? model.selectionMap.get(selectedKey) ?? null : null,
+        selectKey: setSelectedKey,
+        handleVisibleSelectionChange: vi.fn(),
+        registerTimelineList: vi.fn(),
+      };
+    });
+
+    renderSessionDetailPage();
+
+    expect(screen.getByTestId("session-management-badge")).toHaveTextContent("Unmanaged");
+    expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
+      "Longhouse imported this Codex session.",
+    );
+    expect(screen.getByTestId("session-managed-launch-hint")).toHaveTextContent(
+      "Start the next Codex session through Longhouse",
+    );
+    expect(screen.getByTestId("session-managed-launch-hint-command")).toHaveTextContent(
+      "longhouse codex",
+    );
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-disabled-reason",
+      "Live control is unavailable for this unmanaged Codex session.",
+    );
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-launch-command",
+      "longhouse codex",
     );
   });
 });
