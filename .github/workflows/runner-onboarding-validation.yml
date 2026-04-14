@@ -101,6 +101,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -120,8 +122,8 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Verify make available
-        run: command -v make
+      - name: Ensure make available
+        run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
       - name: Install Playwright browsers
         run: |
@@ -173,6 +175,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -192,8 +196,8 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Verify make available
-        run: command -v make
+      - name: Ensure make available
+        run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
       - name: Install Playwright browsers
         run: |
@@ -229,6 +233,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -282,6 +288,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -337,6 +345,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -392,6 +402,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
 
       - name: Set up Python
         uses: actions/setup-python@v6

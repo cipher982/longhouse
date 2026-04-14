@@ -45,8 +45,8 @@ jobs:
         with:
           bun-version: "1.2.20"
 
-      - name: Verify make available
-        run: command -v make
+      - name: Ensure make available
+        run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
       - name: Run readme-test blocks
         run: make test-readmes MODE=${{ github.event.inputs.mode || 'smoke' }}

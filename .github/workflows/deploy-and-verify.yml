@@ -31,6 +31,7 @@ jobs:
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: false
+          fetch-depth: 1
 
       - name: Resolve target commit
         id: meta
@@ -131,6 +132,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.gate.outputs.head_sha }}
+          fetch-depth: 1
 
       - name: Restore Bun download cache
         uses: actions/cache@v4
@@ -163,8 +165,8 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Verify make available
-        run: command -v make
+      - name: Ensure make available
+        run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
       - name: Install JS deps
         run: bun install --frozen-lockfile
