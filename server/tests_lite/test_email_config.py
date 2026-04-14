@@ -173,6 +173,8 @@ class TestEmailConfigAPI:
             assert resp.status_code == 200
             data = resp.json()
             assert data["configured"] is False
+            assert data["aws_ses_access_key_preview"] is None
+            assert data["aws_ses_secret_access_key_preview"] is None
             assert data["aws_ses_region"] == "us-east-1"
             assert data["from_email"] is None
             assert data["notify_email"] is None
@@ -203,6 +205,8 @@ class TestEmailConfigAPI:
             data = resp.json()
             assert data["configured"] is True
             assert data["source"] == "db"
+            assert data["aws_ses_access_key_preview"] == "AKIA...TEST"
+            assert data["aws_ses_secret_access_key_preview"] == "secr...test"
             assert data["aws_ses_region"] == "us-east-1"
             assert data["from_email"] == "test@example.com"
             assert data["notify_email"] == "ops@example.com"
@@ -222,6 +226,8 @@ class TestEmailConfigAPI:
             data = resp.json()
             assert data["configured"] is True
             assert data["source"] == "env"
+            assert data["aws_ses_access_key_preview"] == "AK...NV"
+            assert data["aws_ses_secret_access_key_preview"] == "secr..._env"
             assert data["aws_ses_region"] == "eu-west-1"
             assert data["from_email"] == "from@env.com"
             assert data["notify_email"] == "notify@env.com"

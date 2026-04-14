@@ -12,6 +12,7 @@ import { Badge, Button, Card, Input, Spinner } from "./ui";
 export default function EmailConfigCard() {
   const queryClient = useQueryClient();
   const [isConfiguring, setIsConfiguring] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
   const [testResult, setTestResult] = useState<{
     success: boolean;
     message: string;
@@ -74,6 +75,7 @@ export default function EmailConfigCard() {
       notify_email: "",
     });
     setTestResult(null);
+    setIsEditing(false);
   }
 
   function handleToggleConfigure() {
@@ -89,6 +91,7 @@ export default function EmailConfigCard() {
         from_email: status?.from_email ?? "",
         notify_email: status?.notify_email ?? "",
       });
+      setIsEditing(!(status?.configured ?? false));
       setTestResult(null);
     }
   }
@@ -168,6 +171,12 @@ export default function EmailConfigCard() {
       ? "Custom"
       : "Platform"
     : null;
+
+  const currentAccessKey = status?.aws_ses_access_key_preview ?? "Not configured";
+  const currentSecretKey = status?.aws_ses_secret_access_key_preview ?? "Not configured";
+  const currentRegion = status?.aws_ses_region ?? "Not configured";
+  const currentFromEmail = status?.from_email ?? "Not configured";
+  const currentNotifyEmail = status?.notify_email ?? "Not configured";
 
   return (
     <Card>
@@ -254,112 +263,194 @@ export default function EmailConfigCard() {
             {/* Config form */}
             {isConfiguring && (
               <div className="llm-config-form">
-                <div className="llm-test-result">
-                  Secret fields stay blank by design. Enter a new value only if you want to replace the current one.
-                </div>
-
                 <div className="llm-config-fields">
                   <div className="form-group">
-                    <label className="form-label">
-                      SES Access Key ID
-                    </label>
+                    <label className="form-label">Current SES Access Key ID</label>
                     <Input
-                      type="password"
-                      value={form.aws_ses_access_key_id}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          aws_ses_access_key_id: e.target.value,
-                        })
-                      }
-                      placeholder={
-                        keyStatusMap.get("AWS_SES_ACCESS_KEY_ID")?.configured
-                          ? "Configured. Enter a new key to replace it."
-                          : "AKIA..."
-                      }
+                      value={currentAccessKey}
+                      readOnly
                     />
                     <small>
                       {keyStatusMap.get("AWS_SES_ACCESS_KEY_ID")?.configured
-                        ? "Current key is hidden."
-                        : "Required only when adding or replacing SES credentials."}
+                        ? "Masked preview of the configured key."
+                        : "No access key configured."}
                     </small>
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">
-                      SES Secret Access Key
-                    </label>
+                    <label className="form-label">Current SES Secret Access Key</label>
                     <Input
-                      type="password"
-                      value={form.aws_ses_secret_access_key}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          aws_ses_secret_access_key: e.target.value,
-                        })
-                      }
-                      placeholder={
-                        keyStatusMap.get("AWS_SES_SECRET_ACCESS_KEY")?.configured
-                          ? "Configured. Enter a new secret to replace it."
-                          : "Secret key..."
-                      }
+                      value={currentSecretKey}
+                      readOnly
                     />
                     <small>
                       {keyStatusMap.get("AWS_SES_SECRET_ACCESS_KEY")?.configured
-                        ? "Current secret is hidden."
-                        : "Required only when adding or replacing SES credentials."}
+                        ? "Masked preview of the configured secret."
+                        : "No secret key configured."}
                     </small>
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">SES Region</label>
+                    <label className="form-label">Current SES Region</label>
                     <Input
-                      value={form.aws_ses_region}
-                      onChange={(e) =>
-                        setForm({ ...form, aws_ses_region: e.target.value })
-                      }
-                      placeholder="us-east-1 (default)"
+                      value={currentRegion}
+                      readOnly
                     />
-                    <small>Leave empty for us-east-1</small>
+                    <small>Effective value currently in use</small>
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">From Email</label>
+                    <label className="form-label">Current From Email</label>
                     <Input
-                      value={form.from_email}
-                      onChange={(e) =>
-                        setForm({ ...form, from_email: e.target.value })
-                      }
-                      placeholder="notifications@yourdomain.com"
+                      value={currentFromEmail}
+                      readOnly
                     />
                     <small>Must be verified in SES</small>
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">
-                      Instance Email
-                    </label>
+                    <label className="form-label">Current Instance Email</label>
                     <Input
-                      value={form.notify_email}
-                      onChange={(e) =>
-                        setForm({ ...form, notify_email: e.target.value })
-                      }
-                      placeholder="you@example.com"
+                      value={currentNotifyEmail}
+                      readOnly
                     />
                     <small>Used for alerts, digests, and test emails</small>
                   </div>
                 </div>
 
-                <div className="llm-config-actions">
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={handleSave}
-                    disabled={saveMutation.isPending || !hasChanges}
-                  >
-                    {saveMutation.isPending ? "Saving..." : "Save"}
-                  </Button>
-                </div>
+                {!isEditing && (
+                  <div className="llm-config-actions">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setIsEditing(true)}
+                    >
+                      {status?.configured ? "Edit Settings" : "Add Settings"}
+                    </Button>
+                  </div>
+                )}
+
+                {isEditing && (
+                  <>
+                    <div className="llm-test-result">
+                      Enter replacement secret values only for the fields you want to change.
+                    </div>
+
+                    <div className="llm-config-fields">
+                      <div className="form-group">
+                        <label className="form-label">New SES Access Key ID</label>
+                        <Input
+                          value={form.aws_ses_access_key_id}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              aws_ses_access_key_id: e.target.value,
+                            })
+                          }
+                          placeholder={
+                            keyStatusMap.get("AWS_SES_ACCESS_KEY_ID")?.configured
+                              ? "Replace current access key"
+                              : "AKIA..."
+                          }
+                        />
+                        <small>
+                          {keyStatusMap.get("AWS_SES_ACCESS_KEY_ID")?.configured
+                            ? "Leave empty to keep the current access key."
+                            : "Required when adding SES credentials."}
+                        </small>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">New SES Secret Access Key</label>
+                        <Input
+                          type="password"
+                          value={form.aws_ses_secret_access_key}
+                          onChange={(e) =>
+                            setForm({
+                              ...form,
+                              aws_ses_secret_access_key: e.target.value,
+                            })
+                          }
+                          placeholder={
+                            keyStatusMap.get("AWS_SES_SECRET_ACCESS_KEY")?.configured
+                              ? "Replace current secret key"
+                              : "Secret key..."
+                          }
+                        />
+                        <small>
+                          {keyStatusMap.get("AWS_SES_SECRET_ACCESS_KEY")?.configured
+                            ? "Leave empty to keep the current secret key."
+                            : "Required when adding SES credentials."}
+                        </small>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">SES Region</label>
+                        <Input
+                          value={form.aws_ses_region}
+                          onChange={(e) =>
+                            setForm({ ...form, aws_ses_region: e.target.value })
+                          }
+                          placeholder="us-east-1 (default)"
+                        />
+                        <small>Leave empty for us-east-1</small>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">From Email</label>
+                        <Input
+                          value={form.from_email}
+                          onChange={(e) =>
+                            setForm({ ...form, from_email: e.target.value })
+                          }
+                          placeholder="notifications@yourdomain.com"
+                        />
+                        <small>Must be verified in SES</small>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">
+                          Instance Email
+                        </label>
+                        <Input
+                          value={form.notify_email}
+                          onChange={(e) =>
+                            setForm({ ...form, notify_email: e.target.value })
+                          }
+                          placeholder="you@example.com"
+                        />
+                        <small>Used for alerts, digests, and test emails</small>
+                      </div>
+                    </div>
+
+                    <div className="llm-config-actions">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setIsEditing(false);
+                          setForm({
+                            aws_ses_access_key_id: "",
+                            aws_ses_secret_access_key: "",
+                            aws_ses_region: status?.aws_ses_region ?? "",
+                            from_email: status?.from_email ?? "",
+                            notify_email: status?.notify_email ?? "",
+                          });
+                        }}
+                      >
+                        Stop Editing
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={handleSave}
+                        disabled={saveMutation.isPending || !hasChanges}
+                      >
+                        {saveMutation.isPending ? "Saving..." : "Save"}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

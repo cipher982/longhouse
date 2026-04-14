@@ -56,6 +56,8 @@ class EmailStatusResponse(BaseModel):
     configured: bool = Field(description="Whether email can send (SES creds + FROM_EMAIL + NOTIFY_EMAIL present)")
     source: str | None = Field(None, description="Primary source: 'db', 'env', or None")
     keys: list[EmailKeyStatus]
+    aws_ses_access_key_preview: str | None = Field(None, description="Masked preview of the effective SES access key")
+    aws_ses_secret_access_key_preview: str | None = Field(None, description="Masked preview of the effective SES secret key")
     aws_ses_region: str | None = Field(None, description="Effective SES region (defaults to us-east-1)")
     from_email: str | None = Field(None, description="Effective from address")
     notify_email: str | None = Field(None, description="Effective instance notification address")
@@ -124,6 +126,32 @@ def _resolve_non_sensitive_value(
     return default
 
 
+def _resolve_effective_value(key: str, db: Session, owner_id: int) -> str | None:
+    """Resolve a value using DB-first/env fallback, returning the raw value."""
+    return _resolve_non_sensitive_value(key, db, owner_id)
+
+
+def _mask_secret_preview(value: str | None) -> str | None:
+    """Show the first and last characters of a secret without exposing the full value."""
+    if value is None:
+        return None
+
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+
+    if len(trimmed) <= 2:
+        return trimmed
+
+    if len(trimmed) <= 6:
+        return f"{trimmed[0]}...{trimmed[-1]}"
+
+    if len(trimmed) <= 8:
+        return f"{trimmed[:2]}...{trimmed[-2:]}"
+
+    return f"{trimmed[:4]}...{trimmed[-4:]}"
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -153,6 +181,8 @@ def email_status(
         configured=has_creds,
         source=primary_source,
         keys=keys,
+        aws_ses_access_key_preview=_mask_secret_preview(_resolve_effective_value("AWS_SES_ACCESS_KEY_ID", db, current_user.id)),
+        aws_ses_secret_access_key_preview=_mask_secret_preview(_resolve_effective_value("AWS_SES_SECRET_ACCESS_KEY", db, current_user.id)),
         aws_ses_region=_resolve_non_sensitive_value(
             "AWS_SES_REGION",
             db,
