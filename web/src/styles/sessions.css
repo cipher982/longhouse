@@ -1885,13 +1885,12 @@
   .session-card--thinking,
   .session-card--running,
   .session-card--live {
-    background: color-mix(in srgb, #fb923c 8%, var(--surface-glass-1));
-    animation: card-working-pulse 3s ease-in-out infinite;
+    animation: card-working-pulse 2.5s ease-in-out infinite;
   }
 
   @keyframes card-working-pulse {
-    0%, 100% { border-left-color: inherit; }
-    50% { border-left-color: #fb923c; }
+    0%, 100% { outline: 1px solid transparent; outline-offset: -1px; }
+    50% { outline: 1px solid color-mix(in srgb, #fb923c 55%, transparent); outline-offset: -1px; }
   }
 
   .page-shell--scrolling .session-card--thinking,
