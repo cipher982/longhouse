@@ -226,9 +226,8 @@ videos/
 !web/public/videos/timeline-demo.mp4
 .claude/
 
-# UI capture debug bundles
-artifacts/ui-capture/
-artifacts/menubar-harness/
+# Generated local artifacts
+artifacts/
 desktop/LonghouseMenuBarHarness/XcodeHarness/*.xcodeproj/
 
 # Swift menu bar harness build outputs
