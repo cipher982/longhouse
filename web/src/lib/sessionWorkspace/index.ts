@@ -1,5 +1,6 @@
 export type {
   EventFilter,
+  ManagedLaunchSuggestion,
   SessionInteractionCapabilities,
   SessionInteractionMode,
   TimelineItem,

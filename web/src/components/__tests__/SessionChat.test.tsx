@@ -12,6 +12,10 @@ const { requestMock } = vi.hoisted(() => ({
   requestMock: vi.fn(),
 }));
 
+const { writeTextMock } = vi.hoisted(() => ({
+  writeTextMock: vi.fn(),
+}));
+
 vi.mock("../../lib/auth-refresh", () => ({
   fetchWithRefresh: fetchWithRefreshMock,
 }));
@@ -99,11 +103,17 @@ describe("SessionChat", () => {
   beforeEach(() => {
     fetchWithRefreshMock.mockReset();
     requestMock.mockReset();
+    writeTextMock.mockReset();
+    writeTextMock.mockResolvedValue(undefined);
     requestMock.mockImplementation((path: string) => {
       if (String(path).endsWith("/lock")) {
         return Promise.resolve({ locked: false, fork_available: false });
       }
       return Promise.reject(new Error(`Unexpected request: ${path}`));
+    });
+    Object.defineProperty(globalThis.navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: writeTextMock },
     });
     Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
@@ -147,6 +157,30 @@ describe("SessionChat", () => {
       "Longhouse cannot continue it from the browser yet.",
     );
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
+  });
+
+  it("shows a managed-launch hint card for unmanaged sessions", () => {
+    renderSessionChat({
+      composerDisabledReason: "Live control is unavailable for this unmanaged Codex session.",
+      managedLaunchSuggestion: {
+        title: "Start the next Codex session through Longhouse",
+        body: "This session stays searchable here. Use this command when you want the next Codex session to stay steerable from Longhouse.",
+        command: "longhouse codex",
+      },
+    });
+
+    expect(screen.getByRole("textbox")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.getByTestId("session-chat-managed-launch-hint")).toHaveTextContent(
+      "Start the next Codex session through Longhouse",
+    );
+    expect(screen.getByTestId("session-chat-managed-launch-hint-command")).toHaveTextContent(
+      "longhouse codex",
+    );
+    expect(screen.queryByTestId("session-chat-disabled-reason")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /copy command: longhouse codex/i })).toHaveTextContent(
+      "Copy",
+    );
   });
 
   it("shows empty-state copy instead of resume wording", () => {

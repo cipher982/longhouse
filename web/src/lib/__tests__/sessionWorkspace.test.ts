@@ -109,6 +109,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(true);
     expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.managementDescription).toMatch(/owns the live control path/i);
+    expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Live control");
     expect(capabilities.composerDisabledReason).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Open live dock");
@@ -134,6 +135,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("managed_local_unavailable");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
+    expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Reattach on host");
     expect(capabilities.composerDisabledReason).toMatch(/host control channel/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
@@ -160,6 +162,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("managed_local_unavailable");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Managed");
+    expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.capabilityLabel).toBe("Reattach on host");
   });
 
@@ -173,11 +176,15 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.capabilityDescription).toMatch(/cannot steer the live session/i);
-    expect(capabilities.capabilityDescription).toMatch(/longhouse claude/i);
+    expect(capabilities.capabilityDescription).not.toMatch(/longhouse claude/i);
     expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
     expect(capabilities.notice?.title).toBe("Claude session — unmanaged");
-    expect(capabilities.managementDescription).toMatch(/longhouse claude/i);
+    expect(capabilities.managementDescription).toBe("Longhouse imported this Claude session.");
+    expect(capabilities.composerDisabledReason).toBe(
+      "Live control is unavailable for this unmanaged Claude session.",
+    );
+    expect(capabilities.managedLaunchSuggestion?.command).toBe("longhouse claude");
   });
 
   it("treats unsupported providers as searchable context only", () => {
@@ -194,6 +201,7 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.composerDisabledReason).toMatch(/cannot steer the live session/i);
     expect(capabilities.composerDisabledReason).toMatch(/Launch new Gemini sessions through Longhouse/i);
+    expect(capabilities.managedLaunchSuggestion).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 });

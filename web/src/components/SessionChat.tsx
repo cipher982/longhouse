@@ -15,7 +15,9 @@ import { fetchWithRefresh } from "../lib/auth-refresh";
 import { consumeSessionChatSseBuffer, flushSessionChatSseBuffer } from "../lib/sessionChatSse";
 import { fetchSessionLockStatus, type SessionLockInfo } from "../services/api";
 import type { AgentSession } from "../services/api/agents";
+import type { ManagedLaunchSuggestion } from "../lib/sessionWorkspace";
 import { Badge, Button, Spinner } from "./ui";
+import { ManagedLaunchHintCard } from "./session-workspace/ManagedLaunchHintCard";
 import "../styles/session-chat.css";
 
 interface SSEAssistantDelta {
@@ -76,6 +78,7 @@ interface SessionChatProps {
   /** Managed-local sessions use explicit live-send with fast JSON ack. */
   chatMode?: "managed_local";
   composerDisabledReason?: string | null;
+  managedLaunchSuggestion?: ManagedLaunchSuggestion | null;
 }
 
 export type SessionChatTarget = Pick<AgentSession, "id" | "project" | "provider">;
@@ -114,6 +117,7 @@ export function SessionChat({
   keyboardHintText,
   chatMode,
   composerDisabledReason = null,
+  managedLaunchSuggestion = null,
 }: SessionChatProps) {
   const isDock = layout === "dock";
   const isManagedLocal = chatMode === "managed_local";
@@ -613,7 +617,12 @@ export function SessionChat({
             </div>
           </>
         )}
-        {composerDisabledReason ? (
+        {managedLaunchSuggestion ? (
+          <ManagedLaunchHintCard
+            suggestion={managedLaunchSuggestion}
+            testId="session-chat-managed-launch-hint"
+          />
+        ) : composerDisabledReason ? (
           <div
             className="session-chat-disabled-reason"
             data-testid="session-chat-disabled-reason"

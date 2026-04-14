@@ -248,6 +248,7 @@ function SessionDetailWorkspaceRoute({
                 chatMode={interaction.mode === "managed_local" ? "managed_local" : undefined}
                 composerPlaceholder={interaction.placeholder}
                 composerDisabledReason={interaction.composerDisabledReason}
+                managedLaunchSuggestion={interaction.managedLaunchSuggestion}
                 submitLabel={interaction.submitLabel}
                 requireClickForFirstSend={
                   interaction.mode === "branch" || interaction.mode === "promote"
