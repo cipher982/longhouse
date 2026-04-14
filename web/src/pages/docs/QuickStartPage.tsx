@@ -66,16 +66,16 @@ export default function QuickStartPage() {
         <p>
           <strong>Imported runs are unmanaged.</strong> Longhouse still shows
           them in the timeline, but there is no live control path open. Treat
-          bare CLI history as observe-only until you launch a managed session
-          yourself.
+          bare CLI history as observe-only, then restart the work through
+          Longhouse when you want to keep it steerable.
         </p>
       </div>
 
       <h2>4. Launch a managed session</h2>
       <p>
-        Bare provider CLIs create unmanaged sessions that are useful for quick
-        local work but cannot accept browser messages. Start through Longhouse
-        instead when you want a <strong>managed</strong> session to stay
+        Bare provider CLIs are useful for compatibility import, but they are
+        not the default path once Longhouse is installed. Start through
+        Longhouse when you want a <strong>managed</strong> session to stay
         reachable later:
       </p>
       <CodeBlock title="terminal">
@@ -91,9 +91,9 @@ longhouse codex     # Codex CLI with control channel`}
       <div className="docs-callout">
         <p>
           <strong>Managed vs unmanaged.</strong> Both show up in the timeline,
-          but only managed sessions keep a live control channel. Use
-          <code>longhouse claude</code> or <code>longhouse codex</code> whenever you want to keep a
-          session steerable.
+          but only managed sessions keep a live control channel. Use{" "}
+          <code>longhouse claude</code> or <code>longhouse codex</code> as the
+          normal launch path whenever you want to keep a session steerable.
         </p>
       </div>
 

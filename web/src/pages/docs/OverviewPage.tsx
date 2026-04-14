@@ -12,15 +12,16 @@ export default function OverviewPage() {
       <h1>Longhouse Documentation</h1>
       <p className="docs-subtitle">
         Mission control for CLI agent sessions running on machines you own.
-        Import unmanaged sessions, search them, and keep managed sessions
-        steerable for later.
+        Import existing sessions fast, then start new work through Longhouse so
+        it stays steerable for later.
       </p>
 
       <div className="docs-callout">
         <p>
           <strong>New here?</strong> Start with the{" "}
           <Link to="/docs/quickstart">Quick Start</Link> — you will have
-          Longhouse running and your first session imported in under two minutes.
+          Longhouse running, your first session imported, and the normal launch
+          path in under two minutes.
         </p>
       </div>
 
@@ -34,8 +35,8 @@ export default function OverviewPage() {
       <div className="docs-callout">
         <p>
           <strong>Managed vs unmanaged.</strong> Imported sessions are useful
-          immediately for search and inspection, but only managed sessions keep
-          a live control path.
+          immediately for search and inspection, but they are not the long-term
+          happy path. Only managed sessions keep a live control path.
         </p>
       </div>
 

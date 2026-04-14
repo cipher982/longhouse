@@ -19,10 +19,10 @@ export default function RemoteControlPage() {
         <p>
           <strong>Managed vs unmanaged.</strong> Sessions started with bare
           provider CLIs are imported as unmanaged history—they land in the
-          timeline but Longhouse does not own their live control channel. When
-          you use <code>longhouse claude</code> or <code>longhouse codex</code>{" "}
-          you launch a managed session that stays steerable long after the
-          terminal closes.
+          timeline but Longhouse does not own their live control channel. Use{" "}
+          <code>longhouse claude</code> or <code>longhouse codex</code> as the
+          normal launch path when you want a session to stay steerable long
+          after the terminal closes.
         </p>
       </div>
       <div className="docs-callout">
@@ -95,7 +95,7 @@ longhouse wall --json       # machine-readable output`}
         "CLI session" — there is one session with multiple ways to reach it.
       </p>
 
-      <h2>When to use unmanaged vs. managed</h2>
+      <h2>Which command should you start with?</h2>
       <table>
         <thead>
           <tr>
@@ -105,8 +105,8 @@ longhouse wall --json       # machine-readable output`}
         </thead>
         <tbody>
           <tr>
-            <td>Quick local task, no need to come back</td>
-            <td><code>claude</code> / <code>codex</code></td>
+            <td>Quick local task you still may want to inspect later</td>
+            <td><code>longhouse claude</code> / <code>longhouse codex</code></td>
           </tr>
           <tr>
             <td>Long-running work you want to check on later</td>
@@ -124,11 +124,11 @@ longhouse wall --json       # machine-readable output`}
       </table>
       <div className="docs-callout">
         <p>
-          <strong>Both paths land in the timeline.</strong> Unmanaged sessions
-          from bare CLIs still get imported and searchable, but they cannot be
-          steered from the browser. Managed sessions launched through Longhouse
-          keep the control channel open so you can message them, tail them,
-          or continue them from any surface.
+          <strong>Bare provider CLIs still import.</strong> That compatibility
+          path exists so Longhouse is useful on day one, not because it is the
+          recommended steady state. Managed sessions launched through Longhouse
+          keep the control channel open so you can message them, tail them, or
+          continue them from any surface.
         </p>
       </div>
 

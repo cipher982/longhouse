@@ -24,7 +24,7 @@ const faqs: FAQ[] = [
   {
     question: "Are imported sessions different from sessions started through Longhouse?",
     answer:
-      "Yes. Imported sessions are unmanaged: searchable and inspectable, but not steerable. Sessions launched with Longhouse are managed and keep the control path for live control or reattach later.",
+      "Yes. Imported sessions are unmanaged: searchable and inspectable, but not steerable. That import path exists so Longhouse is useful immediately. Sessions launched with Longhouse are managed and keep the control path for live control or reattach later.",
   },
   {
     question: "Which providers are strongest today?",
