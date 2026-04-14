@@ -834,7 +834,7 @@ fi
 log "🔐 Creating local device token for demo server..."
 longhouse auth --url "http://127.0.0.1:${DEMO_PORT}" --device installer-smoke --force >/dev/null
 
-TOKEN_PATH="$HOME/.claude/longhouse-device-token"
+TOKEN_PATH="$HOME/.longhouse/machine/device-token"
 if [[ ! -s "$TOKEN_PATH" ]]; then
   fail "Device token file missing after local auth: $TOKEN_PATH"
 fi
