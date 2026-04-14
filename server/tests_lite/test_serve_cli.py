@@ -25,7 +25,8 @@ class _FakeSocket:
 def _base_config(*, public_url: str | None) -> config_file_cli.LonghouseConfig:
     return config_file_cli.LonghouseConfig(
         server=config_file_cli.ServerConfig(host="127.0.0.1", port=8080, public_url=public_url),
-        shipper=config_file_cli.ShipperConfig(flush_ms=500, fallback_scan_secs=300),
+        browser=config_file_cli.BrowserConfig(default_url="https://browser.example.com"),
+        shipper=config_file_cli.ShipperConfig(api_url="http://127.0.0.1:8080", flush_ms=500, fallback_scan_secs=300),
     )
 
 
@@ -51,7 +52,11 @@ def _patch_serve(monkeypatch, tmp_path, *, config):
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
 
     monkeypatch.setattr(config_file_cli, "load_config", lambda: config)
-    monkeypatch.setattr(config_file_cli, "save_config", lambda value, config_path=None: saved_configs.append(value))
+    monkeypatch.setattr(
+        config_file_cli,
+        "save_loaded_config",
+        lambda value, config_path=None, claude_dir=None: saved_configs.append(config_file_cli.config_to_dict(value)),
+    )
 
     return uvicorn_calls, saved_configs
 
@@ -138,5 +143,10 @@ def test_serve_domain_overrides_runtime_env_and_persists_config(monkeypatch, tmp
     assert os.environ["APP_PUBLIC_URL"] == "https://longhouse.example.com"
     assert os.environ["PUBLIC_SITE_URL"] == "https://longhouse.example.com"
     assert saved_configs[0]["server"]["public_url"] == "https://longhouse.example.com"
-    assert saved_configs[0]["shipper"] == {"flush_ms": 500, "fallback_scan_secs": 300}
+    assert saved_configs[0]["browser"]["default_url"] == "https://browser.example.com"
+    assert saved_configs[0]["shipper"] == {
+        "api_url": "http://127.0.0.1:8080",
+        "flush_ms": 500,
+        "fallback_scan_secs": 300,
+    }
     assert uvicorn_calls[0][1]["host"] == "0.0.0.0"

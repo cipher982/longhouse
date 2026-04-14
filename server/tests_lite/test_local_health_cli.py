@@ -413,7 +413,7 @@ def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path
         calls.append({"command": command, "check": check, "cwd": cwd})
 
     monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
-    monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://david010.longhouse.ai")
+    monkeypatch.setattr(local_health_cli, "get_browser_default_url", lambda claude_dir=None: "https://david010.longhouse.ai")
     monkeypatch.setattr(local_health_cli, "_prebuilt_runtime_artifact", lambda component: None)
 
     result = runner.invoke(
@@ -441,6 +441,7 @@ def test_local_health_window_launch_without_url(monkeypatch):
         calls.append(command)
 
     monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(local_health_cli, "get_browser_default_url", lambda claude_dir=None: None)
     monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: None)
     monkeypatch.setattr(local_health_cli, "_prebuilt_runtime_artifact", lambda component: None)
 
@@ -470,7 +471,7 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
             launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
         ),
     )
-    monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://longhouse.ai")
+    monkeypatch.setattr(local_health_cli, "get_browser_default_url", lambda claude_dir=None: "https://longhouse.ai")
 
     result = runner.invoke(app, ["local-health", "menubar"])
 

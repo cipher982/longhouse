@@ -10,6 +10,7 @@ from pathlib import Path
 
 import typer
 
+from zerg.cli.config_file import get_browser_default_url
 from zerg.services.desktop_app import build_snapshot_arguments
 from zerg.services.local_health import collect_local_health
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
@@ -150,7 +151,8 @@ def _launch_desktop_surface(
     allow_source_fallback: bool = False,
 ) -> None:
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
-    ui_url = get_zerg_url(config_dir)
+    browser_config_dir = Path(claude_dir) if claude_dir else None
+    ui_url = get_browser_default_url(claude_dir=browser_config_dir) or get_zerg_url(config_dir)
     health_arguments = build_snapshot_arguments(claude_dir=claude_dir)
 
     prebuilt_artifact = _prebuilt_runtime_artifact(component) if component is not None else None

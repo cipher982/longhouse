@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from click.exceptions import Exit as ClickExit
 
+from zerg.cli import config_file as config_file_cli
 from zerg.cli import connect
 from zerg.services.shipper.service import Platform
 
@@ -261,3 +262,42 @@ def test_connect_requires_configured_url(monkeypatch):
             menubar=False,
         )
     assert exc.value.exit_code == 1
+
+
+def test_persist_selected_url_updates_browser_and_shipper_config(tmp_path, monkeypatch):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    saved_urls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr(connect, "save_zerg_url", lambda url, config_dir=None: saved_urls.append((url, config_dir)))
+
+    connect._persist_selected_url("https://example.com", claude_dir)
+
+    config = config_file_cli.load_config(claude_dir=claude_dir)
+    assert saved_urls == [("https://example.com", claude_dir)]
+    assert config.browser.default_url == "https://example.com"
+    assert config.shipper.api_url == "https://example.com"
+
+
+def test_clear_persisted_urls_preserves_other_local_config(tmp_path):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    config_file_cli.save_config(
+        {
+            "server": {"host": "0.0.0.0", "port": 9999, "public_url": "https://public.example.com"},
+            "browser": {"default_url": "https://example.com"},
+            "shipper": {"api_url": "https://example.com", "flush_ms": 900, "fallback_scan_secs": 600},
+        },
+        claude_dir=claude_dir,
+    )
+
+    connect._clear_persisted_urls(claude_dir)
+
+    config = config_file_cli.load_config(claude_dir=claude_dir)
+    assert config.server.host == "0.0.0.0"
+    assert config.server.port == 9999
+    assert config.server.public_url == "https://public.example.com"
+    assert config.browser.default_url is None
+    assert config.shipper.api_url is None
+    assert config.shipper.flush_ms == 900
+    assert config.shipper.fallback_scan_secs == 600
