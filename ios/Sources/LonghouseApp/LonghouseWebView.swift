@@ -46,6 +46,18 @@ struct LonghouseWebView: UIViewRepresentable {
         let serverURL: String
         private var authInProgress = false
 
+        private var tenant: String {
+            URL(string: serverURL)?.host?.components(separatedBy: ".").first ?? ""
+        }
+
+        private var controlPlaneURL: String {
+            guard let host = URL(string: serverURL)?.host else { return serverURL }
+            let parts = host.components(separatedBy: ".")
+            guard parts.count >= 2 else { return serverURL }
+            let rootDomain = parts.suffix(2).joined(separator: ".")
+            return "https://control.\(rootDomain)"
+        }
+
         init(serverURL: String) {
             self.serverURL = serverURL
         }
@@ -96,7 +108,7 @@ struct LonghouseWebView: UIViewRepresentable {
             guard !authInProgress else { return }
             authInProgress = true
 
-            let authURL = URL(string: "\(serverURL)/api/auth/google/redirect")!
+            let authURL = URL(string: "\(controlPlaneURL)/auth/native/google?tenant=\(tenant)")!
             let callbackScheme = "longhouse"
 
             let session = ASWebAuthenticationSession(
@@ -117,7 +129,7 @@ struct LonghouseWebView: UIViewRepresentable {
                 guard let callbackURL else { return }
 
                 Task { @MainActor in
-                    self.handleAuthCallback(callbackURL)
+                    await self.handleAuthCallback(callbackURL)
                 }
             }
 
@@ -126,66 +138,71 @@ struct LonghouseWebView: UIViewRepresentable {
             session.start()
         }
 
-        private func handleAuthCallback(_ url: URL) {
+        private func handleAuthCallback(_ url: URL) async {
             guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                   let queryItems = components.queryItems else {
                 reloadTimeline()
                 return
             }
 
-            let accessToken = queryItems.first(where: { $0.name == "at" })?.value
-            let refreshToken = queryItems.first(where: { $0.name == "rt" })?.value
+            let ssoToken = queryItems.first(where: { $0.name == "sso_token" })?.value
 
-            guard let accessToken, let webView else {
+            guard let ssoToken else {
                 reloadTimeline()
                 return
             }
 
-            KeychainHelper.saveAuthToken("longhouse_session=\(accessToken)")
+            do {
+                let tokenData = try await exchangeSSOToken(ssoToken)
+                guard let accessToken = tokenData["access_token"] as? String else {
+                    reloadTimeline()
+                    return
+                }
 
-            guard let serverHost = URL(string: serverURL)?.host else {
+                KeychainHelper.saveAuthToken("longhouse_session=\(accessToken)")
+
+                guard let serverHost = URL(string: serverURL)?.host, let webView else {
+                    reloadTimeline()
+                    return
+                }
+
+                let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
+                if let cookie = HTTPCookie(properties: [
+                    .name: "longhouse_session",
+                    .value: accessToken,
+                    .domain: serverHost,
+                    .path: "/",
+                    .secure: "TRUE",
+                ]) {
+                    cookieStore.setCookie(cookie) {
+                        self.reloadTimeline()
+                    }
+                } else {
+                    reloadTimeline()
+                }
+            } catch {
+                print("SSO token exchange failed: \(error)")
                 reloadTimeline()
-                return
-            }
-
-            let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
-            var cookiesToSet: [HTTPCookie] = []
-
-            if let sessionCookie = HTTPCookie(properties: [
-                .name: "longhouse_session",
-                .value: accessToken,
-                .domain: serverHost,
-                .path: "/",
-                .secure: "TRUE",
-            ]) {
-                cookiesToSet.append(sessionCookie)
-            }
-
-            if let refreshToken,
-               let refreshCookie = HTTPCookie(properties: [
-                .name: "longhouse_refresh",
-                .value: refreshToken,
-                .domain: serverHost,
-                .path: "/api/auth",
-                .secure: "TRUE",
-               ]) {
-                cookiesToSet.append(refreshCookie)
-            }
-
-            setCookiesSequentially(cookieStore: cookieStore, cookies: cookiesToSet) {
-                self.reloadTimeline()
             }
         }
 
-        private func setCookiesSequentially(cookieStore: WKHTTPCookieStore, cookies: [HTTPCookie], completion: @escaping () -> Void) {
-            guard let cookie = cookies.first else {
-                completion()
-                return
+        private func exchangeSSOToken(_ ssoToken: String) async throws -> [String: Any] {
+            let url = URL(string: "\(serverURL)/api/auth/accept-token")!
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["token": ssoToken])
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                throw LonghouseAPIError.requestFailed
             }
-            cookieStore.setCookie(cookie) {
-                let remaining = Array(cookies.dropFirst())
-                self.setCookiesSequentially(cookieStore: cookieStore, cookies: remaining, completion: completion)
+
+            guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                throw LonghouseAPIError.requestFailed
             }
+
+            return json
         }
 
         private func reloadTimeline() {
