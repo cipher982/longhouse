@@ -1869,33 +1869,17 @@
    * Session Card Summary & Active State
    * ---------------------------------------------------------------------------*/
 
-  .session-card--live {
-    background: color-mix(in srgb, var(--color-intent-success) 8%, var(--surface-glass-1));
-    border-color: color-mix(in srgb, var(--color-intent-success) 26%, transparent);
-  }
-
-  .session-card--thinking {
-    background: color-mix(in srgb, #fb923c 8%, var(--surface-glass-1));
-    border-color: color-mix(in srgb, #fb923c 30%, transparent);
-  }
-
-  .session-card--running {
-    background: color-mix(in srgb, #38bdf8 8%, var(--surface-glass-1));
-    border-color: color-mix(in srgb, #38bdf8 28%, transparent);
-  }
-
-  .session-card--needs-user {
-    background: color-mix(in srgb, #fbbf24 8%, var(--surface-glass-1));
-    border-color: color-mix(in srgb, #fbbf24 30%, transparent);
-  }
-
+  .session-card--live,
+  .session-card--thinking,
+  .session-card--running,
+  .session-card--needs-user,
   .session-card--blocked {
-    background: color-mix(in srgb, #f87171 8%, var(--surface-glass-1));
-    border-color: color-mix(in srgb, #f87171 32%, transparent);
+    background: color-mix(in srgb, var(--color-brand-primary) 6%, var(--surface-glass-1));
+    border-color: color-mix(in srgb, var(--color-brand-primary) 18%, transparent);
   }
 
   .session-card--inferred {
-    background: color-mix(in srgb, #94a3b8 6%, transparent);
+    background: color-mix(in srgb, var(--color-brand-primary) 3%, transparent);
   }
 
   .session-card--idle {
