@@ -192,21 +192,26 @@ def _verify_password_hash(password: str, stored: str) -> bool:
 
 def _verify_google_id_token(id_token_str: str) -> dict[str, Any]:
     settings = get_settings()
-    google_client_id = settings.google_client_id
-    if not google_client_id:
+    valid_client_ids = [cid for cid in [settings.google_client_id, settings.google_ios_client_id] if cid]
+    if not valid_client_ids:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="GOOGLE_CLIENT_ID not set")
 
-    try:
-        from google.auth.transport import requests as google_requests  # type: ignore
-        from google.oauth2 import id_token  # type: ignore
+    from google.auth.transport import requests as google_requests  # type: ignore
+    from google.oauth2 import id_token  # type: ignore
 
-        request = google_requests.Request()
-        return id_token.verify_oauth2_token(id_token_str, request, google_client_id)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid Google token: {str(exc)}",
-        ) from exc
+    request = google_requests.Request()
+    last_exc: Exception | None = None
+    for client_id in valid_client_ids:
+        try:
+            return id_token.verify_oauth2_token(id_token_str, request, client_id)
+        except Exception as exc:
+            last_exc = exc
+            continue
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=f"Invalid Google token: {str(last_exc)}",
+    ) from last_exc
 
 
 @router.post("/dev-login", response_model=TokenOut)

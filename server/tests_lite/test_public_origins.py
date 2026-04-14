@@ -22,6 +22,7 @@ def _make_settings(**overrides):
         longhouse_password_hash="",
         internal_api_secret="test-internal-secret",
         google_client_id=None,
+        google_ios_client_id=None,
         google_client_secret=None,
         github_client_id=None,
         github_client_secret=None,
