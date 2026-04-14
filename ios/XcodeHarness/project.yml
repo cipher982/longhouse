@@ -9,6 +9,9 @@ options:
 packages:
   LonghousePackage:
     path: ..
+  GoogleSignIn:
+    url: https://github.com/google/GoogleSignIn-iOS
+    from: "8.0.0"
 
 targets:
   Longhouse:
@@ -22,6 +25,11 @@ targets:
         createIntermediateGroups: true
     resources:
       - path: ../Resources/Assets.xcassets
+    dependencies:
+      - package: GoogleSignIn
+        product: GoogleSignIn
+      - package: GoogleSignIn
+        product: GoogleSignInSwift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios
@@ -38,6 +46,12 @@ targets:
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_STRICT_CONCURRENCY: complete
+    info:
+      properties:
+        GIDClientID: 658453123272-PLACEHOLDER.apps.googleusercontent.com
+        CFBundleURLTypes:
+          - CFBundleURLSchemes:
+              - com.googleusercontent.apps.658453123272-PLACEHOLDER
 
 schemes:
   Longhouse:

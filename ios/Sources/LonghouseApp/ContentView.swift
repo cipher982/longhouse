@@ -5,24 +5,48 @@ struct ContentView: View {
     @State private var showingServerConfig = false
 
     var body: some View {
-        LonghouseWebView(serverURL: appState.serverURL)
-            .ignoresSafeArea(.all, edges: .bottom)
-            .overlay(alignment: .topTrailing) {
-                Button {
-                    showingServerConfig = true
-                } label: {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .padding(10)
-                        .background(.ultraThinMaterial, in: Circle())
-                }
-                .padding(.trailing, 8)
-                .padding(.top, 4)
+        Group {
+            if appState.isAuthenticated {
+                LonghouseWebView(serverURL: appState.serverURL, sessionToken: appState.sessionToken)
+                    .ignoresSafeArea(.all, edges: .bottom)
+                    .overlay(alignment: .topTrailing) {
+                        Menu {
+                            Button("Change Server") {
+                                showingServerConfig = true
+                            }
+                            Button("Sign Out", role: .destructive) {
+                                appState.signOut()
+                            }
+                        } label: {
+                            Image(systemName: "gearshape")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(10)
+                                .background(.ultraThinMaterial, in: Circle())
+                        }
+                        .padding(.trailing, 8)
+                        .padding(.top, 4)
+                    }
+            } else {
+                LoginView()
+                    .overlay(alignment: .topTrailing) {
+                        Button {
+                            showingServerConfig = true
+                        } label: {
+                            Image(systemName: "server.rack")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(.white.opacity(0.4))
+                                .padding(10)
+                                .background(.white.opacity(0.06), in: Circle())
+                        }
+                        .padding(.trailing, 8)
+                        .padding(.top, 4)
+                    }
             }
-            .sheet(isPresented: $showingServerConfig) {
-                ServerConfigSheet()
-            }
+        }
+        .sheet(isPresented: $showingServerConfig) {
+            ServerConfigSheet()
+        }
     }
 }
 
@@ -42,7 +66,7 @@ struct ServerConfigSheet: View {
                         .keyboardType(.URL)
                 }
                 Section {
-                    Text("Enter the URL of your Longhouse instance. This is the same URL you use in your browser.")
+                    Text("Enter the URL of your Longhouse instance.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

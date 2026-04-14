@@ -11,6 +11,9 @@ let package = Package(
     products: [
         .library(name: "LonghouseShared", targets: ["LonghouseShared"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/google/GoogleSignIn-iOS", from: "8.0.0"),
+    ],
     targets: [
         .target(
             name: "LonghouseShared",
