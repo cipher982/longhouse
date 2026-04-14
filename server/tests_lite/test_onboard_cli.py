@@ -10,6 +10,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg.cli import config_file as config_file_cli
 from zerg.cli import onboard as onboard_cli
 from zerg.cli.main import app
 
@@ -28,6 +29,7 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
     runner = CliRunner()
     subprocess_calls: list[list[str]] = []
     install_calls: list[dict[str, object]] = []
+    saved_configs: list[config_file_cli.LonghouseConfig] = []
 
     monkeypatch.delenv("CI", raising=False)
     monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
@@ -38,9 +40,14 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
     monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
     monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
-    monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(
+        onboard_cli,
+        "save_loaded_config",
+        lambda config, config_path=None: saved_configs.append(config),
+    )
     monkeypatch.setattr(
         onboard_cli,
         "install_local_runtime",
@@ -73,6 +80,9 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
             "menubar": False,
         }
     ]
+    assert len(saved_configs) == 1
+    assert saved_configs[0].browser.default_url == "http://127.0.0.1:8080"
+    assert saved_configs[0].shipper.api_url == "http://127.0.0.1:8080"
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
 
 
@@ -90,9 +100,10 @@ def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
     monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
     monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
-    monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
     monkeypatch.setattr(
         onboard_cli,
         "install_local_runtime",
@@ -140,9 +151,10 @@ def test_onboard_in_ci_skips_service_manager_install(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
     monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
     monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
-    monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
     monkeypatch.setattr(
         onboard_cli,
         "install_local_runtime",
@@ -181,9 +193,10 @@ def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch,
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: True)
     monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
     monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
-    monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
     monkeypatch.setattr(onboard_cli.webbrowser, "open", lambda url: open_calls.append(url) or True)
     monkeypatch.setattr(
         onboard_cli,
@@ -221,9 +234,10 @@ def test_onboard_no_longer_prompts_for_manual_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(onboard_cli, "_is_server_running", lambda: (False, None))
     monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: False)
     monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
-    monkeypatch.setattr(onboard_cli, "save_config", lambda config: None)
     monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
     monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
 
     result = runner.invoke(app, ["onboard", "--no-server", "--no-shipper"])
 

@@ -23,7 +23,8 @@ import httpx
 import typer
 
 from zerg.cli.config_file import get_config_path
-from zerg.cli.config_file import save_config
+from zerg.cli.config_file import load_config
+from zerg.cli.config_file import save_loaded_config
 from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
 from zerg.services.local_runtime_installer import install_local_runtime
@@ -476,15 +477,13 @@ def onboard(
     typer.secho("Step 4: Saving configuration", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
-    config_data = {
-        "server": {
-            "host": host,
-            "port": port,
-        },
-    }
-
     try:
-        save_config(config_data)
+        config = load_config(config_path=config_path)
+        config.server.host = host
+        config.server.port = port
+        config.browser.default_url = api_url
+        config.shipper.api_url = api_url
+        save_loaded_config(config, config_path=config_path)
         typer.secho(f"  [OK] Config saved: {config_path}", fg=typer.colors.GREEN)
     except Exception as e:
         typer.secho(f"  [WARN] Could not save config: {e}", fg=typer.colors.YELLOW)

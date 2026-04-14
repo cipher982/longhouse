@@ -464,24 +464,15 @@ def serve(
 
     # Persist public domain to config if provided, then load from config as fallback.
     from zerg.cli.config_file import load_config
-    from zerg.cli.config_file import save_config
+    from zerg.cli.config_file import save_loaded_config
 
     file_cfg = load_config()
     if domain:
         public_url = f"https://{domain}"
-        save_config(
-            {
-                "server": {
-                    "host": host,
-                    "port": port,
-                    "public_url": public_url,
-                },
-                "shipper": {
-                    "flush_ms": file_cfg.shipper.flush_ms,
-                    "fallback_scan_secs": file_cfg.shipper.fallback_scan_secs,
-                },
-            }
-        )
+        file_cfg.server.host = host
+        file_cfg.server.port = port
+        file_cfg.server.public_url = public_url
+        save_loaded_config(file_cfg)
     else:
         public_url = file_cfg.server.public_url
 
