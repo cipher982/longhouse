@@ -453,8 +453,8 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
         local_health_cli,
         "_prebuilt_runtime_artifact",
         lambda component: SimpleNamespace(
-            path="/Users/test/Applications/Longhouse.app",
-            launch_path="/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            path="/Applications/Longhouse.app",
+            launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
         ),
     )
     monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://longhouse.ai")
@@ -463,7 +463,7 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert len(calls) == 1
-    assert calls[0][0] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
+    assert calls[0][0] == "/Applications/Longhouse.app/Contents/MacOS/Longhouse"
     assert "--health-exec" in calls[0]
     assert "swift" not in calls[0]
 

@@ -37,6 +37,7 @@ _mock_stripe.error = MagicMock()
 _mock_stripe.error.SignatureVerificationError = type("SignatureVerificationError", (Exception,), {})
 sys.modules.setdefault("stripe", _mock_stripe)
 
+from control_plane.config import settings  # noqa: E402
 from control_plane.db import Base, get_db  # noqa: E402
 from control_plane.main import app  # noqa: E402
 from control_plane.models import Instance, User  # noqa: E402
@@ -261,6 +262,12 @@ class TestSubdomainCheckEndpoint:
         resp = client.get("/api/instances/subdomain-check?subdomain=publictest")
         assert resp.status_code == 200
 
+    def test_other_users_pending_slug_does_not_block_check(self, client, db_session):
+        _make_user(db_session, email="holder@t.com", pending="floating-slug")
+        resp = client.get("/api/instances/subdomain-check?subdomain=floating-slug")
+        assert resp.status_code == 200
+        assert resp.json() == {"available": True, "reason": None}
+
 
 # ---------------------------------------------------------------------------
 # GET /onboarding/choose-subdomain
@@ -351,6 +358,15 @@ class TestSetSubdomainEndpoint:
         assert resp.status_code == 303
         assert "choose-subdomain" in resp.headers["location"]
 
+    def test_other_users_pending_slug_does_not_block_submit(self, client, db_session):
+        _make_user(db_session, email="holder@t.com", pending="floating-slug")
+        user = _make_user(db_session, email="picker@t.com")
+        resp = self._post(client, user, "floating-slug")
+        assert resp.status_code == 303
+        assert "/dashboard" in resp.headers["location"]
+        db_session.refresh(user)
+        assert user.pending_subdomain == "floating-slug"
+
     def test_bad_csrf_rejected(self, client, db_session):
         user = _make_user(db_session, email="bcsrf@t.com")
         resp = self._post(client, user, "goodslug", csrf="notavalidtoken1234567890123456")
@@ -393,6 +409,38 @@ class TestDashboardSubdomainRedirect:
         assert b"choose-subdomain" in resp.content  # "Change" link points there
 
 
+class TestDashboardCheckout:
+    def test_requires_pending_subdomain(self, client, db_session):
+        user = _make_user(db_session, email="checkout@t.com", verified=True)
+        resp = client.post("/dashboard/checkout", cookies=_auth(user))
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "/onboarding/choose-subdomain"
+
+    def test_checkout_binds_requested_subdomain_in_metadata(self, client, db_session):
+        user = _make_user(db_session, email="bound@t.com", verified=True, pending="picked-on-dashboard")
+
+        stripe_module = sys.modules["stripe"]
+        stripe_module.reset_mock()
+        stripe_module.Customer.create.return_value = MagicMock(id="cus_bound")
+        stripe_module.checkout.Session.create.return_value = MagicMock(
+            id="cs_bound",
+            url="https://checkout.stripe.test/session",
+        )
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(settings, "stripe_secret_key", "sk_test")
+            mp.setattr(settings, "stripe_price_id", "price_test")
+            resp = client.post("/dashboard/checkout", cookies=_auth(user))
+
+        assert resp.status_code == 303
+        assert resp.headers["location"] == "https://checkout.stripe.test/session"
+
+        create_call = stripe_module.checkout.Session.create.call_args
+        assert create_call is not None
+        assert create_call.kwargs["metadata"]["longhouse_user_id"] == str(user.id)
+        assert create_call.kwargs["metadata"]["requested_subdomain"] == "picked-on-dashboard"
+
+
 # ---------------------------------------------------------------------------
 # Webhook: pending_subdomain consumed at checkout
 # Call _handle_checkout_completed directly to avoid the background reconciler.
@@ -402,7 +450,7 @@ class TestDashboardSubdomainRedirect:
 class TestWebhookSubdomainConsumption:
     """Unit tests for _handle_checkout_completed: pending_subdomain lifecycle."""
 
-    def _fire(self, db_session, user, mock_prov=None):
+    def _fire(self, db_session, user, mock_prov=None, event_overrides=None):
         from unittest.mock import patch, MagicMock
         from control_plane.routers.webhooks import _handle_checkout_completed
         from control_plane.services.provisioner import ProvisionResult
@@ -421,6 +469,8 @@ class TestWebhookSubdomainConsumption:
             "customer": "cus_test",
             "subscription": "sub_test",
         }
+        if event_overrides:
+            event_data.update(event_overrides)
         with patch("control_plane.services.provisioner.Provisioner", return_value=mock_prov):
             _handle_checkout_completed(event_data, db_session)
 
@@ -454,6 +504,17 @@ class TestWebhookSubdomainConsumption:
         inst = db_session.query(Instance).filter(Instance.user_id == user.id).first()
         assert inst is not None
         assert inst.subdomain != "raced"
+
+    def test_prefers_checkout_metadata_over_mutated_pending_subdomain(self, db_session):
+        user = _make_user(db_session, email="bound@t.com", pending="changed-before-payment")
+        self._fire(
+            db_session,
+            user,
+            event_overrides={"metadata": {"requested_subdomain": "picked-on-dashboard"}},
+        )
+        inst = db_session.query(Instance).filter(Instance.user_id == user.id).first()
+        assert inst is not None
+        assert inst.subdomain == "picked-on-dashboard"
 
     def test_pending_cleared_even_on_provisioning_failure(self, db_session):
         """pending_subdomain must be None after webhook even if provisioner raises."""

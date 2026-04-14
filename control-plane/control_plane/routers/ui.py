@@ -558,12 +558,6 @@ def set_subdomain(
         error = "That name is reserved. Please choose another."
     elif db.query(Instance).filter(Instance.subdomain == slug).first():
         error = "That subdomain is already taken."
-    elif (
-        db.query(User)
-        .filter(User.pending_subdomain == slug, User.id != user.id)
-        .first()
-    ):
-        error = "That subdomain is already taken."
 
     if error:
         from urllib.parse import urlencode
@@ -788,32 +782,15 @@ def dashboard_checkout(request: Request, db: Session = Depends(get_db)):
         return RedirectResponse("/", status_code=302)
     if not user.email_verified:
         return RedirectResponse("/verify-email", status_code=302)
+    if not user.pending_subdomain:
+        return RedirectResponse("/onboarding/choose-subdomain", status_code=303)
 
-    # Delegate to the billing API
-    from control_plane.routers.billing import _get_stripe
+    from control_plane.routers.billing import _create_checkout_session
 
-    stripe = _get_stripe()
-
-    if not settings.stripe_price_id:
-        return _page("Error", '<div class="card"><p>Billing not configured yet.</p></div>')
-
-    # Create or reuse Stripe customer
-    if not user.stripe_customer_id:
-        customer = stripe.Customer.create(
-            email=user.email,
-            metadata={"longhouse_user_id": str(user.id)},
-        )
-        user.stripe_customer_id = customer.id
-        db.commit()
-
-    session = stripe.checkout.Session.create(
-        customer=user.stripe_customer_id,
-        mode="subscription",
-        line_items=[{"price": settings.stripe_price_id, "quantity": 1}],
-        success_url=f"https://control.{settings.root_domain}/provisioning?session_id={{CHECKOUT_SESSION_ID}}",
+    session = _create_checkout_session(
+        user,
+        db,
         cancel_url=f"https://control.{settings.root_domain}/dashboard",
-        client_reference_id=str(user.id),
-        metadata={"longhouse_user_id": str(user.id)},
     )
 
     return RedirectResponse(session.url, status_code=303)

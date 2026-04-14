@@ -25,8 +25,8 @@ def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsy
             desktop_app_result={
                 "message": "desktop app installed",
                 "plist_path": "/tmp/menubar.plist",
-                "app_path": "/Users/test/Applications/Longhouse.app",
-                "launch_path": "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+                "app_path": "/Applications/Longhouse.app",
+                "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
             },
         ),
     )
@@ -53,7 +53,7 @@ def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsy
     assert "Machine: test-box" in output
     assert "Engine binary installed at /tmp/longhouse-engine" in output
     assert "Longhouse.app:" in output
-    assert "App: /Users/test/Applications/Longhouse.app" in output
+    assert "App: /Applications/Longhouse.app" in output
 
 
 def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
@@ -198,8 +198,8 @@ def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
             "service_name": "ai.longhouse.app",
             "service_file": "/tmp/menubar.plist",
             "log_path": "/tmp/menubar.log",
-            "artifact_path": "/Users/test/Applications/Longhouse.app",
-            "launch_path": "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            "artifact_path": "/Applications/Longhouse.app",
+            "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
             "runtime_mode": "app-bundle",
         },
     )
@@ -208,8 +208,8 @@ def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert "Desktop App: ai.longhouse.app" in output
-    assert "App: /Users/test/Applications/Longhouse.app" in output
-    assert "Launch: /Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse" in output
+    assert "App: /Applications/Longhouse.app" in output
+    assert "Launch: /Applications/Longhouse.app/Contents/MacOS/Longhouse" in output
 
 
 def test_connect_hooks_only_exits_with_error(monkeypatch):

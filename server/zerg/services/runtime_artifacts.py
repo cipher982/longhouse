@@ -130,7 +130,7 @@ def _local_bin_dir() -> Path:
 
 
 def _local_applications_dir() -> Path:
-    return Path.home() / "Applications"
+    return Path("/Applications")
 
 
 def _canonical_destination(component: RuntimeComponent) -> Path:
@@ -138,6 +138,10 @@ def _canonical_destination(component: RuntimeComponent) -> Path:
     if kind == RuntimeArtifactKind.APP_BUNDLE:
         return _local_applications_dir() / CANONICAL_APP_BUNDLE_NAMES[component]
     return _local_bin_dir() / CANONICAL_BINARY_NAMES[component]
+
+
+def desktop_app_canonical_bundle_path() -> Path:
+    return _canonical_destination(RuntimeComponent.DESKTOP_APP)
 
 
 def _installed_destination_candidates(component: RuntimeComponent) -> tuple[Path, ...]:
@@ -438,7 +442,7 @@ def ensure_runtime_artifact(
 
     Resolution order:
     1. explicit source override (path or URL)
-    2. already-installed canonical artifact in ``~/.local/bin`` or ``~/Applications``
+    2. already-installed canonical artifact in ``~/.local/bin`` or ``/Applications``
     3. existing engine binary already on PATH (engine only)
     4. released GitHub asset for the current Longhouse version
     """

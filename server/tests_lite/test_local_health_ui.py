@@ -41,8 +41,8 @@ def test_install_desktop_app_service_writes_plist_and_loads(monkeypatch, tmp_pat
         desktop_app,
         "ensure_runtime_artifact",
         lambda component, source_override=None: SimpleNamespace(
-            path="/Users/test/Applications/Longhouse.app",
-            launch_path="/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            path="/Applications/Longhouse.app",
+            launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
             source="override",
             installed_now=True,
         ),
@@ -64,15 +64,15 @@ def test_install_desktop_app_service_writes_plist_and_loads(monkeypatch, tmp_pat
     plist_path = home / "Library" / "LaunchAgents" / "ai.longhouse.app.plist"
     assert plist_path.exists()
     plist = plist_path.read_text(encoding="utf-8")
-    assert "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse" in plist
+    assert "/Applications/Longhouse.app/Contents/MacOS/Longhouse" in plist
     assert "ai.longhouse.app" in plist
     assert "--health-exec" in plist
     assert "zerg.cli.main" in plist
     assert "https://longhouse.ai" in plist
     assert calls[-1] == ["launchctl", "load", str(plist_path)]
     assert result["plist_path"] == str(plist_path)
-    assert result["app_path"] == "/Users/test/Applications/Longhouse.app"
-    assert result["launch_path"] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
+    assert result["app_path"] == "/Applications/Longhouse.app"
+    assert result["launch_path"] == "/Applications/Longhouse.app/Contents/MacOS/Longhouse"
 
 
 def test_install_desktop_app_service_omits_invalid_ui_url(monkeypatch, tmp_path: Path):
@@ -84,8 +84,8 @@ def test_install_desktop_app_service_omits_invalid_ui_url(monkeypatch, tmp_path:
         desktop_app,
         "ensure_runtime_artifact",
         lambda component, source_override=None: SimpleNamespace(
-            path="/Users/test/Applications/Longhouse.app",
-            launch_path="/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            path="/Applications/Longhouse.app",
+            launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
             source="override",
             installed_now=True,
         ),
@@ -126,8 +126,8 @@ def test_get_desktop_app_service_info_includes_app_bundle_details(monkeypatch, t
         "resolve_installed_runtime_artifact",
         lambda component: SimpleNamespace(
             component=desktop_app.RuntimeComponent.DESKTOP_APP,
-            path="/Users/test/Applications/Longhouse.app",
-            launch_path="/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            path="/Applications/Longhouse.app",
+            launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
         ) if component == desktop_app.RuntimeComponent.DESKTOP_APP else None,
     )
 
@@ -135,8 +135,8 @@ def test_get_desktop_app_service_info_includes_app_bundle_details(monkeypatch, t
 
     assert info["status"] == "running"
     assert info["service_name"] == "ai.longhouse.app"
-    assert info["artifact_path"] == "/Users/test/Applications/Longhouse.app"
-    assert info["launch_path"] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
+    assert info["artifact_path"] == "/Applications/Longhouse.app"
+    assert info["launch_path"] == "/Applications/Longhouse.app/Contents/MacOS/Longhouse"
     assert info["runtime_mode"] == "app-bundle"
 
 
@@ -149,7 +149,7 @@ def test_get_desktop_app_service_info_reads_legacy_plist_log_dir(monkeypatch, tm
         plistlib.dumps(
             {
                 "Label": "com.longhouse.local-health-menubar",
-                "ProgramArguments": ["/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"],
+                "ProgramArguments": ["/Applications/Longhouse.app/Contents/MacOS/Longhouse"],
                 "StandardOutPath": "/tmp/custom-claude/logs/local-health-menubar.stdout.log",
             }
         )

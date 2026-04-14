@@ -16,6 +16,7 @@ from control_plane.routers.auth import get_current_user
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 logger = logging.getLogger(__name__)
+CHECKOUT_SUBDOMAIN_METADATA_KEY = "requested_subdomain"
 
 
 # ---------------------------------------------------------------------------
@@ -38,31 +39,28 @@ def _get_stripe():
     return stripe
 
 
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
+def _checkout_metadata(user: User) -> dict[str, str]:
+    metadata = {"longhouse_user_id": str(user.id)}
+    if user.pending_subdomain:
+        metadata[CHECKOUT_SUBDOMAIN_METADATA_KEY] = user.pending_subdomain
+    return metadata
 
 
-@router.post("/checkout")
-def create_checkout(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Create a Stripe Checkout session for a new subscription.
-
-    Requires authenticated session with verified email.
-    """
-    if not user.email_verified:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not verified")
-
-    stripe = _get_stripe()
-
-    if not settings.stripe_price_id:
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="STRIPE_PRICE_ID not configured")
-
-    # Already subscribed → point to portal
+def _create_checkout_session(user: User, db: Session, *, cancel_url: str):
+    # Already subscribed -> point to portal
     if user.subscription_status == "active":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Already subscribed. Use /billing/portal to manage.",
         )
+
+    if not user.pending_subdomain:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Choose a subdomain before checkout")
+
+    stripe = _get_stripe()
+
+    if not settings.stripe_price_id:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="STRIPE_PRICE_ID not configured")
 
     # Create or reuse Stripe customer
     if not user.stripe_customer_id:
@@ -78,12 +76,30 @@ def create_checkout(user: User = Depends(get_current_user), db: Session = Depend
         mode="subscription",
         line_items=[{"price": settings.stripe_price_id, "quantity": 1}],
         success_url=f"https://control.{settings.root_domain}/provisioning?session_id={{CHECKOUT_SESSION_ID}}",
-        cancel_url=f"https://{settings.root_domain}",
+        cancel_url=cancel_url,
         client_reference_id=str(user.id),
-        metadata={"longhouse_user_id": str(user.id)},
+        metadata=_checkout_metadata(user),
     )
 
-    logger.info(f"Created checkout session {session.id} for {user.email}")
+    logger.info("Created checkout session %s for %s (subdomain=%s)", session.id, user.email, user.pending_subdomain)
+    return session
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+@router.post("/checkout")
+def create_checkout(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create a Stripe Checkout session for a new subscription.
+
+    Requires authenticated session with verified email.
+    """
+    if not user.email_verified:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Email not verified")
+
+    session = _create_checkout_session(user, db, cancel_url=f"https://{settings.root_domain}")
     return {"checkout_url": session.url, "session_id": session.id}
 
 

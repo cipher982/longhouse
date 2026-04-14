@@ -14,6 +14,10 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.services import runtime_artifacts
 
 
+def test_desktop_app_canonical_bundle_path_is_system_applications():
+    assert runtime_artifacts.desktop_app_canonical_bundle_path() == Path("/Applications/Longhouse.app")
+
+
 def test_ensure_runtime_binary_uses_existing_engine_on_path(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

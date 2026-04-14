@@ -45,6 +45,21 @@ def _get_lan_ip() -> str | None:
         return None
 
 
+def _apply_runtime_public_url(public_url: str | None, *, force: bool = False) -> str | None:
+    """Seed runtime env vars from the CLI/public config when needed."""
+    configured = os.getenv("APP_PUBLIC_URL") or os.getenv("PUBLIC_SITE_URL")
+    effective = public_url if force else (configured or public_url)
+    if not effective:
+        return None
+
+    if force or not os.getenv("APP_PUBLIC_URL"):
+        os.environ["APP_PUBLIC_URL"] = effective
+    if force or not os.getenv("PUBLIC_SITE_URL"):
+        os.environ["PUBLIC_SITE_URL"] = effective
+
+    return effective
+
+
 def _get_longhouse_home() -> Path:
     """Return the Longhouse home directory (~/.longhouse), creating if needed."""
     longhouse_home = Path.home() / ".longhouse"
@@ -476,6 +491,8 @@ def serve(
         )
     else:
         public_url = file_cfg.server.public_url
+
+    public_url = _apply_runtime_public_url(public_url, force=bool(domain))
 
     is_public_interface = host in ("0.0.0.0", "::", "")
     lan_ip = _get_lan_ip() if is_public_interface else None

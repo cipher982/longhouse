@@ -141,6 +141,35 @@ def _resolve_user_from_event(data: dict, db: Session) -> User | None:
     return None
 
 
+def _requested_subdomain_from_checkout(data: dict[str, Any]) -> str | None:
+    from control_plane.routers.billing import CHECKOUT_SUBDOMAIN_METADATA_KEY
+
+    metadata = data.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+
+    requested = metadata.get(CHECKOUT_SUBDOMAIN_METADATA_KEY)
+    if not isinstance(requested, str):
+        return None
+
+    requested = requested.strip().lower()
+    return requested or None
+
+
+def _checkout_subdomain_candidates(data: dict[str, Any], user: User) -> list[str]:
+    candidates: list[str] = []
+
+    requested = _requested_subdomain_from_checkout(data)
+    if requested:
+        candidates.append(requested)
+
+    pending = user.pending_subdomain.strip().lower() if isinstance(user.pending_subdomain, str) else None
+    if pending and pending not in candidates:
+        candidates.append(pending)
+
+    return candidates
+
+
 def _handle_checkout_completed(data: dict, db: Session) -> None:
     """Handle successful checkout: activate subscription and provision instance."""
     user = _resolve_user_from_event(data, db)
@@ -176,11 +205,16 @@ def _handle_checkout_completed(data: dict, db: Session) -> None:
     from control_plane.routers.instances import _derive_subdomain_from_email
     from control_plane.routers.instances import _is_valid_subdomain
 
-    subdomain = user.pending_subdomain
-    # Check claimed state first (race guard), then validate format
-    if subdomain and not db.query(Instance).filter(Instance.subdomain == subdomain).first() and _is_valid_subdomain(subdomain):
-        pass  # use the chosen slug
-    else:
+    subdomain = None
+    for candidate in _checkout_subdomain_candidates(data, user):
+        # Check claimed state first (race guard), then validate format
+        if db.query(Instance).filter(Instance.subdomain == candidate).first():
+            continue
+        if _is_valid_subdomain(candidate):
+            subdomain = candidate
+            break
+
+    if subdomain is None:
         subdomain = _derive_subdomain_from_email(user.email, db)
 
     # Clear and commit before provisioning so the slug is released

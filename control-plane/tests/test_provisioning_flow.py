@@ -1522,12 +1522,49 @@ class TestBillingCheckout:
         resp = client.post("/billing/checkout")
         assert resp.status_code in (302, 401, 403)
 
+    def test_checkout_requires_pending_subdomain(self, client, db_session):
+        user = _make_user(db_session, email="verified@test.com", verified=True)
+        client.cookies.update(_login_cookie(user))
+
+        with patch.object(settings, "stripe_secret_key", "sk_test"):
+            resp = client.post("/billing/checkout")
+
+        assert resp.status_code == 409
+        assert "choose a subdomain" in resp.json()["detail"].lower()
+
     def test_checkout_without_stripe_config(self, client, db_session):
         user = _make_user(db_session, email="verified@test.com", verified=True)
+        user.pending_subdomain = "ready-for-checkout"
+        db_session.commit()
         client.cookies.update(_login_cookie(user))
 
         resp = client.post("/billing/checkout")
         assert resp.status_code == 503
+
+    def test_checkout_binds_requested_subdomain_in_metadata(self, client, db_session):
+        user = _make_user(db_session, email="verified@test.com", verified=True)
+        user.pending_subdomain = "picked-on-dashboard"
+        db_session.commit()
+
+        _mock_stripe_module.Customer.create.return_value = MagicMock(id="cus_checkout")
+        _mock_stripe_module.checkout.Session.create.return_value = MagicMock(
+            id="cs_checkout",
+            url="https://checkout.stripe.test/session",
+        )
+        client.cookies.update(_login_cookie(user))
+
+        with (
+            patch.object(settings, "stripe_secret_key", "sk_test"),
+            patch.object(settings, "stripe_price_id", "price_test"),
+        ):
+            resp = client.post("/billing/checkout")
+
+        assert resp.status_code == 200
+        assert resp.json()["checkout_url"] == "https://checkout.stripe.test/session"
+        assert (
+            _mock_stripe_module.checkout.Session.create.call_args.kwargs["metadata"]["requested_subdomain"]
+            == "picked-on-dashboard"
+        )
 
 
 # ===========================================================================

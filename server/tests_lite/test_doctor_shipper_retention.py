@@ -58,7 +58,7 @@ def test_check_shipper_reports_ambient_app_bundle(tmp_path, monkeypatch):
     monkeypatch.setattr(shipper, "get_service_status", lambda: "running")
     monkeypatch.setattr(desktop_app, "get_desktop_app_service_info", lambda: {
         "status": "running",
-        "artifact_path": "/Users/test/Applications/Longhouse.app",
+        "artifact_path": "/Applications/Longhouse.app",
         "runtime_mode": "app-bundle",
     })
     monkeypatch.setattr("zerg.services.shipper.service.detect_platform", lambda: Platform.MACOS)
@@ -67,7 +67,7 @@ def test_check_shipper_reports_ambient_app_bundle(tmp_path, monkeypatch):
     labels = {r.label: r.status for r in results}
 
     assert labels["Desktop App running"] == doctor.PASS
-    assert labels["Desktop App installed as Longhouse.app (/Users/test/Applications/Longhouse.app)"] == doctor.PASS
+    assert labels["Desktop App installed as Longhouse.app (/Applications/Longhouse.app)"] == doctor.PASS
 
 
 def test_check_shipper_warns_when_ambient_ui_uses_legacy_binary_install(tmp_path, monkeypatch):
