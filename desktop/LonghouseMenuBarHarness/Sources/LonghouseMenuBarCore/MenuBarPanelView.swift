@@ -137,16 +137,12 @@ public struct MenuBarPanelView: View {
                     runbookSection
                     issueActions
                 }
+
+                if let feedback {
+                    feedbackBanner(feedback)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .overlay(alignment: .bottomLeading) {
-            if let feedback {
-                feedbackBanner(feedback)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 16)
-                    .allowsHitTesting(false)
-            }
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.panel)
@@ -621,35 +617,40 @@ public struct MenuBarPanelView: View {
     private func feedbackBanner(_ feedback: HealthActionFeedback) -> some View {
         let tint = feedbackColor(for: feedback.style)
 
-        return HStack(alignment: .center, spacing: 8) {
+        return HStack(alignment: .top, spacing: 10) {
             Image(systemName: feedbackIcon(for: feedback.style))
-                .font(.system(size: 11, weight: .semibold))
+                .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(tint)
+                .frame(width: 16, height: 16)
+                .padding(.top, 1)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(feedback.title)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Color.primary)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.white.opacity(0.96))
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.title)
 
                 Text(feedback.detail)
                     .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(2)
+                    .foregroundStyle(Color.white.opacity(0.8))
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.detail)
             }
+
+            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color.black.opacity(0.28))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(feedbackBackgroundColor(for: feedback.style))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(tint.opacity(0.24), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(tint.opacity(0.5), lineWidth: 1)
         )
-        .shadow(color: Color.black.opacity(0.24), radius: 10, x: 0, y: 6)
+        .shadow(color: Color.black.opacity(0.22), radius: 12, x: 0, y: 8)
         .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Feedback.container)
     }
 
@@ -676,6 +677,19 @@ public struct MenuBarPanelView: View {
             return "exclamationmark.triangle.fill"
         case .failure:
             return "xmark.circle.fill"
+        }
+    }
+
+    private func feedbackBackgroundColor(for style: HealthActionFeedbackStyle) -> Color {
+        switch style {
+        case .info:
+            return Color(red: 0.13, green: 0.19, blue: 0.28)
+        case .success:
+            return Color(red: 0.12, green: 0.24, blue: 0.18)
+        case .warning:
+            return Color(red: 0.29, green: 0.20, blue: 0.11)
+        case .failure:
+            return Color(red: 0.30, green: 0.14, blue: 0.14)
         }
     }
 
