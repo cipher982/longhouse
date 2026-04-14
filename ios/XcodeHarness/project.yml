@@ -30,6 +30,8 @@ targets:
         product: GoogleSignIn
       - package: GoogleSignIn
         product: GoogleSignInSwift
+      - target: LonghouseWidgetExtension
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios
@@ -54,11 +56,39 @@ targets:
           - CFBundleURLSchemes:
               - com.googleusercontent.apps.658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2
 
+  LonghouseWidgetExtension:
+    type: app-extension
+    platform: iOS
+    supportedDestinations: [iOS]
+    sources:
+      - path: ../Sources/LonghouseWidget
+        createIntermediateGroups: true
+      - path: ../Sources/Shared
+        createIntermediateGroups: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios.widget
+        PRODUCT_NAME: LonghouseWidget
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: 1
+        SWIFT_STRICT_CONCURRENCY: complete
+        TARGETED_DEVICE_FAMILY: "1,2"
+    info:
+      path: WidgetInfo.plist
+      properties:
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+
 schemes:
   Longhouse:
     build:
       targets:
         Longhouse: all
+        LonghouseWidgetExtension: all
     run:
       config: Debug
       executable: Longhouse
