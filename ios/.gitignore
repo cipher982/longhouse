@@ -1,6 +1,7 @@
 .build/
 .swiftpm/
 XcodeHarness/LonghouseIOS.xcodeproj/
+XcodeHarness/Configs/LocalSigning.xcconfig
 xcuserdata/
 DerivedData/
 *.xcresult
