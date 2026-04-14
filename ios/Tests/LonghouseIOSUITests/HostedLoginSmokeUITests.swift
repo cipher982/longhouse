@@ -1,5 +1,6 @@
 import XCTest
 
+@MainActor
 final class HostedLoginSmokeUITests: XCTestCase {
     private enum LaunchEnvironment {
         static let resetState = "LONGHOUSE_UI_TEST_RESET_STATE"
