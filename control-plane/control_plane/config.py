@@ -54,6 +54,7 @@ class Settings(BaseSettings):
 
     # Optional OAuth (instance)
     instance_google_client_id: str | None = None
+    instance_google_ios_client_id: str | None = None
     instance_google_client_secret: str | None = None
     instance_gmail_pubsub_topic: str | None = None
     instance_pubsub_sa_email: str | None = None
