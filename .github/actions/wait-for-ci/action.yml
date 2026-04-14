@@ -53,7 +53,7 @@ runs:
           const workflowEvent = (process.env.WORKFLOW_EVENT || '').trim();
           const requireSuccess = (process.env.REQUIRE_SUCCESS || 'true') === 'true';
           const allowMissing = (process.env.ALLOW_MISSING || 'false') === 'true';
-          const delayMs = 10000;
+          const delayMs = 5000;
           const timeoutSeconds = Number(process.env.TIMEOUT_SECONDS || '1200');
           const maxAttempts = Math.max(1, Math.ceil((timeoutSeconds * 1000) / delayMs));
           const missingGraceAttempts = 6;

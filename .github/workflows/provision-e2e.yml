@@ -1,11 +1,8 @@
 name: Provisioning E2E
 
 on:
-  workflow_run:
-    workflows: ["Publish Runtime Image"]
-    types: [completed]
-    branches:
-      - main
+  push:
+    branches: [main]
   pull_request:
     paths:
       - '.dockerignore'
@@ -23,12 +20,33 @@ on:
   workflow_dispatch: {}
 
 permissions:
+  actions: read
   contents: read
   packages: read
 
 jobs:
+  wait-for-image:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+
+      - name: Wait for runtime image
+        uses: ./.github/actions/wait-for-ci
+        with:
+          head_sha: ${{ github.sha }}
+          head_branch: ${{ github.ref_name }}
+          github_token: ${{ github.token }}
+          workflow_id: runtime-image.yml
+          event: push
+          timeout_seconds: "600"
+
   provision-e2e-core:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    needs: [wait-for-image]
+    if: ${{ always() && (needs.wait-for-image.result == 'success' || github.event_name != 'push') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -36,7 +54,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -65,8 +82,8 @@ jobs:
         run: |
           set -euo pipefail
           image=""
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
-            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${{ github.event.workflow_run.head_sha }}"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
           fi
 
           echo "image=$image" >> "$GITHUB_OUTPUT"
@@ -83,7 +100,8 @@ jobs:
         run: ./scripts/ci/provision-e2e.sh --mode core
 
   provision-e2e-extended:
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
+    needs: [wait-for-image]
+    if: ${{ always() && github.event_name != 'pull_request' && (needs.wait-for-image.result == 'success' || github.event_name != 'push') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
@@ -91,7 +109,6 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -120,8 +137,8 @@ jobs:
         run: |
           set -euo pipefail
           image=""
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
-            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${{ github.event.workflow_run.head_sha }}"
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            image="ghcr.io/${GITHUB_REPOSITORY_OWNER}/longhouse-runtime:${GITHUB_SHA}"
           fi
 
           echo "image=$image" >> "$GITHUB_OUTPUT"

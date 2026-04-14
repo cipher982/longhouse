@@ -1,11 +1,8 @@
 name: Publish Runtime Image
 
 on:
-  workflow_run:
-    workflows: ["push-pr-ci--validate-contracts-and-lints--unit-backend-frontend-runner--e2e-core-a11y"]
-    types: [completed]
-    branches: [main]
   push:
+    branches: [main]
     tags:
       - "runtime-v*"
   workflow_dispatch: {}
@@ -16,18 +13,16 @@ permissions:
 
 jobs:
   gate:
-    name: "Gate image on CI success"
+    name: "Gate image on push to main"
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'workflow_dispatch' || github.ref_type == 'tag' || github.event.workflow_run.conclusion == 'success' }}
     outputs:
       head_sha: ${{ steps.meta.outputs.head_sha }}
     steps:
       - name: Resolve target commit
         id: meta
         run: |
-          HEAD_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
-          echo "head_sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
-          echo "CI gate passed — building image for $HEAD_SHA"
+          echo "head_sha=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          echo "Building image for ${{ github.sha }}"
 
   build-and-push:
     runs-on: ubuntu-latest

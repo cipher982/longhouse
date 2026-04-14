@@ -49,8 +49,8 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y make
+      - name: Verify make available
+        run: command -v make
 
       - name: Install Claude Code CLI
         run: |

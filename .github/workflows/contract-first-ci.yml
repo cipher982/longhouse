@@ -19,7 +19,7 @@ env:
 jobs:
   # -----------------------------------------------------------------------
   # Path detection — skip jobs whose code hasn't changed
-  # Skipped jobs don't block workflow success, so runtime-image still fires.
+  # Skipped jobs don't block workflow success.
   # -----------------------------------------------------------------------
   changes:
     runs-on: ubuntu-latest
@@ -97,8 +97,8 @@ jobs:
       with:
         bun-version: '1.2.20'
 
-    - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y make
+    - name: Verify make available
+      run: command -v make
 
     - name: Validate
       run: make validate
@@ -108,6 +108,8 @@ jobs:
     if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     name: "🗃️ sqlite-lite--make-test--install-runner--oss-path"
+    env:
+      CARGO_PROFILE: ci
 
     steps:
     - uses: actions/checkout@v6
@@ -125,8 +127,19 @@ jobs:
       with:
         bun-version: '1.2.20'
 
-    - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y make
+    - name: Cache Rust build artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          engine/target
+        key: engine-ci-${{ runner.os }}-${{ hashFiles('engine/Cargo.lock', 'engine/Cargo.toml') }}
+        restore-keys: |
+          engine-ci-${{ runner.os }}-
+
+    - name: Verify make available
+      run: command -v make
 
     - name: Run Python Backend Tests
       run: make test
@@ -176,8 +189,8 @@ jobs:
     - name: Install dependencies
       run: bun install --frozen-lockfile
 
-    - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y make
+    - name: Verify make available
+      run: command -v make
 
     - name: Run Frontend Tests
       run: make test-frontend
@@ -207,8 +220,8 @@ jobs:
     - name: Setup uv
       uses: astral-sh/setup-uv@v7
 
-    - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y make
+    - name: Verify make available
+      run: command -v make
 
     - name: Verify CLI wheel packaging
       run: make test-wheel-package
@@ -268,8 +281,8 @@ jobs:
     - name: Install dependencies
       run: bun install --frozen-lockfile
 
-    - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y make
+    - name: Verify make available
+      run: command -v make
 
     - name: Install Playwright browsers + deps
       run: cd e2e && bunx playwright install --with-deps chromium
@@ -316,8 +329,8 @@ jobs:
     - name: Setup uv
       uses: astral-sh/setup-uv@v7
 
-    - name: Install build tools
-      run: sudo apt-get update && sudo apt-get install -y make
+    - name: Verify make available
+      run: command -v make
 
     - name: Install control plane deps
       run: cd control-plane && uv sync --extra dev --frozen
