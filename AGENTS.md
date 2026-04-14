@@ -66,15 +66,24 @@ Boundary rules:
 - Do not dump file inventories or command transcripts unless they are needed to explain a blocker.
 - Mention tests when they fail, were skipped, or materially change confidence.
 
-## Concurrent Agent Reality
+## Shared Worktree Reality
 
-- Multiple agents may be working in this exact repo, on the same `main` branch, and even in the same local worktree on this laptop at the same time.
-- Never infer state from "latest" branch runs, generic tails, or recent logs. Those are often another agent's commit, another deploy, or an older still-running workflow.
-- Anchor every CI or deploy check to your exact `HEAD` SHA or explicit run id. If deployment matters, also verify live surface SHAs because demo, control plane, and canary can be on different commits during rollout.
-- If you tail anything, say what you are tailing first: exact workflow run id, exact commit SHA, exact session id, or exact container/service.
-- Reserved trigger: when David says `cowbell`, handle shipping yourself. Figure out the latest commit that represents this task's finished work, make sure that exact commit is the ship target, then run `make ship SHA=<that-sha>` in the foreground. If you only edited files, commit them first. If you already pushed earlier, reuse that same task SHA. Do not ask David to find or provide a hash.
-- `make ship SHA=<sha>` prints a start banner with the exact target SHA and commit subject. Read that line before trusting the run.
-- For `cowbell`, a non-zero `make ship` result means ship failed for that exact SHA. Report the failure and suspected cause, but do not relabel it as success just because the root cause might predate the current diff.
+- Assume multiple agents can be working in this exact repo, on the same `main`, and even in this same local worktree on this laptop at the same time.
+- "Latest" is not evidence. Branch-latest workflow lists, generic tails, and recent logs often belong to another agent or another deploy.
+- Any CI or deploy claim must be anchored to an exact commit SHA, workflow run id, session id, or container/service name.
+- If deployment matters, verify live surface SHAs too; demo, control plane, and canary can be on different commits during rollout.
+
+## Cowbell
+
+- `cowbell` is the PM trigger for the full ship cycle. David should only need to say `cowbell`.
+- Own the target commit yourself:
+  - if your task is still uncommitted work, commit it now
+  - otherwise use the latest commit that represents the task you just finished, even if it was pushed earlier
+- Run `make ship SHA="<task-sha>"` in the foreground.
+- Read the start banner before trusting the run. It prints the exact target SHA and commit subject.
+- Stay blocked until `make ship` exits. Do not stop after `git push`.
+- Exit `0` means shipped. Any non-zero exit means ship failed for that exact task SHA.
+- When you report status, name the exact task SHA and, when useful, the exact failing workflow run ids.
 
 ## Task Tracking
 
@@ -209,16 +218,14 @@ Extra rules:
 - If you add a DB column, new required env var, or touch schema, call it out and run `make reprovision` after CI.
 - Hosted tenants get engine changes through the runtime image; users running the engine locally still need `make install-engine`.
 - For the full ship cycle and manual deploy fallbacks, use `.agents/skills/zerg-ship/SKILL.md`.
-- After making commits for one task, keep track of the latest task commit yourself. Later `cowbell` requests should target that commit, not whatever `HEAD` or "latest on main" happens to be.
 
-Default path:
+Agent ship path:
 
 ```bash
-SHA=$(git rev-parse HEAD)
-make ship SHA="$SHA"
+make ship SHA="<task-sha>"
 ```
 
-For agent use, the explicit `SHA=` form is canonical. Bare `make ship` is only a human convenience fallback and is unsafe for delayed shipping in a shared worktree.
+Use the `cowbell` flow above to decide `<task-sha>` from the task you just finished. Bare `make ship` is only a human convenience fallback.
 
 Local fallback when remote CI is unavailable or David explicitly wants a local run:
 
