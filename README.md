@@ -21,7 +21,7 @@ Video walkthrough coming soon. In the meantime, the first run is simple:
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-The installer runs the default local quickstart, starts the local Longhouse runtime, sets up the background machine agent when supported, and on macOS installs `Longhouse.app` in `/Applications` for local status. Open `http://localhost:8080` and find one prior session.
+The installer runs the default local quickstart, starts the local Longhouse runtime, sets up the background machine agent when supported, and on macOS installs `Longhouse.app` in `/Applications` for local status. On macOS, terminal bootstrap and direct app download land on the same `Longhouse.app` in `/Applications`; if the app is not already open, open `Longhouse.app` and find one prior session. On Linux or WSL, open `http://localhost:8080`.
 
 When you want control after launch:
 
@@ -52,13 +52,13 @@ longhouse serve --demo
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-Open `http://localhost:8080`. This runs both the Machine Agent and the Runtime Host on your laptop, which is good for trying the product but stops when your laptop sleeps.
+Open `Longhouse.app` on macOS or `http://localhost:8080` on Linux or WSL. This runs both the Machine Agent and the Runtime Host on your laptop, which is good for trying the product but stops when your laptop sleeps.
 
-On macOS the installer also puts `Longhouse.app` in `/Applications` and your menu bar.
+On macOS the installer also puts `Longhouse.app` in `/Applications` and your menu bar. The direct app download lands on the same Mac product state.
 
 ### macOS app download (Apple Silicon)
 
-If you want the non-terminal path on a modern Mac, download the desktop app directly:
+If you want the signed app-first path on a modern Mac, download the desktop app directly. It installs the same `Longhouse.app` product the shell bootstrap installs for macOS users:
 
 [Download Longhouse for macOS](https://longhouse.ai/download/macos)
 
@@ -96,20 +96,20 @@ Sign up at https://longhouse.ai when you want the convenience path — we run th
 
 ## Install Options
 
-### Shell installer (recommended)
+### Shell installer (recommended for agents and automation)
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-Installs the `longhouse` CLI, runs the default local quickstart, sets up the Machine Agent, and on macOS adds `Longhouse.app`. Set `LONGHOUSE_NO_WIZARD=1` to skip the automatic quickstart.
+Installs the `longhouse` CLI, runs the default local quickstart, sets up the Machine Agent, and on macOS installs the same `/Applications/Longhouse.app` you get from the direct app download. Set `LONGHOUSE_NO_WIZARD=1` to skip the automatic quickstart.
 
 ### macOS desktop app
 
-For a click-first install on Apple Silicon Macs, use the direct desktop download:
+For a click-first install on Apple Silicon Macs, use the direct desktop download. This is the same Mac product as the shell installer, not a separate setup path:
 
 [Download Longhouse for macOS](https://longhouse.ai/download/macos)
 
-### With `uv`
+### With `uv` (advanced / power-user path)
 ```bash
 uv tool install longhouse
 longhouse onboard

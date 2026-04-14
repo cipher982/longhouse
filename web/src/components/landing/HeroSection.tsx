@@ -69,7 +69,7 @@ export function HeroSection() {
               </span>
             </button>
             <p className="hero-install-note">
-              macOS, Linux, or WSL. No account required.
+              Best for agents, automation, Linux, or WSL.
             </p>
           </div>
 
@@ -96,13 +96,16 @@ export function HeroSection() {
             </svg>
             <div className="hero-install-mac-text">
               <span className="hero-install-mac-label">Download for macOS</span>
-              <span className="hero-install-mac-detail">Apple Silicon &middot; Signed desktop app</span>
+              <span className="hero-install-mac-detail">Apple Silicon &middot; Same app as terminal install</span>
             </div>
           </a>
         </div>
 
         {/* ── Secondary links ── */}
         <div className="hero-install-extras">
+          <span className="hero-install-extra">
+            On macOS, both install choices end at <code>Longhouse.app</code>.
+          </span>
           <span className="hero-install-extra">
             Or: <code>uv tool install longhouse</code>
           </span>

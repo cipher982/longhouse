@@ -134,7 +134,7 @@ longhouse connect --status      # check shipping status`}
       <h2>Setup & Maintenance</h2>
 
       <h3>longhouse onboard</h3>
-      <p>Run first-time setup wizard to configure Longhouse for your machine.</p>
+      <p>Run the default local quickstart on this machine.</p>
       <CodeBlock title="terminal">{`longhouse onboard`}</CodeBlock>
 
       <h3>longhouse migrate</h3>

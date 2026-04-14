@@ -161,7 +161,7 @@ Artifact policy:
 - the `vX.Y.Z` GitHub release is the versioned source of truth for local runtime binaries
 - the CLI version and runtime artifact version should match the same tag by default
 - local/dev validation may override artifact sources explicitly
-- on macOS, `connect --install` should install the ambient helper as `~/Applications/Longhouse.app`
+- on macOS, `connect --install` should install the ambient helper as `/Applications/Longhouse.app`
 - raw menu bar/window executables are repo-local harness artifacts, not consumer release assets
 - ZIP is transitional transport only; the website-facing macOS download should move to DMG
 
