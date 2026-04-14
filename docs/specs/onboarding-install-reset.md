@@ -8,6 +8,9 @@ Updated: 2026-04-14
 
 Define one honest install and onboarding contract for launch.
 
+The concrete single-state + single-reconciler design for local machine config
+lives in `docs/specs/machine-state-reconcile.md`.
+
 Users should not have to reverse-engineer the difference between:
 
 - `Longhouse.app`
