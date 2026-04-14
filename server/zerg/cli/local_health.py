@@ -12,6 +12,7 @@ import typer
 
 from zerg.services.desktop_app import build_snapshot_arguments
 from zerg.services.local_health import collect_local_health
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
@@ -116,7 +117,8 @@ def _render_snapshot(snapshot: dict[str, object], *, json_output: bool) -> None:
 
 
 def _collect_snapshot(claude_dir: str | None) -> dict[str, object]:
-    return collect_local_health(Path(claude_dir) if claude_dir else None)
+    state_root = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
+    return collect_local_health(state_root)
 
 
 def _repo_root() -> Path:
@@ -147,7 +149,8 @@ def _launch_desktop_surface(
     refresh_seconds: int,
     allow_source_fallback: bool = False,
 ) -> None:
-    ui_url = get_zerg_url(Path(claude_dir) if claude_dir else None)
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
+    ui_url = get_zerg_url(config_dir)
     health_arguments = build_snapshot_arguments(claude_dir=claude_dir)
 
     prebuilt_artifact = _prebuilt_runtime_artifact(component) if component is not None else None
@@ -218,7 +221,7 @@ def local_health_callback(
     claude_dir: str | None = typer.Option(
         None,
         "--claude-dir",
-        help="Claude config directory override (default: ~/.claude or CLAUDE_CONFIG_DIR).",
+        help="Claude config directory override (maps that provider home to the sibling ~/.longhouse state root).",
     ),
 ) -> None:
     """Show local Longhouse shipping health for this machine."""

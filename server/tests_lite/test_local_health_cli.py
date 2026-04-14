@@ -21,6 +21,9 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.cli.main import app
 from zerg.cli import local_health as local_health_cli
 from zerg.services import local_health as local_health_service
+from zerg.services.longhouse_paths import get_agent_db_path
+from zerg.services.longhouse_paths import get_agent_outbox_dir
+from zerg.services.longhouse_paths import get_agent_status_path
 
 
 def _service_info(status: str, *, service_file: str = "/Users/test/Library/LaunchAgents/com.longhouse.shipper.plist") -> dict:
@@ -29,14 +32,14 @@ def _service_info(status: str, *, service_file: str = "/Users/test/Library/Launc
         "status": status,
         "service_name": "com.longhouse.shipper",
         "service_file": service_file,
-        "log_path": "/Users/test/.claude/logs/engine.log.*",
+        "log_path": "/Users/test/.longhouse/agent/logs/engine.log.*",
     }
 
 
 def _write_engine_status(tmp_path: Path, *, age_seconds: int = 0, payload: dict | None = None) -> None:
-    claude_dir = tmp_path
-    claude_dir.mkdir(parents=True, exist_ok=True)
-    status_path = claude_dir / "engine-status.json"
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    status_path = get_agent_status_path(tmp_path)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
     merged = {
         "version": "0.1.0",
         "daemon_pid": 1234,
@@ -58,7 +61,7 @@ def _write_engine_status(tmp_path: Path, *, age_seconds: int = 0, payload: dict 
 
 
 def _write_outbox_file(tmp_path: Path, *, age_seconds: int = 0, name: str = "prs.1.json") -> None:
-    outbox_dir = tmp_path / "outbox"
+    outbox_dir = get_agent_outbox_dir(tmp_path)
     outbox_dir.mkdir(parents=True, exist_ok=True)
     path = outbox_dir / name
     path.write_text(json.dumps({"session_id": "sess-1", "state": "thinking"}))
@@ -67,9 +70,10 @@ def _write_outbox_file(tmp_path: Path, *, age_seconds: int = 0, name: str = "prs
 
 
 def _write_local_config(tmp_path: Path, *, url: str, machine_name: str) -> None:
-    tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "longhouse-url").write_text(url + "\n")
-    (tmp_path / "longhouse-machine-name").write_text(machine_name + "\n")
+    machine_dir = tmp_path / "machine"
+    machine_dir.mkdir(parents=True, exist_ok=True)
+    (machine_dir / "target-url").write_text(url + "\n")
+    (machine_dir / "name").write_text(machine_name + "\n")
 
 
 def _write_runner_env(tmp_path: Path, *, url: str, runner_name: str) -> Path:
@@ -108,7 +112,8 @@ def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
 
 
 def _write_shipper_db(tmp_path: Path, rows: list[tuple[str, str, str | None, str | None, str]]) -> None:
-    db_path = tmp_path / "longhouse-shipper.db"
+    db_path = get_agent_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute(
         """
@@ -136,7 +141,7 @@ def _write_shipper_db(tmp_path: Path, rows: list[tuple[str, str, str | None, str
 
 def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
     snapshot = local_health_service.collect_local_health(tmp_path)
@@ -151,7 +156,7 @@ def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
 
 def test_collect_local_health_degraded_while_waiting_for_first_status(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
@@ -163,7 +168,7 @@ def test_collect_local_health_degraded_while_waiting_for_first_status(monkeypatc
 
 def test_collect_local_health_degraded_when_status_is_aging(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=90)
 
     snapshot = local_health_service.collect_local_health(tmp_path)
@@ -175,7 +180,7 @@ def test_collect_local_health_degraded_when_status_is_aging(monkeypatch, tmp_pat
 
 def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("stopped"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("stopped"))
     _write_outbox_file(tmp_path, age_seconds=300)
 
     snapshot = local_health_service.collect_local_health(tmp_path)
@@ -191,7 +196,11 @@ def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, t
     runner_env = _write_runner_env(tmp_path, url="https://david010.longhouse.ai", runner_name="cinder")
     _write_local_config(tmp_path, url="http://127.0.0.1:8080", machine_name="cinder.local")
     _write_engine_status(tmp_path, age_seconds=5)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running", service_file=str(service_file)))
+    monkeypatch.setattr(
+        local_health_service,
+        "get_service_info",
+        lambda *args, **kwargs: _service_info("running", service_file=str(service_file)),
+    )
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [runner_env])
 
     snapshot = local_health_service.collect_local_health(tmp_path)
@@ -214,7 +223,11 @@ def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: 
         machine_name="test-box",
     )
     _write_engine_status(tmp_path, age_seconds=5)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running", service_file=str(service_file)))
+    monkeypatch.setattr(
+        local_health_service,
+        "get_service_info",
+        lambda *args, **kwargs: _service_info("running", service_file=str(service_file)),
+    )
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [runner_env])
 
     snapshot = local_health_service.collect_local_health(tmp_path)
@@ -230,10 +243,10 @@ def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: 
 def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
-    _write_engine_status(tmp_path, age_seconds=2)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path / ".longhouse", age_seconds=2)
 
-    result = runner.invoke(app, ["local-health", "--json", "--claude-dir", str(tmp_path)])
+    result = runner.invoke(app, ["local-health", "--json", "--claude-dir", str(tmp_path / ".claude")])
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
@@ -247,7 +260,7 @@ def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
 
 def test_collect_local_health_includes_activity_summary(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
     now = datetime(2026, 4, 12, 18, 0, 0, tzinfo=timezone.utc)
@@ -315,7 +328,7 @@ def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_me
     monkeypatch, tmp_path: Path
 ):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
     now = datetime(2026, 4, 12, 18, 0, 0, tzinfo=timezone.utc)
@@ -408,7 +421,7 @@ def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path
         [
             "local-health",
             "--claude-dir",
-            str(tmp_path),
+            str(tmp_path / ".claude"),
             "menubar",
             "--refresh-seconds",
             "7",
@@ -474,6 +487,7 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
 
 
 def _write_update_cache(tmp_path: Path, *, update_available: bool, installed: str = "0.1.8", latest: str = "0.1.9") -> Path:
+    tmp_path.mkdir(parents=True, exist_ok=True)
     cache = {
         "checked_at": "2026-04-11T10:00:00+00:00",
         "installed_version": installed,
@@ -492,7 +506,7 @@ def _write_update_cache(tmp_path: Path, *, update_available: bool, installed: st
 
 def test_collect_local_health_includes_update_info_when_update_available(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
     # Point update_manager at our tmp dir for the cache file
@@ -512,7 +526,7 @@ def test_collect_local_health_includes_update_info_when_update_available(monkeyp
 
 def test_collect_local_health_includes_update_info_when_up_to_date(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
     monkeypatch.setattr("zerg.cli.update_manager._get_longhouse_home", lambda: tmp_path)
@@ -526,7 +540,7 @@ def test_collect_local_health_includes_update_info_when_up_to_date(monkeypatch, 
 
 def test_collect_local_health_update_info_is_none_when_no_cache(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
     # No update-check.json written — cache is absent
@@ -539,7 +553,7 @@ def test_collect_local_health_update_info_is_none_when_no_cache(monkeypatch, tmp
 
 def test_collect_local_health_update_info_survives_corrupt_cache(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
 
     monkeypatch.setattr("zerg.cli.update_manager._get_longhouse_home", lambda: tmp_path)
@@ -553,14 +567,14 @@ def test_collect_local_health_update_info_survives_corrupt_cache(monkeypatch, tm
 
 def test_update_info_present_in_json_cli_output(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running"))
-    _write_engine_status(tmp_path, age_seconds=5)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path / ".longhouse", age_seconds=5)
 
-    monkeypatch.setattr("zerg.cli.update_manager._get_longhouse_home", lambda: tmp_path)
-    _write_update_cache(tmp_path, update_available=True)
+    monkeypatch.setattr("zerg.cli.update_manager._get_longhouse_home", lambda: tmp_path / ".longhouse")
+    _write_update_cache(tmp_path / ".longhouse", update_available=True)
 
     runner = CliRunner()
-    result = runner.invoke(app, ["local-health", "--json", "--claude-dir", str(tmp_path)])
+    result = runner.invoke(app, ["local-health", "--json", "--claude-dir", str(tmp_path / ".claude")])
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)

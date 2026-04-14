@@ -2,7 +2,7 @@
 # E2E test for the Longhouse hook outbox pipeline.
 #
 # Validates the full chain:
-#   hook rename pattern → ~/.claude/outbox/prs.*.json
+#   hook rename pattern → ~/.longhouse/agent/outbox/prs.*.json
 #   → daemon drains (1s poll)
 #   → POST /api/agents/presence
 #   → file deleted

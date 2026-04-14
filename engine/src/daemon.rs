@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use tokio::task::JoinSet;
 
-use crate::config::ShipperConfig;
+use crate::config::{self, ShipperConfig};
 use crate::discovery::{self, ProviderConfig};
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
@@ -218,15 +218,11 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
     let mut offline = OfflineState::new();
     let mut last_ship_at: Option<String> = None;
 
-    // Resolve claude dir for status file
-    let claude_dir = {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        let base = std::env::var("CLAUDE_CONFIG_DIR")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|_| std::path::PathBuf::from(home).join(".claude"));
-        base
-    };
-    let outbox_dir = claude_dir.join("outbox");
+    let outbox_dir = config::get_agent_outbox_dir()?;
+    let status_path = config::get_agent_status_path()?;
+    if let Some(parent) = status_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
 
     loop {
         drain_due_local_retries(&mut scheduler, &mut deferred_retries);
@@ -402,7 +398,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &parse_tracker,
                     offline.is_offline,
                     &last_ship_at,
-                    &claude_dir,
+                    &status_path,
                 );
             }
 
@@ -414,7 +410,7 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
                     &parse_tracker,
                     offline.is_offline,
                     &last_ship_at,
-                    &claude_dir,
+                    &status_path,
                 );
                 if !offline.is_offline {
                     if let Err(e) = heartbeat::send_heartbeat(&client, &payload).await {
@@ -435,7 +431,7 @@ fn write_local_status_snapshot(
     parse_tracker: &RecentIssueTracker,
     is_offline: bool,
     last_ship_at: &Option<String>,
-    claude_dir: &Path,
+    status_path: &Path,
 ) -> heartbeat::HeartbeatPayload {
     let spool = Spool::new(conn);
     let stats = heartbeat::HeartbeatStats {
@@ -446,7 +442,7 @@ fn write_local_status_snapshot(
         last_ship_at: last_ship_at.clone(),
     };
     let payload = heartbeat::HeartbeatPayload::build(&stats);
-    heartbeat::write_status_file(&payload, &stats, claude_dir);
+    heartbeat::write_status_file(&payload, &stats, status_path);
     payload
 }
 

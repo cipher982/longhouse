@@ -102,11 +102,11 @@ enum Commands {
 
     /// Daemon mode: watch for file changes and ship incrementally
     Connect {
-        /// API URL override (default: from ~/.claude/longhouse-url)
+        /// API URL override (default: from ~/.longhouse/machine/target-url)
         #[arg(long)]
         url: Option<String>,
 
-        /// API token override (default: from ~/.claude/longhouse-device-token)
+        /// API token override (default: from ~/.longhouse/machine/device-token)
         #[arg(long)]
         token: Option<String>,
 
@@ -134,22 +134,22 @@ enum Commands {
         #[arg(long)]
         max_batch_bytes: Option<u64>,
 
-        /// Log directory for rolling log files (default: ~/.claude/logs, or LONGHOUSE_LOG_DIR env)
+        /// Log directory for rolling log files (default: ~/.longhouse/agent/logs, or LONGHOUSE_LOG_DIR env)
         #[arg(long)]
         log_dir: Option<PathBuf>,
 
-        /// Human-readable name for this machine (default: from ~/.claude/longhouse-machine-name or hostname)
+        /// Human-readable name for this machine (default: from ~/.longhouse/machine/name or hostname)
         #[arg(long)]
         machine_name: Option<String>,
     },
 
     /// One-shot: scan all provider sessions and ship new events
     Ship {
-        /// API URL override (default: from ~/.claude/longhouse-url)
+        /// API URL override (default: from ~/.longhouse/machine/target-url)
         #[arg(long)]
         url: Option<String>,
 
-        /// API token override (default: from ~/.claude/longhouse-device-token)
+        /// API token override (default: from ~/.longhouse/machine/device-token)
         #[arg(long)]
         token: Option<String>,
 
@@ -185,7 +185,7 @@ enum Commands {
         #[arg(long)]
         max_batch_bytes: Option<u64>,
 
-        /// Human-readable name for this machine (default: from ~/.claude/longhouse-machine-name or hostname)
+        /// Human-readable name for this machine (default: from ~/.longhouse/machine/name or hostname)
         #[arg(long)]
         machine_name: Option<String>,
 
@@ -475,8 +475,13 @@ fn resolve_log_dir(log_dir_arg: Option<&std::path::Path>) -> std::path::PathBuf 
     if let Ok(dir) = std::env::var("LONGHOUSE_LOG_DIR") {
         return std::path::PathBuf::from(dir);
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    std::path::PathBuf::from(home).join(".claude").join("logs")
+    config::get_agent_log_dir().unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        std::path::PathBuf::from(home)
+            .join(".longhouse")
+            .join("agent")
+            .join("logs")
+    })
 }
 
 fn prune_old_logs(log_dir: &std::path::Path, keep_days: u64) {
@@ -620,7 +625,7 @@ fn main() -> anyhow::Result<()> {
             if let Some(ref name) = machine_name {
                 pipeline::compressor::set_machine_name(name);
             } else {
-                // Load from config file (reads ~/.claude/longhouse-machine-name)
+                // Load from config file (reads ~/.longhouse/machine/name)
                 let cfg = ShipperConfig::from_env().unwrap_or_default();
                 pipeline::compressor::set_machine_name(&cfg.machine_name);
             }

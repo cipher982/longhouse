@@ -640,10 +640,6 @@ def onboard(
             "host": host,
             "port": port,
         },
-        "shipper": {
-            "mode": "watch",
-            "api_url": api_url,
-        },
     }
 
     try:

@@ -1,6 +1,6 @@
 //! Outbox drain for presence events.
 //!
-//! Claude Code hooks write small JSON files to `~/.claude/outbox/` instead of
+//! Hook integrations write small JSON files to `~/.longhouse/agent/outbox/` instead of
 //! calling the API directly. This eliminates network I/O from the hook hot path,
 //! allowing hooks to run as `async: false` without risking stalls.
 //!

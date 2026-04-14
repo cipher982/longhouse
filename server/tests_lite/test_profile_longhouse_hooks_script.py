@@ -21,7 +21,13 @@ def _load_script_module():
 
 def _write_hook(tmp_path: Path, name: str, text: str) -> Path:
     path = tmp_path / name
-    path.write_text(text.replace("__ENGINE_PATH__", "/tmp/placeholder-engine"), encoding="utf-8")
+    real_home = Path.home()
+    rendered = (
+        text.replace("__ENGINE_PATH__", "/tmp/placeholder-engine")
+        .replace("__LONGHOUSE_HOME__", str(real_home / ".longhouse"))
+        .replace("__HINDSIGHT_ROOT__", str(real_home / ".claude" / "hindsight"))
+    )
+    path.write_text(rendered, encoding="utf-8")
     path.chmod(0o755)
     return path
 

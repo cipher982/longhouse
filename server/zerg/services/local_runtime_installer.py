@@ -8,9 +8,9 @@ regardless of which entrypoint initiated the setup.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
 from zerg.services.desktop_app import install_desktop_app_service
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.runtime_artifacts import InstalledRuntimeBinary
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import ensure_runtime_binary
@@ -47,7 +47,7 @@ def install_local_runtime(
 ) -> LocalRuntimeInstallResult:
     """Install the machine agent, CLI hooks, and optional desktop app."""
 
-    config_dir = Path(claude_dir) if claude_dir else None
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
     save_zerg_url(url, config_dir)
     if token:
         save_token(token, config_dir)

@@ -11,6 +11,8 @@ import xml.sax.saxutils as saxutils
 from pathlib import Path
 from typing import Literal
 
+from zerg.services.longhouse_paths import get_agent_log_dir
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import ensure_runtime_artifact
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
@@ -60,11 +62,8 @@ default_install_menubar = default_install_desktop_app
 
 def _log_dir(claude_dir: str | None) -> Path:
     if claude_dir:
-        return Path(claude_dir).expanduser() / "logs"
-    raw = os.getenv("CLAUDE_CONFIG_DIR")
-    if raw:
-        return Path(raw).expanduser() / "logs"
-    return Path.home() / ".claude" / "logs"
+        return get_agent_log_dir(resolve_longhouse_home_from_provider_home(claude_dir))
+    return get_agent_log_dir()
 
 
 def _service_plist_path(label: str) -> Path:

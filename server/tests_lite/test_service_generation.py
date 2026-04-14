@@ -7,6 +7,8 @@ Specifically covers the Codex findings:
 - Missing machine_name is handled gracefully (no --machine-name arg)
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 import zerg.services.shipper.service as shipper_service
@@ -83,6 +85,21 @@ def test_plist_is_valid_xml():
     ET.fromstring(plist)
 
 
+def test_plist_persists_longhouse_home():
+    config = _make_config(claude_dir="/tmp/.claude")
+    plist = _generate_launchd_plist(config)
+    assert "<key>LONGHOUSE_HOME</key>" in plist
+    assert "<string>/tmp/.longhouse</string>" in plist
+
+
+def test_plist_uses_longhouse_agent_log_dir():
+    config = _make_config(claude_dir="/tmp/.claude")
+    plist = _generate_launchd_plist(config)
+    assert "<key>LONGHOUSE_LOG_DIR</key>" in plist
+    assert "<string>/tmp/.longhouse/agent/logs</string>" in plist
+    assert "/tmp/.longhouse/agent/logs/engine.stdout.log" in plist
+
+
 def test_plist_valid_xml_with_special_machine_name():
     """Plist is still valid XML even if sanitization is bypassed."""
     import xml.etree.ElementTree as ET
@@ -104,6 +121,18 @@ def test_systemd_contains_machine_name():
     assert "--machine-name" in unit
     assert "home-server" in unit
     assert "--log-dir" not in unit
+
+
+def test_systemd_persists_longhouse_home():
+    config = _make_config(claude_dir="/tmp/.claude")
+    unit = _generate_systemd_unit(config)
+    assert 'Environment="LONGHOUSE_HOME=/tmp/.longhouse"' in unit
+
+
+def test_systemd_uses_longhouse_agent_log_dir():
+    config = _make_config(claude_dir="/tmp/.claude")
+    unit = _generate_systemd_unit(config)
+    assert 'Environment="LONGHOUSE_LOG_DIR=/tmp/.longhouse/agent/logs"' in unit
 
 
 def test_systemd_no_machine_name_arg_when_none():
@@ -143,3 +172,14 @@ def test_get_engine_executable_prefers_repo_build_over_path(monkeypatch: pytest.
     monkeypatch.setattr(shipper_service.shutil, "which", lambda name: "/usr/local/bin/longhouse-engine")
 
     assert get_engine_executable() == str(engine_binary)
+
+
+def test_get_engine_executable_uses_runtime_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(shipper_service, "_find_project_root", lambda: None)
+    monkeypatch.setattr(
+        shipper_service,
+        "resolve_installed_runtime_artifact",
+        lambda component: SimpleNamespace(launch_path="/tmp/longhouse-engine"),
+    )
+
+    assert get_engine_executable() == "/tmp/longhouse-engine"

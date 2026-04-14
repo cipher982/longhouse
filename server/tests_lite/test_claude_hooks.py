@@ -15,7 +15,8 @@ def test_claude_hook_seeds_session_binding_on_stop():
 
 
 def test_claude_hook_writes_presence_to_outbox():
-    assert 'OUTBOX="$HOME/.claude/outbox"' in HOOK_SCRIPT
+    assert 'LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"' in HOOK_SCRIPT
+    assert 'OUTBOX="$LONGHOUSE_HOME/agent/outbox"' in HOOK_SCRIPT
     assert 'write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true' in HOOK_SCRIPT
 
 
@@ -31,7 +32,7 @@ def test_claude_hook_script_is_local_only():
 
 def test_claude_stop_hook_forces_sidechain_for_hindsight_workspace():
     assert 'FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"' in HOOK_SCRIPT
-    assert 'HINDSIGHT_ROOT="$HOME/.claude/hindsight"' in HOOK_SCRIPT
+    assert 'HINDSIGHT_ROOT="__HINDSIGHT_ROOT__"' in HOOK_SCRIPT
     assert 'case "$CWD" in' in HOOK_SCRIPT
 
 

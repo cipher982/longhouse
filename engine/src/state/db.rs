@@ -1,12 +1,14 @@
 //! Shared SQLite connection for file_state + spool_queue.
 //!
-//! Same DB as the Python shipper v2: `~/.claude/longhouse-shipper.db`.
+//! Same DB as the Python shipper v2: `~/.longhouse/agent/longhouse-shipper.db`.
 //! Forward/backward compatible — both Python and Rust can read/write.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+
+use crate::config;
 
 /// Default DB filename (same as Python).
 const DB_FILENAME: &str = "longhouse-shipper.db";
@@ -95,15 +97,11 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
     Ok(conn)
 }
 
-/// Resolve the default DB path: `~/.claude/longhouse-shipper.db`.
+/// Resolve the default DB path: `~/.longhouse/agent/longhouse-shipper.db`.
 fn default_db_path() -> Result<PathBuf> {
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let claude_dir = if let Ok(config_dir) = std::env::var("CLAUDE_CONFIG_DIR") {
-        PathBuf::from(config_dir)
-    } else {
-        PathBuf::from(home).join(".claude")
-    };
-    Ok(claude_dir.join(DB_FILENAME))
+    let path = config::get_agent_db_path()?;
+    debug_assert_eq!(path.file_name().and_then(|value| value.to_str()), Some(DB_FILENAME));
+    Ok(path)
 }
 
 #[cfg(test)]

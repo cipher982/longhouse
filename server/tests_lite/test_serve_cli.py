@@ -25,13 +25,12 @@ class _FakeSocket:
 def _base_config(*, public_url: str | None) -> config_file_cli.LonghouseConfig:
     return config_file_cli.LonghouseConfig(
         server=config_file_cli.ServerConfig(host="127.0.0.1", port=8080, public_url=public_url),
-        shipper=config_file_cli.ShipperConfig(api_url="http://127.0.0.1:8080", flush_ms=500, fallback_scan_secs=300),
+        shipper=config_file_cli.ShipperConfig(flush_ms=500, fallback_scan_secs=300),
     )
 
 
 def _patch_serve(monkeypatch, tmp_path, *, config):
     uvicorn_calls: list[tuple[tuple, dict]] = []
-    saved_urls: list[str] = []
     saved_configs: list[dict] = []
 
     monkeypatch.setattr(serve_cli, "_apply_lite_mode_defaults", lambda: os.environ.setdefault("DATABASE_URL", "sqlite:///tmp/test.db"))
@@ -51,20 +50,17 @@ def _patch_serve(monkeypatch, tmp_path, *, config):
     fake_uvicorn.run = lambda *args, **kwargs: uvicorn_calls.append((args, kwargs))
     monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
 
-    from zerg.services.shipper import token as shipper_token
-
-    monkeypatch.setattr(shipper_token, "save_zerg_url", lambda url: saved_urls.append(url))
     monkeypatch.setattr(config_file_cli, "load_config", lambda: config)
     monkeypatch.setattr(config_file_cli, "save_config", lambda value, config_path=None: saved_configs.append(value))
 
-    return uvicorn_calls, saved_urls, saved_configs
+    return uvicorn_calls, saved_configs
 
 
 def test_serve_uses_saved_public_url_for_runtime_env(monkeypatch, tmp_path):
     monkeypatch.delenv("APP_PUBLIC_URL", raising=False)
     monkeypatch.delenv("PUBLIC_SITE_URL", raising=False)
 
-    uvicorn_calls, saved_urls, saved_configs = _patch_serve(
+    uvicorn_calls, saved_configs = _patch_serve(
         monkeypatch,
         tmp_path,
         config=_base_config(public_url="https://saved.example.com"),
@@ -85,7 +81,6 @@ def test_serve_uses_saved_public_url_for_runtime_env(monkeypatch, tmp_path):
 
     assert os.environ["APP_PUBLIC_URL"] == "https://saved.example.com"
     assert os.environ["PUBLIC_SITE_URL"] == "https://saved.example.com"
-    assert saved_urls == ["http://127.0.0.1:8080"]
     assert saved_configs == []
     assert uvicorn_calls[0][1]["host"] == "0.0.0.0"
 
@@ -121,7 +116,7 @@ def test_serve_domain_overrides_runtime_env_and_persists_config(monkeypatch, tmp
     monkeypatch.setenv("APP_PUBLIC_URL", "https://env.example.com")
     monkeypatch.delenv("PUBLIC_SITE_URL", raising=False)
 
-    uvicorn_calls, saved_urls, saved_configs = _patch_serve(
+    uvicorn_calls, saved_configs = _patch_serve(
         monkeypatch,
         tmp_path,
         config=_base_config(public_url="https://saved.example.com"),
@@ -142,6 +137,6 @@ def test_serve_domain_overrides_runtime_env_and_persists_config(monkeypatch, tmp
 
     assert os.environ["APP_PUBLIC_URL"] == "https://longhouse.example.com"
     assert os.environ["PUBLIC_SITE_URL"] == "https://longhouse.example.com"
-    assert saved_urls == ["http://127.0.0.1:8080"]
     assert saved_configs[0]["server"]["public_url"] == "https://longhouse.example.com"
+    assert saved_configs[0]["shipper"] == {"flush_ms": 500, "fallback_scan_secs": 300}
     assert uvicorn_calls[0][1]["host"] == "0.0.0.0"

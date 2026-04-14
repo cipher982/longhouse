@@ -30,7 +30,9 @@ def test_normalize_zerg_url_rejects_invalid_values(raw):
 
 
 def test_get_zerg_url_ignores_invalid_persisted_value(tmp_path: Path):
-    (tmp_path / "longhouse-url").write_text("https://<typer.models.OptionInfo object at 0x1234>\n")
+    machine_dir = tmp_path / "machine"
+    machine_dir.mkdir()
+    (machine_dir / "target-url").write_text("https://<typer.models.OptionInfo object at 0x1234>\n")
 
     assert get_zerg_url(tmp_path) is None
 
