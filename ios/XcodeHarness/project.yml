@@ -47,6 +47,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_STRICT_CONCURRENCY: complete
     info:
+      path: Info.plist
       properties:
         GIDClientID: 658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2.apps.googleusercontent.com
         CFBundleURLTypes:
