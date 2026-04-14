@@ -91,12 +91,35 @@ targets:
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
 
+  LonghouseIOSTests:
+    type: bundle.unit-test
+    platform: iOS
+    supportedDestinations: [iOS]
+    sources:
+      - path: ../Tests/LonghouseIOSTests
+        createIntermediateGroups: true
+    dependencies:
+      - target: Longhouse
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        CODE_SIGN_STYLE: Automatic
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Longhouse.app/Longhouse"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
 schemes:
   Longhouse:
     build:
       targets:
         Longhouse: all
         LonghouseWidgetExtension: all
+        LonghouseIOSTests: [test]
     run:
       config: Debug
       executable: Longhouse
+    test:
+      config: Debug
+      targets:
+        - LonghouseIOSTests

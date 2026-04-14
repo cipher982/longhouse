@@ -290,7 +290,7 @@ struct LoginView: View {
     }
 
     private func startHostedSignIn(_ methods: AuthMethods) {
-        guard let ssoURL = methods.ssoURL, var components = URLComponents(string: "\(ssoURL)/auth/native/open-instance") else {
+        guard methods.ssoURL != nil else {
             localErrorMessage = "Hosted sign-in is not configured"
             return
         }
@@ -300,16 +300,14 @@ struct LoginView: View {
             return
         }
 
-        appState.clearAuthError()
-        localErrorMessage = nil
-        isSigningIn = true
-        components.queryItems = [URLQueryItem(name: "tenant", value: tenant)]
-
-        guard let authURL = components.url else {
-            isSigningIn = false
+        guard let authURL = HostedAuthFlow.openInstanceURL(tenant: tenant) else {
             localErrorMessage = "Hosted sign-in is not configured"
             return
         }
+
+        appState.clearAuthError()
+        localErrorMessage = nil
+        isSigningIn = true
 
         let session = ASWebAuthenticationSession(
             url: authURL,
@@ -348,7 +346,7 @@ struct LoginView: View {
     }
 
     private func startHostedBootstrapSignIn() {
-        guard let authURL = URL(string: "\(LonghouseAuthConfig.hostedControlPlaneURL)/auth/native/open-instance") else {
+        guard let authURL = HostedAuthFlow.openInstanceURL() else {
             localErrorMessage = "Hosted sign-in is not configured"
             return
         }
@@ -394,23 +392,22 @@ struct LoginView: View {
     }
 
     private func handleHostedAuthCallback(_ callbackURL: URL) async {
-        guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
+        guard let payload = HostedAuthFlow.callbackPayload(from: callbackURL) else {
             localErrorMessage = "Hosted sign-in returned an invalid callback"
             return
         }
 
-        let queryItems = components.queryItems ?? []
-        if let error = queryItems.first(where: { $0.name == "error" })?.value {
+        if let error = payload.error {
             localErrorMessage = friendlyHostedError(error)
             return
         }
 
-        guard let ssoToken = queryItems.first(where: { $0.name == "sso_token" })?.value else {
+        guard let ssoToken = payload.ssoToken else {
             localErrorMessage = "Hosted sign-in returned without a session token"
             return
         }
 
-        if let instanceURL = queryItems.first(where: { $0.name == "instance_url" })?.value,
+        if let instanceURL = payload.instanceURL,
            !instanceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             await appState.prepareServerForHostedLogin(instanceURL)
         }

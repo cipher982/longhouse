@@ -2,11 +2,6 @@ import GoogleSignIn
 import SwiftUI
 import WidgetKit
 
-enum LonghouseAuthConfig {
-    static let hostedCallbackScheme = "ai.longhouse.ios"
-    static let hostedControlPlaneURL = "https://control.longhouse.ai"
-}
-
 @main
 struct LonghouseApp: App {
     @StateObject private var appState = AppState()
