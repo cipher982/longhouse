@@ -122,6 +122,8 @@ required_names = {
     "Longhouse.app/Contents/Info.plist",
     "Longhouse.app/Contents/MacOS/Longhouse",
     "Longhouse.app/Contents/Resources/AppIcon.icns",
+    "Longhouse.app/Contents/Resources/LonghouseMenuBarHarness_LonghouseMenuBarCore.bundle/LonghouseMenuIcon.png",
+    "Longhouse.app/Contents/Resources/LonghouseMenuBarHarness_LonghouseMenuBarCore.bundle/desktop-app-setup.sh",
 }
 missing = sorted(required_names - names)
 if missing:

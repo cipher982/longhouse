@@ -212,7 +212,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(feedback?.style == .info)
         #expect(feedback?.title == "Setup dry run recorded")
-        #expect(feedback?.detail.contains("standard Longhouse installer") == true)
+        #expect(feedback?.detail.contains("built-in Longhouse setup") == true)
     }
 
     @Test
@@ -324,6 +324,15 @@ struct LonghouseMenuBarCoreTests {
             "ember",
             "--menubar",
         ])
+    }
+
+    @Test
+    func setupInvocationUsesBundledSetupScript() {
+        let invocation = LonghouseCLI.setupInvocation(resourceBundle: .module)
+
+        #expect(invocation?.launchPath == "/bin/zsh")
+        #expect(invocation?.arguments.count == 1)
+        #expect(invocation?.arguments.first?.hasSuffix("desktop-app-setup.sh") == true)
     }
 
     @Test

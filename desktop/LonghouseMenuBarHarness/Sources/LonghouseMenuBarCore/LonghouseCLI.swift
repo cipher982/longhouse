@@ -2,6 +2,7 @@ import Foundation
 
 enum LonghouseCLI {
     private static let executableName = "longhouse"
+    private static let setupScriptName = "desktop-app-setup"
     private static let standardPathEntries = [
         "/opt/homebrew/bin",
         "/usr/local/bin",
@@ -76,6 +77,18 @@ enum LonghouseCLI {
                 "--menubar",
             ]
         )
+    }
+
+    static func setupInvocation() -> (launchPath: String, arguments: [String])? {
+        setupInvocation(resourceBundle: .module)
+    }
+
+    static func setupInvocation(resourceBundle: Bundle) -> (launchPath: String, arguments: [String])? {
+        guard let scriptURL = resourceBundle.url(forResource: setupScriptName, withExtension: "sh") else {
+            return nil
+        }
+
+        return ("/bin/zsh", [scriptURL.path])
     }
 
     static func environment(prependingExecutablePath executablePath: String? = nil) -> [String: String] {
