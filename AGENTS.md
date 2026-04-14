@@ -72,7 +72,7 @@ Boundary rules:
 - Never infer state from "latest" branch runs, generic tails, or recent logs. Those are often another agent's commit, another deploy, or an older still-running workflow.
 - Anchor every CI or deploy check to your exact `HEAD` SHA or explicit run id. If deployment matters, also verify live surface SHAs because demo, control plane, and canary can be on different commits during rollout.
 - If you tail anything, say what you are tailing first: exact workflow run id, exact commit SHA, exact session id, or exact container/service.
-- Reserved trigger: when David says `cowbell`, do not guess from current repo state. Identify the one exact commit SHA this session owns, then run `make ship SHA=<that-sha>` in the foreground. If that commit was already pushed earlier, `make ship SHA=<that-sha>` is still correct. If you cannot identify one exact owned SHA, stop and say so instead of guessing from `HEAD` or "latest on main".
+- Reserved trigger: when David says `cowbell`, handle shipping yourself. Figure out the latest commit that represents this task's finished work, make sure that exact commit is the ship target, then run `make ship SHA=<that-sha>` in the foreground. If you only edited files, commit them first. If you already pushed earlier, reuse that same task SHA. Do not ask David to find or provide a hash.
 - `make ship SHA=<sha>` prints a start banner with the exact target SHA and commit subject. Read that line before trusting the run.
 - For `cowbell`, a non-zero `make ship` result means ship failed for that exact SHA. Report the failure and suspected cause, but do not relabel it as success just because the root cause might predate the current diff.
 
@@ -209,7 +209,7 @@ Extra rules:
 - If you add a DB column, new required env var, or touch schema, call it out and run `make reprovision` after CI.
 - Hosted tenants get engine changes through the runtime image; users running the engine locally still need `make install-engine`.
 - For the full ship cycle and manual deploy fallbacks, use `.agents/skills/zerg-ship/SKILL.md`.
-- After making a commit, report its SHA in the conversation. Later `cowbell` requests should reuse that exact SHA, not infer from current repo state.
+- After making commits for one task, keep track of the latest task commit yourself. Later `cowbell` requests should target that commit, not whatever `HEAD` or "latest on main" happens to be.
 
 Default path:
 
