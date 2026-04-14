@@ -235,14 +235,15 @@ def save_config(config: dict[str, Any], config_path: Path | None = None, *, clau
 
     content = "\n".join(lines)
 
-    # Set umask for secure file creation
-    old_umask = os.umask(0o077)
+    # Atomic write: write to temp file, set permissions, then rename
+    tmp_path = config_path.with_suffix(".tmp")
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        config_path.write_text(content)
-        # Ensure permissions are correct
-        config_path.chmod(0o600)
+        os.write(fd, content.encode())
+        os.fsync(fd)
     finally:
-        os.umask(old_umask)
+        os.close(fd)
+    tmp_path.rename(config_path)
 
 
 def get_effective_config_display(config: LonghouseConfig) -> list[tuple[str, str, str]]:

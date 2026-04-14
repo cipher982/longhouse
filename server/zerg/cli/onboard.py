@@ -445,6 +445,8 @@ def onboard(
                 typer.secho(f"  [ERROR] Failed to start local runtime: {e}", fg=typer.colors.RED)
                 typer.echo("         Try starting manually: longhouse serve")
 
+    server_healthy = no_server or _check_server_health(host, port)
+
     typer.echo("")
 
     # Step 3: Import existing sessions
@@ -480,7 +482,7 @@ def onboard(
             typer.echo("       Use: longhouse connect")
             typer.echo("       Or import once with: longhouse ship")
 
-        if has_any_cli and _check_server_health(host, port):
+        if has_any_cli and server_healthy:
             typer.echo("  Importing your existing sessions now...")
             imported, detail = _run_initial_import(api_url)
             if imported:
@@ -528,7 +530,7 @@ def onboard(
 
     typer.echo("")
 
-    if not no_browser and _has_gui() and _check_server_health(host, port):
+    if not no_browser and _has_gui() and server_healthy:
         _open_longhouse_surface(api_url)
 
     typer.echo("")
