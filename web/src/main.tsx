@@ -14,9 +14,7 @@ import App from "./routes/App";
 
 // Umami analytics is driven by runtime config.js.
 // Vite env fallback remains only for older standalone frontend deployments.
-const isLocalhost =
-  window.location.hostname === "localhost" ||
-  window.location.hostname === "127.0.0.1";
+const isLocalhost = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 const umamiWebsiteId = config.umamiWebsiteId;
 const umamiScriptSrc = config.umamiScriptSrc;
 const umamiDomains = config.umamiDomains;
@@ -38,14 +36,7 @@ if (!config.demoMode) {
     fetch("/api/ops/beacon", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        msg,
-        src,
-        line,
-        col,
-        stack: err?.stack,
-        url: location.href,
-      }),
+      body: JSON.stringify({ msg, src, line, col, stack: err?.stack, url: location.href }),
       keepalive: true,
     }).catch(() => {}); // Silent fail
   };
@@ -74,40 +65,8 @@ if (!container) {
 function parseUiEffects(value: string | null): "on" | "off" | null {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
-  if (
-    normalized === "on" ||
-    normalized === "1" ||
-    normalized === "true" ||
-    normalized === "yes"
-  )
-    return "on";
-  if (
-    normalized === "off" ||
-    normalized === "0" ||
-    normalized === "false" ||
-    normalized === "no"
-  )
-    return "off";
-  return null;
-}
-
-function parseBooleanFlag(value: string | null): boolean | null {
-  if (!value) return null;
-  const normalized = value.trim().toLowerCase();
-  if (
-    normalized === "1" ||
-    normalized === "true" ||
-    normalized === "yes" ||
-    normalized === "on"
-  )
-    return true;
-  if (
-    normalized === "0" ||
-    normalized === "false" ||
-    normalized === "no" ||
-    normalized === "off"
-  )
-    return false;
+  if (normalized === "on" || normalized === "1" || normalized === "true" || normalized === "yes") return "on";
+  if (normalized === "off" || normalized === "0" || normalized === "false" || normalized === "no") return "off";
   return null;
 }
 
@@ -116,9 +75,7 @@ function parseBooleanFlag(value: string | null): boolean | null {
 // - ?uieffects=off or ?effects=off
 const envUiEffects = parseUiEffects(import.meta.env.VITE_UI_EFFECTS);
 const params = new URLSearchParams(window.location.search);
-const queryUiEffects = parseUiEffects(
-  params.get("uieffects") ?? params.get("effects"),
-);
+const queryUiEffects = parseUiEffects(params.get("uieffects") ?? params.get("effects"));
 // Default: "on" (full visual mode). Use env/query to force "off".
 const uiEffects: "on" | "off" = queryUiEffects ?? envUiEffects ?? "on";
 container.setAttribute("data-ui-effects", uiEffects);
@@ -147,18 +104,14 @@ if (clockFrozen) {
   Date.now = () => frozenTimestamp;
 
   // Store original for potential restoration
-  (
-    window as Window & { __ORIGINAL_DATE_NOW?: typeof Date.now }
-  ).__ORIGINAL_DATE_NOW = OriginalDateNow;
+  (window as Window & { __ORIGINAL_DATE_NOW?: typeof Date.now }).__ORIGINAL_DATE_NOW = OriginalDateNow;
 }
 
 // ?seed=X - seed random values for consistent layout (deterministic)
 const randomSeed = params.get("seed");
 if (randomSeed) {
   // Simple seeded PRNG (mulberry32)
-  const seed = randomSeed
-    .split("")
-    .reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+  const seed = randomSeed.split("").reduce((a, c) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
   let t = seed >>> 0;
   const seededRandom = () => {
     t = (t + 0x6d2b79f5) | 0;
@@ -173,41 +126,13 @@ if (randomSeed) {
 // ?replay=X - replay scenario name (passed to backend for deterministic responses)
 const replayScenario = params.get("replay");
 if (replayScenario) {
-  (window as Window & { __REPLAY_SCENARIO?: string }).__REPLAY_SCENARIO =
-    replayScenario;
+  (window as Window & { __REPLAY_SCENARIO?: string }).__REPLAY_SCENARIO = replayScenario;
   document.body.classList.add("replay-mode");
 }
 
-const loopServiceWorkerMode = parseBooleanFlag(params.get("loopsw"));
-const shouldManageLoopServiceWorker =
-  "serviceWorker" in navigator && window.location.pathname.startsWith("/loop");
-const shouldRegisterLoopServiceWorker =
-  shouldManageLoopServiceWorker &&
-  (import.meta.env.PROD || loopServiceWorkerMode === true);
-
-if (shouldManageLoopServiceWorker) {
+if ("serviceWorker" in navigator && import.meta.env.PROD && window.location.pathname.startsWith("/loop")) {
   window.addEventListener("load", () => {
-    if (shouldRegisterLoopServiceWorker) {
-      navigator.serviceWorker
-        .register("/loop-sw.js", { scope: "/loop" })
-        .catch(() => {});
-      return;
-    }
-
-    if (loopServiceWorkerMode === false) {
-      navigator.serviceWorker
-        .getRegistrations()
-        .then((registrations) =>
-          Promise.all(
-            registrations
-              .filter((registration) =>
-                new URL(registration.scope).pathname.startsWith("/loop"),
-              )
-              .map((registration) => registration.unregister()),
-          ),
-        )
-        .catch(() => {});
-    }
+    navigator.serviceWorker.register("/loop-sw.js", { scope: "/loop" }).catch(() => {});
   });
 }
 
@@ -219,46 +144,45 @@ ReactDOM.createRoot(container).render(
       <AuthProvider>
         <ConfirmProvider>
           <SessionPickerProvider>
-            <BrowserRouter
-              future={{
-                v7_startTransition: true,
-                v7_relativeSplatPath: true,
-              }}
-            >
-              <App />
-              <Toaster
-                position="top-right"
-                toastOptions={{
-                  duration: 4000,
-                  style: {
-                    background: "#1A1410",
-                    color: "#F3EAD9",
-                    border: "1px solid #3d3428",
-                    borderRadius: "8px",
-                    fontSize: "14px",
-                    fontFamily:
-                      "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
-                  },
-                  success: {
-                    duration: 3000,
-                    iconTheme: {
-                      primary: "#5D9B4A",
-                      secondary: "#F3EAD9",
-                    },
-                  },
-                  error: {
-                    duration: 6000,
-                    iconTheme: {
-                      primary: "#C45040",
-                      secondary: "#F3EAD9",
-                    },
-                  },
-                }}
-              />
-            </BrowserRouter>
+          <BrowserRouter
+            future={{
+              v7_startTransition: true,
+              v7_relativeSplatPath: true,
+            }}
+          >
+            <App />
+            <Toaster
+            position="top-right"
+            toastOptions={{
+              duration: 4000,
+              style: {
+                background: '#1A1410',
+                color: '#F3EAD9',
+                border: '1px solid #3d3428',
+                borderRadius: '8px',
+                fontSize: '14px',
+                fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif",
+              },
+              success: {
+                duration: 3000,
+                iconTheme: {
+                  primary: '#5D9B4A',
+                  secondary: '#F3EAD9',
+                },
+              },
+              error: {
+                duration: 6000,
+                iconTheme: {
+                  primary: '#C45040',
+                  secondary: '#F3EAD9',
+                },
+              },
+            }}
+          />
+          </BrowserRouter>
           </SessionPickerProvider>
         </ConfirmProvider>
       </AuthProvider>
     </QueryClientProvider>
-  </React.StrictMode>,
+  </React.StrictMode>
 );
