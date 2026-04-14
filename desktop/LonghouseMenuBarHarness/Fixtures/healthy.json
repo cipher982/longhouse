@@ -11,10 +11,10 @@
     "status": "running",
     "service_name": "com.longhouse.shipper",
     "service_file": "/Users/davidrose/Library/LaunchAgents/com.longhouse.shipper.plist",
-    "log_path": "/Users/davidrose/.claude/logs/engine.log.*"
+    "log_path": "/Users/davidrose/.longhouse/agent/logs/engine.log.*"
   },
   "engine_status": {
-    "path": "/Users/davidrose/.claude/engine-status.json",
+    "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
     "exists": true,
     "fresh": true,
     "age_seconds": 4,
@@ -34,12 +34,12 @@
     "error": null
   },
   "outbox": {
-    "path": "/Users/davidrose/.claude/outbox",
+    "path": "/Users/davidrose/.longhouse/agent/outbox",
     "file_count": 0,
     "oldest_age_seconds": null
   },
   "activity_summary": {
-    "path": "/Users/davidrose/.claude/longhouse-shipper.db",
+    "path": "/Users/davidrose/.longhouse/agent/longhouse-shipper.db",
     "exists": true,
     "error": null,
     "sessions_today": 14,

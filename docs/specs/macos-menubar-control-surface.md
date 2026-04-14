@@ -18,7 +18,7 @@ This spec replaces the current "status sheet" shape with a denser, native-feelin
 
 - The open path must remain effectively instant. No synchronous health refresh or heavy local probing can happen on click.
 - The current `local-health` payload is strong on repair signals but weak on positive ambient telemetry.
-- The local shipper DB (`~/.claude/longhouse-shipper.db`) already exposes truthful session-level activity we can use for a healthy-state "Today" view:
+- The local shipper DB (`~/.longhouse/agent/longhouse-shipper.db`) already exposes truthful session-level activity we can use for a healthy-state "Today" view:
   - distinct sessions touched today
   - sessions touched recently
   - provider mix for recently active sessions

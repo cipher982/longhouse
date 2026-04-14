@@ -104,7 +104,7 @@ export default function ConfigurationPage() {
         (useful when multiple machines report to the same instance):
       </p>
       <CodeBlock title="terminal">
-        {`echo "my-vps" > ~/.claude/longhouse-machine-name`}
+        {`mkdir -p ~/.longhouse/machine && echo "my-vps" > ~/.longhouse/machine/name`}
       </CodeBlock>
       <p>
         This is read at engine startup, not live. Restart the shipping service
