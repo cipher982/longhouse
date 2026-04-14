@@ -698,7 +698,6 @@ env_vars=(
 if [[ "$USE_INSTALLER_ONBOARD" == "1" ]]; then
   env_vars+=("LONGHOUSE_ONBOARD_HOST=127.0.0.1")
   env_vars+=("LONGHOUSE_ONBOARD_PORT=$PORT")
-  env_vars+=("LONGHOUSE_ONBOARD_QUICK=1")
   env_vars+=("LONGHOUSE_ONBOARD_NO_BROWSER=1")
 else
   env_vars+=("LONGHOUSE_NO_WIZARD=1")
@@ -785,18 +784,14 @@ if [[ "$ENABLE_RUNTIME_ARTIFACT_SMOKE" == "1" ]]; then
 fi
 
 if [[ "$USE_INSTALLER_ONBOARD" == "1" ]]; then
-  log "🧭 Verifying installer-owned onboarding..."
-  if ! wait_for_health "http://127.0.0.1:${PORT}/api/readyz" "Installer onboarding server"; then
-    fail "Installer-owned onboarding did not leave a healthy local runtime"
+  log "🧭 Verifying installer-owned quickstart..."
+  if ! wait_for_health "http://127.0.0.1:${PORT}/api/readyz" "Installer quickstart server"; then
+    fail "Installer-owned quickstart did not leave a healthy local runtime"
   fi
 else
-  log "🧭 Running onboarding quickstart (safe mode)..."
+  log "🧭 Running local quickstart..."
   ONBOARD_LOG="$(mktemp -t longhouse-onboard.XXXXXX.log)"
-  longhouse onboard --quick --no-demo --no-browser --port "$PORT" | tee "$ONBOARD_LOG"
-
-  if grep -q "\[WARN\] Test event failed" "$ONBOARD_LOG"; then
-    fail "Onboarding verification emitted a test-event warning"
-  fi
+  longhouse onboard --no-browser --port "$PORT" | tee "$ONBOARD_LOG"
   rm -f "$ONBOARD_LOG"
 fi
 

@@ -6,15 +6,12 @@
 #   curl -fsSL https://get.longhouse.ai/install.sh | bash
 #
 # Environment:
-#   LONGHOUSE_NO_WIZARD=1  Skip onboarding wizard
-#   LONGHOUSE_API_URL      Custom API URL (default: http://localhost:8080)
-#   LONGHOUSE_ONBOARD_HOST Override onboarding host when the installer runs it
-#   LONGHOUSE_ONBOARD_PORT Override onboarding port when the installer runs it
-#   LONGHOUSE_ONBOARD_QUICK=1       Force QuickStart defaults even when a TTY is present
-#   LONGHOUSE_ONBOARD_NO_BROWSER=1  Skip auto-opening the browser during installer-owned onboarding
-#   LONGHOUSE_ONBOARD_NO_SERVER=1   Skip local runtime startup during installer-owned onboarding
-#   LONGHOUSE_ONBOARD_NO_SHIPPER=1  Skip machine-agent install during installer-owned onboarding
-#   LONGHOUSE_ONBOARD_NO_DEMO=1     Skip demo seeding during installer-owned onboarding
+#   LONGHOUSE_NO_WIZARD=1           Skip the automatic local quickstart
+#   LONGHOUSE_ONBOARD_HOST          Override quickstart host
+#   LONGHOUSE_ONBOARD_PORT          Override quickstart port
+#   LONGHOUSE_ONBOARD_NO_BROWSER=1  Skip auto-opening the browser during quickstart
+#   LONGHOUSE_ONBOARD_NO_SERVER=1   Skip local runtime startup during quickstart
+#   LONGHOUSE_ONBOARD_NO_SHIPPER=1  Skip machine-agent install during quickstart
 #   http_proxy/https_proxy Proxy settings (honored automatically)
 #
 set -euo pipefail
@@ -399,8 +396,8 @@ verify_fresh_shell_path() {
     fi
 }
 
-# Run onboarding wizard
-run_onboard() {
+# Run the default local quickstart
+run_quickstart() {
     local -a onboard_args=()
 
     if [[ -n "${LONGHOUSE_ONBOARD_HOST:-}" ]]; then
@@ -408,9 +405,6 @@ run_onboard() {
     fi
     if [[ -n "${LONGHOUSE_ONBOARD_PORT:-}" ]]; then
         onboard_args+=(--port "$LONGHOUSE_ONBOARD_PORT")
-    fi
-    if [[ "${LONGHOUSE_ONBOARD_QUICK:-}" =~ ^(1|true|yes)$ ]]; then
-        onboard_args+=(--quick)
     fi
     if [[ "${LONGHOUSE_ONBOARD_NO_BROWSER:-}" =~ ^(1|true|yes)$ ]]; then
         onboard_args+=(--no-browser)
@@ -421,57 +415,28 @@ run_onboard() {
     if [[ "${LONGHOUSE_ONBOARD_NO_SHIPPER:-}" =~ ^(1|true|yes)$ ]]; then
         onboard_args+=(--no-shipper)
     fi
-    if [[ "${LONGHOUSE_ONBOARD_NO_DEMO:-}" =~ ^(1|true|yes)$ ]]; then
-        onboard_args+=(--no-demo)
-    fi
 
     if [[ "${LONGHOUSE_NO_WIZARD:-}" == "1" ]]; then
-        info "Skipping onboarding wizard (LONGHOUSE_NO_WIZARD=1)"
+        info "Skipping local quickstart (LONGHOUSE_NO_WIZARD=1)"
         ONBOARD_RESULT="skipped"
         return 0
     fi
 
-    step "Running onboarding wizard"
+    step "Running local quickstart"
     echo ""
 
     if ! has_command longhouse; then
-        warn "longhouse command not found, skipping wizard"
+        warn "longhouse command not found, skipping quickstart"
         ONBOARD_RESULT="skipped"
         return 0
     fi
 
-    # When piped from curl, stdin is consumed by the pipe.
-    # Try to reconnect to the real terminal via /dev/tty.
-    if [[ -t 0 ]]; then
-        # Interactive terminal available directly
-        if longhouse onboard "${onboard_args[@]}"; then
-            ONBOARD_RESULT="completed"
-        else
-            warn "Onboarding wizard exited with error"
-            warn "You can run it again with: longhouse onboard"
-            ONBOARD_RESULT="failed"
-        fi
-    elif { exec 3</dev/tty; } 2>/dev/null; then
-        # Stdin is pipe but TTY is accessible - redirect from /dev/tty
-        info "Reconnecting to terminal for interactive setup..."
-        if longhouse onboard "${onboard_args[@]}" <&3; then
-            ONBOARD_RESULT="completed"
-        else
-            warn "Onboarding wizard exited with error"
-            warn "You can run it again with: longhouse onboard"
-            ONBOARD_RESULT="failed"
-        fi
-        exec 3<&-
+    if longhouse onboard "${onboard_args[@]}"; then
+        ONBOARD_RESULT="completed"
     else
-        # No TTY available (Docker, CI, headless) - use non-interactive mode
-        info "No TTY available, using QuickStart defaults"
-        if longhouse onboard --quick "${onboard_args[@]}"; then
-            ONBOARD_RESULT="completed"
-        else
-            warn "Onboarding wizard exited with error"
-            warn "You can run it again with: longhouse onboard"
-            ONBOARD_RESULT="failed"
-        fi
+        warn "Local quickstart exited with error"
+        warn "You can run it again with: longhouse onboard"
+        ONBOARD_RESULT="failed"
     fi
 }
 
@@ -495,7 +460,7 @@ print_success() {
     echo ""
     if [[ "$ONBOARD_RESULT" == "completed" ]]; then
         echo "First run:"
-        echo "  1. Open http://localhost:8080 (the installer already started the Longhouse local runtime)"
+        echo "  1. Open http://localhost:8080 (the installer already ran the Longhouse local quickstart)"
         echo "  2. Find one prior session in the timeline"
     else
         echo "Next:"
@@ -513,9 +478,9 @@ print_success() {
         echo ""
         echo "macOS:"
         if [[ "$ONBOARD_RESULT" == "completed" ]]; then
-            echo "  Look for Longhouse.app in the menu bar for local machine status."
+            echo "  Look for Longhouse.app in /Applications and the menu bar for local machine status."
         else
-            echo "  Longhouse.app is installed during onboarding."
+            echo "  Run longhouse onboard to install the machine agent and Longhouse.app."
         fi
     fi
     if [[ "$has_launcher_cli" == "1" ]]; then
@@ -575,8 +540,8 @@ main() {
     # Verify everything works
     verify_installation
 
-    # Run onboarding wizard
-    run_onboard
+    # Run the default local quickstart
+    run_quickstart
 
     # Done!
     print_success

@@ -21,7 +21,7 @@ Video walkthrough coming soon. In the meantime, the first run is simple:
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-The installer runs guided onboarding, starts the local Longhouse runtime, sets up the background machine agent when supported, and on macOS installs `Longhouse.app` for local status. Open `http://localhost:8080` and find one prior session.
+The installer runs the default local quickstart, starts the local Longhouse runtime, sets up the background machine agent when supported, and on macOS installs `Longhouse.app` in `/Applications` for local status. Open `http://localhost:8080` and find one prior session.
 
 When you want control after launch:
 
@@ -52,9 +52,9 @@ longhouse serve --demo
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-Open `http://localhost:8080`. This runs both the Machine Agent and the Runtime Host on your laptop — good for trying the product, but it stops when your laptop sleeps.
+Open `http://localhost:8080`. This runs both the Machine Agent and the Runtime Host on your laptop, which is good for trying the product but stops when your laptop sleeps.
 
-On macOS the installer also adds `Longhouse.app` to your menu bar.
+On macOS the installer also puts `Longhouse.app` in `/Applications` and your menu bar.
 
 ### macOS app download (Apple Silicon)
 
@@ -71,7 +71,7 @@ For durable session storage, run the Runtime Host on an always-on box (VPS, home
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 
 # On your dev machine(s), point the agent at the server:
-longhouse onboard  # choose "remote" or "existing server"
+longhouse connect --url https://longhouse.example.com --install
 ```
 
 ### Start control-ready sessions
@@ -101,7 +101,7 @@ Sign up at https://longhouse.ai when you want the convenience path — we run th
 curl -fsSL https://get.longhouse.ai/install.sh | bash
 ```
 
-Installs the `longhouse` CLI, runs onboarding, sets up the Machine Agent, and on macOS adds `Longhouse.app`. Set `LONGHOUSE_NO_WIZARD=1` to skip the wizard.
+Installs the `longhouse` CLI, runs the default local quickstart, sets up the Machine Agent, and on macOS adds `Longhouse.app`. Set `LONGHOUSE_NO_WIZARD=1` to skip the automatic quickstart.
 
 ### macOS desktop app
 
@@ -293,7 +293,7 @@ longhouse version --check     # Check whether a CLI update is available
 longhouse upgrade             # Upgrade the installed CLI
 longhouse doctor              # Self-diagnosis
 longhouse doctor --check-updates  # Include latest stable CLI check
-longhouse onboard             # Re-run setup wizard
+longhouse onboard             # Run the default local quickstart
 longhouse migrate             # Migrate local data to newer format
 longhouse claude              # Start Claude Code through Longhouse
 longhouse codex               # Start Codex CLI through Longhouse
