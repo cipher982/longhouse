@@ -74,6 +74,7 @@ Boundary rules:
 - If you tail anything, say what you are tailing first: exact workflow run id, exact commit SHA, exact session id, or exact container/service.
 - Reserved trigger: when David says `cowbell`, do not guess from current repo state. Identify the one exact commit SHA this session owns, then run `make ship SHA=<that-sha>` in the foreground. If that commit was already pushed earlier, `make ship SHA=<that-sha>` is still correct. If you cannot identify one exact owned SHA, stop and say so instead of guessing from `HEAD` or "latest on main".
 - `make ship SHA=<sha>` prints a start banner with the exact target SHA and commit subject. Read that line before trusting the run.
+- For `cowbell`, a non-zero `make ship` result means ship failed for that exact SHA. Report the failure and suspected cause, but do not relabel it as success just because the root cause might predate the current diff.
 
 ## Task Tracking
 
