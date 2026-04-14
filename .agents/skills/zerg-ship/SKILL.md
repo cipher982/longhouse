@@ -82,6 +82,8 @@ make ship SHA="<full-sha>"
 make ship-watch SHA="<full-sha>"
 ```
 
+This skill is the single source of truth for the repo's `cowbell` ship flow.
+
 When David says `cowbell`, the agent owns the whole ship loop:
 
 - resolve the task SHA yourself
