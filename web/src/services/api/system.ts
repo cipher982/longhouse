@@ -54,10 +54,15 @@ export async function fetchLlmProviders(): Promise<LlmProviderInfo[]> {
   return request<LlmProviderInfo[]>("/llm/providers");
 }
 
+/** List effective LLM providers for the current user, including env-backed defaults. */
+export async function fetchEffectiveLlmProviders(): Promise<LlmProviderInfo[]> {
+  return request<LlmProviderInfo[]>("/llm/providers/effective");
+}
+
 /** Create or update an LLM provider config. */
 export async function upsertLlmProvider(
   capability: string,
-  data: { provider_name: string; api_key: string; base_url: string | null }
+  data: { provider_name: string; api_key?: string | null; base_url: string | null }
 ): Promise<{ success: boolean }> {
   return request<{ success: boolean }>(`/llm/providers/${capability}`, {
     method: "PUT",
@@ -76,7 +81,7 @@ export async function deleteLlmProvider(capability: string): Promise<void> {
 /** Test an LLM provider connection before saving. */
 export async function testLlmProvider(
   capability: string,
-  data: { provider_name: string; api_key: string; base_url: string | null }
+  data: { provider_name: string; api_key?: string | null; base_url: string | null }
 ): Promise<LlmProviderTestResult> {
   return request<LlmProviderTestResult>(`/llm/providers/${capability}/test`, {
     method: "POST",

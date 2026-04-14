@@ -32,6 +32,7 @@ from zerg.models.models import LlmProviderConfig
 from zerg.models.models import User
 from zerg.models_config import _DB_PROVIDER_DEFAULT_MODELS
 from zerg.models_config import EMBEDDING_MODEL
+from zerg.utils.crypto import decrypt
 from zerg.utils.crypto import encrypt
 
 logger = logging.getLogger(__name__)
@@ -86,13 +87,13 @@ class LlmProviderInfo(BaseModel):
 
 class LlmProviderUpsertRequest(BaseModel):
     provider_name: str
-    api_key: str
+    api_key: str | None = None
     base_url: str | None = None
 
 
 class LlmProviderTestRequest(BaseModel):
     provider_name: str
-    api_key: str
+    api_key: str | None = None
     base_url: str | None = None
     model: str | None = None  # optional: override test model for custom providers
 
@@ -219,6 +220,13 @@ def _resolve_capability_no_user(capability: str, db: Session) -> tuple[bool, str
     return False, None, None
 
 
+def _default_base_url_for_provider(provider_name: str | None) -> str | None:
+    """Return the canonical default base URL for a provider, when known."""
+    if not provider_name:
+        return None
+    return _KNOWN_PROVIDERS.get(provider_name)
+
+
 # ---------------------------------------------------------------------------
 # Capabilities endpoint (public — no auth, used by frontend at load)
 # ---------------------------------------------------------------------------
@@ -279,6 +287,56 @@ def list_llm_providers(
     ]
 
 
+@router.get("/llm/providers/effective", response_model=list[LlmProviderInfo])
+def list_effective_llm_providers(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[LlmProviderInfo]:
+    """List effective provider state for settings UI, including env-backed defaults."""
+    db_rows = {
+        row.capability: row
+        for row in db.query(LlmProviderConfig)
+        .filter(LlmProviderConfig.owner_id == current_user.id)
+        .order_by(LlmProviderConfig.capability)
+        .all()
+    }
+
+    result: list[LlmProviderInfo] = []
+    for capability in ("embedding", "text"):
+        row = db_rows.get(capability)
+        if row is not None:
+            result.append(
+                LlmProviderInfo(
+                    capability=row.capability,
+                    provider_name=row.provider_name,
+                    base_url=row.base_url,
+                    source="database",
+                    has_key=True,
+                    created_at=row.created_at.isoformat() if row.created_at else None,
+                    updated_at=row.updated_at.isoformat() if row.updated_at else None,
+                )
+            )
+            continue
+
+        available, source, provider_name = _resolve_capability(capability, db, current_user)
+        if not available or source is None or provider_name is None:
+            continue
+
+        result.append(
+            LlmProviderInfo(
+                capability=capability,
+                provider_name=provider_name,
+                base_url=_default_base_url_for_provider(provider_name),
+                source=source,
+                has_key=True,
+                created_at=None,
+                updated_at=None,
+            )
+        )
+
+    return result
+
+
 @router.put("/llm/providers/{capability}", status_code=status.HTTP_200_OK)
 def upsert_llm_provider(
     capability: str,
@@ -290,15 +348,10 @@ def upsert_llm_provider(
     if capability not in ("text", "embedding"):
         raise HTTPException(status_code=400, detail="Capability must be 'text' or 'embedding'")
 
-    if not request.api_key:
-        raise HTTPException(status_code=400, detail="API key is required")
-
     # Validate base_url for SSRF before persisting
     ssrf_error = _validate_base_url(request.base_url, request.provider_name)
     if ssrf_error:
         raise HTTPException(status_code=400, detail=ssrf_error)
-
-    encrypted = encrypt(request.api_key)
 
     existing = (
         db.query(LlmProviderConfig)
@@ -308,15 +361,19 @@ def upsert_llm_provider(
 
     if existing:
         existing.provider_name = request.provider_name
-        existing.encrypted_api_key = encrypted
+        if request.api_key:
+            existing.encrypted_api_key = encrypt(request.api_key)
         existing.base_url = request.base_url
         logger.info("Updated LLM provider '%s/%s' for user %d", capability, request.provider_name, current_user.id)
     else:
+        if not request.api_key:
+            raise HTTPException(status_code=400, detail="API key is required")
+
         config = LlmProviderConfig(
             owner_id=current_user.id,
             capability=capability,
             provider_name=request.provider_name,
-            encrypted_api_key=encrypted,
+            encrypted_api_key=encrypt(request.api_key),
             base_url=request.base_url,
         )
         db.add(config)
@@ -354,6 +411,7 @@ def delete_llm_provider(
 async def test_llm_provider(
     capability: str,
     request: LlmProviderTestRequest,
+    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> LlmProviderTestResponse:
     """Validate an API key with a minimal API call before saving.
@@ -377,8 +435,27 @@ async def test_llm_provider(
         import httpx
         from openai import AsyncOpenAI
 
+        api_key = request.api_key
+        if not api_key:
+            existing = (
+                db.query(LlmProviderConfig)
+                .filter(
+                    LlmProviderConfig.owner_id == current_user.id,
+                    LlmProviderConfig.capability == capability,
+                )
+                .first()
+            )
+            if existing:
+                try:
+                    api_key = decrypt(existing.encrypted_api_key)
+                except Exception:
+                    api_key = None
+
+        if not api_key:
+            return LlmProviderTestResponse(success=False, message="API key is required to test this connection")
+
         kwargs: dict[str, Any] = {
-            "api_key": request.api_key,
+            "api_key": api_key,
             "timeout": httpx.Timeout(10.0, connect=5.0),
         }
         if base_url:

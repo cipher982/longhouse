@@ -3,6 +3,7 @@
 Covers:
 - GET /api/capabilities/llm — public capability status
 - GET /api/llm/providers — list configured providers
+- GET /api/llm/providers/effective — list effective providers for settings
 - PUT /api/llm/providers/{capability} — upsert provider config
 - DELETE /api/llm/providers/{capability} — remove provider config
 
@@ -164,6 +165,45 @@ class TestLlmCapabilities:
             assert providers[0]["provider_name"] == "groq"
 
 
+class TestEffectiveProviders:
+    def test_effective_endpoint_includes_env_backed_provider(self, tmp_path):
+        """Settings endpoint should expose safe provider details for env-backed config."""
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-123"}, clear=False):
+                os.environ.pop("OPENAI_API_KEY", None)
+                os.environ.pop("GROQ_API_KEY", None)
+                os.environ.pop("XAI_API_KEY", None)
+                resp = client.get("/llm/providers/effective")
+                assert resp.status_code == 200
+                data = resp.json()
+                text = next(provider for provider in data if provider["capability"] == "text")
+                assert text["provider_name"] == "openrouter"
+                assert text["source"] == "environment"
+                assert text["base_url"] == "https://openrouter.ai/api/v1"
+
+    def test_effective_endpoint_prefers_db_override(self, tmp_path):
+        """Per-user DB config should win over env in the settings-effective view."""
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            client.put(
+                "/llm/providers/text",
+                json={
+                    "provider_name": "groq",
+                    "api_key": "gsk-test",
+                    "base_url": "https://api.groq.com/openai/v1",
+                },
+            )
+
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-env"}, clear=False):
+                resp = client.get("/llm/providers/effective")
+                assert resp.status_code == 200
+                data = resp.json()
+                text = next(provider for provider in data if provider["capability"] == "text")
+                assert text["provider_name"] == "groq"
+                assert text["source"] == "database"
+
+
 # ---------------------------------------------------------------------------
 # Tests: PUT /llm/providers/{capability}
 # ---------------------------------------------------------------------------
@@ -212,6 +252,27 @@ class TestUpsertProvider:
             providers = client.get("/llm/providers").json()
             assert len(providers) == 1
             assert providers[0]["provider_name"] == "groq"
+
+    def test_update_provider_without_reentering_key(self, tmp_path):
+        """PUT preserves existing encrypted key when only non-secret fields change."""
+        sf = _make_db(tmp_path)
+        for client in _get_client(sf):
+            create_resp = client.put(
+                "/llm/providers/text",
+                json={"provider_name": "openai", "api_key": "sk-1", "base_url": None},
+            )
+            assert create_resp.status_code == 200
+
+            update_resp = client.put(
+                "/llm/providers/text",
+                json={"provider_name": "openrouter", "base_url": "https://openrouter.ai/api/v1"},
+            )
+            assert update_resp.status_code == 200
+
+            providers = client.get("/llm/providers").json()
+            assert len(providers) == 1
+            assert providers[0]["provider_name"] == "openrouter"
+            assert providers[0]["base_url"] == "https://openrouter.ai/api/v1"
 
     def test_invalid_capability(self, tmp_path):
         """PUT rejects invalid capability names."""
@@ -384,3 +445,42 @@ class TestProviderConnection:
             assert captured["request_kwargs"]["model"] == "grok-4-1-fast-non-reasoning"
             assert captured["request_kwargs"]["max_tokens"] == 3
             assert captured["closed"] is True
+
+    def test_test_endpoint_uses_stored_key_when_api_key_omitted(self, tmp_path):
+        """POST /test can reuse the stored encrypted key for an existing provider."""
+        sf = _make_db(tmp_path)
+        captured: dict[str, object] = {}
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                captured["client_kwargs"] = kwargs
+                self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+            async def _create(self, **kwargs):
+                captured["request_kwargs"] = kwargs
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                )
+
+            async def close(self):
+                captured["closed"] = True
+
+        for client in _get_client(sf):
+            create_resp = client.put(
+                "/llm/providers/text",
+                json={"provider_name": "openai", "api_key": "sk-stored"},
+            )
+            assert create_resp.status_code == 200
+
+            with patch("openai.AsyncOpenAI", FakeAsyncOpenAI):
+                resp = client.post(
+                    "/llm/providers/text/test",
+                    json={
+                        "provider_name": "openai",
+                        "base_url": None,
+                    },
+                )
+
+            assert resp.status_code == 200
+            assert resp.json() == {"success": True, "message": "Connection successful"}
+            assert captured["client_kwargs"]["api_key"] == "sk-stored"

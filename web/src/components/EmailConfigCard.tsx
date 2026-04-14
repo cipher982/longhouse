@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import {
@@ -35,6 +35,11 @@ export default function EmailConfigCard() {
     queryKey: ["email-status"],
     queryFn: fetchEmailStatus,
   });
+
+  const keyStatusMap = useMemo(
+    () => new Map((status?.keys ?? []).map((keyStatus) => [keyStatus.key, keyStatus])),
+    [status?.keys],
+  );
 
   const saveMutation = useMutation({
     mutationFn: saveEmailConfig,
@@ -77,6 +82,13 @@ export default function EmailConfigCard() {
       resetForm();
     } else {
       setIsConfiguring(true);
+      setForm({
+        aws_ses_access_key_id: "",
+        aws_ses_secret_access_key: "",
+        aws_ses_region: status?.aws_ses_region ?? "",
+        from_email: status?.from_email ?? "",
+        notify_email: status?.notify_email ?? "",
+      });
       setTestResult(null);
     }
   }
@@ -95,21 +107,34 @@ export default function EmailConfigCard() {
   }
 
   function handleSave() {
-    // Only send non-empty fields
+    const baseline = {
+      aws_ses_region: status?.aws_ses_region ?? "",
+      from_email: status?.from_email ?? "",
+      notify_email: status?.notify_email ?? "",
+    };
+
+    // Only send fields that actually changed. Secret fields are replace-only.
     const payload: Record<string, string> = {};
-    for (const [key, value] of Object.entries(form)) {
-      if (value.trim()) {
+    for (const [key, rawValue] of Object.entries(form)) {
+      const value = rawValue.trim();
+      if (!value) {
+        continue;
+      }
+      if (key in baseline && value === baseline[key as keyof typeof baseline]) {
+        continue;
+      }
+      if (
+        (key === "aws_ses_access_key_id" || key === "aws_ses_secret_access_key") &&
+        !value
+      ) {
+        continue;
+      }
+      if (value) {
         payload[key] = value.trim();
       }
     }
-    if (
-      !payload.aws_ses_access_key_id ||
-      !payload.aws_ses_secret_access_key ||
-      !payload.from_email
-    ) {
-      toast.error(
-        "Access Key ID, Secret Access Key, and From Email are all required"
-      );
+    if (Object.keys(payload).length === 0) {
+      toast.error("No changes to save");
       return;
     }
     saveMutation.mutate(payload);
@@ -125,11 +150,16 @@ export default function EmailConfigCard() {
     }
   }
 
-  // Can save only when the three required fields are filled
-  const canSave =
-    form.aws_ses_access_key_id.trim() !== "" &&
-    form.aws_ses_secret_access_key.trim() !== "" &&
-    form.from_email.trim() !== "";
+  const hasChanges = useMemo(() => {
+    if (!status) return false;
+    return (
+      form.aws_ses_access_key_id.trim() !== "" ||
+      form.aws_ses_secret_access_key.trim() !== "" ||
+      form.aws_ses_region.trim() !== (status.aws_ses_region ?? "") ||
+      form.from_email.trim() !== (status.from_email ?? "") ||
+      form.notify_email.trim() !== (status.notify_email ?? "")
+    );
+  }, [form, status]);
 
   // Derive display state
   const hasDbOverrides = status?.keys.some((k) => k.source === "db") ?? false;
@@ -224,6 +254,10 @@ export default function EmailConfigCard() {
             {/* Config form */}
             {isConfiguring && (
               <div className="llm-config-form">
+                <div className="llm-test-result">
+                  Secret fields stay blank by design. Enter a new value only if you want to replace the current one.
+                </div>
+
                 <div className="llm-config-fields">
                   <div className="form-group">
                     <label className="form-label">
@@ -238,8 +272,17 @@ export default function EmailConfigCard() {
                           aws_ses_access_key_id: e.target.value,
                         })
                       }
-                      placeholder="AKIA..."
+                      placeholder={
+                        keyStatusMap.get("AWS_SES_ACCESS_KEY_ID")?.configured
+                          ? "Configured. Enter a new key to replace it."
+                          : "AKIA..."
+                      }
                     />
+                    <small>
+                      {keyStatusMap.get("AWS_SES_ACCESS_KEY_ID")?.configured
+                        ? "Current key is hidden."
+                        : "Required only when adding or replacing SES credentials."}
+                    </small>
                   </div>
 
                   <div className="form-group">
@@ -255,8 +298,17 @@ export default function EmailConfigCard() {
                           aws_ses_secret_access_key: e.target.value,
                         })
                       }
-                      placeholder="Secret key..."
+                      placeholder={
+                        keyStatusMap.get("AWS_SES_SECRET_ACCESS_KEY")?.configured
+                          ? "Configured. Enter a new secret to replace it."
+                          : "Secret key..."
+                      }
                     />
+                    <small>
+                      {keyStatusMap.get("AWS_SES_SECRET_ACCESS_KEY")?.configured
+                        ? "Current secret is hidden."
+                        : "Required only when adding or replacing SES credentials."}
+                    </small>
                   </div>
 
                   <div className="form-group">
@@ -303,7 +355,7 @@ export default function EmailConfigCard() {
                     variant="primary"
                     size="sm"
                     onClick={handleSave}
-                    disabled={saveMutation.isPending || !canSave}
+                    disabled={saveMutation.isPending || !hasChanges}
                   >
                     {saveMutation.isPending ? "Saving..." : "Save"}
                   </Button>

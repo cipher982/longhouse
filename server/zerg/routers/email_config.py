@@ -56,6 +56,9 @@ class EmailStatusResponse(BaseModel):
     configured: bool = Field(description="Whether email can send (SES creds + FROM_EMAIL + NOTIFY_EMAIL present)")
     source: str | None = Field(None, description="Primary source: 'db', 'env', or None")
     keys: list[EmailKeyStatus]
+    aws_ses_region: str | None = Field(None, description="Effective SES region (defaults to us-east-1)")
+    from_email: str | None = Field(None, description="Effective from address")
+    notify_email: str | None = Field(None, description="Effective instance notification address")
 
 
 class EmailConfigRequest(BaseModel):
@@ -97,6 +100,30 @@ def _resolve_key_status(key: str, db: Session, owner_id: int) -> EmailKeyStatus:
     return EmailKeyStatus(key=key, configured=False, source=None)
 
 
+def _resolve_non_sensitive_value(
+    key: str,
+    db: Session,
+    owner_id: int,
+    *,
+    default: str | None = None,
+) -> str | None:
+    """Resolve a non-sensitive email value using the same DB-first/env fallback order."""
+    row = db.query(JobSecret).filter(JobSecret.owner_id == owner_id, JobSecret.key == key).first()
+    if row:
+        try:
+            value = decrypt(row.encrypted_value)
+            if value and value.strip():
+                return value.strip()
+        except Exception:
+            pass
+
+    env_val = os.environ.get(key)
+    if env_val and env_val.strip():
+        return env_val.strip()
+
+    return default
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -126,6 +153,14 @@ def email_status(
         configured=has_creds,
         source=primary_source,
         keys=keys,
+        aws_ses_region=_resolve_non_sensitive_value(
+            "AWS_SES_REGION",
+            db,
+            current_user.id,
+            default="us-east-1",
+        ),
+        from_email=_resolve_non_sensitive_value("FROM_EMAIL", db, current_user.id),
+        notify_email=_resolve_non_sensitive_value("NOTIFY_EMAIL", db, current_user.id),
     )
 
 
