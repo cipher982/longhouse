@@ -23,6 +23,11 @@ enum KeychainHelper {
         SharedAuthStore.saveServerURL(url)
     }
 
+    static func deleteServerURL() {
+        delete(key: serverURLKey)
+        SharedAuthStore.clearServerURL()
+    }
+
     static func loadServerURL() -> String? {
         if let url = load(key: serverURLKey) {
             SharedAuthStore.saveServerURL(url)

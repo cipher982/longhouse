@@ -22,7 +22,7 @@ jobs:
         if: ${{ github.event_name != 'workflow_dispatch' }}
         with:
           fetch-depth: 1
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         if: ${{ github.event_name != 'workflow_dispatch' }}
         id: filter
         with:

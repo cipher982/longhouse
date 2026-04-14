@@ -133,6 +133,7 @@ struct LoginView: View {
                         .strokeBorder(.white.opacity(0.15), lineWidth: 1)
                 )
             }
+            .accessibilityIdentifier("login.continueWithLonghouse")
 
             Text("Hosted instances sign in through the Longhouse control plane.")
                 .font(.caption)
@@ -219,11 +220,21 @@ struct LoginView: View {
                     .strokeBorder(.white.opacity(0.15), lineWidth: 1)
             )
         }
+        .accessibilityIdentifier("login.continueWithLonghouse")
 
         Text("Hosted Longhouse accounts sign in through the control plane. Custom or self-hosted servers can still be set from the server icon.")
             .font(.caption)
             .foregroundStyle(.white.opacity(0.45))
             .multilineTextAlignment(.center)
+
+        if let hostedAuthAttemptURL = appState.hostedAuthAttemptURL,
+           UITestHooks.shouldCaptureHostedAuthAttempt {
+            Text(hostedAuthAttemptURL)
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.45))
+                .multilineTextAlignment(.center)
+                .accessibilityIdentifier("login.hostedAuthAttemptURL")
+        }
     }
 
     private var displayedErrorMessage: String? {
@@ -315,44 +326,7 @@ struct LoginView: View {
             return
         }
 
-        appState.clearAuthError()
-        localErrorMessage = nil
-        isSigningIn = true
-
-        let session = ASWebAuthenticationSession(
-            url: authURL,
-            callbackURLScheme: LonghouseAuthConfig.hostedCallbackScheme
-        ) { callbackURL, error in
-            Task { @MainActor in
-                hostedAuthSession = nil
-                defer { isSigningIn = false }
-
-                if let error {
-                    if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
-                        return
-                    }
-                    localErrorMessage = error.localizedDescription
-                    return
-                }
-
-                guard let callbackURL else {
-                    localErrorMessage = "Hosted sign-in did not return to the app"
-                    return
-                }
-
-                await handleHostedAuthCallback(callbackURL)
-            }
-        }
-
-        session.presentationContextProvider = authPresentationContext
-        session.prefersEphemeralWebBrowserSession = false
-        hostedAuthSession = session
-
-        if !session.start() {
-            hostedAuthSession = nil
-            isSigningIn = false
-            localErrorMessage = "Failed to start hosted sign-in"
-        }
+        startHostedAuthSession(authURL)
     }
 
     private func startHostedBootstrapSignIn() {
@@ -361,8 +335,18 @@ struct LoginView: View {
             return
         }
 
+        startHostedAuthSession(authURL)
+    }
+
+    private func startHostedAuthSession(_ authURL: URL) {
         appState.clearAuthError()
         localErrorMessage = nil
+
+        if UITestHooks.shouldCaptureHostedAuthAttempt {
+            appState.recordHostedAuthAttempt(authURL)
+            return
+        }
+
         isSigningIn = true
 
         let session = ASWebAuthenticationSession(

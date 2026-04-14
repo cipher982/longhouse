@@ -1,0 +1,34 @@
+{
+  "configurations" : [
+    {
+      "id" : "7D0B1461-F512-4A5D-A323-D47A0DA3452F",
+      "name" : "Default",
+      "options" : {
+        "language" : "en",
+        "region" : "US"
+      }
+    },
+    {
+      "id" : "F8A0D329-9463-4F8C-8FF4-E2B5256A5F2A",
+      "name" : "French",
+      "options" : {
+        "language" : "fr",
+        "region" : "FR"
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "parallelizable" : false,
+      "target" : {
+        "containerPath" : "container:LonghouseIOS.xcodeproj",
+        "identifier" : "2EC4948F84D0A3D5740FC0E2",
+        "name" : "LonghouseIOSUITests"
+      }
+    }
+  ],
+  "version" : 1
+}

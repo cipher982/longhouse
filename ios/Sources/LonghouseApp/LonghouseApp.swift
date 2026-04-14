@@ -15,9 +15,14 @@ struct LonghouseApp: App {
                 }
                 .task {
                     let environment = ProcessInfo.processInfo.environment
+                    if UITestHooks.shouldResetState {
+                        await appState.resetForUITests()
+                    }
                     if environment["LONGHOUSE_WIDGET_PROBE_ONLY"] == "1" {
                         let result = await WidgetSessionLoader.load()
                         WidgetSessionLoader.logProbeResult(result, source: "launch-probe-only")
+                    } else if UITestHooks.shouldResetState {
+                        appState.isValidating = false
                     } else {
                         await appState.restoreSession()
                         if environment["LONGHOUSE_WIDGET_PROBE_ON_LAUNCH"] == "1" {
@@ -36,6 +41,7 @@ final class AppState: ObservableObject {
     @Published var isAuthenticated = false
     @Published var isValidating = true
     @Published var authError: String?
+    @Published var hostedAuthAttemptURL: String?
 
     init() {
         self.serverURL = KeychainHelper.loadServerURL() ?? ""
@@ -46,6 +52,7 @@ final class AppState: ObservableObject {
 
     func restoreSession() async {
         isValidating = true
+        hostedAuthAttemptURL = nil
         SharedAuthStore.saveServerURL(serverURL)
         if serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             isAuthenticated = false
@@ -160,6 +167,28 @@ final class AppState: ObservableObject {
 
     func clearAuthError() {
         authError = nil
+    }
+
+    func resetForUITests() async {
+        let previousURL = serverURL
+
+        serverURL = ""
+        isAuthenticated = false
+        isValidating = false
+        authError = nil
+        hostedAuthAttemptURL = nil
+
+        if !previousURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            await BrowserSessionStore.clearAll(for: previousURL)
+        }
+
+        KeychainHelper.deleteAuthToken()
+        KeychainHelper.deleteServerURL()
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    func recordHostedAuthAttempt(_ url: URL) {
+        hostedAuthAttemptURL = url.absoluteString
     }
 
     func setServer(_ url: String) {
