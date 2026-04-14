@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-ios test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine validate validate-ws validate-sse validate-sdk validate-makefile regen-ws regen-sse generate-sdk qa-live qa-live-chat reprovision deploy-status ship-watch ship ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
+.PHONY: help dev dev-demo stop test test-ios test-ios-helper test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine validate validate-ws validate-sse validate-sdk validate-makefile regen-ws regen-sse generate-sdk qa-live qa-live-chat reprovision deploy-status ship-watch ship ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -42,6 +42,7 @@ stop: ## Stop dev services
 #
 #  make test              backend (server/)          ~10s
 #  make test-ios          iOS (ios/)                 ~1m
+#  make test-ios-helper   iOS helper scripts         ~1s
 #  make test-frontend     frontend (web/)            ~15s
 #  make test-engine       engine (engine/)           ~20s
 #  make test-runner       runner (runner/)           ~5s
@@ -57,6 +58,9 @@ test-ios: ## iOS unit + smoke tests (simulator)
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
 	./scripts/ci/run_ios_tests.sh "$$DESTINATION"
+
+test-ios-helper: ## iOS simulator helper script tests
+	@bash scripts/tests/select-ios-simulator.test.sh
 
 test-frontend: ## Frontend unit tests + type-check (~15s)
 	@cd web && bun run validate:types && bun run test -- --run
