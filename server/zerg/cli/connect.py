@@ -403,6 +403,11 @@ def connect(
         "-u",
         help="Longhouse API URL (uses stored URL if not specified)",
     ),
+    domain: str | None = typer.Option(
+        None,
+        "--domain",
+        help="Shorthand for --url: connect to https://<domain> (e.g. longhouse.example.com)",
+    ),
     token: str = typer.Option(
         None,
         "--token",
@@ -480,6 +485,10 @@ def connect(
         logging.getLogger().setLevel(logging.DEBUG)
 
     config_dir = Path(claude_dir) if claude_dir else None
+
+    # --domain is shorthand for --url https://<domain>
+    if isinstance(domain, str) and not url:
+        url = f"https://{domain}"
 
     # Handle service management commands
     if status:
