@@ -14,6 +14,7 @@ from typing import Literal
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.runtime_artifacts import RuntimeComponent
+from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
 from zerg.services.runtime_artifacts import ensure_runtime_artifact
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 from zerg.services.shipper.service import Platform
@@ -92,6 +93,35 @@ def _log_glob_from_stdout(stdout_path: str, fallback_basename: str) -> str:
     else:
         base = fallback_basename
     return str(expanded.parent / f"{base}.*.log")
+
+
+def _bundle_version(app_bundle: Path) -> str | None:
+    info_plist = app_bundle / "Contents" / "Info.plist"
+    if not info_plist.exists():
+        return None
+    try:
+        payload = plistlib.loads(info_plist.read_bytes())
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    for field in ("CFBundleShortVersionString", "CFBundleVersion"):
+        value = str(payload.get(field) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _is_local_source_build(app_bundle: Path) -> bool:
+    try:
+        if app_bundle != desktop_app_canonical_bundle_path():
+            return False
+    except Exception:
+        return False
+
+    version = (_bundle_version(app_bundle) or "").lower()
+    return version.startswith("0.0.0-smoke") or version.startswith("0.0.0-dev")
 
 
 def _generate_launchd_plist(
@@ -216,7 +246,15 @@ def get_desktop_app_service_info() -> dict[str, str]:
             launch_path = str(program_arguments[0])
             info["launch_path"] = launch_path
             if ".app/Contents/MacOS/" in launch_path:
-                info["artifact_path"] = launch_path.split("/Contents/MacOS/", 1)[0]
+                artifact_path = launch_path.split("/Contents/MacOS/", 1)[0]
+                info["artifact_path"] = artifact_path
+                bundle_path = Path(artifact_path)
+                if _is_local_source_build(bundle_path):
+                    info["runtime_mode"] = "source-build"
+                    version = _bundle_version(bundle_path)
+                    if version:
+                        info["bundle_version"] = version
+                    return info
             else:
                 info["artifact_path"] = launch_path
             info["runtime_mode"] = "broken-install"

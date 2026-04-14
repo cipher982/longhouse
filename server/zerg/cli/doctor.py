@@ -454,6 +454,11 @@ def _check_shipper() -> list[CheckResult]:
                 if artifact_path:
                     label = f"{label} ({artifact_path})"
                 results.append(CheckResult(PASS, label))
+            elif runtime_mode == "source-build":
+                label = "Desktop App installed from local source build"
+                if artifact_path:
+                    label = f"{label} ({artifact_path})"
+                results.append(CheckResult(PASS, label))
             elif runtime_mode == "broken-install":
                 label = "Desktop App install missing, broken, or unsupported"
                 if artifact_path:

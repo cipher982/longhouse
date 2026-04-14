@@ -73,6 +73,26 @@ def test_check_shipper_reports_ambient_app_bundle(tmp_path, monkeypatch):
     assert labels["Desktop App installed as Longhouse.app (/Applications/Longhouse.app)"] == doctor.PASS
 
 
+def test_check_shipper_accepts_local_source_build_desktop_app(tmp_path, monkeypatch):
+    claude_dir = tmp_path / ".claude"
+    _seed_claude_dir(claude_dir, settings={})
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
+    monkeypatch.setattr(shipper, "get_service_status", lambda: "running")
+    monkeypatch.setattr(desktop_app, "get_desktop_app_service_info", lambda: {
+        "status": "running",
+        "artifact_path": "/Applications/Longhouse.app",
+        "runtime_mode": "source-build",
+        "bundle_version": "0.0.0-dev",
+    })
+    monkeypatch.setattr("zerg.services.shipper.service.detect_platform", lambda: Platform.MACOS)
+
+    results = doctor._check_shipper()
+    labels = {r.label: r.status for r in results}
+
+    assert labels["Desktop App running"] == doctor.PASS
+    assert labels["Desktop App installed from local source build (/Applications/Longhouse.app)"] == doctor.PASS
+
+
 def test_check_shipper_warns_when_ambient_ui_uses_legacy_binary_install(tmp_path, monkeypatch):
     claude_dir = tmp_path / ".claude"
     _seed_claude_dir(claude_dir, settings={})
