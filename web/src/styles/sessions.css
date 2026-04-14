@@ -598,6 +598,10 @@
     gap: var(--space-1);
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .provider-name {
