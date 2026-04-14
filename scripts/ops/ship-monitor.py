@@ -72,6 +72,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip live deploy verification. Useful for replaying old SHAs.",
     )
+    parser.add_argument(
+        "--heartbeat",
+        type=int,
+        default=60,
+        help="Emit a waiting heartbeat every N seconds while workflows are still running. Default: 60.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit a JSON result object.")
     return parser.parse_args()
 
@@ -205,6 +211,25 @@ def summarize_runs(runs: list[RunInfo], short_sha: str) -> str:
     return "\n".join(lines)
 
 
+def format_elapsed(seconds: float) -> str:
+    total = int(seconds)
+    minutes, seconds = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{seconds:02d}s"
+    return f"{minutes}m{seconds:02d}s"
+
+
+def summarize_incomplete_runs(runs: list[RunInfo]) -> str:
+    parts: list[str] = []
+    for run in runs:
+        if run.status == "completed":
+            continue
+        conclusion = run.conclusion or "-"
+        parts.append(f"{run.workflowName} #{run.databaseId}: {run.status}/{conclusion}")
+    return ", ".join(parts) or "waiting on GitHub Actions"
+
+
 def summarize_recent_runs(runs: list[RunInfo]) -> list[dict[str, str | int | None]]:
     summary: list[dict[str, str | int | None]] = []
     seen: set[tuple[str, str]] = set()
@@ -236,6 +261,7 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
     initial_deadline = start + args.initial_timeout
     deadline = start + args.timeout
     last_seen: tuple[tuple[int, str, str | None], ...] | None = None
+    next_heartbeat = start + max(args.heartbeat, 1) if args.heartbeat > 0 else None
 
     while True:
         now = time.time()
@@ -259,9 +285,19 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
         if current != last_seen:
             print(summarize_runs(runs, sha[:10]), file=sys.stderr)
             last_seen = current
+            if args.heartbeat > 0:
+                next_heartbeat = now + max(args.heartbeat, 1)
 
         if all(run.status == "completed" for run in runs):
             return runs
+
+        if next_heartbeat is not None and now >= next_heartbeat:
+            print(
+                f"Still waiting on {sha[:10]} after {format_elapsed(now - start)}: "
+                f"{summarize_incomplete_runs(runs)}",
+                file=sys.stderr,
+            )
+            next_heartbeat = now + max(args.heartbeat, 1)
 
         if now >= deadline:
             raise PollTimeoutError(f"Timed out waiting for push workflows for {sha[:10]}")

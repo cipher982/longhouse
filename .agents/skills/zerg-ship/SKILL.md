@@ -92,6 +92,7 @@ When David says `cowbell`, the agent owns the whole ship loop:
 - run `make ship SHA="<task-sha>"`
 - read the start banner and confirm the exact target SHA + commit subject
 - stay in the foreground until `make ship` exits
+- do not wrap `make ship` in a short outer shell timeout; the monitor already has its own timeout and successful runtime ships commonly take around 5 to 8 minutes, sometimes longer if they wait behind earlier `main` deploys
 - cite exact SHAs and workflow run ids when reporting status
 
 `deploy-and-verify.yml` waits for the matching `contract-first-ci.yml` and `runtime-image.yml` runs for the same SHA before any remote deploy action. Manual dispatch stays isolated for recovery use.
