@@ -13,6 +13,17 @@ struct LonghouseWebView: UIViewRepresentable {
         let config = WKWebViewConfiguration()
         config.allowsInlineMediaPlayback = true
 
+        let contentController = WKUserContentController()
+        contentController.add(context.coordinator, name: "nativeAuth")
+
+        let blockGIS = WKUserScript(
+            source: Self.earlyInjectionJS,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        )
+        contentController.addUserScript(blockGIS)
+        config.userContentController = contentController
+
         let webView = WKWebView(frame: .zero, configuration: config)
         webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
@@ -40,8 +51,87 @@ struct LonghouseWebView: UIViewRepresentable {
         }
     }
 
+    private static let earlyInjectionJS = """
+    (function() {
+        // Block GIS script from loading — it doesn't work in WKWebView
+        var origCreateElement = document.createElement.bind(document);
+        document.createElement = function(tag) {
+            var el = origCreateElement(tag);
+            if (tag.toLowerCase() === 'script') {
+                var origSetAttribute = el.setAttribute.bind(el);
+                var origSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
+                Object.defineProperty(el, 'src', {
+                    set: function(val) {
+                        if (val && val.indexOf('accounts.google.com/gsi/client') !== -1) {
+                            console.log('[Longhouse] Blocked GIS script, using native auth');
+                            return;
+                        }
+                        origSrcDescriptor.set.call(el, val);
+                    },
+                    get: function() { return origSrcDescriptor.get.call(el); },
+                    configurable: true
+                });
+            }
+            return el;
+        };
+
+        // Intercept google.accounts.id.renderButton to inject our native button
+        var _googleProxy = undefined;
+        Object.defineProperty(window, 'google', {
+            get: function() { return _googleProxy; },
+            set: function(val) {
+                _googleProxy = val;
+                if (val && val.accounts && val.accounts.id) {
+                    val.accounts.id.renderButton = function(container, options) {
+                        if (!container) return;
+                        container.innerHTML = '';
+                        var btn = document.createElement('button');
+                        btn.textContent = 'Sign in with Google';
+                        btn.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 16px;border:1px solid #444;border-radius:8px;background:#1a1a1a;color:#fff;font-size:14px;font-family:-apple-system,system-ui,sans-serif;cursor:pointer;';
+                        btn.onmouseover = function() { btn.style.background = '#2a2a2a'; };
+                        btn.onmouseout = function() { btn.style.background = '#1a1a1a'; };
+                        btn.onclick = function(e) {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            window.webkit.messageHandlers.nativeAuth.postMessage('google');
+                        };
+                        container.appendChild(btn);
+                    };
+                    val.accounts.id.initialize = function() {};
+                    val.accounts.id.prompt = function() {};
+                }
+            },
+            configurable: true
+        });
+
+        // Fallback: watch for the button container and replace if GIS somehow renders
+        var observer = new MutationObserver(function(mutations) {
+            var container = document.getElementById('google-signin-button');
+            if (container && !container.dataset.nativeBound) {
+                container.dataset.nativeBound = 'true';
+                // If GIS managed to render, replace its contents
+                setTimeout(function() {
+                    var iframes = container.querySelectorAll('iframe');
+                    if (iframes.length > 0 || container.querySelector('[role="button"]')) {
+                        container.innerHTML = '';
+                        var btn = document.createElement('button');
+                        btn.textContent = 'Sign in with Google';
+                        btn.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 16px;border:1px solid #444;border-radius:8px;background:#1a1a1a;color:#fff;font-size:14px;font-family:-apple-system,system-ui,sans-serif;cursor:pointer;';
+                        btn.onclick = function(e) {
+                            e.preventDefault();
+                            window.webkit.messageHandlers.nativeAuth.postMessage('google');
+                        };
+                        container.appendChild(btn);
+                    }
+                }, 500);
+            }
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+    })();
+    """
+
     @MainActor
-    final class Coordinator: NSObject, WKNavigationDelegate, ASWebAuthenticationPresentationContextProviding {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler, ASWebAuthenticationPresentationContextProviding {
         weak var webView: WKWebView?
         let serverURL: String
         private var authInProgress = false
@@ -69,9 +159,15 @@ struct LonghouseWebView: UIViewRepresentable {
                 .first(where: \.isKeyWindow) ?? ASPresentationAnchor()
         }
 
+        nonisolated func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+            guard message.name == "nativeAuth" else { return }
+            Task { @MainActor in
+                self.startNativeAuth()
+            }
+        }
+
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             extractAndStoreAuthToken(from: webView)
-            injectNativeAuthBridge(into: webView)
         }
 
         func webView(
@@ -84,7 +180,8 @@ struct LonghouseWebView: UIViewRepresentable {
                 return
             }
 
-            if url.host?.contains("accounts.google.com") == true && url.path.contains("oauth") {
+            // Catch any direct navigations to Google OAuth as a safety net
+            if url.host?.contains("accounts.google.com") == true {
                 decisionHandler(.cancel)
                 if !authInProgress {
                     startNativeAuth()
@@ -145,9 +242,7 @@ struct LonghouseWebView: UIViewRepresentable {
                 return
             }
 
-            let ssoToken = queryItems.first(where: { $0.name == "sso_token" })?.value
-
-            guard let ssoToken else {
+            guard let ssoToken = queryItems.first(where: { $0.name == "sso_token" })?.value else {
                 reloadTimeline()
                 return
             }
@@ -208,34 +303,6 @@ struct LonghouseWebView: UIViewRepresentable {
         private func reloadTimeline() {
             guard let webView, let url = URL(string: "\(serverURL)/timeline") else { return }
             webView.load(URLRequest(url: url))
-        }
-
-        private func injectNativeAuthBridge(into webView: WKWebView) {
-            let js = """
-            (function() {
-                if (window.__longhouseNativeAuthInjected) return;
-                window.__longhouseNativeAuthInjected = true;
-
-                document.addEventListener('click', function(e) {
-                    var target = e.target;
-                    while (target && target !== document.body) {
-                        if (target.getAttribute && (
-                            target.getAttribute('data-testid') === 'google-signin-button' ||
-                            target.classList.contains('google-signin') ||
-                            target.id === 'google-signin-button' ||
-                            (target.textContent && target.textContent.includes('Sign in with Google'))
-                        )) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            window.location.href = '/api/auth/google/redirect';
-                            return;
-                        }
-                        target = target.parentElement;
-                    }
-                }, true);
-            })();
-            """;
-            webView.evaluateJavaScript(js) { _, _ in }
         }
 
         private func extractAndStoreAuthToken(from webView: WKWebView) {
