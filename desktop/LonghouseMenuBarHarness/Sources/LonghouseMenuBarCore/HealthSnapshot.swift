@@ -102,11 +102,21 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return reasons.contains("desktop_app_setup_required")
     }
 
+    public var isInstallLocationBlocked: Bool {
+        if launchReadiness?.state == "move-app" {
+            return true
+        }
+        return reasons.contains("desktop_app_wrong_install_location")
+    }
+
     public var statusBadge: String {
         "\(parsedSeverity.uppercaseLabel) · \(healthState.replacingOccurrences(of: "_", with: " ").uppercased())"
     }
 
     public var ambientStatusLabel: String {
+        if isInstallLocationBlocked {
+            return "Needs move"
+        }
         if isSetupRequired {
             return "Setup required"
         }
@@ -537,6 +547,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public func missionSummaryLabel(relativeTo referenceDate: Date) -> String {
+        if isInstallLocationBlocked {
+            return "Longhouse.app must live in /Applications"
+        }
         let lastShipCompact = lastShipCompactLabel(relativeTo: referenceDate)
         let shipLead = lastShipCompact == "-" ? "Ship \(lastShipValueLabel(relativeTo: referenceDate))" : "Ship \(lastShipCompact)"
         var parts = [shipLead]
@@ -551,6 +564,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var attentionSummaryLabel: String {
+        if isInstallLocationBlocked {
+            return "Longhouse.app only runs from /Applications. Quit, move the app there, then relaunch."
+        }
         if isSetupRequired {
             return "Longhouse.app needs to finish setup on this Mac. Set Up Longhouse to install the CLI, runtime, and menu bar wiring."
         }
@@ -685,6 +701,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         switch raw {
         case "desktop_app_setup_required":
             return "Longhouse needs setup on this Mac"
+        case "desktop_app_wrong_install_location":
+            return "Longhouse.app is not in /Applications"
         case "service_stopped":
             return "The local service is stopped"
         case "spool_dead":
@@ -723,6 +741,43 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
                 state: "setup-required",
                 headline: "Longhouse setup required",
                 reasons: reason.map { [$0] } ?? ["Longhouse CLI is not installed yet."],
+                suggestedActions: [suggestedAction],
+                storedURL: nil,
+                machineName: nil,
+                serviceMachineName: nil,
+                runner: nil
+            )
+        )
+    }
+
+    public static func installLocationBlockedSnapshot(
+        currentPath: String,
+        canonicalPath: String = "/Applications/Longhouse.app"
+    ) -> HealthSnapshot {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let normalizedCurrentPath = currentPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let suggestedAction = "Quit Longhouse, move Longhouse.app to \(canonicalPath), then relaunch."
+
+        return HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: formatter.string(from: Date()),
+            healthState: "broken",
+            severity: "red",
+            headline: "Move Longhouse.app to Applications",
+            reasons: ["desktop_app_wrong_install_location"],
+            suggestedActions: [suggestedAction],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: LaunchReadinessSnapshot(
+                state: "move-app",
+                headline: "Longhouse.app must live in /Applications",
+                reasons: [
+                    "Current path: \(normalizedCurrentPath)",
+                    "Supported path: \(canonicalPath)",
+                ],
                 suggestedActions: [suggestedAction],
                 storedURL: nil,
                 machineName: nil,

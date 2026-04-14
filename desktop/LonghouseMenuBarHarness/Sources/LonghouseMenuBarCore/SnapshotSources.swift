@@ -33,19 +33,27 @@ public struct FixtureHealthSnapshotSource: HealthSnapshotSource {
 public struct CLIHealthSnapshotSource: HealthSnapshotSource {
     public let launchPath: String
     public let arguments: [String]
+    let currentBundlePath: String?
 
     public init() {
         let invocation = LonghouseCLI.defaultHealthInvocation()
         self.launchPath = invocation.launchPath
         self.arguments = invocation.arguments
+        self.currentBundlePath = nil
     }
 
-    public init(launchPath: String, arguments: [String]) {
+    public init(launchPath: String, arguments: [String], currentBundlePath: String? = nil) {
         self.launchPath = launchPath
         self.arguments = arguments
+        self.currentBundlePath = currentBundlePath
     }
 
     public func load() throws -> HealthSnapshot {
+        let bundlePath = currentBundlePath ?? Bundle.main.bundleURL.path
+        if let unsupportedBundlePath = AppBundleLocation.unsupportedBundlePath(currentBundlePath: bundlePath) {
+            return HealthSnapshot.installLocationBlockedSnapshot(currentPath: unsupportedBundlePath)
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launchPath)
         process.arguments = arguments
