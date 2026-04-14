@@ -76,33 +76,6 @@ export interface ModelConfig {
   is_default: boolean;
 }
 
-export interface UserContext {
-  display_name?: string;
-  role?: string;
-  location?: string;
-  description?: string;
-  servers?: Array<{
-    name: string;
-    ip: string;
-    purpose: string;
-    platform?: string;
-    notes?: string;
-  }>;
-  integrations?: Record<string, string>;
-  custom_instructions?: string;
-  tools?: {
-    location?: boolean;
-    whoop?: boolean;
-    obsidian?: boolean;
-    oikos?: boolean;
-    [key: string]: boolean | undefined;
-  };
-}
-
-export interface UserContextResponse {
-  context: UserContext;
-}
-
 export type Runner = Schemas["RunnerResponse"];
 export type EnrollTokenResponse = Schemas["EnrollTokenResponse"];
 export type RunnerRegisterRequest = Schemas["RunnerRegisterRequest"];

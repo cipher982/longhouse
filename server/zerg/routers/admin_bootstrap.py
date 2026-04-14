@@ -1,13 +1,12 @@
 """Admin bootstrap API endpoints.
 
-These endpoints allow seeding user context, runners, and credentials via API
-instead of relying on file mounts, which are brittle in container environments.
+These endpoints allow seeding runners and credentials via API instead of
+relying on file mounts, which are brittle in container environments.
 
 All endpoints require admin privileges and optionally support token-based auth
 for CLI/automation use cases.
 """
 
-import copy
 import json
 import logging
 
@@ -22,12 +21,10 @@ from zerg.crud import runner_crud
 from zerg.database import get_db
 from zerg.dependencies.auth import get_current_user
 from zerg.models.models import AccountConnectorCredential
-from zerg.models.models import KnowledgeSource
 from zerg.models.models import User
 from zerg.schemas.bootstrap import BootstrapStatusItem
 from zerg.schemas.bootstrap import BootstrapStatusResponse
 from zerg.schemas.bootstrap import BootstrapSuccessResponse
-from zerg.schemas.bootstrap import ContextSeedRequest
 from zerg.schemas.bootstrap import CredentialsSeedRequest
 from zerg.schemas.bootstrap import RunnersSeedRequest
 from zerg.utils.crypto import encrypt
@@ -112,57 +109,6 @@ def get_admin_user(db: Session, auth_user) -> User:
 # ---------------------------------------------------------------------------
 # Bootstrap Endpoints
 # ---------------------------------------------------------------------------
-
-
-@router.post("/context", response_model=BootstrapSuccessResponse)
-async def seed_context(
-    request: ContextSeedRequest,
-    db: Session = Depends(get_db),
-    auth_user=Depends(require_bootstrap_auth),
-):
-    """Seed user context for the admin user.
-
-    This replaces file-based seeding from ~/.config/zerg/user_context.json.
-    Seeds context for all admin users (idempotent - skips users with existing context).
-    """
-    # Build context dict from request
-    context = request.model_dump(exclude_none=True, exclude_unset=False)
-
-    # Get all admin users
-    admin_users = db.query(User).filter(User.role == "ADMIN").all()
-
-    if not admin_users:
-        raise HTTPException(status_code=404, detail="No admin users found")
-
-    seeded_count = 0
-    skipped_count = 0
-
-    for user in admin_users:
-        # Idempotent: skip if already has meaningful context (unless force via empty context)
-        if user.context and user.context.get("display_name"):
-            skipped_count += 1
-            continue
-
-        # Seed the context (deep copy to avoid shared reference)
-        user.context = copy.deepcopy(context)
-        seeded_count += 1
-        logger.info(f"Seeded user context for {user.email}")
-
-    db.commit()
-
-    # Also seed server knowledge for searchability
-    _seed_server_knowledge(db, admin_users, context)
-
-    server_count = len(context.get("servers", []))
-    return BootstrapSuccessResponse(
-        success=True,
-        message=f"Seeded context for {seeded_count} admin user(s) ({skipped_count} already had context)",
-        details={
-            "seeded_count": seeded_count,
-            "skipped_count": skipped_count,
-            "servers": server_count,
-        },
-    )
 
 
 @router.post("/runners", response_model=BootstrapSuccessResponse)
@@ -284,11 +230,6 @@ async def get_bootstrap_status(
     """Get status of what's configured vs missing."""
     admin_user = get_admin_user(db, auth_user)
 
-    # Check context
-    context_configured = bool(admin_user.context and admin_user.context.get("display_name"))
-    server_count = len(admin_user.context.get("servers", [])) if admin_user.context else 0
-    context_details = f"{server_count} servers" if context_configured else "not configured"
-
     # Check runners
     runners = runner_crud.get_runners_by_owner(db, admin_user.id)
     runners_configured = len(runners) > 0
@@ -301,70 +242,6 @@ async def get_bootstrap_status(
     creds_details = f"{len(creds)} configured: {', '.join(cred_types)}" if creds_configured else "not configured"
 
     return BootstrapStatusResponse(
-        context=BootstrapStatusItem(configured=context_configured, details=context_details),
         runners=BootstrapStatusItem(configured=runners_configured, details=runners_details),
         credentials=BootstrapStatusItem(configured=creds_configured, details=creds_details),
     )
-
-
-# ---------------------------------------------------------------------------
-# Helper Functions
-# ---------------------------------------------------------------------------
-
-
-def _seed_server_knowledge(db: Session, admin_users: list[User], context: dict):
-    """Seed server info into knowledge base for searchability.
-
-    Makes knowledge_search("What servers do I have?") work by indexing
-    the server info from context into a KnowledgeDocument.
-    """
-    from zerg.crud import knowledge_crud
-
-    servers = context.get("servers", [])
-    if not servers:
-        return
-
-    for user in admin_users:
-        # Check if we already have this knowledge source
-        existing_source = db.query(KnowledgeSource).filter_by(owner_id=user.id, name="User Context - Servers").first()
-
-        if not existing_source:
-            existing_source = knowledge_crud.create_knowledge_source(
-                db,
-                owner_id=user.id,
-                name="User Context - Servers",
-                source_type="user_context",
-                config={"auto_seeded": True, "via": "bootstrap_api"},
-            )
-            logger.info(f"Created knowledge source 'User Context - Servers' for {user.email}")
-
-        # Format servers as searchable markdown
-        lines = ["# My Servers\n"]
-        for srv in servers:
-            name = srv.get("name", "Unknown")
-            ip = srv.get("ip", "")
-            purpose = srv.get("purpose", "")
-            ssh_user = srv.get("ssh_user", "")
-
-            lines.append(f"## {name}")
-            if ip:
-                lines.append(f"- **IP Address:** {ip}")
-            if purpose:
-                lines.append(f"- **Purpose:** {purpose}")
-            if ssh_user:
-                lines.append(f"- **SSH User:** {ssh_user}")
-            lines.append("")  # Blank line between servers
-
-        content = "\n".join(lines)
-
-        # Upsert the document
-        knowledge_crud.upsert_knowledge_document(
-            db,
-            source_id=existing_source.id,
-            owner_id=user.id,
-            path="user_context/servers.md",
-            content_text=content,
-            title="My Servers",
-        )
-
-    db.commit()

@@ -6,7 +6,6 @@ export * from "./automations";
 export * from "./threads";
 export * from "./models";
 export * from "./connectors";
-export * from "./users";
 export * from "./runners";
 export * from "./knowledge";
 export * from "./contacts";

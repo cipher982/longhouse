@@ -1,6 +1,6 @@
 """Auto-seeding service for development and production environments.
 
-This service automatically seeds user context, credentials, and runners on startup.
+This service automatically seeds credentials and runners on startup.
 All seeding is idempotent - safe to run multiple times.
 
 Seeding sources (checked in order):
@@ -8,7 +8,6 @@ Seeding sources (checked in order):
 2. ~/.config/zerg/*.json (prod/personal)
 """
 
-import copy
 import json
 import logging
 import os
@@ -22,12 +21,6 @@ from zerg.models.models import User
 logger = logging.getLogger(__name__)
 
 # Config file locations (checked in order)
-USER_CONTEXT_PATHS = [
-    Path("/app/scripts/user_context.local.json"),  # Docker dev
-    Path(__file__).parent.parent.parent / "scripts" / "user_context.local.json",  # Local dev
-    Path.home() / ".config" / "zerg" / "user_context.json",  # Prod/personal
-]
-
 CREDENTIALS_PATHS = [
     Path("/app/scripts/personal_credentials.local.json"),  # Docker dev
     Path(__file__).parent.parent.parent / "scripts" / "personal_credentials.local.json",  # Local dev
@@ -49,69 +42,10 @@ def _find_config_file(paths: list[Path]) -> Path | None:
     return None
 
 
-def _seed_user_context() -> bool:
-    """Seed user context from local config file.
-
-    Seeds context for all ADMIN users (not just first user), since in production
-    there may be a dev@local placeholder user created before the real admin.
-
-    Returns:
-        True if seeding succeeded or was skipped (idempotent), False on error.
-    """
-    config_path = _find_config_file(USER_CONTEXT_PATHS)
-    if not config_path:
-        logger.debug("No user context config found - skipping seed")
-        return True
-
-    logger.info(f"Seeding user context from: {config_path}")
-
-    try:
-        with open(config_path) as f:
-            context = json.load(f)
-    except (json.JSONDecodeError, OSError) as e:
-        logger.warning(f"Failed to load user context from {config_path}: {e}")
-        return False
-
-    db = default_session_factory()
-    try:
-        # Find all admin users (real admins, not just first user)
-        admin_users = db.query(User).filter(User.role == "ADMIN").all()
-
-        if not admin_users:
-            logger.debug("No admin users in database yet - skipping context seed")
-            return True
-
-        seeded_count = 0
-        for user in admin_users:
-            # Idempotent: skip if already has meaningful context
-            if user.context and user.context.get("display_name"):
-                logger.debug(f"User {user.email} already has context - skipping")
-                continue
-
-            # Seed the context (deep copy to avoid shared reference between users)
-            user.context = copy.deepcopy(context)
-            seeded_count += 1
-            logger.info(f"Seeded user context for {user.email}")
-
-        if seeded_count > 0:
-            db.commit()
-            server_count = len(context.get("servers", []))
-            logger.info(f"Seeded context for {seeded_count} admin user(s): {server_count} servers configured")
-
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to seed user context: {e}")
-        db.rollback()
-        return False
-    finally:
-        db.close()
-
-
 def _seed_personal_credentials() -> bool:
     """Seed personal tool credentials from local config file.
 
-    Seeds for all admin users (consistent with _seed_user_context).
+    Seeds for all admin users.
 
     Returns:
         True if seeding succeeded or was skipped (idempotent), False on error.
@@ -136,7 +70,7 @@ def _seed_personal_credentials() -> bool:
 
         db = default_session_factory()
         try:
-            # Seed for all admin users (consistent with _seed_user_context)
+            # Seed for all admin users
             admin_users = db.query(User).filter(User.role == "ADMIN").all()
 
             if not admin_users:
@@ -267,93 +201,6 @@ def _seed_runners() -> bool:
         db.close()
 
 
-def _seed_server_knowledge() -> bool:
-    """Seed user's server info into the knowledge base for searchability.
-
-    This makes knowledge_search("What servers do I have?") work by indexing
-    the server info from user.context into a KnowledgeDocument.
-
-    Seeds for all admin users with server context.
-
-    Returns:
-        True if seeding succeeded or was skipped (idempotent), False on error.
-    """
-    from zerg.crud import knowledge_crud
-    from zerg.models.models import KnowledgeSource
-
-    db = default_session_factory()
-    try:
-        # Find all admin users with context
-        admin_users = db.query(User).filter(User.role == "ADMIN").all()
-
-        if not admin_users:
-            logger.debug("No admin users in database yet - skipping server knowledge seed")
-            return True
-
-        seeded_count = 0
-        for user in admin_users:
-            # Check if user has servers in context
-            context = user.context or {}
-            servers = context.get("servers", [])
-            if not servers:
-                continue
-
-            # Check if we already have this knowledge source (idempotent)
-            existing_source = db.query(KnowledgeSource).filter_by(owner_id=user.id, name="User Context - Servers").first()
-
-            if not existing_source:
-                # Create the knowledge source
-                existing_source = knowledge_crud.create_knowledge_source(
-                    db,
-                    owner_id=user.id,
-                    name="User Context - Servers",
-                    source_type="user_context",
-                    config={"auto_seeded": True},
-                )
-                logger.info(f"Created knowledge source 'User Context - Servers' for {user.email}")
-
-            # Format servers as searchable markdown
-            lines = ["# My Servers\n"]
-            for srv in servers:
-                name = srv.get("name", "Unknown")
-                ip = srv.get("ip", "")
-                purpose = srv.get("purpose", "")
-                ssh_user = srv.get("ssh_user", "")
-
-                lines.append(f"## {name}")
-                if ip:
-                    lines.append(f"- **IP Address:** {ip}")
-                if purpose:
-                    lines.append(f"- **Purpose:** {purpose}")
-                if ssh_user:
-                    lines.append(f"- **SSH User:** {ssh_user}")
-                lines.append("")  # Blank line between servers
-
-            content = "\n".join(lines)
-
-            # Upsert the document (creates or updates)
-            knowledge_crud.upsert_knowledge_document(
-                db,
-                source_id=existing_source.id,
-                owner_id=user.id,
-                path="user_context/servers.md",
-                content_text=content,
-                title="My Servers",
-            )
-            seeded_count += 1
-
-        if seeded_count > 0:
-            logger.info(f"Seeded server knowledge for {seeded_count} admin user(s)")
-        return True
-
-    except Exception as e:
-        logger.error(f"Failed to seed server knowledge: {e}")
-        db.rollback()
-        return False
-    finally:
-        db.close()
-
-
 def run_auto_seed() -> dict:
     """Run all auto-seeding tasks.
 
@@ -366,7 +213,7 @@ def run_auto_seed() -> dict:
 
     settings = get_settings()
 
-    # In dev mode (AUTH_DISABLED=1), many subsystems (runners, user-context, credentials)
+    # In dev mode (AUTH_DISABLED=1), many subsystems (runners, credentials)
     # assume at least one deterministic "dev@local" user exists. Most request paths
     # create it lazily via the auth layer, but runner websockets can connect before
     # any HTTP request occurs, causing noisy reconnect loops in logs.
@@ -402,19 +249,9 @@ def run_auto_seed() -> dict:
         pass
 
     results = {
-        "user_context": "skipped",
         "credentials": "skipped",
         "runners": "skipped",
-        "server_knowledge": "skipped",
     }
-
-    # Seed user context (servers, integrations, preferences)
-    if _seed_user_context():
-        config_path = _find_config_file(USER_CONTEXT_PATHS)
-        if config_path:
-            results["user_context"] = f"ok ({config_path.name})"
-    else:
-        results["user_context"] = "failed"
 
     # Seed personal credentials (WHOOP, Obsidian, etc.)
     if _seed_personal_credentials():
@@ -431,12 +268,5 @@ def run_auto_seed() -> dict:
             results["runners"] = f"ok ({config_path.name})"
     else:
         results["runners"] = "failed"
-
-    # Seed server info into knowledge base (makes knowledge_search work for servers)
-    # This runs AFTER user_context seed, so servers are available
-    if _seed_server_knowledge():
-        results["server_knowledge"] = "ok"
-    else:
-        results["server_knowledge"] = "failed"
 
     return results

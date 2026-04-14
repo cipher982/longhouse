@@ -45,10 +45,6 @@ else
     echo "Migrations complete"
 fi
 
-# Auto-seed user context if local config exists (idempotent)
-echo "Checking for user context seed..."
-python scripts/seed_user_context.py 2>&1 || echo "Context seeding skipped or failed (non-fatal)"
-
 # Auto-seed personal tool credentials if local config exists (idempotent)
 echo "Checking for personal credentials seed..."
 python scripts/seed_personal_credentials.py 2>&1 || echo "Credentials seeding skipped or failed (non-fatal)"
