@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import os
 import platform
+import plistlib
 import shutil
 import stat
 import tempfile
@@ -156,6 +157,34 @@ def _artifact_launch_path(component: RuntimeComponent, artifact_path: Path) -> P
     return artifact_path
 
 
+def _should_reuse_installed_artifact(component: RuntimeComponent, artifact_path: Path) -> bool:
+    if component != RuntimeComponent.DESKTOP_APP:
+        return True
+
+    info_plist = artifact_path / "Contents" / "Info.plist"
+    if not info_plist.exists():
+        return True
+
+    try:
+        payload = plistlib.loads(info_plist.read_bytes())
+    except Exception:
+        return True
+
+    if not isinstance(payload, dict):
+        return True
+
+    version_fields = (
+        payload.get("CFBundleShortVersionString"),
+        payload.get("CFBundleVersion"),
+    )
+    for raw_version in version_fields:
+        version = str(raw_version or "").strip().lower()
+        if version.startswith("0.0.0-smoke") or version.startswith("0.0.0-dev"):
+            return False
+
+    return True
+
+
 def _platform_target() -> str:
     system = platform.system().lower()
     machine = platform.machine().lower()
@@ -268,6 +297,8 @@ def resolve_installed_runtime_artifact(component: RuntimeComponent) -> Installed
             continue
         launch_path = _artifact_launch_path(component, installed_path)
         if launch_path.exists():
+            if not _should_reuse_installed_artifact(component, installed_path):
+                continue
             source = "local-runtime-app" if ARTIFACT_KINDS[component] == RuntimeArtifactKind.APP_BUNDLE else "local-runtime-bin"
             return InstalledRuntimeArtifact(
                 component=component,
