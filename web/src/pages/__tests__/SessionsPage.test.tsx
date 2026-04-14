@@ -929,7 +929,8 @@ describe("SessionsPage", () => {
     renderSessionsPage();
 
     expect(await screen.findAllByText("Live control")).toHaveLength(1);
-    expect(screen.getAllByTestId("session-card-management").some((pill) => pill.textContent?.includes("Managed"))).toBe(true);
+    expect(screen.getAllByTestId("session-card-management")).toHaveLength(1);
+    expect(screen.getByTestId("session-card-management")).toHaveTextContent("Unmanaged");
     expect(screen.getByText("This machine")).toBeInTheDocument();
     expect(screen.getByText("Cloud")).toBeInTheDocument();
     expect(screen.getByText("Head: cinder")).toBeInTheDocument();

@@ -671,12 +671,14 @@ function SessionCard({
               )}
             </div>
           )}
-          <span
-            className={`session-card-management-pill session-card-management-pill--${interaction.managementVariant}`}
-            data-testid="session-card-management"
-          >
-            {interaction.managementLabel}
-          </span>
+          {!interaction.isManagedLocalSession ? (
+            <span
+              className={`session-card-management-pill session-card-management-pill--${interaction.managementVariant}`}
+              data-testid="session-card-management"
+            >
+              {interaction.managementLabel}
+            </span>
+          ) : null}
           <span className={`session-card-capability-pill session-card-capability-pill--${interaction.capabilityVariant}`} data-testid="session-card-capability">
             {interaction.capabilityLabel}
           </span>
