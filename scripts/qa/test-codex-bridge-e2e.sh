@@ -79,7 +79,7 @@ if [ -z "$DEVICE_TOKEN" ]; then
         | python3 -c "import sys,json; print(json.load(sys.stdin).get('device_token',''))" 2>/dev/null || echo "")
     if [ -z "$DEVICE_TOKEN" ]; then
         # Check the default location
-        DEVICE_TOKEN=$(cat ~/.claude/longhouse-device-token 2>/dev/null || echo "")
+        DEVICE_TOKEN=$(cat ~/.longhouse/machine/device-token 2>/dev/null || echo "")
     fi
 fi
 

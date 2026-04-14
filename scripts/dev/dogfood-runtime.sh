@@ -18,6 +18,19 @@ MACHINE_NAME_OVERRIDE="${LONGHOUSE_DOGFOOD_MACHINE_NAME:-}"
 MENUBAR=1
 SKIP_ENGINE=0
 
+resolve_longhouse_home() {
+  local provider_home="$1"
+  local basename
+  basename="$(basename "$provider_home")"
+  if [[ "$basename" == ".longhouse" ]]; then
+    printf '%s\n' "$provider_home"
+    return
+  fi
+  printf '%s\n' "$(dirname "$provider_home")/.longhouse"
+}
+
+LONGHOUSE_HOME="$(resolve_longhouse_home "$CLAUDE_DIR")"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -72,7 +85,7 @@ resolve_url() {
   fi
 
   local configured_url
-  configured_url="$(read_trimmed_file "$CLAUDE_DIR/longhouse-url")"
+  configured_url="$(read_trimmed_file "$LONGHOUSE_HOME/machine/target-url")"
   if [[ -n "$configured_url" ]]; then
     printf '%s\n' "$configured_url"
     return
@@ -88,7 +101,7 @@ resolve_machine_name() {
   fi
 
   local configured_name
-  configured_name="$(read_trimmed_file "$CLAUDE_DIR/longhouse-machine-name")"
+  configured_name="$(read_trimmed_file "$LONGHOUSE_HOME/machine/name")"
   if [[ -n "$configured_name" ]]; then
     printf '%s\n' "$configured_name"
     return
