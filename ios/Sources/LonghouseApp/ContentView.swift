@@ -50,6 +50,7 @@ struct ContentView: View {
                                 .padding(10)
                                 .background(.white.opacity(0.06), in: Circle())
                         }
+                        .accessibilityIdentifier("login.serverConfig")
                         .padding(.trailing, 8)
                         .padding(.top, 4)
                     }
