@@ -29,6 +29,7 @@ runner:
 
 ios:
   - 'ios/**'
+  # Re-run iOS tests when CI plumbing changes to verify the job itself
   - '.github/path-filters.yml'
   - '.github/workflows/contract-first-ci.yml'
 
