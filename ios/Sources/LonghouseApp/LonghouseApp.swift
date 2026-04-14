@@ -39,7 +39,7 @@ final class AppState: ObservableObject {
     func validateTokenIfNeeded() async {
         guard isAuthenticated, !sessionToken.isEmpty else { return }
 
-        guard let url = URL(string: "\(serverURL)/api/health") else {
+        guard let url = URL(string: "\(serverURL)/api/timeline/sessions?limit=1") else {
             signOut()
             return
         }
