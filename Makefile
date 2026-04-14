@@ -8,7 +8,7 @@ COMPOSE_DEV := docker compose --project-name zerg --env-file .env -f docker/dock
 E2E_BACKEND_PORT ?=
 E2E_FRONTEND_PORT ?=
 
-.PHONY: help dev dev-demo stop test test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine validate validate-ws validate-sse validate-sdk validate-makefile regen-ws regen-sse generate-sdk qa-live qa-live-chat reprovision deploy-status ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval
+.PHONY: help dev dev-demo stop test test-frontend test-engine test-runner test-control-plane test-e2e test-e2e-core test-e2e-a11y test-e2e-cp test-e2e-single test-ci test-full install-engine validate validate-ws validate-sse validate-sdk validate-makefile regen-ws regen-sse generate-sdk qa-live qa-live-chat reprovision deploy-status ui-capture test-shipper-e2e test-shipper-premerge test-wheel-package test-install test-install-first-run test-install-macos-ambient test-install-runner test-hosted-instance test-coolify-deploy test-web-entrypoint test-runtime-packaging-macos test-e2e-onboarding test-e2e-continuation-provider test-readmes test-codex-bridge-e2e test-hooks onboarding-funnel launch-gate-local lint-test-patterns import-smoke ensure-js-deps ensure-playwright-browser demo-db menubar-harness qa-oss vibetest eval dogfood dogfood-refresh dogfood-check
 
 # ---------------------------------------------------------------------------
 # Help
@@ -174,6 +174,14 @@ install-engine: ## Build + install Rust engine binary
 	@mkdir -p $$HOME/.local/bin
 	@ln -sf "$(CURDIR)/engine/target/release/longhouse-engine" "$$HOME/.local/bin/longhouse-engine"
 	@echo "longhouse-engine installed"
+
+dogfood: dogfood-refresh ## Refresh the real local runtime from current repo source
+
+dogfood-refresh: ## Rebuild/reinstall the actual local Longhouse runtime from current repo source
+	@./scripts/dev/dogfood-runtime.sh refresh
+
+dogfood-check: ## Show installed local runtime status + local health
+	@./scripts/dev/dogfood-runtime.sh check
 
 # ---------------------------------------------------------------------------
 # Validation (contract drift checks)
