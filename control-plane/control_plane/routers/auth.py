@@ -65,6 +65,8 @@ GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 GMAIL_CONNECT_SCOPES = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send"
 HOSTED_GMAIL_STATE_MAX_AGE = 10 * 60
 LOGIN_RETURN_STATE_MAX_AGE = 10 * 60
+INSTANCE_SSO_TOKEN_MAX_AGE = 5 * 60
+NATIVE_APP_CALLBACK_SCHEME = "ai.longhouse.ios"
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +334,28 @@ def _decode_login_return_state(state: str | None) -> str | None:
     return safe_return_to
 
 
+def _issue_instance_sso_token(*, user: User, instance: Instance) -> str:
+    return _encode_jwt(
+        {
+            "sub": str(user.id),
+            "email": user.email,
+            "instance": instance.subdomain,
+            "exp": int(time.time()) + INSTANCE_SSO_TOKEN_MAX_AGE,
+        },
+        settings.instance_jwt_secret,
+    )
+
+
+def _native_app_callback_url(*, tenant: str, sso_token: str | None = None, error: str | None = None) -> str:
+    query: dict[str, str] = {"tenant": tenant}
+    if sso_token:
+        query["sso_token"] = sso_token
+    if error:
+        query["error"] = error
+    encoded = urllib.parse.urlencode(query)
+    return f"{NATIVE_APP_CALLBACK_SCHEME}://auth-callback?{encoded}"
+
+
 def _issue_hosted_gmail_handoff_token(*, email: str, instance: str) -> str:
     return _encode_jwt(
         {
@@ -494,7 +518,6 @@ def google_login(return_to: str | None = None):
         "response_type": "code",
         "scope": "openid email profile",
         "access_type": "online",
-        "prompt": "select_account",
     }
     if safe_return_to:
         params_dict["state"] = _issue_login_return_state(return_to=safe_return_to)
@@ -563,6 +586,36 @@ def google_callback(
     response = RedirectResponse(target, status_code=302)
     _set_session(response, session_token)
     return response
+
+
+@router.get("/native/open-instance")
+def native_open_instance(request: Request, tenant: str | None = None, db: Session = Depends(get_db)):
+    """Start hosted iOS auth and return to the app with a tenant SSO token."""
+    normalized_tenant = (tenant or "").strip().lower()
+    if not normalized_tenant:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tenant parameter required")
+
+    user = get_current_user_or_none(request, db)
+    if not user:
+        current_path = request.url.path
+        if request.url.query:
+            current_path = f"{current_path}?{request.url.query}"
+        return RedirectResponse(_append_return_to("/", current_path), status_code=302)
+
+    instance = (
+        db.query(Instance).filter(Instance.user_id == user.id, Instance.subdomain == normalized_tenant).first()
+    )
+    if not instance:
+        return RedirectResponse(
+            _native_app_callback_url(tenant=normalized_tenant, error="instance_not_found"),
+            status_code=302,
+        )
+
+    sso_token = _issue_instance_sso_token(user=user, instance=instance)
+    return RedirectResponse(
+        _native_app_callback_url(tenant=normalized_tenant, sso_token=sso_token),
+        status_code=302,
+    )
 
 
 @router.get("/google/gmail/start")

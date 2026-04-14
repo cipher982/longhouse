@@ -28,7 +28,14 @@ struct SessionsWidgetView: View {
 
             Spacer()
 
-            if entry.sessions.isEmpty && !entry.isPlaceholder {
+            if !entry.isSignedIn && !entry.isPlaceholder {
+                Image(systemName: "person.crop.circle.badge.questionmark")
+                    .font(.system(size: 24))
+                    .foregroundStyle(.secondary)
+                Text("Sign in to get started")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            } else if entry.sessions.isEmpty && !entry.isPlaceholder {
                 Text("All clear")
                     .font(.system(size: 20, weight: .semibold))
                 Text("No sessions need attention")
@@ -69,7 +76,24 @@ struct SessionsWidgetView: View {
             }
             .padding(.bottom, 8)
 
-            if entry.sessions.isEmpty && !entry.isPlaceholder {
+            if !entry.isSignedIn && !entry.isPlaceholder {
+                Spacer()
+                HStack {
+                    Spacer()
+                    VStack(spacing: 4) {
+                        Image(systemName: "person.crop.circle.badge.questionmark")
+                            .font(.system(size: 24))
+                            .foregroundStyle(.secondary)
+                        Text("Not signed in")
+                            .font(.system(size: 13, weight: .medium))
+                        Text("Open Longhouse to sign in")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                Spacer()
+            } else if entry.sessions.isEmpty && !entry.isPlaceholder {
                 Spacer()
                 HStack {
                     Spacer()
