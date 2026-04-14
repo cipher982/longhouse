@@ -14,9 +14,9 @@ struct BrowserSession {
 enum BrowserSessionStore {
     // The iOS shell wraps the web app, so the browser cookie jar is the
     // durable auth boundary. Native login only bootstraps that session.
-    private static let sessionCookieName = "longhouse_session"
-    private static let refreshCookieName = "longhouse_refresh"
-    private static let managedCookieNames: Set<String> = [sessionCookieName, refreshCookieName]
+    private static let sessionCookieName = SharedAuthStore.sessionCookieName
+    private static let refreshCookieName = SharedAuthStore.refreshCookieName
+    private static let managedCookieNames = SharedAuthStore.managedCookieNames
 
     static func webKitSession(for serverURL: String) async -> BrowserSession {
         let cookies = await webKitCookies(for: serverURL)
@@ -27,7 +27,7 @@ enum BrowserSessionStore {
     }
 
     static func syncSharedCookiesToWebKit(for serverURL: String) async {
-        await setWebKitCookies(sharedCookies(for: serverURL))
+        await setWebKitCookies(mergedSharedCookies(for: serverURL))
     }
 
     static func syncWebKitCookiesToShared(for serverURL: String) async {
@@ -36,9 +36,11 @@ enum BrowserSessionStore {
         for cookie in cookies {
             sharedStore.setCookie(cookie)
         }
+        SharedAuthStore.setManagedCookies(cookies, for: serverURL)
     }
 
     static func persistAccessTokenFromWebKit(for serverURL: String) async {
+        await syncWebKitCookiesToShared(for: serverURL)
         let session = await webKitSession(for: serverURL)
         if let sessionCookie = session.sessionCookie {
             KeychainHelper.saveAuthToken("\(sessionCookie.name)=\(sessionCookie.value)")
@@ -55,6 +57,15 @@ enum BrowserSessionStore {
         for cookie in sharedCookies(for: serverURL) {
             sharedStore.deleteCookie(cookie)
         }
+        SharedAuthStore.clearManagedCookies(for: serverURL)
+    }
+
+    private static func mergedSharedCookies(for serverURL: String) -> [HTTPCookie] {
+        var cookiesByID: [String: HTTPCookie] = [:]
+        for cookie in sharedCookies(for: serverURL) + SharedAuthStore.managedCookies(for: serverURL) {
+            cookiesByID[cookieIdentity(cookie)] = cookie
+        }
+        return Array(cookiesByID.values)
     }
 
     private static func sharedCookies(for serverURL: String) -> [HTTPCookie] {
@@ -105,6 +116,10 @@ enum BrowserSessionStore {
 
     private static func normalizedHost(for serverURL: String) -> String? {
         URL(string: serverURL)?.host?.trimmingCharacters(in: CharacterSet(charactersIn: ".")).lowercased()
+    }
+
+    private static func cookieIdentity(_ cookie: HTTPCookie) -> String {
+        "\(cookie.name)|\(cookie.domain)|\(cookie.path)"
     }
 
     private static func domainMatches(_ rawDomain: String, host: String) -> Bool {

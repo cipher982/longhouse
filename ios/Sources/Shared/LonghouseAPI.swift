@@ -8,13 +8,12 @@ struct LonghouseAPI: Sendable {
     }
 
     init(host: String) {
-        self.baseURL = URL(string: host)!
+        self.init(baseURL: URL(string: host)!)
     }
 
-    func sessionsNeedingAttention(authToken: String) async throws -> [SessionSummary] {
+    func sessionsNeedingAttention() async throws -> [SessionSummary] {
         var request = URLRequest(url: baseURL.appendingPathComponent("/api/timeline/sessions"))
         request.addValue("application/json", forHTTPHeaderField: "Accept")
-        request.addValue(authToken, forHTTPHeaderField: "Cookie")
 
         var components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!
         components.queryItems = [
@@ -23,9 +22,9 @@ struct LonghouseAPI: Sendable {
         ]
         request.url = components.url
 
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw LonghouseAPIError.requestFailed
+        let (data, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
 
         let decoded = try JSONDecoder.snakeCase.decode(SessionsResponse.self, from: data)
@@ -43,36 +42,57 @@ struct LonghouseAPI: Sendable {
         }
     }
 
-    func continueSession(_ sessionId: String, message: String, authToken: String) async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/api/sessions/\(sessionId)/chat/send"))
+    func refreshSession() async throws {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/api/auth/refresh"))
         request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.addValue(authToken, forHTTPHeaderField: "Cookie")
-        request.httpBody = try JSONEncoder().encode(["message": message])
 
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-            throw LonghouseAPIError.requestFailed
+        let (_, httpResponse) = try await data(for: request)
+        guard httpResponse.statusCode == 200 else {
+            throw LonghouseAPIError.from(statusCode: httpResponse.statusCode)
         }
     }
 
-    func snoozeSession(_ sessionId: String, authToken: String) async throws {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/api/agents/sessions/\(sessionId)/action"))
-        request.httpMethod = "POST"
-        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.addValue(authToken, forHTTPHeaderField: "Cookie")
-        request.httpBody = try JSONEncoder().encode(["action": "snooze"])
+    private func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        var request = request
+        if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
+            request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        }
 
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
             throw LonghouseAPIError.requestFailed
         }
+        persistResponseCookies(from: httpResponse, requestURL: request.url)
+        return (data, httpResponse)
+    }
+
+    private func persistResponseCookies(from response: HTTPURLResponse, requestURL: URL?) {
+        guard let requestURL else {
+            return
+        }
+
+        let headerFields = response.allHeaderFields.reduce(into: [String: String]()) { result, entry in
+            guard let key = entry.key as? String else {
+                return
+            }
+            result[key] = String(describing: entry.value)
+        }
+
+        let cookies = HTTPCookie.cookies(withResponseHeaderFields: headerFields, for: requestURL)
+        guard !cookies.isEmpty else {
+            return
+        }
+        SharedAuthStore.setManagedCookies(cookies, for: baseURL.absoluteString)
     }
 }
 
 enum LonghouseAPIError: Error {
     case requestFailed
     case notAuthenticated
+
+    static func from(statusCode: Int) -> LonghouseAPIError {
+        statusCode == 401 ? .notAuthenticated : .requestFailed
+    }
 }
 
 extension JSONDecoder {

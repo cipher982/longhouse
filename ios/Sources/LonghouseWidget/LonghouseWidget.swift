@@ -7,6 +7,8 @@ struct SessionEntry: TimelineEntry {
     let totalActive: Int
     let isPlaceholder: Bool
     let isSignedIn: Bool
+    let statusTitle: String?
+    let statusMessage: String?
 
     static let placeholder = SessionEntry(
         date: .now,
@@ -16,11 +18,32 @@ struct SessionEntry: TimelineEntry {
         ],
         totalActive: 2,
         isPlaceholder: true,
-        isSignedIn: true
+        isSignedIn: true,
+        statusTitle: nil,
+        statusMessage: nil
     )
 
-    static let empty = SessionEntry(date: .now, sessions: [], totalActive: 0, isPlaceholder: false, isSignedIn: true)
-    static let notSignedIn = SessionEntry(date: .now, sessions: [], totalActive: 0, isPlaceholder: false, isSignedIn: false)
+    static let empty = SessionEntry(
+        date: .now,
+        sessions: [],
+        totalActive: 0,
+        isPlaceholder: false,
+        isSignedIn: true,
+        statusTitle: nil,
+        statusMessage: nil
+    )
+
+    static func unavailable(title: String, message: String) -> SessionEntry {
+        SessionEntry(
+            date: .now,
+            sessions: [],
+            totalActive: 0,
+            isPlaceholder: false,
+            isSignedIn: false,
+            statusTitle: title,
+            statusMessage: message
+        )
+    }
 }
 
 struct SessionProvider: TimelineProvider {
@@ -48,18 +71,24 @@ struct SessionProvider: TimelineProvider {
     }
 
     private func fetchSessions() async -> SessionEntry {
-        guard let serverURL = KeychainHelper.loadServerURL(),
-              let authToken = KeychainHelper.loadAuthToken() else {
-            return .notSignedIn
+        let result = await WidgetSessionLoader.load()
+        if result.isSignedIn {
+            return SessionEntry(
+                date: .now,
+                sessions: result.sessions,
+                totalActive: result.totalActive,
+                isPlaceholder: false,
+                isSignedIn: true,
+                statusTitle: nil,
+                statusMessage: nil
+            )
         }
 
-        let api = LonghouseAPI(host: serverURL)
-        do {
-            let sessions = try await api.sessionsNeedingAttention(authToken: authToken)
-            return SessionEntry(date: .now, sessions: Array(sessions.prefix(3)), totalActive: sessions.count, isPlaceholder: false, isSignedIn: true)
-        } catch {
-            return .notSignedIn
+        if let title = result.statusTitle, let message = result.statusMessage {
+            return .unavailable(title: title, message: message)
         }
+
+        return .empty
     }
 }
 

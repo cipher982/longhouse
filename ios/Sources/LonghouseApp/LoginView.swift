@@ -8,6 +8,14 @@ private struct AuthMethods: Decodable {
     let sso: Bool
     let ssoURL: String?
     let ssoLoginURL: String?
+
+    private enum CodingKeys: String, CodingKey {
+        case google
+        case password
+        case sso
+        case ssoURL = "sso_url"
+        case ssoLoginURL = "sso_login_url"
+    }
 }
 
 @MainActor
@@ -30,6 +38,9 @@ struct LoginView: View {
     @State private var isSigningIn = false
     @State private var localErrorMessage: String?
     @State private var password = ""
+    private var hasConfiguredServer: Bool {
+        !appState.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         ZStack {
@@ -56,7 +67,9 @@ struct LoginView: View {
                 Spacer()
 
                 VStack(spacing: 16) {
-                    if isLoadingAuthMethods && authMethods == nil {
+                    if !hasConfiguredServer {
+                        hostedBootstrapControls
+                    } else if isLoadingAuthMethods && authMethods == nil {
                         ProgressView()
                             .tint(.white)
                             .scaleEffect(1.2)
@@ -187,11 +200,48 @@ struct LoginView: View {
         }
     }
 
+    @ViewBuilder
+    private var hostedBootstrapControls: some View {
+        Button(action: startHostedBootstrapSignIn) {
+            HStack(spacing: 10) {
+                Image(systemName: "arrow.up.forward.square.fill")
+                    .font(.system(size: 18))
+                Text("Continue with Longhouse")
+                    .font(.system(size: 16, weight: .medium))
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(.white.opacity(0.08))
+            .foregroundStyle(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+            )
+        }
+
+        Text("Hosted Longhouse accounts sign in through the control plane. Custom or self-hosted servers can still be set from the server icon.")
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.45))
+            .multilineTextAlignment(.center)
+    }
+
     private var displayedErrorMessage: String? {
         localErrorMessage ?? appState.authError
     }
 
     private func loadAuthMethods() async {
+        guard hasConfiguredServer else {
+            await MainActor.run {
+                isLoadingAuthMethods = false
+                authMethods = nil
+                localErrorMessage = nil
+                password = ""
+                appState.clearAuthError()
+            }
+            return
+        }
+
         guard let url = URL(string: "\(appState.serverURL)/api/auth/methods") else {
             await MainActor.run {
                 isLoadingAuthMethods = false
@@ -221,9 +271,7 @@ struct LoginView: View {
                 return
             }
 
-            let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
-            let methods = try decoder.decode(AuthMethods.self, from: data)
+            let methods = try JSONDecoder().decode(AuthMethods.self, from: data)
 
             await MainActor.run {
                 authMethods = methods
@@ -299,6 +347,52 @@ struct LoginView: View {
         }
     }
 
+    private func startHostedBootstrapSignIn() {
+        guard let authURL = URL(string: "\(LonghouseAuthConfig.hostedControlPlaneURL)/auth/native/open-instance") else {
+            localErrorMessage = "Hosted sign-in is not configured"
+            return
+        }
+
+        appState.clearAuthError()
+        localErrorMessage = nil
+        isSigningIn = true
+
+        let session = ASWebAuthenticationSession(
+            url: authURL,
+            callbackURLScheme: LonghouseAuthConfig.hostedCallbackScheme
+        ) { callbackURL, error in
+            Task { @MainActor in
+                hostedAuthSession = nil
+                defer { isSigningIn = false }
+
+                if let error {
+                    if (error as NSError).code == ASWebAuthenticationSessionError.canceledLogin.rawValue {
+                        return
+                    }
+                    localErrorMessage = error.localizedDescription
+                    return
+                }
+
+                guard let callbackURL else {
+                    localErrorMessage = "Hosted sign-in did not return to the app"
+                    return
+                }
+
+                await handleHostedAuthCallback(callbackURL)
+            }
+        }
+
+        session.presentationContextProvider = authPresentationContext
+        session.prefersEphemeralWebBrowserSession = false
+        hostedAuthSession = session
+
+        if !session.start() {
+            hostedAuthSession = nil
+            isSigningIn = false
+            localErrorMessage = "Failed to start hosted sign-in"
+        }
+    }
+
     private func handleHostedAuthCallback(_ callbackURL: URL) async {
         guard let components = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
             localErrorMessage = "Hosted sign-in returned an invalid callback"
@@ -314,6 +408,11 @@ struct LoginView: View {
         guard let ssoToken = queryItems.first(where: { $0.name == "sso_token" })?.value else {
             localErrorMessage = "Hosted sign-in returned without a session token"
             return
+        }
+
+        if let instanceURL = queryItems.first(where: { $0.name == "instance_url" })?.value,
+           !instanceURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            await appState.prepareServerForHostedLogin(instanceURL)
         }
 
         let sessionEstablished = await appState.exchangeHostedSSOToken(ssoToken)

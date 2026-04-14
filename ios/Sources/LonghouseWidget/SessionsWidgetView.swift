@@ -32,9 +32,10 @@ struct SessionsWidgetView: View {
                 Image(systemName: "person.crop.circle.badge.questionmark")
                     .font(.system(size: 24))
                     .foregroundStyle(.secondary)
-                Text("Sign in to get started")
+                Text(entry.statusTitle ?? "Sign in to get started")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
             } else if entry.sessions.isEmpty && !entry.isPlaceholder {
                 Text("All clear")
                     .font(.system(size: 20, weight: .semibold))
@@ -84,11 +85,12 @@ struct SessionsWidgetView: View {
                         Image(systemName: "person.crop.circle.badge.questionmark")
                             .font(.system(size: 24))
                             .foregroundStyle(.secondary)
-                        Text("Not signed in")
+                        Text(entry.statusTitle ?? "Not signed in")
                             .font(.system(size: 13, weight: .medium))
-                        Text("Open Longhouse to sign in")
+                        Text(entry.statusMessage ?? "Open Longhouse to sign in")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                     Spacer()
                 }
