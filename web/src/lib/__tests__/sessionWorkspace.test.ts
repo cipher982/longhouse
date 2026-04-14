@@ -172,10 +172,12 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Unmanaged");
-    expect(capabilities.capabilityDescription).toMatch(/cannot steer it from the browser/i);
+    expect(capabilities.capabilityDescription).toMatch(/cannot steer the live session/i);
+    expect(capabilities.capabilityDescription).toMatch(/longhouse claude/i);
     expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
     expect(capabilities.notice?.title).toBe("Claude session — unmanaged");
+    expect(capabilities.managementDescription).toMatch(/longhouse claude/i);
   });
 
   it("treats unsupported providers as searchable context only", () => {
@@ -190,7 +192,8 @@ describe("getSessionInteractionCapabilities", () => {
     expect(capabilities.canChatFromBrowser).toBe(false);
     expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.capabilityLabel).toBe("Search only");
-    expect(capabilities.composerDisabledReason).toMatch(/cannot steer it from the browser/i);
+    expect(capabilities.composerDisabledReason).toMatch(/cannot steer the live session/i);
+    expect(capabilities.composerDisabledReason).toMatch(/Launch new Gemini sessions through Longhouse/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 });

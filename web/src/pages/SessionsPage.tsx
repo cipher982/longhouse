@@ -525,6 +525,8 @@ function SessionCard({
   const detailSession = thread.detail;
   const session = compatibilityMode ? detailSession : thread.head;
   const interaction = getSessionInteractionCapabilities({ session });
+  const cardCapabilityLabel =
+    interaction.mode === "managed_local_unavailable" ? "Reattach" : null;
   const turnCount = session.user_messages;
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
@@ -675,13 +677,20 @@ function SessionCard({
             <span
               className={`session-card-management-pill session-card-management-pill--${interaction.managementVariant}`}
               data-testid="session-card-management"
+              title={interaction.managementDescription}
             >
               {interaction.managementLabel}
             </span>
           ) : null}
-          <span className={`session-card-capability-pill session-card-capability-pill--${interaction.capabilityVariant}`} data-testid="session-card-capability">
-            {interaction.capabilityLabel}
-          </span>
+          {cardCapabilityLabel ? (
+            <span
+              className={`session-card-capability-pill session-card-capability-pill--${interaction.capabilityVariant}`}
+              data-testid="session-card-capability"
+              title={interaction.capabilityDescription ?? undefined}
+            >
+              {cardCapabilityLabel}
+            </span>
+          ) : null}
         </div>
 
         <div className="session-card-body">

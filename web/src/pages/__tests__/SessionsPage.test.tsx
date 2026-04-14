@@ -438,15 +438,52 @@ describe("SessionsPage", () => {
     expect(prefetchSpy).not.toHaveBeenCalled();
   });
 
-  it("shows the capability badge on session cards", async () => {
+  it("shows the unmanaged badge as the exception state on session cards", async () => {
+    renderSessionsPage("/timeline");
+
+    const management = await screen.findByTestId("session-card-management");
+    expect(management).toHaveTextContent("Unmanaged");
+    expect(management).toHaveAttribute(
+      "title",
+      "Longhouse imported this Codex session. Restart it with longhouse codex when you want Longhouse to keep it managed and steerable.",
+    );
+    expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
+  });
+
+  it("shows a compact reattach badge when a managed session needs the host terminal", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            provider: "codex",
+            control: {
+              managed_transport: "codex_app_server",
+              source_runner_id: null,
+              source_runner_name: null,
+              attach_command: "longhouse codex --attach",
+            },
+            capabilities: makeCapabilities({
+              host_reattach_available: true,
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
     renderSessionsPage("/timeline");
 
     const capability = await screen.findByTestId("session-card-capability");
-    const management = screen.getByTestId("session-card-management");
-    expect(management).toHaveTextContent("Unmanaged");
-    expect(capability).toHaveTextContent("Search only");
-    // Cards show badge only — no prose summary
-    expect(capability.querySelector(".session-card-capability-text")).toBeNull();
+    expect(capability).toHaveTextContent("Reattach");
+    expect(capability).toHaveAttribute(
+      "title",
+      "This live Codex session is visible here, but you need the host terminal to keep driving it.",
+    );
+    expect(screen.queryByTestId("session-card-management")).not.toBeInTheDocument();
   });
 
   it("keeps the timeline card action semantically honest", async () => {
@@ -928,9 +965,9 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findAllByText("Live control")).toHaveLength(1);
     expect(screen.getAllByTestId("session-card-management")).toHaveLength(1);
     expect(screen.getByTestId("session-card-management")).toHaveTextContent("Unmanaged");
+    expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
     expect(screen.getByText("This machine")).toBeInTheDocument();
     expect(screen.getByText("Cloud")).toBeInTheDocument();
     expect(screen.getByText("Head: cinder")).toBeInTheDocument();

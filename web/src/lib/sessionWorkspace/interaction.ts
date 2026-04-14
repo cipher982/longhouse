@@ -3,6 +3,16 @@ import { getProviderLabel } from "../providers";
 import type { SessionInteractionCapabilities, SessionInteractionMode } from "./types";
 import { getSessionOriginLabel } from "./formatters";
 
+function getManagedLaunchHint(provider: string, providerLabel: string): string {
+  if (provider === "claude") {
+    return "Restart it with longhouse claude when you want Longhouse to keep it managed and steerable.";
+  }
+  if (provider === "codex") {
+    return "Restart it with longhouse codex when you want Longhouse to keep it managed and steerable.";
+  }
+  return `Launch new ${providerLabel} sessions through Longhouse when you want live control.`;
+}
+
 export function getSessionInteractionCapabilities({
   session,
   isViewingHead = true,
@@ -24,6 +34,7 @@ export function getSessionInteractionCapabilities({
   const isManagedLocalCodex = session.provider === "codex" && isManagedLocalSession;
   const sourceOriginLabel = getSessionOriginLabel(session);
   const headOriginLabel = headThreadSession ? getSessionOriginLabel(headThreadSession) : null;
+  const managedLaunchHint = getManagedLaunchHint(session.provider, providerLabel);
 
   const mode: SessionInteractionMode = liveControlAvailable
     ? "managed_local"
@@ -37,7 +48,7 @@ export function getSessionInteractionCapabilities({
     ? liveControlAvailable
       ? "Longhouse owns the live control path for this session."
       : "Longhouse owns this session, but live control currently requires reattaching on the host."
-    : `Longhouse imported this ${providerLabel} session, but it does not own the live control path. Launch through Longhouse when you need a managed session.`;
+    : `Longhouse imported this ${providerLabel} session. ${managedLaunchHint}`;
 
   const submitLabel =
     mode === "managed_local"
@@ -63,7 +74,7 @@ export function getSessionInteractionCapabilities({
       ? `Message this live ${providerLabel} session from Longhouse, or reattach on the host machine.`
       : mode === "managed_local_unavailable"
         ? `This live ${providerLabel} session is visible here, but you need the host terminal to keep driving it.`
-        : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot steer it from the browser.`;
+        : `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer the live session. ${managedLaunchHint}`;
 
   const title =
     mode === "managed_local"
@@ -77,7 +88,7 @@ export function getSessionInteractionCapabilities({
       ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
       : mode === "managed_local_unavailable"
         ? `This managed live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts right now. Reattach on the host machine to continue.`
-        : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot inject prompts into it.`;
+        : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot inject prompts into it. ${managedLaunchHint}`;
 
   const placeholder =
     mode === "managed_local"
@@ -95,7 +106,7 @@ export function getSessionInteractionCapabilities({
       : mode === "unsupported"
         ? {
             title: `${providerLabel} session — unmanaged`,
-            body: `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot steer it from the browser.`,
+            body: `Longhouse can search this unmanaged ${providerLabel} session here, but it cannot steer the live session. ${managedLaunchHint}`,
           }
         : null;
 
