@@ -259,6 +259,7 @@ function WelcomeHeader() {
       id="mobile-nav-drawer"
       className={clsx("mobile-nav-drawer", { open: mobileNavOpen })}
       aria-label="Mobile navigation"
+      aria-hidden={!mobileNavOpen}
     >
       <div className="mobile-nav-header">
         <div className="mobile-nav-brand">
