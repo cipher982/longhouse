@@ -53,11 +53,10 @@ stop: ## Stop dev services
 test: ## Backend unit tests (tests_lite/, ~10s)
 	@cd server && ./run_backend_tests_lite.sh
 
-test-ios: ## iOS unit tests (simulator)
+test-ios: ## iOS unit + smoke tests (simulator)
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
-	xcodebuild -project ios/XcodeHarness/LonghouseIOS.xcodeproj -scheme Longhouse -destination "$$DESTINATION" test && \
-	xcodebuild -project ios/XcodeHarness/LonghouseIOS.xcodeproj -scheme LonghouseSmoke -destination "$$DESTINATION" test
+	./scripts/ci/run_ios_tests.sh "$$DESTINATION"
 
 test-frontend: ## Frontend unit tests + type-check (~15s)
 	@cd web && bun run validate:types && bun run test -- --run
