@@ -110,8 +110,8 @@ jobs:
           head_branch: ${{ steps.meta.outputs.head_branch }}
           github_token: ${{ github.token }}
           workflow_id: runtime-image.yml
-          event: workflow_run
-          timeout_seconds: "3600"
+          event: push
+          timeout_seconds: "1200"
 
   deploy-and-verify:
     name: "Deploy demo + canary + hosted live QA"
@@ -163,8 +163,8 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y make
+      - name: Verify make available
+        run: command -v make
 
       - name: Install JS deps
         run: bun install --frozen-lockfile

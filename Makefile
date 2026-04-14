@@ -56,8 +56,8 @@ test-frontend: ## Frontend unit tests + type-check (~15s)
 	@cd web && bun run validate:types && bun run test -- --run
 
 test-engine: ## Rust engine tests (~20s)
-	cd engine && cargo build --release
-	cd engine && cargo test --bin longhouse-engine --test golden_parser_contract --test adversarial_parser
+	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
+	cd engine && cargo test --profile $(or $(CARGO_PROFILE),release) --bin longhouse-engine --test golden_parser_contract --test adversarial_parser
 
 test-runner: ## Runner unit tests (~5s)
 	@cd runner && bun test
@@ -97,7 +97,7 @@ test-e2e-onboarding: ## @internal Onboarding browser ring
 	@ONBOARDING_PLAYWRIGHT_PROJECT="$(PROJECT)" ./scripts/qa/qa-oss.sh --workdir $(CURDIR) --no-unit --no-e2e
 
 test-shipper-e2e: ## Shipper pipeline E2E (engine → API → DB)
-	cd engine && cargo build --release
+	cd engine && cargo build --profile $(or $(CARGO_PROFILE),release)
 	cd server && uv run --extra dev pytest tests/integration/test_shipper_e2e.py -m integration -v
 
 test-shipper-premerge: ## Engine + shipper E2E (run before merging engine changes)
