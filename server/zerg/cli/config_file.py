@@ -37,6 +37,7 @@ class ServerConfig:
 
     host: str = "127.0.0.1"
     port: int = 8080
+    public_url: str | None = None
 
 
 @dataclass
@@ -93,6 +94,9 @@ def load_config(config_path: Path | None = None) -> LonghouseConfig:
                 if "port" in server_data:
                     config.server.port = int(server_data["port"])
                     sources["server.port"] = "file"
+                if "public_url" in server_data:
+                    config.server.public_url = server_data["public_url"]
+                    sources["server.public_url"] = "file"
 
             # Load shipper config
             if "shipper" in data:
@@ -114,6 +118,9 @@ def load_config(config_path: Path | None = None) -> LonghouseConfig:
             logging.getLogger(__name__).warning(f"Failed to load config file: {e}")
 
     # Override with environment variables
+    if os.getenv("LONGHOUSE_PUBLIC_URL"):
+        config.server.public_url = os.environ["LONGHOUSE_PUBLIC_URL"]
+        sources["server.public_url"] = "env"
     if os.getenv("LONGHOUSE_HOST"):
         config.server.host = os.environ["LONGHOUSE_HOST"]
         sources["server.host"] = "env"
@@ -124,9 +131,7 @@ def load_config(config_path: Path | None = None) -> LonghouseConfig:
         except ValueError:
             import logging
 
-            logging.getLogger(__name__).warning(
-                f"Invalid LONGHOUSE_PORT value: {os.environ['LONGHOUSE_PORT']!r}, ignoring"
-            )
+            logging.getLogger(__name__).warning(f"Invalid LONGHOUSE_PORT value: {os.environ['LONGHOUSE_PORT']!r}, ignoring")
     if os.getenv("LONGHOUSE_API_URL"):
         config.shipper.api_url = os.environ["LONGHOUSE_API_URL"]
         sources["shipper.api_url"] = "env"
@@ -137,9 +142,7 @@ def load_config(config_path: Path | None = None) -> LonghouseConfig:
         except ValueError:
             import logging
 
-            logging.getLogger(__name__).warning(
-                f"Invalid LONGHOUSE_FLUSH_MS value: {os.environ['LONGHOUSE_FLUSH_MS']!r}, ignoring"
-            )
+            logging.getLogger(__name__).warning(f"Invalid LONGHOUSE_FLUSH_MS value: {os.environ['LONGHOUSE_FLUSH_MS']!r}, ignoring")
 
     config._sources = sources
     return config
@@ -164,6 +167,8 @@ def save_config(config: dict[str, Any], config_path: Path | None = None) -> None
     if "server" in config:
         lines.append("[server]")
         for key, value in config["server"].items():
+            if value is None:
+                continue
             if isinstance(value, str):
                 lines.append(f'{key} = "{value}"')
             else:
@@ -200,6 +205,7 @@ def get_effective_config_display(config: LonghouseConfig) -> list[tuple[str, str
     entries = [
         ("server.host", config.server.host, config._sources.get("server.host", "default")),
         ("server.port", str(config.server.port), config._sources.get("server.port", "default")),
+        ("server.public_url", config.server.public_url or "(not set)", config._sources.get("server.public_url", "default")),
         ("shipper.api_url", config.shipper.api_url, config._sources.get("shipper.api_url", "default")),
         ("shipper.flush_ms", str(config.shipper.flush_ms), config._sources.get("shipper.flush_ms", "default")),
         (

@@ -10,9 +10,11 @@ Commands:
 from __future__ import annotations
 
 import base64
+import ipaddress
 import os
 import secrets
 import signal
+import socket
 import sys
 import time
 from pathlib import Path
@@ -22,6 +24,25 @@ from urllib.parse import urlparse
 import typer
 
 app = typer.Typer(help="Longhouse server commands")
+
+
+def _get_lan_ip() -> str | None:
+    """Return the LAN IP the OS would use for outbound traffic.
+
+    Uses a UDP connect (no packets sent) to query the routing table.
+    Returns None if the machine is offline or only has loopback.
+    """
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        ip_obj = ipaddress.ip_address(ip)
+        if ip_obj.is_loopback or ip_obj.is_link_local:
+            return None
+        return ip
+    except OSError:
+        return None
 
 
 def _get_longhouse_home() -> Path:
@@ -289,6 +310,11 @@ def serve(
         "--demo-fresh",
         help="Rebuild demo database with sample data (implies --demo)",
     ),
+    domain: Optional[str] = typer.Option(
+        None,
+        "--domain",
+        help="Public domain (e.g. longhouse.example.com). Stored in config, shown at startup.",
+    ),
 ) -> None:
     """Start the Longhouse server.
 
@@ -296,14 +322,15 @@ def serve(
     configure a Postgres DATABASE_URL in your environment.
 
     Examples:
-        longhouse serve                           # SQLite on localhost:8080
-        longhouse serve --demo                    # Start with sample data
-        longhouse serve --demo-fresh              # Rebuild demo data on start
-        longhouse serve --daemon                  # Run in background
-        longhouse serve --stop                    # Stop background server
-        longhouse serve --host 0.0.0.0 --port 80  # Bind to all interfaces
-        longhouse serve --db postgresql://...     # Use Postgres
-        longhouse serve --reload                  # Dev mode with auto-reload
+        longhouse serve                                     # SQLite on localhost:8080
+        longhouse serve --demo                              # Start with sample data
+        longhouse serve --demo-fresh                        # Rebuild demo data on start
+        longhouse serve --daemon                            # Run in background
+        longhouse serve --stop                              # Stop background server
+        longhouse serve --host 0.0.0.0 --port 80            # Bind to all interfaces
+        longhouse serve --host 0.0.0.0 --domain my.host.com # LAN + public domain
+        longhouse serve --db postgresql://...               # Use Postgres
+        longhouse serve --reload                            # Dev mode with auto-reload
     """
     import uvicorn
 
@@ -426,6 +453,33 @@ def serve(
     local_url = f"http://127.0.0.1:{port}"
     save_zerg_url(local_url)
 
+    # Persist public domain to config if provided, then load from config as fallback.
+    from zerg.cli.config_file import load_config
+    from zerg.cli.config_file import save_config
+
+    file_cfg = load_config()
+    if domain:
+        public_url = f"https://{domain}"
+        save_config(
+            {
+                "server": {
+                    "host": host,
+                    "port": port,
+                    "public_url": public_url,
+                },
+                "shipper": {
+                    "api_url": file_cfg.shipper.api_url,
+                    "flush_ms": file_cfg.shipper.flush_ms,
+                    "fallback_scan_secs": file_cfg.shipper.fallback_scan_secs,
+                },
+            }
+        )
+    else:
+        public_url = file_cfg.server.public_url
+
+    is_public_interface = host in ("0.0.0.0", "::", "")
+    lan_ip = _get_lan_ip() if is_public_interface else None
+
     # Check for bundled frontend
     from zerg.main import FRONTEND_DIST_DIR
     from zerg.main import FRONTEND_SOURCE
@@ -443,8 +497,6 @@ def serve(
         typer.echo("")
 
     typer.echo("Starting Longhouse server...")
-    typer.echo(f"  Host: {host}")
-    typer.echo(f"  Port: {port}")
     typer.echo(f"  Database: {_mask_db_url(db_url)}")
     typer.echo(f"  Mode: {'lite (SQLite)' if is_sqlite else 'full (Postgres)'}")
     typer.echo(f"  Frontend: {frontend_source}")
@@ -454,8 +506,20 @@ def serve(
         typer.echo("  Reload: enabled")
     typer.echo("")
 
-    if has_frontend:
-        typer.secho(f"  UI available at: http://{host}:{port}/", fg=typer.colors.GREEN)
+    typer.secho(f"  Local:    http://127.0.0.1:{port}/", fg=typer.colors.GREEN)
+    if lan_ip:
+        typer.secho(f"  LAN:      http://{lan_ip}:{port}/", fg=typer.colors.GREEN)
+    if public_url:
+        typer.secho(f"  Public:   {public_url}/", fg=typer.colors.CYAN)
+    typer.echo("")
+
+    if is_public_interface and lan_ip:
+        typer.echo("  To connect from another machine:")
+        typer.secho(f"    longhouse connect --url http://{lan_ip}:{port}", fg=typer.colors.BRIGHT_BLACK)
+    if public_url:
+        typer.echo("  To connect from any machine (via your domain):")
+        typer.secho(f"    longhouse connect --url {public_url}", fg=typer.colors.BRIGHT_BLACK)
+    if is_public_interface or public_url:
         typer.echo("")
 
     # Daemonize if requested (Unix only)

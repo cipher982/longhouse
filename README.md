@@ -193,6 +193,56 @@ cd longhouse && make dev
 - Local database: `~/.longhouse/longhouse.db`
 - Local quickstart auth: disabled by default on localhost
 
+### Multi-machine / self-hosted on a VPS or homelab
+
+Run the server on an always-on machine (VPS, home server, Mac mini) and connect your dev machines to it.
+
+**On the server:**
+
+```bash
+# Bind to all interfaces so other machines can reach it
+longhouse serve --host 0.0.0.0
+
+# With a domain name (stored in ~/.longhouse/config.toml for future starts)
+longhouse serve --host 0.0.0.0 --domain longhouse.example.com
+```
+
+On startup, Longhouse prints every URL it can be reached at:
+
+```
+  Local:    http://127.0.0.1:8080/
+  LAN:      http://192.168.1.42:8080/
+  Public:   https://longhouse.example.com/    ← only when --domain is set
+
+  To connect from another machine:
+    longhouse connect --url http://192.168.1.42:8080
+  To connect from any machine (via your domain):
+    longhouse connect --url https://longhouse.example.com
+```
+
+**On each dev machine:**
+
+```bash
+# Point this machine's agent at the server (LAN)
+longhouse connect --url http://192.168.1.42:8080
+
+# Or with your domain
+longhouse connect --domain longhouse.example.com
+
+# Install as a persistent background agent
+longhouse connect --domain longhouse.example.com --install
+```
+
+**Reverse proxy (Caddy — recommended):**
+
+```
+longhouse.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Caddy handles TLS automatically. No extra configuration needed on the Longhouse side.
+
 ### Remote or shared access
 
 Set `LONGHOUSE_PASSWORD` (plaintext) or `LONGHOUSE_PASSWORD_HASH` (recommended) before binding beyond localhost.
