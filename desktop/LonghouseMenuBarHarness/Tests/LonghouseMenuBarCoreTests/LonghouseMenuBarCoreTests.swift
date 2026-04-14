@@ -336,6 +336,16 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func bundledSetupScriptPinsReleaseVersionOrOverride() throws {
+        let scriptURL = try #require(Bundle.module.url(forResource: "desktop-app-setup", withExtension: "sh"))
+        let script = try String(contentsOf: scriptURL, encoding: .utf8)
+
+        #expect(script.contains("LONGHOUSE_PKG_SOURCE"))
+        #expect(script.contains("CFBundleShortVersionString"))
+        #expect(script.contains("longhouse=="))
+    }
+
+    @Test
     func decodesUpdateInfoFromSnakeCaseJSON() throws {
         let data = Data("""
         {
