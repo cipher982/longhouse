@@ -1,7 +1,7 @@
 mod bench;
-mod commands;
 mod codex_app_server_canary;
 mod codex_bridge;
+mod commands;
 mod config;
 mod daemon;
 mod discovery;
@@ -102,7 +102,7 @@ enum Commands {
 
     /// Daemon mode: watch for file changes and ship incrementally
     Connect {
-        /// API URL override (default: from ~/.longhouse/machine/target-url)
+        /// API URL override (default: from ~/.longhouse/machine/state.json)
         #[arg(long)]
         url: Option<String>,
 
@@ -138,14 +138,14 @@ enum Commands {
         #[arg(long)]
         log_dir: Option<PathBuf>,
 
-        /// Human-readable name for this machine (default: from ~/.longhouse/machine/name or hostname)
+        /// Human-readable name for this machine (default: from ~/.longhouse/machine/state.json or hostname)
         #[arg(long)]
         machine_name: Option<String>,
     },
 
     /// One-shot: scan all provider sessions and ship new events
     Ship {
-        /// API URL override (default: from ~/.longhouse/machine/target-url)
+        /// API URL override (default: from ~/.longhouse/machine/state.json)
         #[arg(long)]
         url: Option<String>,
 
@@ -185,7 +185,7 @@ enum Commands {
         #[arg(long)]
         max_batch_bytes: Option<u64>,
 
-        /// Human-readable name for this machine (default: from ~/.longhouse/machine/name or hostname)
+        /// Human-readable name for this machine (default: from ~/.longhouse/machine/state.json or hostname)
         #[arg(long)]
         machine_name: Option<String>,
 
@@ -625,7 +625,7 @@ fn main() -> anyhow::Result<()> {
             if let Some(ref name) = machine_name {
                 pipeline::compressor::set_machine_name(name);
             } else {
-                // Load from config file (reads ~/.longhouse/machine/name)
+                // Load from canonical machine state (reads ~/.longhouse/machine/state.json)
                 let cfg = ShipperConfig::from_env().unwrap_or_default();
                 pipeline::compressor::set_machine_name(&cfg.machine_name);
             }

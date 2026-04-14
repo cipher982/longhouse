@@ -1,11 +1,12 @@
 //! Shipper configuration.
 //!
-//! Reads API URL and token from `~/.longhouse/machine/target-url` and
-//! `~/.longhouse/machine/device-token` (same files as the Python helpers).
+//! Reads canonical machine state from `~/.longhouse/machine/state.json` and the
+//! device token from `~/.longhouse/machine/device-token`.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use serde::Deserialize;
 
 /// Shipper configuration (mirrors Python `ShipperConfig`).
 #[derive(Debug, Clone)]
@@ -19,8 +20,14 @@ pub struct ShipperConfig {
     pub max_retries_429: u32,
     pub base_backoff_seconds: f64,
     /// Human-readable machine label (set by user during `longhouse connect --install`).
-    /// Stored in `~/.longhouse/machine/name`. Defaults to hostname.
+    /// Stored in `~/.longhouse/machine/state.json`. Defaults to hostname.
     pub machine_name: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct MachineStateFile {
+    runtime_url: Option<String>,
+    machine_name: Option<String>,
 }
 
 impl Default for ShipperConfig {
@@ -45,25 +52,13 @@ impl ShipperConfig {
         let machine_dir = get_machine_dir()?;
         let mut config = Self::default();
 
-        // Read machine name from file (set during --install)
-        let machine_name_path = machine_dir.join("name");
-        if machine_name_path.exists() {
-            if let Ok(name) = std::fs::read_to_string(&machine_name_path) {
-                let name = name.trim().to_string();
-                if !name.is_empty() {
-                    config.machine_name = name;
-                }
+        let state_path = machine_dir.join("state.json");
+        if state_path.exists() {
+            let state = load_machine_state(&state_path)?;
+            if let Some(name) = normalized_state_field(state.machine_name) {
+                config.machine_name = name;
             }
-        }
-
-        // Read URL from file
-        let url_path = machine_dir.join("target-url");
-        if url_path.exists() {
-            let url = std::fs::read_to_string(&url_path)
-                .with_context(|| format!("reading {}", url_path.display()))?
-                .trim()
-                .to_string();
-            if !url.is_empty() {
+            if let Some(url) = normalized_state_field(state.runtime_url) {
                 config.api_url = url;
             }
         }
@@ -145,14 +140,15 @@ mod tests {
     fn config_from_dir(dir: &std::path::Path) -> ShipperConfig {
         let mut config = ShipperConfig::default();
         let machine_dir = dir.join("machine");
+        let state_path = machine_dir.join("state.json");
 
-        let machine_name_path = machine_dir.join("name");
-        if machine_name_path.exists() {
-            if let Ok(name) = fs::read_to_string(&machine_name_path) {
-                let name = name.trim().to_string();
-                if !name.is_empty() {
-                    config.machine_name = name;
-                }
+        if state_path.exists() {
+            let state = load_machine_state(&state_path).unwrap();
+            if let Some(name) = normalized_state_field(state.machine_name) {
+                config.machine_name = name;
+            }
+            if let Some(url) = normalized_state_field(state.runtime_url) {
+                config.api_url = url;
             }
         }
         config
@@ -162,7 +158,11 @@ mod tests {
     fn test_machine_name_loaded_from_file() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("machine")).unwrap();
-        fs::write(dir.path().join("machine").join("name"), "work-macbook\n").unwrap();
+        fs::write(
+            dir.path().join("machine").join("state.json"),
+            r#"{"machine_name":"work-macbook"}"#,
+        )
+        .unwrap();
 
         let config = config_from_dir(dir.path());
         assert_eq!(config.machine_name, "work-macbook");
@@ -180,7 +180,11 @@ mod tests {
     fn test_machine_name_empty_file_ignored() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir_all(dir.path().join("machine")).unwrap();
-        fs::write(dir.path().join("machine").join("name"), "   \n").unwrap();
+        fs::write(
+            dir.path().join("machine").join("state.json"),
+            "{\"machine_name\":\"   \"}",
+        )
+        .unwrap();
 
         let config = config_from_dir(dir.path());
         // Empty file → falls back to hostname, not empty string
@@ -232,6 +236,23 @@ mod tests {
     }
 }
 
+fn load_machine_state(path: &Path) -> Result<MachineStateFile> {
+    let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+    serde_json::from_slice::<MachineStateFile>(&bytes)
+        .with_context(|| format!("parsing {}", path.display()))
+}
+
+fn normalized_state_field(value: Option<String>) -> Option<String> {
+    value.and_then(|item| {
+        let normalized = item.trim().to_string();
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    })
+}
+
 /// Resolve the Longhouse-owned machine config directory.
 pub fn get_machine_dir() -> Result<PathBuf> {
     Ok(get_longhouse_home()?.join("machine"))
@@ -270,7 +291,10 @@ pub fn get_longhouse_home() -> Result<PathBuf> {
 }
 
 fn provider_home_to_longhouse_home(path: PathBuf) -> PathBuf {
-    if matches!(path.file_name().and_then(|value| value.to_str()), Some(".longhouse")) {
+    if matches!(
+        path.file_name().and_then(|value| value.to_str()),
+        Some(".longhouse")
+    ) {
         return path;
     }
     path.parent()

@@ -14,21 +14,18 @@ from pathlib import Path
 import httpx
 import typer
 
-from zerg.cli.config_file import get_config_path
-from zerg.cli.config_file import load_config
-from zerg.cli.config_file import save_loaded_config
 from zerg.services.desktop_app import default_install_desktop_app
 from zerg.services.desktop_app import get_desktop_app_service_info
 from zerg.services.desktop_app import uninstall_desktop_app_service
 from zerg.services.local_runtime_installer import install_local_runtime
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.machine_state import clear_machine_runtime_url
+from zerg.services.machine_state import write_machine_state
 from zerg.services.shipper import clear_token
-from zerg.services.shipper import clear_zerg_url
 from zerg.services.shipper import get_service_info
 from zerg.services.shipper import get_zerg_url
 from zerg.services.shipper import load_token
 from zerg.services.shipper import save_token
-from zerg.services.shipper import save_zerg_url
 from zerg.services.shipper import uninstall_service
 from zerg.services.shipper.service import Platform
 from zerg.services.shipper.service import detect_platform
@@ -63,34 +60,17 @@ logging.basicConfig(
 # ---------------------------------------------------------------------------
 
 
-def _persist_selected_url(url: str, config_dir: Path | None) -> None:
-    """Persist an explicit Runtime Host choice for both shipping and UI launch."""
+def _persist_selected_url(url: str, config_dir: Path | None, *, written_by: str) -> None:
+    """Persist an explicit Runtime Host choice to canonical machine state."""
     normalized_url = normalize_zerg_url(url)
     if not normalized_url:
         raise ValueError(f"Invalid Longhouse URL: {url!r}")
 
-    save_zerg_url(normalized_url, config_dir)
-
-    config_path = get_config_path(claude_dir=config_dir)
-    config = load_config(config_path=config_path, claude_dir=config_dir)
-    config.browser.default_url = normalized_url
-    config.shipper.api_url = normalized_url
-    save_loaded_config(config, config_path=config_path, claude_dir=config_dir)
-
-
-def _clear_persisted_urls(config_dir: Path | None) -> None:
-    """Clear config-side URL mirrors without touching unrelated local settings."""
-    config_path = get_config_path(claude_dir=config_dir)
-    if not config_path.exists():
-        return
-
-    config = load_config(config_path=config_path, claude_dir=config_dir)
-    if config.browser.default_url is None and config.shipper.api_url is None:
-        return
-
-    config.browser.default_url = None
-    config.shipper.api_url = None
-    save_loaded_config(config, config_path=config_path, claude_dir=config_dir)
+    write_machine_state(
+        base_dir=config_dir,
+        written_by=written_by,
+        runtime_url=normalized_url,
+    )
 
 
 def _auto_create_token(url: str, device_name: str | None = None) -> str | None:
@@ -227,8 +207,11 @@ def auth(
     # Handle --clear
     if clear:
         cleared_token = clear_token(config_dir)
-        cleared_url = clear_zerg_url(config_dir)
-        _clear_persisted_urls(config_dir)
+        try:
+            cleared_url = clear_machine_runtime_url(config_dir, written_by="auth-clear")
+        except RuntimeError as exc:
+            typer.secho(f"Failed to clear stored URL: {exc}", fg=typer.colors.RED)
+            raise typer.Exit(code=1) from exc
         if cleared_token and cleared_url:
             typer.secho("Cleared stored token and URL", fg=typer.colors.GREEN)
         elif cleared_token:
@@ -264,7 +247,7 @@ def auth(
     if token:
         if _validate_token(url, token):
             save_token(token, config_dir)
-            _persist_selected_url(url, config_dir)
+            _persist_selected_url(url, config_dir, written_by="auth")
             typer.secho(f"Token validated and stored for {device_name}", fg=typer.colors.GREEN)
         else:
             typer.secho("Invalid token", fg=typer.colors.RED)
@@ -305,7 +288,7 @@ def auth(
     # Validate and store
     if _validate_token(url, token):
         save_token(token, config_dir)
-        _persist_selected_url(url, config_dir)
+        _persist_selected_url(url, config_dir, written_by="auth")
         typer.secho(f"Authenticated successfully as {device_name}", fg=typer.colors.GREEN)
     else:
         typer.secho("Invalid or expired token", fg=typer.colors.RED)
@@ -567,7 +550,7 @@ def connect(
         auto_token = _auto_create_token(url)
         if auto_token:
             save_token(auto_token, config_dir)
-            _persist_selected_url(url, config_dir)
+            _persist_selected_url(url, config_dir, written_by="connect")
             token = auto_token
             typer.secho("Authenticated successfully.", fg=typer.colors.GREEN)
         else:
@@ -579,11 +562,11 @@ def connect(
 
     # Normal connect mode — exec longhouse-engine (replaces this process)
 
-    # Persist url/token so the engine can read them from files.
+    # Persist canonical machine target + token before handing off to the engine.
     # This handles the case where explicit --url/--token were passed but
     # not yet written (auto-auth already persists on that path).
     save_token(token, config_dir)
-    _persist_selected_url(url, config_dir)
+    _persist_selected_url(url, config_dir, written_by="connect")
 
     try:
         engine = get_engine_executable()
@@ -854,8 +837,6 @@ def _handle_install(
     menubar: bool = False,
 ) -> None:
     """Handle --install flag."""
-    config_dir = Path(claude_dir) if claude_dir else None
-
     # Determine machine name — prompt interactively unless already provided.
     default_name = socket.gethostname()
     if machine_name:
@@ -880,12 +861,12 @@ def _handle_install(
             claude_dir=claude_dir,
             machine_name=resolved_name,
             menubar=menubar,
+            written_by="connect-install",
+            topology_intent="connect-remote",
         )
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
-
-    _persist_selected_url(url, config_dir)
 
     typer.echo("")
     typer.secho(f"  Machine: {install_result.machine_name}", fg=typer.colors.CYAN)

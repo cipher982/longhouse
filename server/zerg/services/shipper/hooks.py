@@ -158,10 +158,11 @@ TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
 URL="${LONGHOUSE_HOOK_URL:-}"
 if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]; then
   TOKEN_FILE="$LONGHOUSE_HOME/machine/device-token"
-  URL_FILE="$LONGHOUSE_HOME/machine/target-url"
-  if [[ ! -f "$TOKEN_FILE" ]] || [[ ! -f "$URL_FILE" ]]; then exit 0; fi
+  STATE_FILE="$LONGHOUSE_HOME/machine/state.json"
+  if [[ ! -f "$TOKEN_FILE" ]] || [[ ! -f "$STATE_FILE" ]]; then exit 0; fi
   TOKEN=$(cat "$TOKEN_FILE" | tr -d '[:space:]')
-  URL=$(cat "$URL_FILE" | tr -d '[:space:]')
+  URL=$(jq -r '.runtime_url // empty' "$STATE_FILE" 2>/dev/null | tr -d '[:space:]')
+  [[ -z "$URL" ]] && exit 0
 fi
 
 # URL-encode the project name so paths with spaces or special chars work.

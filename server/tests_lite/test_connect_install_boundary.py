@@ -1,12 +1,13 @@
 """Tests for the local install vs workspace MCP boundary."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
 from click.exceptions import Exit as ClickExit
 
-from zerg.cli import config_file as config_file_cli
 from zerg.cli import connect
+from zerg.services.machine_state import load_machine_state
 from zerg.services.shipper.service import Platform
 
 
@@ -49,6 +50,8 @@ def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsy
             "claude_dir": "/tmp/.claude",
             "machine_name": "test-box",
             "menubar": True,
+            "written_by": "connect-install",
+            "topology_intent": "connect-remote",
         }
     ]
     assert "Machine: test-box" in output
@@ -92,6 +95,8 @@ def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
             "claude_dir": None,
             "machine_name": "fallback-box",
             "menubar": False,
+            "written_by": "connect-install",
+            "topology_intent": "connect-remote",
         }
     ]
 
@@ -299,40 +304,38 @@ def test_connect_requires_configured_url(monkeypatch):
     assert exc.value.exit_code == 1
 
 
-def test_persist_selected_url_updates_browser_and_shipper_config(tmp_path, monkeypatch):
+def test_persist_selected_url_updates_machine_state(tmp_path):
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
-    saved_urls: list[tuple[str, object]] = []
 
-    monkeypatch.setattr(connect, "save_zerg_url", lambda url, config_dir=None: saved_urls.append((url, config_dir)))
+    connect._persist_selected_url("https://example.com", claude_dir, written_by="connect")
 
-    connect._persist_selected_url("https://example.com", claude_dir)
+    state = load_machine_state(claude_dir)
+    assert state is not None
+    assert state.runtime_url == "https://example.com"
+    assert state.written_by == "connect"
 
-    config = config_file_cli.load_config(claude_dir=claude_dir)
-    assert saved_urls == [("https://example.com", claude_dir)]
-    assert config.browser.default_url == "https://example.com"
-    assert config.shipper.api_url == "https://example.com"
+    journal_path = tmp_path / ".longhouse" / "machine" / "state-journal.jsonl"
+    entries = [json.loads(line) for line in journal_path.read_text().splitlines()]
+    assert entries[-1]["new"]["runtime_url"] == "https://example.com"
+    assert entries[-1]["written_by"] == "connect"
 
 
-def test_clear_persisted_urls_preserves_other_local_config(tmp_path):
+def test_auth_clear_clears_canonical_runtime_url_without_touching_machine_name(tmp_path):
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir()
-    config_file_cli.save_config(
-        {
-            "server": {"host": "0.0.0.0", "port": 9999, "public_url": "https://public.example.com"},
-            "browser": {"default_url": "https://example.com"},
-            "shipper": {"api_url": "https://example.com", "flush_ms": 900, "fallback_scan_secs": 600},
-        },
-        claude_dir=claude_dir,
+
+    connect.write_machine_state(
+        base_dir=claude_dir,
+        written_by="test",
+        runtime_url="https://example.com",
+        machine_name="test-box",
     )
+    cleared = connect.clear_machine_runtime_url(claude_dir, written_by="auth-clear")
 
-    connect._clear_persisted_urls(claude_dir)
-
-    config = config_file_cli.load_config(claude_dir=claude_dir)
-    assert config.server.host == "0.0.0.0"
-    assert config.server.port == 9999
-    assert config.server.public_url == "https://public.example.com"
-    assert config.browser.default_url is None
-    assert config.shipper.api_url is None
-    assert config.shipper.flush_ms == 900
-    assert config.shipper.fallback_scan_secs == 600
+    assert cleared is True
+    state = load_machine_state(claude_dir)
+    assert state is not None
+    assert state.runtime_url is None
+    assert state.machine_name == "test-box"
+    assert state.written_by == "auth-clear"

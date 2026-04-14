@@ -7,11 +7,11 @@ def test_install_local_runtime_does_not_create_global_mcp_configs(tmp_path, monk
     home = tmp_path / "home"
     claude_dir = home / ".claude"
     hook_calls: list[dict[str, str | None]] = []
+    state_writes: list[dict[str, object]] = []
 
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(installer, "save_zerg_url", lambda url, config_dir: None)
+    monkeypatch.setattr(installer, "write_machine_state", lambda **kwargs: state_writes.append(kwargs))
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
-    monkeypatch.setattr(installer, "save_machine_name", lambda machine_name, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
     monkeypatch.setattr(
         installer,
@@ -40,6 +40,16 @@ def test_install_local_runtime_does_not_create_global_mcp_configs(tmp_path, monk
     assert result.machine_name == "test-box"
     assert result.hooks.actions == ["hooks installed"]
     assert result.hooks.warning is None
+    assert state_writes == [
+        {
+            "base_dir": home / ".longhouse",
+            "written_by": "connect-install",
+            "runtime_url": "https://example.com",
+            "machine_name": "test-box",
+            "desktop_app_enabled": False,
+            "topology_intent": None,
+        }
+    ]
     assert hook_calls == [
         {
             "url": "https://example.com",
@@ -56,11 +66,11 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
     home = tmp_path / "home"
     claude_dir = home / ".claude"
     calls: list[tuple[str, dict[str, str | None]]] = []
+    state_writes: list[dict[str, object]] = []
 
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(installer, "save_zerg_url", lambda url, config_dir: None)
+    monkeypatch.setattr(installer, "write_machine_state", lambda **kwargs: state_writes.append(kwargs))
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
-    monkeypatch.setattr(installer, "save_machine_name", lambda machine_name, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
     monkeypatch.setattr(
         installer,
@@ -88,6 +98,16 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
         menubar=True,
     )
 
+    assert state_writes == [
+        {
+            "base_dir": home / ".longhouse",
+            "written_by": "connect-install",
+            "runtime_url": "https://example.com",
+            "machine_name": "test-box",
+            "desktop_app_enabled": True,
+            "topology_intent": None,
+        }
+    ]
     assert calls == [
         (
             "desktop",
@@ -108,11 +128,11 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
 def test_install_local_runtime_keeps_service_install_when_hooks_warn(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"
+    state_writes: list[dict[str, object]] = []
 
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(installer, "save_zerg_url", lambda url, config_dir: None)
+    monkeypatch.setattr(installer, "write_machine_state", lambda **kwargs: state_writes.append(kwargs))
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
-    monkeypatch.setattr(installer, "save_machine_name", lambda machine_name, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
     monkeypatch.setattr(
         installer,
@@ -134,6 +154,16 @@ def test_install_local_runtime_keeps_service_install_when_hooks_warn(tmp_path, m
         menubar=False,
     )
 
+    assert state_writes == [
+        {
+            "base_dir": home / ".longhouse",
+            "written_by": "connect-install",
+            "runtime_url": "https://example.com",
+            "machine_name": "test-box",
+            "desktop_app_enabled": False,
+            "topology_intent": None,
+        }
+    ]
     assert result.service_result["message"] == "ok"
     assert result.hooks.actions == []
     assert result.hooks.warning == "hooks boom"

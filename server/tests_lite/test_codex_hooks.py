@@ -275,7 +275,7 @@ def test_install_hooks_points_session_start_at_longhouse_machine_state(tmp_path,
 
     assert f'{tmp_path / ".longhouse"}' in content
     assert "machine/device-token" in content
-    assert "machine/target-url" in content
+    assert "machine/state.json" in content
 
 
 def test_install_hooks_points_lifecycle_hooks_at_longhouse_agent_state(tmp_path, monkeypatch):
