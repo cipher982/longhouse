@@ -76,14 +76,7 @@ Boundary rules:
 ## Cowbell
 
 - `cowbell` is the PM trigger for the full ship cycle. David should only need to say `cowbell`.
-- Own the target commit yourself:
-  - if your task is still uncommitted work, commit it now
-  - otherwise use the latest commit that represents the task you just finished, even if it was pushed earlier
-- Run `make ship SHA="<task-sha>"` in the foreground.
-- Read the start banner before trusting the run. It prints the exact target SHA and commit subject.
-- Stay blocked until `make ship` exits. Do not stop after `git push`.
-- Exit `0` means shipped. Any non-zero exit means ship failed for that exact task SHA.
-- When you report status, name the exact task SHA and, when useful, the exact failing workflow run ids.
+- Use `.agents/skills/zerg-ship/SKILL.md` for any full ship/deploy work in this repo. That skill owns task-commit resolution, exact-SHA monitoring, command flow, and final success/failure reporting.
 
 ## Task Tracking
 
@@ -217,31 +210,6 @@ Extra rules:
 
 - If you add a DB column, new required env var, or touch schema, call it out and run `make reprovision` after CI.
 - Hosted tenants get engine changes through the runtime image; users running the engine locally still need `make install-engine`.
-- For the full ship cycle and manual deploy fallbacks, use `.agents/skills/zerg-ship/SKILL.md`.
-
-Agent ship path:
-
-```bash
-make ship SHA="<task-sha>"
-```
-
-Use the `cowbell` flow above to decide `<task-sha>` from the task you just finished. Bare `make ship` is only a human convenience fallback.
-
-Local fallback when remote CI is unavailable or David explicitly wants a local run:
-
-```bash
-make test-ci
-make test-e2e
-```
-
-Manual deploy fallback:
-
-```bash
-./scripts/ops/coolify-deploy.sh longhouse-demo --timeout 900
-./scripts/ops/coolify-deploy.sh longhouse-control-plane --timeout 900
-make reprovision
-make qa-live
-```
 
 ## Jobs and External Automation
 
