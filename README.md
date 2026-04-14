@@ -125,6 +125,21 @@ longhouse connect --install   # Repair hooks and machine agent
 
 Use `serve --demo` for a safe preview before importing real work.
 
+### Local dogfood loop (repo dev)
+
+If you are actively changing Longhouse itself and want your Mac to keep running the real product from current repo source, use:
+
+```bash
+make dogfood-refresh
+make dogfood-check
+```
+
+`make dogfood-refresh` is the repo-native reinstall loop for the actual local runtime. It rebuilds the Rust engine, rebuilds `Longhouse.app` from current source on macOS, and re-runs `connect --install` against your real local launchd/hooks/app state.
+
+`make dogfood-check` shows the installed runtime status and local-health summary.
+
+Do not use the DMG drag-install flow for daily dogfooding. The DMG is a release transport; the dogfood path is `make dogfood-refresh`.
+
 ### 3. Advanced / contributor paths
 
 Docker is mainly for CI and contributor workflows, not the primary end-user install path.
