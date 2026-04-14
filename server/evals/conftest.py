@@ -241,18 +241,8 @@ def eval_runner(db_session, test_user, request, eval_case):
     If a variant is specified via --variant flag, it will be applied.
     """
     from evals.runner import EvalRunner
-    from zerg.services.auto_seed import _seed_server_knowledge
-    from zerg.services.auto_seed import _seed_user_context
     from zerg.services.oikos_service import OikosService
 
-    # Evals should reflect a real "dev@local" environment. In tests we create the
-    # dev user deterministically, but user context (servers/integrations) is not
-    # present unless it's seeded from scripts/user_context.local.json.
-    #
-    # Live evals in particular assume servers exist; without this, the model can
-    # correctly answer "(No servers configured)" which fails the dataset rubric.
-    _seed_user_context()
-    _seed_server_knowledge()
     db_session.expire_all()
 
     oikos_service = OikosService(db_session)

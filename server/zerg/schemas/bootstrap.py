@@ -12,35 +12,6 @@ from pydantic import BaseModel
 from pydantic import Field
 
 # ---------------------------------------------------------------------------
-# User Context
-# ---------------------------------------------------------------------------
-
-
-class ContextSeedRequest(BaseModel):
-    """Request to seed user context for the admin user.
-
-    This replaces file-based seeding from ~/.config/zerg/user_context.json.
-    The context is stored in the User.context JSONB column.
-    """
-
-    servers: list[dict[str, Any]] = Field(
-        default_factory=list,
-        description="List of servers with name, ip, purpose, ssh_user, etc.",
-    )
-    integrations: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Integration configs (github, email, etc.)",
-    )
-    display_name: str | None = Field(None, description="User's preferred display name")
-    role: str | None = Field(None, description="User's job role or title")
-    location: str | None = Field(None, description="User's primary location")
-    custom_instructions: str | None = Field(None, description="Custom instructions for fiche behavior")
-
-    class Config:
-        extra = "allow"  # Allow additional fields for flexibility
-
-
-# ---------------------------------------------------------------------------
 # Runners
 # ---------------------------------------------------------------------------
 
@@ -116,7 +87,6 @@ class BootstrapStatusItem(BaseModel):
 class BootstrapStatusResponse(BaseModel):
     """Response showing what's configured vs missing."""
 
-    context: BootstrapStatusItem = Field(..., description="User context status")
     runners: BootstrapStatusItem = Field(..., description="Runners status")
     credentials: BootstrapStatusItem = Field(..., description="Personal credentials status")
 
