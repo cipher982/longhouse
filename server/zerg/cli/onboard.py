@@ -1,12 +1,10 @@
-"""Onboarding wizard for Longhouse.
+"""Default local quickstart for Longhouse.
 
-Guides new users through the first two beats of value:
-- make existing sessions findable
-- point users at starting a Longhouse session when they want control
-
-Usage:
-    longhouse onboard          # Interactive setup
-    longhouse onboard --quick  # QuickStart (defaults)
+Gets a developer machine into the launch-path state:
+- local Runtime Host up
+- Machine Agent installed when supported
+- existing sessions imported when a supported CLI is present
+- browser handoff to Longhouse
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from uuid import uuid4
 
 import httpx
 import typer
@@ -31,8 +28,6 @@ from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
 from zerg.services.local_runtime_installer import install_local_runtime
 from zerg.services.shipper import load_token
-from zerg.services.shipper import save_token
-from zerg.services.shipper import save_zerg_url
 
 logger = logging.getLogger(__name__)
 
@@ -295,68 +290,6 @@ def verify_shell_path() -> list[str]:
     return warnings
 
 
-def _emit_test_event(api_url: str) -> bool:
-    """Emit a test event to verify the pipeline."""
-    device_name = f"onboard-{socket.gethostname()}"
-    try:
-        # Create a minimal test session/event
-        payload = {
-            "id": str(uuid4()),
-            "provider": "longhouse",
-            "environment": "onboarding",
-            "project": "longhouse-onboarding",
-            "device_id": device_name,
-            "cwd": str(Path.home()),
-            "is_sidechain": True,
-            "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "events": [
-                {
-                    "role": "user",
-                    "content_text": "Longhouse onboarding verification",
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "source_path": "onboard://verification",
-                    "source_offset": 0,
-                }
-            ],
-        }
-
-        with httpx.Client(timeout=10) as client:
-            token = load_token()
-            if not token:
-                from zerg.cli.connect import _auto_create_token
-
-                token = _auto_create_token(api_url, device_name)
-                if not token:
-                    return False
-                save_token(token)
-                save_zerg_url(api_url)
-
-            headers = {"X-Agents-Token": token}
-            response = client.post(f"{api_url}/api/agents/ingest", json=payload, headers=headers)
-            if response.status_code in (200, 201):
-                return True
-            if response.status_code != 401:
-                return False
-
-            from zerg.cli.connect import _auto_create_token
-
-            fresh_token = _auto_create_token(api_url, device_name)
-            if not fresh_token or fresh_token == token:
-                return False
-
-            save_token(fresh_token)
-            save_zerg_url(api_url)
-            retry_response = client.post(
-                f"{api_url}/api/agents/ingest",
-                json=payload,
-                headers={"X-Agents-Token": fresh_token},
-            )
-            return retry_response.status_code in (200, 201)
-    except Exception as e:
-        typer.echo(f"  Error: {e}")
-        return False
-
-
 def _run_initial_import(api_url: str) -> tuple[bool, str]:
     """Run a one-shot import so existing sessions become visible immediately."""
     try:
@@ -375,17 +308,11 @@ def _run_initial_import(api_url: str) -> tuple[bool, str]:
     return False, detail
 
 
-app = typer.Typer(help="Onboarding wizard")
+app = typer.Typer(help="Default local quickstart")
 
 
 @app.command()
 def onboard(
-    quick: bool = typer.Option(
-        False,
-        "--quick",
-        "-q",
-        help="QuickStart mode - use all defaults",
-    ),
     host: str = typer.Option(
         "127.0.0.1",
         "--host",
@@ -407,42 +334,17 @@ def onboard(
         "--no-shipper",
         help="Skip machine-agent installation",
     ),
-    no_demo: bool = typer.Option(
-        False,
-        "--no-demo",
-        help="Skip seeding demo sessions",
-    ),
     no_browser: bool = typer.Option(
         False,
         "--no-browser",
         help="Skip auto-opening the browser at the end of onboarding.",
     ),
 ) -> None:
-    """Run the Longhouse onboarding wizard.
-
-    Guides you through initial setup:
-    1. Verify dependencies
-    2. Start Longhouse
-    3. Import existing sessions
-    4. Verify the pipeline
-    5. Optionally seed demo sessions
-
-    Use --quick for automated setup with defaults.
-    """
+    """Run the default local quickstart."""
     typer.echo("")
     typer.secho("Welcome to Longhouse", fg=typer.colors.CYAN, bold=True)
     typer.echo("Install Longhouse, open it, and find one prior session. Start Longhouse sessions later when you want control.")
     typer.echo("")
-
-    # Quick vs Manual mode selection
-    if not quick:
-        typer.echo("[1] QuickStart (recommended) - Open Longhouse first, add control later")
-        typer.echo("[2] Manual Setup - Configure each option")
-        typer.echo("")
-
-        choice = typer.prompt("Choice", default="1")
-        quick = choice == "1"
-        typer.echo("")
 
     # Step 1: Check dependencies
     typer.secho("Step 1: Checking dependencies", fg=typer.colors.BLUE, bold=True)
@@ -481,7 +383,7 @@ def onboard(
 
     typer.echo("")
 
-    # Step 2: Server setup
+    # Step 2: Start the local runtime
     typer.secho("Step 2: Start the local runtime", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
@@ -498,78 +400,70 @@ def onboard(
         elif _check_server_health(host, port):
             typer.secho(f"  [OK] Local runtime responding at {api_url}", fg=typer.colors.GREEN)
         else:
-            # Need to start server
-            if quick or typer.confirm("Start the local Longhouse runtime now?", default=True):
-                typer.echo("  Starting local runtime...")
+            typer.echo("  Starting local runtime...")
 
-                try:
-                    # Start server as daemon
-                    subprocess.run(
-                        ["longhouse", "serve", "--daemon", "--host", host, "--port", str(port)],
-                        check=True,
-                        capture_output=True,
-                    )
+            try:
+                subprocess.run(
+                    ["longhouse", "serve", "--daemon", "--host", host, "--port", str(port)],
+                    check=True,
+                    capture_output=True,
+                )
 
-                    # Wait for it to be ready
-                    typer.echo("  Waiting for local runtime...")
-                    if _wait_for_server(host, port, timeout=30):
-                        typer.secho(f"  [OK] Local runtime ready at {api_url}", fg=typer.colors.GREEN)
-                    else:
-                        typer.secho("  [WARN] Local runtime started but not responding", fg=typer.colors.YELLOW)
-                        typer.echo(f"         Check logs: {_get_longhouse_home() / 'server.log'}")
-
-                except subprocess.CalledProcessError as e:
-                    typer.secho(f"  [ERROR] Failed to start local runtime: {e}", fg=typer.colors.RED)
-                    typer.echo("         Try starting manually: longhouse serve")
-            else:
-                typer.echo("  Skipping local runtime startup")
+                typer.echo("  Waiting for local runtime...")
+                if _wait_for_server(host, port, timeout=30):
+                    typer.secho(f"  [OK] Local runtime ready at {api_url}", fg=typer.colors.GREEN)
+                else:
+                    typer.secho("  [WARN] Local runtime started but not responding", fg=typer.colors.YELLOW)
+                    typer.echo(f"         Check logs: {_get_longhouse_home() / 'server.log'}")
+            except subprocess.CalledProcessError as e:
+                typer.secho(f"  [ERROR] Failed to start local runtime: {e}", fg=typer.colors.RED)
+                typer.echo("         Try starting manually: longhouse serve")
 
     typer.echo("")
 
     # Step 3: Import existing sessions
     typer.secho("Step 3: Bring in your existing sessions", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
+    installed_desktop_app = False
 
     if no_shipper:
         typer.echo("  Skipping machine-agent setup (--no-shipper)")
     else:
-        # Check for service manager
         ci_service_install = _allow_service_install_in_ci()
         has_service_manager = (_has_launchd() or _has_systemd()) and (not os.getenv("CI") or ci_service_install)
 
         if has_service_manager:
-            if quick or typer.confirm("Set up the machine agent for automatic imports now?", default=True):
-                install_menubar = sys.platform == "darwin" and _has_gui() and (not os.getenv("CI") or ci_service_install)
-                try:
-                    install_result = install_local_runtime(
-                        url=api_url,
-                        token=load_token(),
-                        claude_dir=None,
-                        machine_name=socket.gethostname(),
-                        menubar=install_menubar,
-                    )
-                    typer.secho("  [OK] Machine agent installed for automatic imports", fg=typer.colors.GREEN)
-                    if install_result.hooks.warning:
-                        typer.secho(f"  [WARN] CLI hook install had issues: {install_result.hooks.warning}", fg=typer.colors.YELLOW)
-                except Exception as e:
-                    typer.secho(f"  [WARN] Could not install machine agent: {e}", fg=typer.colors.YELLOW)
-                    typer.echo("         Run manually: longhouse connect --install")
+            install_menubar = sys.platform == "darwin" and _has_gui() and (not os.getenv("CI") or ci_service_install)
+            try:
+                install_result = install_local_runtime(
+                    url=api_url,
+                    token=load_token(),
+                    claude_dir=None,
+                    machine_name=socket.gethostname(),
+                    menubar=install_menubar,
+                )
+                installed_desktop_app = install_menubar and bool(getattr(install_result, "desktop_app_result", None))
+                typer.secho("  [OK] Machine agent installed for automatic imports", fg=typer.colors.GREEN)
+                if install_result.hooks.warning:
+                    typer.secho(f"  [WARN] CLI hook install had issues: {install_result.hooks.warning}", fg=typer.colors.YELLOW)
+            except Exception as e:
+                typer.secho(f"  [WARN] Could not install machine agent: {e}", fg=typer.colors.YELLOW)
+                typer.echo("         Run manually: longhouse connect --install")
         else:
             typer.secho("  [--] Background machine-agent install is not available in this environment", fg=typer.colors.YELLOW)
             typer.echo("       Use: longhouse connect")
             typer.echo("       Or import once with: longhouse ship")
 
         if has_any_cli and _check_server_health(host, port):
-            if quick or typer.confirm("Import your existing sessions now?", default=True):
-                typer.echo("  Importing your existing sessions now...")
-                imported, detail = _run_initial_import(api_url)
-                if imported:
-                    typer.secho("  [OK] Existing sessions are ready to look for in Longhouse", fg=typer.colors.GREEN)
-                else:
-                    typer.secho("  [WARN] Initial import failed", fg=typer.colors.YELLOW)
-                    if detail:
-                        typer.echo(f"         {detail}")
-                    typer.echo("         Retry with: longhouse ship")
+            typer.echo("  Importing your existing sessions now...")
+            imported, detail = _run_initial_import(api_url)
+            if imported:
+                typer.secho("  [OK] Existing sessions are ready to look for in Longhouse", fg=typer.colors.GREEN)
+            else:
+                typer.secho("  [WARN] Initial import failed", fg=typer.colors.YELLOW)
+                if detail:
+                    typer.echo(f"         {detail}")
+                typer.echo("         Retry with: longhouse ship")
         elif not has_any_cli:
             typer.echo("  No supported CLI found yet, so Longhouse skipped the initial import.")
             typer.echo("  Install Claude Code, Codex CLI, or Gemini CLI later, then run: longhouse ship")
@@ -578,61 +472,8 @@ def onboard(
 
     typer.echo("")
 
-    # Step 4: Verification
-    typer.secho("Step 4: Verify Longhouse is ready", fg=typer.colors.BLUE, bold=True)
-    typer.echo("")
-
-    if _check_server_health(host, port):
-        typer.echo("  Sending hidden verification event...")
-        if _emit_test_event(api_url):
-            typer.secho("  [OK] Longhouse received the verification event", fg=typer.colors.GREEN)
-        else:
-            typer.secho("  [WARN] Verification event failed (local runtime may need auth)", fg=typer.colors.YELLOW)
-    else:
-        typer.echo("  Skipping verification (local runtime not running)")
-
-    typer.echo("")
-
-    # Step 5: Seed demo sessions
-    typer.secho("Step 5: Optional demo data", fg=typer.colors.BLUE, bold=True)
-    typer.echo("")
-
-    if no_demo:
-        typer.echo("  Skipping demo data (--no-demo)")
-    elif has_any_cli and quick:
-        typer.echo("  Skipping demo data. Use 'longhouse serve --demo' later if you want a safe preview.")
-    elif _check_server_health(host, port):
-        should_seed_demo = quick or not has_any_cli
-        if has_any_cli and not quick:
-            should_seed_demo = typer.confirm("Seed demo sessions too?", default=False)
-
-        if should_seed_demo:
-            typer.echo("  Seeding demo sessions...")
-            try:
-                with httpx.Client(timeout=10) as client:
-                    resp = client.post(f"{api_url}/api/agents/demo")
-                    if resp.status_code == 200:
-                        result = resp.json()
-                        if result.get("seeded"):
-                            typer.secho(
-                                f"  [OK] Seeded {result['sessions_created']} demo sessions",
-                                fg=typer.colors.GREEN,
-                            )
-                        else:
-                            typer.secho("  [OK] Demo sessions already present", fg=typer.colors.GREEN)
-                    else:
-                        typer.secho("  [WARN] Could not seed demo data", fg=typer.colors.YELLOW)
-            except Exception as e:
-                typer.secho(f"  [WARN] Demo seeding failed: {e}", fg=typer.colors.YELLOW)
-        else:
-            typer.echo("  Skipping demo data")
-    else:
-        typer.echo("  Skipping demo data (local runtime not running)")
-
-    typer.echo("")
-
-    # Step 6: Save config
-    typer.secho("Step 6: Saving configuration", fg=typer.colors.BLUE, bold=True)
+    # Step 4: Save config
+    typer.secho("Step 4: Saving configuration", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     config_data = {
@@ -650,8 +491,8 @@ def onboard(
 
     typer.echo("")
 
-    # Step 7: Verify PATH in a fresh shell
-    typer.secho("Step 7: PATH verification", fg=typer.colors.BLUE, bold=True)
+    # Step 5: Verify PATH in a fresh shell
+    typer.secho("Step 5: PATH verification", fg=typer.colors.BLUE, bold=True)
     typer.echo("")
 
     path_warnings = verify_shell_path()
@@ -663,18 +504,15 @@ def onboard(
 
     typer.echo("")
 
-    # Step 8: Open browser (if GUI available)
     if not no_browser and _has_gui() and _check_server_health(host, port):
-        if quick or typer.confirm("Open Longhouse in browser?", default=True):
-            typer.echo(f"  Opening {api_url}...")
-            try:
-                webbrowser.open(api_url)
-            except Exception:
-                typer.echo(f"  Could not open browser. Visit: {api_url}")
+        typer.echo(f"  Opening {api_url}...")
+        try:
+            webbrowser.open(api_url)
+        except Exception:
+            typer.echo(f"  Could not open browser. Visit: {api_url}")
 
     typer.echo("")
 
-    # Done!
     typer.echo("=" * 50)
     typer.secho("Setup complete!", fg=typer.colors.GREEN, bold=True)
     typer.echo("=" * 50)
@@ -686,8 +524,8 @@ def onboard(
     else:
         typer.echo("  1. Open Longhouse")
         typer.echo("  2. Install Claude Code, Codex CLI, or Gemini CLI when you want real imports")
-    if _has_launchd():
-        typer.echo("  3. On macOS, Longhouse.app also lives in your menu bar")
+    if installed_desktop_app:
+        typer.echo("  3. Look for Longhouse.app in /Applications and your menu bar")
     typer.echo("")
     typer.echo("Next, when you want control after launch:")
     if has_claude:
@@ -702,9 +540,10 @@ def onboard(
     typer.echo("  longhouse connect --install Repair the machine agent, desktop app, and automatic imports")
     typer.echo("")
     typer.echo("Advanced:")
-    typer.echo("  longhouse ship               Import existing sessions once")
-    typer.echo("  longhouse status             Show local health")
-    typer.echo("  longhouse serve --stop       Stop local runtime")
+    typer.echo("  longhouse ship              Import existing sessions once")
+    typer.echo("  longhouse serve --demo      Start a safe preview instead of importing real work")
+    typer.echo("  longhouse status            Show local health")
+    typer.echo("  longhouse serve --stop      Stop local runtime")
     typer.echo("")
 
 
