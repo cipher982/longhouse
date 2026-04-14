@@ -37,6 +37,8 @@ jobs:
       scripts:        ${{ steps.filter.outputs.scripts }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -83,6 +85,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -97,8 +101,8 @@ jobs:
       with:
         bun-version: '1.2.20'
 
-    - name: Verify make available
-      run: command -v make
+    - name: Ensure make available
+      run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
     - name: Validate
       run: make validate
@@ -111,6 +115,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -125,8 +131,8 @@ jobs:
       with:
         bun-version: '1.2.20'
 
-    - name: Verify make available
-      run: command -v make
+    - name: Ensure make available
+      run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
     - name: Run Python Backend Tests
       run: make test
@@ -150,6 +156,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -175,8 +183,8 @@ jobs:
         restore-keys: |
           engine-ci-${{ runner.os }}-
 
-    - name: Verify make available
-      run: command -v make
+    - name: Ensure make available
+      run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
     - name: Run Rust Engine Tests (unit + golden + adversarial)
       run: make test-engine
@@ -192,6 +200,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
     - name: Restore Bun download cache
       uses: actions/cache@v4
@@ -214,8 +224,8 @@ jobs:
     - name: Install dependencies
       run: bun install --frozen-lockfile
 
-    - name: Verify make available
-      run: command -v make
+    - name: Ensure make available
+      run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
     - name: Run Frontend Tests
       run: make test-frontend
@@ -231,6 +241,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
     - name: Setup Node
       uses: actions/setup-node@v6
@@ -245,8 +257,8 @@ jobs:
     - name: Setup uv
       uses: astral-sh/setup-uv@v7
 
-    - name: Verify make available
-      run: command -v make
+    - name: Ensure make available
+      run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
     - name: Verify CLI wheel packaging
       run: make test-wheel-package
@@ -268,6 +280,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
     - name: Restore Bun download cache
       uses: actions/cache@v4
@@ -306,8 +320,8 @@ jobs:
     - name: Install dependencies
       run: bun install --frozen-lockfile
 
-    - name: Verify make available
-      run: command -v make
+    - name: Ensure make available
+      run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
     - name: Install Playwright browsers + deps
       run: cd e2e && bunx playwright install --with-deps chromium
@@ -337,6 +351,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
     - name: Restore Playwright browser cache
       uses: actions/cache@v4
@@ -354,8 +370,8 @@ jobs:
     - name: Setup uv
       uses: astral-sh/setup-uv@v7
 
-    - name: Verify make available
-      run: command -v make
+    - name: Ensure make available
+      run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
     - name: Install control plane deps
       run: cd control-plane && uv sync --extra dev --frozen
@@ -380,6 +396,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
     - name: Setup uv
       uses: astral-sh/setup-uv@v7
@@ -397,6 +415,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
 
     - name: Restore Bun download cache
       uses: actions/cache@v4
