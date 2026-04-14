@@ -9,6 +9,7 @@ public enum HarnessAction: String, Codable {
     case openLonghouse
     case copyDiagnostics
     case upgradeNow
+    case quitApp
 }
 
 public enum HarnessEffectMode: String {
@@ -174,6 +175,11 @@ public struct SpyHealthActionSink: HealthActionSink {
                 title: "Upgrade could not open",
                 detail: command
             )
+        case .quitApp:
+            Task { @MainActor in
+                NSApplication.shared.terminate(nil)
+            }
+            return nil
         case .refresh:
             return nil
         }
@@ -400,6 +406,13 @@ public struct SpyHealthActionSink: HealthActionSink {
                 style: .info,
                 title: "Upgrade dry run recorded",
                 detail: "The harness logged the upgrade action without opening Terminal."
+            )
+        case .quitApp:
+            return feedback(
+                for: action,
+                style: .info,
+                title: "Quit dry run recorded",
+                detail: "The harness logged the app quit action without terminating the process."
             )
         case .refresh:
             return nil

@@ -530,6 +530,12 @@ public struct MenuBarPanelView: View {
                 feedback = actionSink.handle(.copyDiagnostics, snapshot: snapshot)
             }
             .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
+
+            Divider()
+
+            Button("Quit Longhouse") {
+                _ = actionSink.handle(.quitApp, snapshot: snapshot)
+            }
         } label: {
             accessoryGlyph(systemImage: "ellipsis")
         }

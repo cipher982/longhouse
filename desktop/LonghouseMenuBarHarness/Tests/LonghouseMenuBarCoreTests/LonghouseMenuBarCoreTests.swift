@@ -155,6 +155,30 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func quitDryRunReturnsVisibleFeedback() throws {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.quitApp, snapshot: snapshot)
+
+        #expect(feedback?.style == .info)
+        #expect(feedback?.title == "Quit dry run recorded")
+    }
+
+    @Test
     func repairDryRunReturnsVisibleFeedback() throws {
         let snapshot = HealthSnapshot(
             schemaVersion: 1,
