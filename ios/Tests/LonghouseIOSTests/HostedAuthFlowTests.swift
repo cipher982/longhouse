@@ -1,34 +1,37 @@
-import XCTest
+import Foundation
+import Testing
 @testable import Longhouse
 
-final class HostedAuthFlowTests: XCTestCase {
-    func testOpenInstanceURLWithoutTenantOmitsTenantQuery() throws {
-        let url = try XCTUnwrap(HostedAuthFlow.openInstanceURL())
-        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+struct HostedAuthFlowTests {
+    @Test
+    func openInstanceURLWithoutTenantOmitsTenantQuery() throws {
+        let url = try #require(HostedAuthFlow.openInstanceURL())
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
 
-        XCTAssertEqual(components.scheme, "https")
-        XCTAssertEqual(components.host, "control.longhouse.ai")
-        XCTAssertEqual(components.path, "/auth/native/open-instance")
-        XCTAssertNil(components.queryItems)
+        #expect(components.scheme == "https")
+        #expect(components.host == "control.longhouse.ai")
+        #expect(components.path == "/auth/native/open-instance")
+        #expect(components.queryItems == nil)
     }
 
-    func testOpenInstanceURLWithTenantIncludesNormalizedTenant() throws {
-        let url = try XCTUnwrap(HostedAuthFlow.openInstanceURL(tenant: "  David010 "))
-        let components = try XCTUnwrap(URLComponents(url: url, resolvingAgainstBaseURL: false))
+    @Test
+    func openInstanceURLWithTenantIncludesNormalizedTenant() throws {
+        let url = try #require(HostedAuthFlow.openInstanceURL(tenant: "  David010 "))
+        let components = try #require(URLComponents(url: url, resolvingAgainstBaseURL: false))
 
-        XCTAssertEqual(components.queryItems, [URLQueryItem(name: "tenant", value: "david010")])
+        #expect(components.queryItems == [URLQueryItem(name: "tenant", value: "david010")])
     }
 
-    func testCallbackPayloadExtractsInstanceURLAndToken() throws {
-        let callbackURL = try XCTUnwrap(URL(
+    @Test
+    func callbackPayloadExtractsInstanceURLAndToken() throws {
+        let callbackURL = try #require(URL(
             string: "ai.longhouse.ios://auth-callback?tenant=testuser&instance_url=https%3A%2F%2Ftestuser.longhouse.ai&sso_token=abc123"
         ))
 
-        let payload = try XCTUnwrap(HostedAuthFlow.callbackPayload(from: callbackURL))
+        let payload = try #require(HostedAuthFlow.callbackPayload(from: callbackURL))
 
-        XCTAssertEqual(
-            payload,
-            HostedAuthCallbackPayload(
+        #expect(
+            payload == HostedAuthCallbackPayload(
                 tenant: "testuser",
                 instanceURL: "https://testuser.longhouse.ai",
                 ssoToken: "abc123",
@@ -37,23 +40,25 @@ final class HostedAuthFlowTests: XCTestCase {
         )
     }
 
-    func testCallbackPayloadExtractsHostedError() throws {
-        let callbackURL = try XCTUnwrap(URL(
+    @Test
+    func callbackPayloadExtractsHostedError() throws {
+        let callbackURL = try #require(URL(
             string: "ai.longhouse.ios://auth-callback?tenant=testuser&error=instance_not_found"
         ))
 
-        let payload = try XCTUnwrap(HostedAuthFlow.callbackPayload(from: callbackURL))
+        let payload = try #require(HostedAuthFlow.callbackPayload(from: callbackURL))
 
-        XCTAssertEqual(payload.error, "instance_not_found")
-        XCTAssertEqual(payload.tenant, "testuser")
-        XCTAssertNil(payload.ssoToken)
+        #expect(payload.error == "instance_not_found")
+        #expect(payload.tenant == "testuser")
+        #expect(payload.ssoToken == nil)
     }
 
-    func testCallbackPayloadRejectsUnexpectedCallbackURL() throws {
-        let callbackURL = try XCTUnwrap(URL(
+    @Test
+    func callbackPayloadRejectsUnexpectedCallbackURL() throws {
+        let callbackURL = try #require(URL(
             string: "https://control.longhouse.ai/auth/native/open-instance"
         ))
 
-        XCTAssertNil(HostedAuthFlow.callbackPayload(from: callbackURL))
+        #expect(HostedAuthFlow.callbackPayload(from: callbackURL) == nil)
     }
 }
