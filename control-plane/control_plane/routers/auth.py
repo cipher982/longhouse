@@ -684,6 +684,112 @@ def google_gmail_callback(
     return RedirectResponse(_tenant_conversations_url(subdomain), status_code=302)
 
 
+NATIVE_APP_STATE_MAX_AGE = 10 * 60
+
+
+def _native_callback_url() -> str:
+    return f"https://control.{settings.root_domain}/auth/native/google/callback"
+
+
+def _issue_native_state(*, tenant: str) -> str:
+    return _encode_jwt(
+        {
+            "purpose": "native_app_google_auth",
+            "tenant": tenant,
+            "exp": int(time.time()) + NATIVE_APP_STATE_MAX_AGE,
+        },
+        settings.jwt_secret,
+    )
+
+
+def _issue_instance_sso_token(*, email: str, tenant: str) -> str:
+    return _encode_jwt(
+        {
+            "sub": email,
+            "email": email,
+            "instance": tenant,
+            "exp": int(time.time()) + 5 * 60,
+        },
+        settings.instance_jwt_secret,
+    )
+
+
+@router.get("/native/google")
+def native_google_login(tenant: str | None = None):
+    """Start Google OAuth for native iOS app. Tenant subdomain is required."""
+    _require_oauth()
+    if not tenant:
+        raise HTTPException(status_code=400, detail="tenant parameter required")
+
+    state = _issue_native_state(tenant=tenant)
+    params = urllib.parse.urlencode(
+        {
+            "client_id": settings.google_client_id,
+            "redirect_uri": _native_callback_url(),
+            "response_type": "code",
+            "scope": "openid email profile",
+            "state": state,
+            "access_type": "online",
+            "prompt": "select_account",
+        }
+    )
+    return RedirectResponse(f"{GOOGLE_AUTH_URL}?{params}", status_code=302)
+
+
+@router.get("/native/google/callback")
+def native_google_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Handle Google OAuth callback for native app, redirect to longhouse:// with SSO token."""
+    _require_oauth()
+
+    if not state:
+        raise HTTPException(status_code=400, detail="Missing state")
+
+    try:
+        state_payload = _decode_jwt(state, settings.jwt_secret)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    if state_payload.get("purpose") != "native_app_google_auth":
+        raise HTTPException(status_code=401, detail="Invalid state purpose")
+
+    tenant = state_payload.get("tenant")
+    if not tenant:
+        raise HTTPException(status_code=400, detail="Missing tenant in state")
+
+    if error:
+        callback = f"longhouse://auth-callback?error={urllib.parse.quote(error)}"
+        return RedirectResponse(callback, status_code=302)
+
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code")
+
+    token_data = _exchange_code_with_redirect_uri(code, _native_callback_url())
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=502, detail="No access_token in Google response")
+
+    userinfo = _get_userinfo(access_token)
+    email = userinfo.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Google account has no email")
+
+    email = email.strip().lower()
+
+    instance = db.query(Instance).filter(Instance.subdomain == tenant).first()
+    if not instance:
+        raise HTTPException(status_code=404, detail="Instance not found")
+
+    sso_token = _issue_instance_sso_token(email=email, tenant=tenant)
+
+    params = urllib.parse.urlencode({"sso_token": sso_token, "tenant": tenant})
+    return RedirectResponse(f"longhouse://auth-callback?{params}", status_code=302)
+
+
 @router.get("/status")
 def auth_status(request: Request, db: Session = Depends(get_db)):
     """Check authentication status."""
