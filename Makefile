@@ -72,7 +72,7 @@ test-e2e: ## Launch-surface E2E (core + a11y)
 test-e2e-core: ## @internal Core E2E — no retries
 	@$(MAKE) ensure-playwright-browser
 	cd e2e && BACKEND_PORT=$(E2E_BACKEND_PORT) FRONTEND_PORT=$(E2E_FRONTEND_PORT) \
-		bunx playwright test --project=core --retries=0 --workers=1
+		bunx playwright test --project=core --retries=0 --workers=2
 
 test-e2e-a11y: ## @internal Accessibility checks
 	@$(MAKE) ensure-playwright-browser

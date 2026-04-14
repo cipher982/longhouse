@@ -103,11 +103,48 @@ jobs:
     - name: Validate
       run: make validate
 
-  sqlite-tests:
+  backend-tests:
     needs: changes
-    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ needs.changes.outputs.backend == 'true' || needs.changes.outputs.scripts == 'true' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    name: "🗃️ sqlite-lite--make-test--install-runner--oss-path"
+    name: "🗃️ backend--make-test--install-runner--oss-path"
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Setup uv
+      uses: astral-sh/setup-uv@v7
+
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: '1.2.20'
+
+    - name: Verify make available
+      run: command -v make
+
+    - name: Run Python Backend Tests
+      run: make test
+
+    - name: Run Install-Runner Tests
+      run: make test-install-runner
+
+    - name: Run Hosted-Instance Helper Tests
+      run: make test-hosted-instance
+
+    - name: Run Web Runtime Entrypoint Tests
+      run: make test-web-entrypoint
+
+  engine-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.engine == 'true' || needs.changes.outputs.backend == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    name: "⚙️ engine--rust-tests--shipper-e2e"
     env:
       CARGO_PROFILE: ci
 
@@ -141,23 +178,11 @@ jobs:
     - name: Verify make available
       run: command -v make
 
-    - name: Run Python Backend Tests
-      run: make test
-
     - name: Run Rust Engine Tests (unit + golden + adversarial)
       run: make test-engine
 
     - name: Run Shipper Pipeline E2E (fixture → engine ship → API → DB)
       run: make test-shipper-e2e
-
-    - name: Run Install-Runner Tests
-      run: make test-install-runner
-
-    - name: Run Hosted-Instance Helper Tests
-      run: make test-hosted-instance
-
-    - name: Run Web Runtime Entrypoint Tests
-      run: make test-web-entrypoint
 
   frontend-tests:
     needs: changes
