@@ -30,6 +30,7 @@ jobs:
       control_plane:  ${{ steps.filter.outputs.control_plane }}
       packaging:      ${{ steps.filter.outputs.packaging }}
       runner:         ${{ steps.filter.outputs.runner }}
+      ios:            ${{ steps.filter.outputs.ios }}
       e2e:            ${{ steps.filter.outputs.e2e }}
       models:         ${{ steps.filter.outputs.models }}
       scripts:        ${{ steps.filter.outputs.scripts }}
@@ -197,6 +198,58 @@ jobs:
 
     - name: Run Runner Unit Tests
       run: make test-runner
+
+  ios-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.ios == 'true' || github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-latest
+    timeout-minutes: 25
+    name: "iOS tests"
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 1
+
+    - name: Restore Swift package cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/Library/Caches/org.swift.swiftpm
+          ~/Library/org.swift.swiftpm
+          ~/Library/Developer/Xcode/DerivedData/LonghouseIOS-*/SourcePackages
+        key: longhouse-ios-spm-${{ runner.os }}-${{ hashFiles('ios/Package.swift', 'ios/XcodeHarness/project.yml') }}
+        restore-keys: |
+          longhouse-ios-spm-${{ runner.os }}-
+
+    - name: Install XcodeGen
+      run: brew install xcodegen
+
+    - name: Generate Xcode project
+      run: xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
+
+    - name: Select simulator destination
+      id: simulator
+      run: |
+        DESTINATION="$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"
+        echo "destination=$DESTINATION" >> "$GITHUB_OUTPUT"
+
+    - name: Run iOS tests
+      run: |
+        xcodebuild \
+          -project ios/XcodeHarness/LonghouseIOS.xcodeproj \
+          -scheme Longhouse \
+          -destination "${{ steps.simulator.outputs.destination }}" \
+          -resultBundlePath "$RUNNER_TEMP/LonghouseIOS.xcresult" \
+          test
+
+    - name: Upload iOS test results
+      if: failure()
+      uses: actions/upload-artifact@v7
+      with:
+        name: ios-xcresult
+        if-no-files-found: ignore
+        path: ${{ runner.temp }}/LonghouseIOS.xcresult
 
   wheel-package:
     needs: changes
