@@ -96,6 +96,17 @@ def _startup():
                 if "duplicate" not in str(exc).lower():
                     logger.warning("Instance health column migration skipped: %s", exc)
 
+    # Migrate: add pending_subdomain column for user-chosen slug flow
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE cp_users ADD COLUMN pending_subdomain VARCHAR(63)"))
+            conn.commit()
+            logger.info("Added pending_subdomain column to cp_users")
+        except Exception as exc:
+            conn.rollback()
+            if "duplicate" not in str(exc).lower():
+                logger.warning(f"pending_subdomain migration skipped: {exc}")
+
     # Crash recovery: clean up stale deploy states from interrupted deploys
     _recover_stale_deploys()
 

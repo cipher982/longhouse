@@ -39,6 +39,27 @@ from control_plane.services.provisioner import resolve_instance_data_path
 
 router = APIRouter(prefix="/api/instances", tags=["instances"])
 
+# ---------------------------------------------------------------------------
+# Subdomain validation
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+RESERVED_SUBDOMAINS: frozenset[str] = frozenset({
+    # DNS infrastructure
+    "www", "mail", "ns", "ns1", "ns2", "mx", "smtp", "imap", "ftp",
+    # Auth & admin
+    "admin", "auth", "login", "signup", "register", "verify", "password", "reset",
+    # Control plane & product
+    "control", "cp", "api", "dashboard", "billing", "console", "app", "web",
+    "support", "help", "docs", "status", "health", "ping",
+    # Environments
+    "test", "testing", "dev", "develop", "staging", "stage", "sandbox", "demo",
+    "prod", "production", "live", "canary", "beta",
+    # Longhouse branding
+    "longhouse", "instance", "hosted", "tenant", "assets", "cdn", "static",
+})
+
 _HEAVY_MIGRATION_EVENTS = "20260304_events_branch_backfill"
 _HEAVY_MIGRATION_SOURCE_LINES = "20260304_source_lines_branch_revision_rebuild"
 _HEAVY_MIGRATION_ORDER = (_HEAVY_MIGRATION_EVENTS, _HEAVY_MIGRATION_SOURCE_LINES)
@@ -253,8 +274,47 @@ def _recreate_instance(
 
 
 # ---------------------------------------------------------------------------
+# Subdomain helpers
+# ---------------------------------------------------------------------------
+
+
+def _is_valid_subdomain(value: str) -> bool:
+    """Return True if value is a legal, non-reserved subdomain slug."""
+    if not value or len(value) < 3 or len(value) > 63:
+        return False
+    if not _re.match(r"^[a-z0-9][a-z0-9-]*[a-z0-9]$", value):
+        return False
+    if value in RESERVED_SUBDOMAINS:
+        return False
+    return True
+
+
+def _derive_subdomain_from_email(email: str, db: Session) -> str:
+    """Derive a unique subdomain from an email prefix (fallback path)."""
+    base = _re.sub(r"[^a-z0-9-]", "-", email.split("@")[0].lower()).strip("-")[:63] or "user"
+    subdomain, counter = base, 1
+    while db.query(Instance).filter(Instance.subdomain == subdomain).first():
+        subdomain = f"{base}-{counter}"
+        counter += 1
+    return subdomain
+
+
+# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+
+@router.get("/subdomain-check")
+def subdomain_check(subdomain: str, db: Session = Depends(get_db)):
+    """Public endpoint: check if a subdomain slug is available."""
+    slug = subdomain.strip().lower()
+    if slug in RESERVED_SUBDOMAINS:
+        return {"available": False, "reason": "reserved"}
+    if not _is_valid_subdomain(slug):
+        return {"available": False, "reason": "invalid"}
+    if db.query(Instance).filter(Instance.subdomain == slug).first():
+        return {"available": False, "reason": "taken"}
+    return {"available": True, "reason": None}
 
 
 @router.get("/sso-keys")

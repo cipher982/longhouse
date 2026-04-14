@@ -1,7 +1,11 @@
 """Control plane UI pages: home, dashboard, provisioning status, admin."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import html
+import re as _re
+import time
 import urllib.parse
 
 from fastapi import APIRouter
@@ -100,7 +104,7 @@ small { color: #9898a3; }
 _GOOGLE_ICON = '<svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2a10.3 10.3 0 0 0-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92a8.78 8.78 0 0 0 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.83.86-3.04.86-2.34 0-4.32-1.58-5.03-3.71H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.71A5.41 5.41 0 0 1 3.69 9c0-.6.1-1.17.28-1.71V4.96H.96A9 9 0 0 0 0 9c0 1.45.35 2.82.96 4.04l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59A9 9 0 0 0 9 0 9 9 0 0 0 .96 4.96l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>'
 
 
-def _page(title: str, body: str, *, nav: bool = True) -> str:
+def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "") -> str:
     nav_html = ""
     if nav:
         nav_html = f"""
@@ -112,6 +116,8 @@ def _page(title: str, body: str, *, nav: bool = True) -> str:
       </div>
     </div>"""
 
+    extra_style_tag = f"\n    <style>{extra_styles}</style>" if extra_styles else ""
+
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -121,7 +127,7 @@ def _page(title: str, body: str, *, nav: bool = True) -> str:
     <title>{title} - Longhouse</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>{_STYLES}</style>
+    <style>{_STYLES}</style>{extra_style_tag}
   </head>
   <body>
     {nav_html}
@@ -146,6 +152,23 @@ def _get_user_from_cookie(request: Request, db: Session) -> User | None:
         return db.query(User).filter(User.id == int(payload["sub"])).first()
     except (ValueError, KeyError):
         return None
+
+
+def _csrf_token(user_id: int) -> str:
+    """Daily-rotating CSRF token derived from the JWT secret and user ID."""
+    day = int(time.time()) // 86400
+    digest = hashlib.sha256(f"{settings.jwt_secret}:{user_id}:{day}".encode()).hexdigest()
+    return digest[:32]
+
+
+def _verify_csrf(user_id: int, token: str) -> bool:
+    """Check current day and previous day (tolerates midnight boundary)."""
+    day = int(time.time()) // 86400
+    for d in (day, day - 1):
+        expected = hashlib.sha256(f"{settings.jwt_secret}:{user_id}:{d}".encode()).hexdigest()[:32]
+        if hmac.compare_digest(token, expected):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +312,270 @@ def verify_email_page(
 
 
 # ---------------------------------------------------------------------------
+# Subdomain picker
+# ---------------------------------------------------------------------------
+
+_SUBDOMAIN_PICKER_EXTRA_STYLES = """
+.slug-row { display: flex; align-items: stretch; border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px; overflow: hidden; background: rgba(255,255,255,0.05);
+            transition: border-color 0.2s, box-shadow 0.2s; }
+.slug-row:focus-within { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }
+.slug-row.valid { border-color: rgba(34,197,94,0.6); box-shadow: 0 0 0 2px rgba(34,197,94,0.15); }
+.slug-row.invalid { border-color: rgba(239,68,68,0.5); box-shadow: 0 0 0 2px rgba(239,68,68,0.12); }
+.slug-input { flex: 1; padding: 0.75rem 0.9rem; background: transparent; border: none;
+              color: #fafafa; font-size: 1rem; font-family: 'JetBrains Mono','Fira Code',monospace;
+              outline: none; min-width: 0; letter-spacing: 0.01em; }
+.slug-suffix { display: flex; align-items: center; padding: 0 0.9rem;
+               background: rgba(255,255,255,0.04); border-left: 1px solid rgba(255,255,255,0.08);
+               color: #9898a3; font-size: 0.95rem; font-family: 'JetBrains Mono','Fira Code',monospace;
+               white-space: nowrap; user-select: none; }
+.check-badge { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.65rem;
+               font-size: 0.875rem; min-height: 1.4rem; transition: opacity 0.15s; }
+.check-badge.hidden { opacity: 0; }
+.check-badge.ok { color: #22c55e; }
+.check-badge.err { color: #f87171; }
+.check-badge.loading { color: #9898a3; }
+.preview-block { background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2);
+                 border-radius: 10px; padding: 1rem 1.25rem; margin: 1.25rem 0;
+                 display: none; }
+.preview-block.visible { display: block; }
+.preview-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
+                 color: #9898a3; font-weight: 600; margin-bottom: 0.3rem; }
+.preview-url { font-family: 'JetBrains Mono','Fira Code',monospace; font-size: 1rem;
+               color: #a5b4fc; word-break: break-all; }
+.hint-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
+.hint-chip { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+             border-radius: 6px; padding: 0.2rem 0.6rem; font-size: 0.8rem; color: #9898a3;
+             cursor: pointer; transition: all 0.12s; font-family: 'JetBrains Mono','Fira Code',monospace; }
+.hint-chip:hover { background: rgba(99,102,241,0.12); border-color: rgba(99,102,241,0.3); color: #a5b4fc; }
+"""
+
+
+@router.get("/onboarding/choose-subdomain", response_class=HTMLResponse)
+def choose_subdomain_page(request: Request, error: str | None = Query(default=None), db: Session = Depends(get_db)):
+    user = _get_user_from_cookie(request, db)
+    if not user:
+        return RedirectResponse("/", status_code=302)
+    if not user.email_verified:
+        return RedirectResponse("/verify-email", status_code=302)
+    # Already has an active instance → go to dashboard
+    instance = db.query(Instance).filter(Instance.user_id == user.id).first()
+    if instance and instance.status not in ("deprovisioned", "failed"):
+        return RedirectResponse("/dashboard", status_code=302)
+
+    domain = settings.root_domain
+    csrf = _csrf_token(user.id)
+
+    # Generate hint chips from the email prefix
+    raw_prefix = user.email.split("@")[0].lower()
+    sanitized = _re.sub(r"[^a-z0-9-]", "-", raw_prefix).strip("-")[:20]
+    hints_html = ""
+    if sanitized and len(sanitized) >= 3:
+        hints = [sanitized]
+        # Add a few numeric variants
+        for i in (1, 42):
+            candidate = f"{sanitized[:15]}{i}"
+            if candidate != sanitized:
+                hints.append(candidate)
+        chips = "".join(
+            f'<span class="hint-chip" onclick="fillSlug(\'{html.escape(h)}\')">{html.escape(h)}</span>'
+            for h in hints
+        )
+        hints_html = f'<div style="margin-top:0.5rem;"><div style="font-size:0.75rem;color:#9898a3;margin-bottom:0.4rem;">Suggestions</div><div class="hint-row">{chips}</div></div>'
+
+    prefill = html.escape(user.pending_subdomain or sanitized or "")
+
+    error_html = ""
+    if error:
+        error_html = f'<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:0.65rem 0.9rem;margin-bottom:1rem;color:#fca5a5;font-size:0.875rem;">{html.escape(error)}</div>'
+
+    body = f"""
+    <div class="hero-center" style="padding:2.5rem 0 1.5rem;">
+      <h1>Choose your URL</h1>
+      <p class="subtitle">This is the address where you'll access your Longhouse.</p>
+    </div>
+    <div class="card" style="max-width:480px;margin:0 auto 1.25rem;">
+      {error_html}
+      <form id="slug-form" method="post" action="/onboarding/set-subdomain">
+        <input type="hidden" name="csrf_token" value="{html.escape(csrf)}">
+        <label style="margin-top:0;">Your address</label>
+        <div class="slug-row" id="slug-row">
+          <input class="slug-input" type="text" id="slug-input" name="subdomain"
+                 value="{prefill}" required minlength="3" maxlength="63"
+                 autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+                 placeholder="myteam">
+          <span class="slug-suffix">.{html.escape(domain)}</span>
+        </div>
+        <div class="check-badge hidden" id="check-badge"></div>
+
+        <div class="preview-block" id="preview-block">
+          <div class="preview-label">Your instance will be at</div>
+          <div class="preview-url" id="preview-url"></div>
+        </div>
+
+        {hints_html}
+
+        <button type="submit" id="submit-btn" class="btn btn-primary"
+                style="width:100%;margin-top:1.5rem;padding:0.8rem;font-size:1rem;" disabled>
+          Continue to Payment &rarr;
+        </button>
+      </form>
+      <p style="text-align:center;margin-top:1rem;font-size:0.8rem;color:#9898a3;">
+        You can&#8217;t change this after subscribing.
+      </p>
+    </div>
+    <script>
+    (function() {{
+      const input     = document.getElementById('slug-input');
+      const row       = document.getElementById('slug-row');
+      const badge     = document.getElementById('check-badge');
+      const preview   = document.getElementById('preview-block');
+      const previewUrl= document.getElementById('preview-url');
+      const submitBtn = document.getElementById('submit-btn');
+      const domain    = '{html.escape(domain)}';
+      let debounce, controller;
+
+      function setAvailable(slug) {{
+        row.className = 'slug-row valid';
+        badge.className = 'check-badge ok';
+        badge.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8l3.5 3.5L13 4.5" stroke="#22c55e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Available';
+        previewUrl.textContent = slug + '.' + domain;
+        preview.className = 'preview-block visible';
+        submitBtn.disabled = false;
+      }}
+
+      function setUnavailable(reason) {{
+        row.className = 'slug-row invalid';
+        badge.className = 'check-badge err';
+        const msgs = {{ taken: 'Already taken', reserved: 'Reserved name', invalid: 'Letters, numbers, and hyphens only (3–63 chars)' }};
+        badge.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="#f87171" stroke-width="2" stroke-linecap="round"/></svg> ' + (msgs[reason] || 'Not available');
+        preview.className = 'preview-block';
+        submitBtn.disabled = true;
+      }}
+
+      function setChecking() {{
+        row.className = 'slug-row';
+        badge.className = 'check-badge loading';
+        badge.textContent = 'Checking...';
+        preview.className = 'preview-block';
+        submitBtn.disabled = true;
+      }}
+
+      function setEmpty() {{
+        row.className = 'slug-row';
+        badge.className = 'check-badge hidden';
+        badge.textContent = '';
+        preview.className = 'preview-block';
+        submitBtn.disabled = true;
+      }}
+
+      async function check(slug) {{
+        if (!slug || slug.length < 3) {{ setEmpty(); return; }}
+        if (controller) controller.abort();
+        controller = new AbortController();
+        setChecking();
+        try {{
+          const res = await fetch('/api/instances/subdomain-check?subdomain=' + encodeURIComponent(slug), {{
+            signal: controller.signal
+          }});
+          const data = await res.json();
+          data.available ? setAvailable(slug) : setUnavailable(data.reason);
+        }} catch (e) {{
+          if (e.name !== 'AbortError') setEmpty();
+        }}
+      }}
+
+      function onInput() {{
+        const raw = input.value.toLowerCase().replace(/[^a-z0-9-]/g, '');
+        if (raw !== input.value) {{
+          const pos = input.selectionStart;
+          input.value = raw;
+          input.setSelectionRange(pos, pos);
+        }}
+        clearTimeout(debounce);
+        if (!raw || raw.length < 3) {{ setEmpty(); return; }}
+        // Must start and end with alphanumeric (not hyphen)
+        if (!/^[a-z0-9]/.test(raw) || !/[a-z0-9]$/.test(raw)) {{
+          setUnavailable('invalid');
+          return;
+        }}
+        setChecking();
+        debounce = setTimeout(() => check(raw), 320);
+      }}
+
+      input.addEventListener('input', onInput);
+
+      // Run check on page load if there's a prefill value
+      const initial = input.value.trim();
+      if (initial.length >= 3) check(initial);
+
+      // Prevent double-submit
+      document.getElementById('slug-form').addEventListener('submit', (e) => {{
+        if (submitBtn.disabled) e.preventDefault();
+        else submitBtn.textContent = 'Saving...';
+      }});
+    }})();
+
+    function fillSlug(val) {{
+      const input = document.getElementById('slug-input');
+      input.value = val;
+      input.dispatchEvent(new Event('input'));
+      input.focus();
+    }}
+    </script>
+    """
+    return _page("Choose Your URL", body, nav=False, extra_styles=_SUBDOMAIN_PICKER_EXTRA_STYLES)
+
+
+@router.post("/onboarding/set-subdomain")
+def set_subdomain(
+    request: Request,
+    subdomain: str = Form(...),
+    csrf_token: str = Form(default=""),
+    db: Session = Depends(get_db),
+):
+    user = _get_user_from_cookie(request, db)
+    if not user:
+        return RedirectResponse("/", status_code=302)
+    if not user.email_verified:
+        return RedirectResponse("/verify-email", status_code=302)
+    if not _verify_csrf(user.id, csrf_token):
+        from urllib.parse import urlencode
+        return RedirectResponse(
+            f"/onboarding/choose-subdomain?{urlencode({'error': 'Session expired. Please try again.'})}",
+            status_code=303,
+        )
+
+    from control_plane.routers.instances import _is_valid_subdomain
+    from control_plane.routers.instances import RESERVED_SUBDOMAINS
+
+    slug = subdomain.strip().lower()
+    error = None
+
+    if not _is_valid_subdomain(slug):
+        error = "Invalid subdomain. Use 3–63 lowercase letters, numbers, or hyphens."
+    elif slug in RESERVED_SUBDOMAINS:
+        error = "That name is reserved. Please choose another."
+    elif db.query(Instance).filter(Instance.subdomain == slug).first():
+        error = "That subdomain is already taken."
+    elif (
+        db.query(User)
+        .filter(User.pending_subdomain == slug, User.id != user.id)
+        .first()
+    ):
+        error = "That subdomain is already taken."
+
+    if error:
+        from urllib.parse import urlencode
+        params = urlencode({"error": error})
+        return RedirectResponse(f"/onboarding/choose-subdomain?{params}", status_code=303)
+
+    user.pending_subdomain = slug
+    db.commit()
+    return RedirectResponse("/dashboard", status_code=303)
+
+
+# ---------------------------------------------------------------------------
 # Password reset pages
 # ---------------------------------------------------------------------------
 
@@ -429,12 +716,24 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         # Paid but not yet provisioned — redirect to provisioning status
         return RedirectResponse("/provisioning", status_code=302)
     else:
-        # No subscription — offer checkout
-        body = """
+        # No subscription — require subdomain choice before checkout
+        if not user.pending_subdomain:
+            return RedirectResponse("/onboarding/choose-subdomain", status_code=302)
+
+        domain = settings.root_domain
+        chosen_url = f"{html.escape(user.pending_subdomain)}.{html.escape(domain)}"
+        body = f"""
         <h1>Get Started</h1>
         <p class="subtitle">Launch your own always-on Longhouse instance.</p>
         <div class="card">
-          <h2>Hosted &mdash; $5/mo</h2>
+          <div style="margin-bottom:1.25rem;">
+            <div style="font-size:0.75rem;color:#9898a3;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-bottom:0.35rem;">Your instance URL</div>
+            <div style="display:flex;align-items:center;gap:0.6rem;">
+              <span style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:1rem;color:#818cf8;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:0.45rem 0.85rem;">{chosen_url}</span>
+              <a href="/onboarding/choose-subdomain" style="font-size:0.8rem;color:#9898a3;white-space:nowrap;">Change</a>
+            </div>
+          </div>
+          <h2 style="margin-bottom:0.35rem;">Hosted &mdash; $5/mo</h2>
           <p>Always-on instance, automatic updates, access from any device.</p>
           <form method="post" action="/dashboard/checkout">
             <button type="submit" class="btn btn-primary" style="margin-top:1rem;">Subscribe &amp; Launch Instance</button>

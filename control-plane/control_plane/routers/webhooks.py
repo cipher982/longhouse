@@ -172,19 +172,21 @@ def _handle_checkout_completed(data: dict, db: Session) -> None:
         logger.info(f"Instance already exists for {user.email} ({existing.subdomain}), skipping provision")
         return
 
-    # Derive subdomain from email (before @, sanitized to valid DNS label)
-    import re
+    # Use user-chosen slug when available; fall back to email derivation
+    from control_plane.routers.instances import _derive_subdomain_from_email
+    from control_plane.routers.instances import _is_valid_subdomain
 
-    subdomain = user.email.split("@")[0].lower()
-    subdomain = re.sub(r"[^a-z0-9-]", "-", subdomain).strip("-")[:63]
-    if not subdomain:
-        subdomain = "user"
-    # Ensure uniqueness
-    base = subdomain
-    counter = 1
-    while db.query(Instance).filter(Instance.subdomain == subdomain).first():
-        subdomain = f"{base}-{counter}"
-        counter += 1
+    subdomain = user.pending_subdomain
+    # Check claimed state first (race guard), then validate format
+    if subdomain and not db.query(Instance).filter(Instance.subdomain == subdomain).first() and _is_valid_subdomain(subdomain):
+        pass  # use the chosen slug
+    else:
+        subdomain = _derive_subdomain_from_email(user.email, db)
+
+    # Clear and commit before provisioning so the slug is released
+    # regardless of whether provisioning succeeds or fails.
+    user.pending_subdomain = None
+    db.commit()
 
     try:
         from control_plane.services.provisioner import Provisioner

@@ -27,6 +27,7 @@ class User(Base):
     updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), onupdate=func.now())
     password_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    pending_subdomain: Mapped[str | None] = mapped_column(String(63), nullable=True)
 
     instance: Mapped["Instance"] = relationship("Instance", back_populates="user", uselist=False)
 
