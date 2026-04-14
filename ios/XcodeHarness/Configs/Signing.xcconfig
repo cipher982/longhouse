@@ -1,0 +1,2 @@
+// Shared target config. Keep signing local to the machine that owns the Apple team.
+#include? "LocalSigning.xcconfig"
