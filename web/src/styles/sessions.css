@@ -751,6 +751,23 @@
     border-color: color-mix(in srgb, #fbbf24 28%, transparent);
   }
 
+  .session-card-management-pill {
+    font-size: 10px;
+    font-weight: var(--font-weight-semibold);
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: var(--radius-full);
+    background: var(--surface-glass-2);
+    color: var(--color-text-muted);
+    border: 1px solid var(--border-glass-1);
+  }
+
+  .session-card-management-pill--success {
+    background: color-mix(in srgb, var(--color-intent-success) 15%, transparent);
+    color: var(--color-intent-success);
+    border-color: color-mix(in srgb, var(--color-intent-success) 30%, transparent);
+  }
+
   /* Secondary: what was done — summary title or first user message */
   .session-card-title {
     font-size: var(--font-size-sm);

@@ -442,6 +442,8 @@ describe("SessionsPage", () => {
     renderSessionsPage("/timeline");
 
     const capability = await screen.findByTestId("session-card-capability");
+    const management = screen.getByTestId("session-card-management");
+    expect(management).toHaveTextContent("Unmanaged");
     expect(capability).toHaveTextContent("Search only");
     // Cards show badge only — no prose summary
     expect(capability.querySelector(".session-card-capability-text")).toBeNull();
@@ -600,7 +602,7 @@ describe("SessionsPage", () => {
     expect(await screen.findByText("These are demo sessions.")).toBeInTheDocument();
     expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
     expect(screen.getByText("longhouse ship")).toBeInTheDocument();
-    expect(screen.getByText(/start through longhouse or wrappers when you want control after launch/i)).toBeInTheDocument();
+    expect(screen.getByText(/launch managed sessions with Longhouse when you want control after launch/i)).toBeInTheDocument();
   });
 
   it("renders query compatibility cards from the matched detail session instead of speculative head state", async () => {
@@ -927,6 +929,7 @@ describe("SessionsPage", () => {
     renderSessionsPage();
 
     expect(await screen.findAllByText("Live control")).toHaveLength(1);
+    expect(screen.getAllByTestId("session-card-management").some((pill) => pill.textContent?.includes("Managed"))).toBe(true);
     expect(screen.getByText("This machine")).toBeInTheDocument();
     expect(screen.getByText("Cloud")).toBeInTheDocument();
     expect(screen.getByText("Head: cinder")).toBeInTheDocument();

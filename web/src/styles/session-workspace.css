@@ -247,6 +247,12 @@
     line-height: var(--font-line-height-relaxed);
   }
 
+  .session-context-managed-copy {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    line-height: var(--font-line-height-relaxed);
+  }
+
   .session-context-primary-action {
     display: flex;
     flex-direction: column;

@@ -671,6 +671,12 @@ function SessionCard({
               )}
             </div>
           )}
+          <span
+            className={`session-card-management-pill session-card-management-pill--${interaction.managementVariant}`}
+            data-testid="session-card-management"
+          >
+            {interaction.managementLabel}
+          </span>
           <span className={`session-card-capability-pill session-card-capability-pill--${interaction.capabilityVariant}`} data-testid="session-card-capability">
             {interaction.capabilityLabel}
           </span>
@@ -1234,7 +1240,7 @@ export default function SessionsPage() {
               <li><code>longhouse connect --install</code> &mdash; keep background import running</li>
               <li><code>longhouse ship</code> &mdash; pull existing sessions into the timeline now</li>
               <li>Search one session or open raw detail</li>
-              <li>Later, start through <code>longhouse claude</code> or <code>longhouse codex</code> on a connected machine when you want control after launch</li>
+              <li>Later, start a managed session with <code>longhouse claude</code> or <code>longhouse codex</code> when you want control after launch</li>
             </ol>
             <p className="sessions-guided-cli-hint">
               Don&apos;t have a CLI yet? Longhouse supports{" "}
@@ -1271,7 +1277,7 @@ export default function SessionsPage() {
             <span>These are demo sessions.</span>{" "}
             <span>
               Import real sessions with <code>longhouse connect --install</code> and <code>longhouse ship</code>,
-              then start through Longhouse or wrappers when you want control after launch.
+              then launch managed sessions with Longhouse when you want control after launch.
             </span>
           </div>
         )}

@@ -27,13 +27,18 @@ longhouse serve --demo         # start with demo data`}
 
       <h3>longhouse claude / codex</h3>
       <p>
-        Start a provider CLI session with a Longhouse control channel. The
-        session runs in your terminal and stays reachable from other surfaces.
+        Launch a managed provider CLI session with a Longhouse control channel.
+        The session runs in your terminal and stays reachable from other
+        surfaces.
       </p>
       <CodeBlock title="terminal">
         {`longhouse claude               # start Claude Code
 longhouse codex                # start Codex CLI`}
       </CodeBlock>
+      <p>
+        Bare <code>claude</code> and <code>codex</code> runs still import into
+        the timeline, but they remain unmanaged history.
+      </p>
 
       <h3>longhouse ship</h3>
       <p>

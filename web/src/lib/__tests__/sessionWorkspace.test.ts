@@ -107,6 +107,8 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("managed_local");
     expect(capabilities.canChatFromBrowser).toBe(true);
+    expect(capabilities.managementLabel).toBe("Managed");
+    expect(capabilities.managementDescription).toMatch(/owns the live control path/i);
     expect(capabilities.capabilityLabel).toBe("Live control");
     expect(capabilities.composerDisabledReason).toBeNull();
     expect(capabilities.primaryActionLabel).toBe("Open live dock");
@@ -131,6 +133,7 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("managed_local_unavailable");
     expect(capabilities.canChatFromBrowser).toBe(false);
+    expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.capabilityLabel).toBe("Reattach on host");
     expect(capabilities.composerDisabledReason).toMatch(/host control channel/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
@@ -156,6 +159,7 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("managed_local_unavailable");
     expect(capabilities.canChatFromBrowser).toBe(false);
+    expect(capabilities.managementLabel).toBe("Managed");
     expect(capabilities.capabilityLabel).toBe("Reattach on host");
   });
 
@@ -167,8 +171,11 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
+    expect(capabilities.managementLabel).toBe("Unmanaged");
+    expect(capabilities.capabilityDescription).toMatch(/cannot steer it from the browser/i);
     expect(capabilities.capabilityLabel).toBe("Search only");
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
+    expect(capabilities.notice?.title).toBe("Claude session — unmanaged");
   });
 
   it("treats unsupported providers as searchable context only", () => {
@@ -181,8 +188,9 @@ describe("getSessionInteractionCapabilities", () => {
 
     expect(capabilities.mode).toBe("unsupported");
     expect(capabilities.canChatFromBrowser).toBe(false);
+    expect(capabilities.managementLabel).toBe("Unmanaged");
     expect(capabilities.capabilityLabel).toBe("Search only");
-    expect(capabilities.composerDisabledReason).toMatch(/fully searchable/i);
+    expect(capabilities.composerDisabledReason).toMatch(/cannot steer it from the browser/i);
     expect(capabilities.primaryActionLabel).toBe("Unavailable");
   });
 });

@@ -13,8 +13,9 @@ export default function IntegrationsPage() {
       <h1>Integrations</h1>
       <p className="docs-subtitle">
         Longhouse reads the session files your CLI tools already produce.
-        No plugins or provider-side configuration needed. Starting through
-        Longhouse keeps the control path explicit instead of pretending every
+        No plugins or provider-side configuration needed. Bare CLI runs import
+        as unmanaged history; launching through Longhouse creates managed
+        sessions and keeps the control path explicit instead of pretending every
         provider is equally mature.
       </p>
 
@@ -22,7 +23,7 @@ export default function IntegrationsPage() {
       <p>
         <strong>Strongest today.</strong> Claude has the best end-to-end story:
         import, search, raw session detail, and the strongest control-after-launch
-        path when started through Longhouse.
+        path when launched as a managed session through Longhouse.
       </p>
       <CodeBlock title="terminal">
         {`longhouse claude               # start with control channel`}
@@ -49,8 +50,9 @@ export default function IntegrationsPage() {
 
       <h2>Codex CLI</h2>
       <p>
-        Archive and search are solid, and launch-through-Longhouse is supported.
-        Codex can stay reachable after launch, but the continuation path is still
+        Archive and search are solid, and managed launch through Longhouse is
+        supported. Bare Codex runs still import as unmanaged history. Codex can
+        stay reachable after launch, but the continuation path is still
         catching up to Claude.
       </p>
       <CodeBlock title="terminal">
@@ -76,7 +78,7 @@ export default function IntegrationsPage() {
       <p>
         Treat Gemini as archive and search first today. Longhouse ingests the
         sessions cleanly, but live control and continuation are not the reason
-        to buy on Gemini yet.
+        to buy on Gemini yet, even when the session is managed.
       </p>
       <table>
         <thead>

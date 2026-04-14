@@ -31,6 +31,14 @@ export function getSessionInteractionCapabilities({
       ? "managed_local_unavailable"
       : "unsupported";
 
+  const managementLabel = isManagedLocalSession ? "Managed" : "Unmanaged";
+  const managementVariant = isManagedLocalSession ? "success" : "neutral";
+  const managementDescription = isManagedLocalSession
+    ? liveControlAvailable
+      ? "Longhouse owns the live control path for this session."
+      : "Longhouse owns this session, but live control currently requires reattaching on the host."
+    : `Longhouse imported this ${providerLabel} session, but it does not own the live control path. Launch through Longhouse when you need a managed session.`;
+
   const submitLabel =
     mode === "managed_local"
       ? "Send"
@@ -55,7 +63,7 @@ export function getSessionInteractionCapabilities({
       ? `Message this live ${providerLabel} session from Longhouse, or reattach on the host machine.`
       : mode === "managed_local_unavailable"
         ? `This live ${providerLabel} session is visible here, but you need the host terminal to keep driving it.`
-        : null;
+        : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot steer it from the browser.`;
 
   const title =
     mode === "managed_local"
@@ -68,8 +76,8 @@ export function getSessionInteractionCapabilities({
     mode === "managed_local"
       ? `Longhouse can send your next prompt into this live ${providerLabel} session on ${sourceOriginLabel}, and the results sync back into the timeline here.`
       : mode === "managed_local_unavailable"
-        ? `This live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts right now. Reattach on the host machine to continue.`
-        : `This ${providerLabel} session is fully searchable here.`;
+        ? `This managed live ${providerLabel} session is still visible here, but Longhouse cannot inject prompts right now. Reattach on the host machine to continue.`
+        : `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot inject prompts into it.`;
 
   const placeholder =
     mode === "managed_local"
@@ -86,8 +94,8 @@ export function getSessionInteractionCapabilities({
           }
       : mode === "unsupported"
         ? {
-            title: `${providerLabel} session — search only`,
-            body: `This ${providerLabel} session is fully searchable here.`,
+            title: `${providerLabel} session — unmanaged`,
+            body: `This unmanaged ${providerLabel} session is searchable here, but Longhouse cannot steer it from the browser.`,
           }
         : null;
 
@@ -104,6 +112,9 @@ export function getSessionInteractionCapabilities({
     liveControlAvailable,
     hostReattachAvailable,
     canChatFromBrowser: liveControlAvailable,
+    managementLabel,
+    managementVariant,
+    managementDescription,
     capabilityLabel,
     capabilityVariant,
     capabilityDescription,

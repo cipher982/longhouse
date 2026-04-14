@@ -55,21 +55,40 @@ export default function QuickStartPage() {
           data. Then import your real sessions when you are ready.
         </p>
       </div>
+      <div className="docs-callout">
+        <p>
+          <strong>Imported runs are unmanaged.</strong> Longhouse still shows
+          them in the timeline, but there is no live control path open. Treat
+          bare CLI history as observe-only until you launch a managed session
+          yourself.
+        </p>
+      </div>
 
-      <h2>4. Start through Longhouse</h2>
+      <h2>4. Launch a managed session</h2>
       <p>
-        Keep using bare provider CLIs when you only need local work. Start
-        through Longhouse when you want the session to stay reachable later:
+        Bare provider CLIs create unmanaged sessions that are useful for quick
+        local work but cannot accept browser messages. Start through Longhouse
+        instead when you want a <strong>managed</strong> session to stay
+        reachable later:
       </p>
       <CodeBlock title="terminal">
         {`longhouse claude    # Claude Code with control channel
 longhouse codex     # Codex CLI with control channel`}
       </CodeBlock>
       <p>
-        When Longhouse is in the launch path, the session stays addressable from
-        the browser, CLI, or API after the terminal closes. Claude is the
-        strongest control-ready path today.
+        When Longhouse launches the session, it owns the control path so you
+        can message or reattach later from the browser, CLI, or API. Claude is
+        the strongest managed path today, but <code>longhouse codex</code> also keeps a
+        Codex session steerable.
       </p>
+      <div className="docs-callout">
+        <p>
+          <strong>Managed vs unmanaged.</strong> Both show up in the timeline,
+          but only managed sessions keep a live control channel. Use
+          <code>longhouse claude</code> or <code>longhouse codex</code> whenever you want to keep a
+          session steerable.
+        </p>
+      </div>
 
       <h2>5. Troubleshooting</h2>
       <p>

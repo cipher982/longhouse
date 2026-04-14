@@ -12,7 +12,8 @@ export default function OverviewPage() {
       <h1>Longhouse Documentation</h1>
       <p className="docs-subtitle">
         Mission control for CLI agent sessions running on machines you own.
-        Import sessions, search them, and keep a control channel open for later.
+        Import unmanaged sessions, search them, and keep managed sessions
+        steerable for later.
       </p>
 
       <div className="docs-callout">
@@ -26,10 +27,17 @@ export default function OverviewPage() {
       <h2>What Longhouse Does</h2>
       <p>
         Longhouse puts Claude Code, Codex CLI, and Gemini CLI sessions into one
-        searchable timeline. When you start a session through Longhouse, it also
-        keeps a control channel open so you can message, tail, or continue that
-        session later — from the browser, CLI, or API.
+        searchable timeline. Bare provider runs land as unmanaged history.
+        When you launch a session through Longhouse, it becomes managed, so you
+        can message, tail, or continue it later from the browser, CLI, or API.
       </p>
+      <div className="docs-callout">
+        <p>
+          <strong>Managed vs unmanaged.</strong> Imported sessions are useful
+          immediately for search and inspection, but only managed sessions keep
+          a live control path.
+        </p>
+      </div>
 
       <h3>The core loop</h3>
       <ol>
@@ -47,9 +55,9 @@ export default function OverviewPage() {
           The model already did the work; Longhouse makes it reusable.
         </li>
         <li>
-          <strong>Control</strong> — When you start through Longhouse, the
-          session stays reachable. Send it a message, tail its events, or
-          continue where it left off.
+          <strong>Control</strong> — When you launch through Longhouse, the
+          session becomes managed and stays reachable. Send it a message, tail
+          its events, or continue where it left off.
         </li>
       </ol>
 
@@ -77,7 +85,7 @@ export default function OverviewPage() {
         </Link>
         <Link to="/docs/remote-control" className="docs-overview-card">
           <h3>Remote Control</h3>
-          <p>Start through Longhouse, keep control after launch.</p>
+          <p>Launch managed sessions and keep control after launch.</p>
         </Link>
         <Link to="/docs/cli" className="docs-overview-card">
           <h3>CLI Reference</h3>
