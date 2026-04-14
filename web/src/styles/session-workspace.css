@@ -998,6 +998,15 @@
     font-size: var(--font-size-xs);
   }
 
+  .timeline-row--agent {
+    opacity: 0.55;
+    padding-block: var(--space-2);
+  }
+
+  .timeline-row--agent .timeline-row__content {
+    -webkit-line-clamp: 1;
+  }
+
   .timeline-row__badge,
   .timeline-row__tool-namespace,
   .timeline-row__batch-chip {

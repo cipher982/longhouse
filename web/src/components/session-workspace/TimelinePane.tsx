@@ -15,6 +15,7 @@ import {
   getToolDuration,
   getToolExitCode,
   getToolSummary,
+  isAgentToolInteraction,
   isOutsideActiveContext,
   timelineItemContainsSelection,
 } from "../../lib/sessionWorkspace";
@@ -116,6 +117,8 @@ function ToolRow({
   const outsideActiveContext =
     isOutsideActiveContext(interaction.callEvent) || isOutsideActiveContext(interaction.resultEvent);
   const pending = !interaction.resultEvent && interaction.pairing !== "orphan";
+  const isAgent = isAgentToolInteraction(interaction);
+  const agentType = isAgent ? (interaction.callEvent?.tool_input_json as Record<string, unknown> | null)?.subagent_type as string | undefined : undefined;
 
   return (
     <button
@@ -123,7 +126,7 @@ function ToolRow({
       id={rowId}
       data-testid="session-timeline-row"
       data-row-kind="tool"
-      className={`timeline-row timeline-row--tool event-item${isSelected ? " is-selected event-highlight" : ""}`}
+      className={`timeline-row timeline-row--tool${isAgent ? " timeline-row--agent" : ""} event-item${isSelected ? " is-selected event-highlight" : ""}`}
       onClick={onSelect}
     >
       <div className="timeline-row__meta">
@@ -131,7 +134,7 @@ function ToolRow({
           <span className="timeline-row__tool-icon" style={{ backgroundColor: info.color }}>
             {info.icon}
           </span>
-          <span className="timeline-row__tool-name">{info.displayName}</span>
+          <span className="timeline-row__tool-name">{agentType || info.displayName}</span>
           {info.mcpNamespace ? <span className="timeline-row__tool-namespace">{info.mcpNamespace}</span> : null}
         </span>
         <span className="timeline-row__time">
@@ -166,21 +169,23 @@ function ToolBatchRow({
   isSelected: boolean;
   onSelect: () => void;
 }) {
+  const allAgents = batch.interactions.every(isAgentToolInteraction);
+
   return (
     <button
       type="button"
       id={`event-${batch.anchorId}`}
       data-testid="session-timeline-row"
       data-row-kind="tool-batch"
-      className={`timeline-row timeline-row--batch event-item${isSelected ? " is-selected event-highlight" : ""}`}
+      className={`timeline-row timeline-row--batch${allAgents ? " timeline-row--agent" : ""} event-item${isSelected ? " is-selected event-highlight" : ""}`}
       onClick={onSelect}
     >
       <div className="timeline-row__meta">
         <span className="timeline-row__batch-label">
-          <span className="timeline-row__badge timeline-row__badge--accent">
-            {batch.interactions.length} parallel
+          <span className={`timeline-row__badge${allAgents ? "" : " timeline-row__badge--accent"}`}>
+            {batch.interactions.length} {allAgents ? "agents" : "parallel"}
           </span>
-          <span>Tool burst</span>
+          {allAgents ? null : <span>Tool burst</span>}
         </span>
         <span className="timeline-row__time">{formatTime(batch.timestamp)}</span>
       </div>

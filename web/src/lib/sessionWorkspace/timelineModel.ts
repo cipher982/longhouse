@@ -14,6 +14,10 @@ export function isOutsideActiveContext(event: AgentEvent | null | undefined): bo
   return event?.in_active_context === false;
 }
 
+export function isAgentToolInteraction(interaction: ToolInteraction): boolean {
+  return interaction.toolName.toLowerCase() === "agent";
+}
+
 function buildTimelineSeam(item: AgentSessionProjectionItem): TimelineSeam {
   const childOrigin = item.origin_label || "Local";
   const parentOrigin = item.parent_origin_label || "earlier sync";
@@ -102,6 +106,8 @@ export function getToolDisplayInfo(
   }
 
   switch (toolName.toLowerCase()) {
+    case "agent":
+      return { icon: "A", color: "var(--color-text-tertiary)", displayName: "Agent" };
     case "bash":
     case "exec_command":
     case "shell":
@@ -199,6 +205,7 @@ export function getToolSummary(interaction: ToolInteraction): string {
 
   if (callEvent?.tool_input_json) {
     const input = callEvent.tool_input_json;
+    if ("description" in input && "prompt" in input) return String(input.description).slice(0, 120);
     if ("file_path" in input) return truncatePath(String(input.file_path));
     if ("command" in input) return String(input.command).slice(0, 120);
     if ("cmd" in input) return String(input.cmd).slice(0, 120);
