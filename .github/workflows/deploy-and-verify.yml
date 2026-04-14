@@ -16,9 +16,35 @@ permissions:
   packages: read
 
 jobs:
+  changes:
+    name: "Detect runtime deploy scope"
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_verify: ${{ steps.decide.outputs.deploy_verify }}
+    steps:
+      - uses: actions/checkout@v6
+        if: ${{ github.event_name == 'push' }}
+        with:
+          fetch-depth: 1
+      - uses: dorny/paths-filter@v3
+        if: ${{ github.event_name == 'push' }}
+        id: filter
+        with:
+          filters: .github/path-filters.yml
+      - name: Resolve runtime deploy scope
+        id: decide
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "deploy_verify=${{ steps.filter.outputs.deploy_verify }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_verify=true" >> "$GITHUB_OUTPUT"
+          fi
+
   gate:
     name: "Queue deploy behind earlier main SHAs + green CI"
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.deploy_verify == 'true' }}
     outputs:
       predecessor_sha: ${{ steps.meta.outputs.predecessor_sha }}
       head_sha: ${{ steps.meta.outputs.head_sha }}

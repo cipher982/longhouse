@@ -1,0 +1,88 @@
+backend:
+  - 'server/**'
+  - 'config/**'
+
+frontend:
+  - 'web/**'
+  - 'bun.lock'
+  - 'package.json'
+
+engine:
+  - 'engine/**'
+
+schemas:
+  - 'schemas/**'
+  - 'scripts/generate/**'
+  - 'Makefile'
+
+control_plane:
+  - 'control-plane/**'
+
+packaging:
+  - 'server/pyproject.toml'
+  - 'server/setup.cfg'
+  - 'web/**'
+  - 'scripts/qa/test-wheel-package.sh'
+
+runner:
+  - 'runner/**'
+
+e2e:
+  - 'e2e/**'
+  - 'server/**'
+  - 'web/**'
+  - 'config/**'
+
+models:
+  - 'config/models.json'
+  - 'server/zerg/llm/**'
+  - 'scripts/qa/smoke_models.py'
+
+scripts:
+  - 'scripts/**'
+
+runtime_image:
+  - 'bun.lock'
+  - 'config/**'
+  - 'control-plane/longhouse_shared/**'
+  - 'docker/entrypoint.sh'
+  - 'docker/runtime.dockerfile'
+  - 'engine/**'
+  - 'server/**'
+  - 'web/**'
+  - '.github/workflows/runtime-image.yml'
+
+deploy_verify:
+  - 'bun.lock'
+  - 'config/**'
+  - 'control-plane/longhouse_shared/**'
+  - 'docker/entrypoint.sh'
+  - 'docker/runtime.dockerfile'
+  - 'engine/**'
+  - 'server/**'
+  - 'web/**'
+  - 'Makefile'
+  - 'scripts/ci/setup-deploy-ssh.sh'
+  - 'scripts/ci/wait-for-http.sh'
+  - 'scripts/lib/hosted-instance.sh'
+  - 'scripts/ops/coolify-deploy.sh'
+  - 'scripts/qa/**'
+  - '.github/actions/wait-for-ci/**'
+  - '.github/workflows/deploy-and-verify.yml'
+  - '.github/workflows/runtime-image.yml'
+
+provision_e2e:
+  - '.dockerignore'
+  - 'bun.lock'
+  - 'control-plane/**'
+  - 'engine/**'
+  - 'server/**'
+  - 'web/**'
+  - 'config/**'
+  - 'docker/entrypoint.sh'
+  - 'docker/runtime.dockerfile'
+  - 'scripts/ci/provision-e2e.sh'
+  - 'scripts/lib/hosted-instance.sh'
+  - '.github/actions/wait-for-ci/**'
+  - '.github/workflows/provision-e2e.yml'
+  - '.github/workflows/runtime-image.yml'

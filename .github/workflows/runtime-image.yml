@@ -12,9 +12,35 @@ permissions:
   packages: write
 
 jobs:
+  changes:
+    name: "Detect runtime image scope"
+    runs-on: ubuntu-latest
+    outputs:
+      runtime_image: ${{ steps.decide.outputs.runtime_image }}
+    steps:
+      - uses: actions/checkout@v6
+        if: ${{ github.event_name == 'push' }}
+        with:
+          fetch-depth: 1
+      - uses: dorny/paths-filter@v3
+        if: ${{ github.event_name == 'push' }}
+        id: filter
+        with:
+          filters: .github/path-filters.yml
+      - name: Resolve runtime image scope
+        id: decide
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            echo "runtime_image=${{ steps.filter.outputs.runtime_image }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "runtime_image=true" >> "$GITHUB_OUTPUT"
+          fi
+
   gate:
     name: "Gate image on push to main"
     runs-on: ubuntu-latest
+    needs: changes
+    if: ${{ needs.changes.outputs.runtime_image == 'true' }}
     outputs:
       head_sha: ${{ steps.meta.outputs.head_sha }}
     steps:
