@@ -6,6 +6,7 @@ struct SessionEntry: TimelineEntry {
     let sessions: [SessionSummary]
     let totalActive: Int
     let isPlaceholder: Bool
+    let isSignedIn: Bool
 
     static let placeholder = SessionEntry(
         date: .now,
@@ -14,10 +15,12 @@ struct SessionEntry: TimelineEntry {
             SessionSummary(id: "2", title: "Deploy pipeline stuck", presenceState: "blocked", provider: "claude", project: "zerg", lastActivityAt: nil),
         ],
         totalActive: 2,
-        isPlaceholder: true
+        isPlaceholder: true,
+        isSignedIn: true
     )
 
-    static let empty = SessionEntry(date: .now, sessions: [], totalActive: 0, isPlaceholder: false)
+    static let empty = SessionEntry(date: .now, sessions: [], totalActive: 0, isPlaceholder: false, isSignedIn: true)
+    static let notSignedIn = SessionEntry(date: .now, sessions: [], totalActive: 0, isPlaceholder: false, isSignedIn: false)
 }
 
 struct SessionProvider: TimelineProvider {
@@ -47,15 +50,15 @@ struct SessionProvider: TimelineProvider {
     private func fetchSessions() async -> SessionEntry {
         guard let serverURL = KeychainHelper.loadServerURL(),
               let authToken = KeychainHelper.loadAuthToken() else {
-            return .empty
+            return .notSignedIn
         }
 
         let api = LonghouseAPI(host: serverURL)
         do {
             let sessions = try await api.sessionsNeedingAttention(authToken: authToken)
-            return SessionEntry(date: .now, sessions: Array(sessions.prefix(3)), totalActive: sessions.count, isPlaceholder: false)
+            return SessionEntry(date: .now, sessions: Array(sessions.prefix(3)), totalActive: sessions.count, isPlaceholder: false, isSignedIn: true)
         } catch {
-            return .empty
+            return .notSignedIn
         }
     }
 }
