@@ -21,8 +21,14 @@ export default function QuickStartPage() {
         {`curl -fsSL https://get.longhouse.ai/install.sh | bash`}
       </CodeBlock>
       <p>
-        The installer sets up the CLI and runs guided onboarding. On macOS,
-        Longhouse also installs a menu bar app — the always-on local status
+        On Apple Silicon Macs, you can also download <code>Longhouse.app</code>{" "}
+        directly. The app download and terminal bootstrap install the same Mac
+        product.
+      </p>
+      <p>
+        The installer sets up the CLI and runs the default local quickstart. On
+        macOS, it installs <code>Longhouse.app</code> in{" "}
+        <code>/Applications</code> and uses it as the always-on local status
         surface. Green means local shipping is healthy; yellow or red means
         there is an issue to repair.
       </p>
@@ -32,8 +38,10 @@ export default function QuickStartPage() {
 
       <h2>2. Open Longhouse</h2>
       <p>
-        Guided onboarding starts Longhouse for you. Open <code>http://localhost:8080</code>. Your
-        data stays in a SQLite database on your machine at <code>~/.longhouse/longhouse.db</code>.
+        The quickstart starts Longhouse for you. On macOS, open{" "}
+        <code>Longhouse.app</code> if it is not already open. On Linux or WSL,
+        open <code>http://localhost:8080</code>. Your data stays in a SQLite
+        database on your machine at <code>~/.longhouse/longhouse.db</code>.
       </p>
       <p>
         This laptop setup is the fast proof path. When you want Longhouse to
@@ -100,8 +108,8 @@ longhouse codex     # Codex CLI with control channel`}
 longhouse connect --install  # repair onboarding and automatic imports`}
       </CodeBlock>
       <p>
-        On macOS, the menu bar app shows the same health information in ambient
-        form.
+        On macOS, <code>Longhouse.app</code> and the menu bar show the same
+        local health information in ambient form.
       </p>
     </>
   );

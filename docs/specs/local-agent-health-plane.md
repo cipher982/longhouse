@@ -355,7 +355,7 @@ Goal:
 
 Deliverables:
 
-- `Longhouse.app` installs into `~/Applications`
+- `Longhouse.app` installs into `/Applications`
 - direct app launch shows a status or repair window instead of failing silently
 - relaunching the app after background install still produces a visible status path
 - launchd launches the app's inner executable for the ambient menu bar surface when Longhouse is running quietly in the background
