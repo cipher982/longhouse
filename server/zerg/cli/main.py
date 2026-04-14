@@ -23,6 +23,7 @@ from zerg.cli.doctor import doctor
 from zerg.cli.local_health import app as local_health_app
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
+from zerg.cli.runtime_artifact_smoke import runtime_artifact_install_command
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_smoke_command
 from zerg.cli.serve import serve
 from zerg.cli.serve import status
@@ -108,6 +109,7 @@ app.command(name="connect")(connect_command)
 app.command(name="version")(version_command)
 app.command(name="upgrade")(upgrade_command)
 app.command(hidden=True, name="record-install")(record_install_command)
+app.command(hidden=True, name="runtime-artifact-install")(runtime_artifact_install_command)
 app.command(hidden=True, name="runtime-artifact-smoke")(runtime_artifact_smoke_command)
 
 

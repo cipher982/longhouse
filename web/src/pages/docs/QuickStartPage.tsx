@@ -26,11 +26,10 @@ export default function QuickStartPage() {
         product.
       </p>
       <p>
-        The installer sets up the CLI and runs the default local quickstart. On
-        macOS, it installs <code>Longhouse.app</code> in{" "}
-        <code>/Applications</code> and uses it as the always-on local status
-        surface. Green means local shipping is healthy; yellow or red means
-        there is an issue to repair.
+        The installer only acquires Longhouse. On macOS, it installs{" "}
+        <code>Longhouse.app</code> in <code>/Applications</code>. On Linux or
+        WSL, it installs the CLI. Setup is the next step, not part of the
+        installer itself.
       </p>
       <p>
         Requires Python 3.12+. No sudo needed.
@@ -38,9 +37,9 @@ export default function QuickStartPage() {
 
       <h2>2. Open Longhouse</h2>
       <p>
-        The quickstart starts Longhouse for you. On macOS, open{" "}
-        <code>Longhouse.app</code> if it is not already open. On Linux or WSL,
-        open <code>http://localhost:8080</code>. Your data stays in a SQLite
+        On macOS, open <code>Longhouse.app</code> to finish setup. On Linux or
+        WSL, run <code>longhouse onboard</code>, then open{" "}
+        <code>http://localhost:8080</code>. Your data stays in a SQLite
         database on your machine at <code>~/.longhouse/longhouse.db</code>.
       </p>
       <p>
@@ -53,8 +52,8 @@ export default function QuickStartPage() {
       <h2>3. Find one prior session</h2>
       <p>
         Use the timeline or search to find one real past session. If you have
-        used Claude Code, Codex, or Gemini CLI on this machine, Longhouse has
-        already imported your sessions during onboarding.
+        used Claude Code, Codex, or Gemini CLI on this machine, Longhouse will
+        import your sessions during setup.
       </p>
       <div className="docs-callout">
         <p>

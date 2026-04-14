@@ -60,3 +60,33 @@ def test_runtime_artifact_smoke_command_surfaces_install_errors(monkeypatch):
 
     assert result.exit_code == 1
     assert "boom" in result.output
+
+
+def test_runtime_artifact_install_command_outputs_json(monkeypatch):
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        runtime_artifact_smoke,
+        "ensure_runtime_artifact",
+        lambda component, overwrite=False: SimpleNamespace(
+            component=component,
+            path="/Applications/Longhouse.app",
+            launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            source="https://github.com/cipher982/longhouse/releases/download/v0.1.8/Longhouse-macos-arm64.zip",
+            installed_now=False,
+            kind=RuntimeArtifactKind.APP_BUNDLE,
+        ),
+    )
+
+    result = runner.invoke(app, ["runtime-artifact-install", "desktop-app", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload == {
+        "component": RuntimeComponent.DESKTOP_APP.value,
+        "path": "/Applications/Longhouse.app",
+        "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+        "source": "https://github.com/cipher982/longhouse/releases/download/v0.1.8/Longhouse-macos-arm64.zip",
+        "installed_now": False,
+        "kind": RuntimeArtifactKind.APP_BUNDLE.value,
+    }
