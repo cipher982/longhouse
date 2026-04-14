@@ -4,6 +4,7 @@ import WidgetKit
 
 enum LonghouseAuthConfig {
     static let hostedCallbackScheme = "ai.longhouse.ios"
+    static let hostedControlPlaneURL = "https://control.longhouse.ai"
 }
 
 @main
@@ -18,7 +19,17 @@ struct LonghouseApp: App {
                     GIDSignIn.sharedInstance.handle(url)
                 }
                 .task {
-                    await appState.restoreSession()
+                    let environment = ProcessInfo.processInfo.environment
+                    if environment["LONGHOUSE_WIDGET_PROBE_ONLY"] == "1" {
+                        let result = await WidgetSessionLoader.load()
+                        WidgetSessionLoader.logProbeResult(result, source: "launch-probe-only")
+                    } else {
+                        await appState.restoreSession()
+                        if environment["LONGHOUSE_WIDGET_PROBE_ON_LAUNCH"] == "1" {
+                            let result = await WidgetSessionLoader.load()
+                            WidgetSessionLoader.logProbeResult(result, source: "launch-probe")
+                        }
+                    }
                 }
         }
     }
@@ -32,11 +43,22 @@ final class AppState: ObservableObject {
     @Published var authError: String?
 
     init() {
-        self.serverURL = KeychainHelper.loadServerURL() ?? "https://david010.longhouse.ai"
+        self.serverURL = KeychainHelper.loadServerURL() ?? ""
+        if !self.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            SharedAuthStore.saveServerURL(self.serverURL)
+        }
     }
 
     func restoreSession() async {
         isValidating = true
+        SharedAuthStore.saveServerURL(serverURL)
+        if serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            isAuthenticated = false
+            authError = nil
+            isValidating = false
+            WidgetCenter.shared.reloadAllTimelines()
+            return
+        }
 
         var session = await BrowserSessionStore.webKitSession(for: serverURL)
         if !session.hasCookies {
@@ -69,6 +91,13 @@ final class AppState: ObservableObject {
     }
 
     func finishLoginFromSharedCookies() async -> Bool {
+        SharedAuthStore.saveServerURL(serverURL)
+        if serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            authError = "Set your Longhouse server first"
+            isAuthenticated = false
+            isValidating = false
+            return false
+        }
         await BrowserSessionStore.syncSharedCookiesToWebKit(for: serverURL)
         let session = await BrowserSessionStore.webKitSession(for: serverURL)
         let isSignedIn = session.hasCookies
@@ -85,6 +114,23 @@ final class AppState: ObservableObject {
         isValidating = false
         WidgetCenter.shared.reloadAllTimelines()
         return isSignedIn
+    }
+
+    func prepareServerForHostedLogin(_ url: String) async {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+
+        let previousURL = serverURL
+        serverURL = trimmed
+        KeychainHelper.saveServerURL(trimmed)
+        authError = nil
+
+        if previousURL != trimmed, !previousURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            await BrowserSessionStore.clearAll(for: previousURL)
+            KeychainHelper.deleteAuthToken()
+        }
     }
 
     func exchangeHostedSSOToken(_ ssoToken: String) async -> Bool {

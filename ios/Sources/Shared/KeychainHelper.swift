@@ -20,10 +20,15 @@ enum KeychainHelper {
 
     static func saveServerURL(_ url: String) {
         save(key: serverURLKey, value: url)
+        SharedAuthStore.saveServerURL(url)
     }
 
     static func loadServerURL() -> String? {
-        load(key: serverURLKey)
+        if let url = load(key: serverURLKey) {
+            SharedAuthStore.saveServerURL(url)
+            return url
+        }
+        return SharedAuthStore.loadServerURL()
     }
 
     private static func save(key: String, value: String) {

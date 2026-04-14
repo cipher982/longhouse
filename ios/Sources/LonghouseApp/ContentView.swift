@@ -65,6 +65,8 @@ struct ServerConfigSheet: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var urlText = ""
+    @State private var widgetProbeResult: WidgetLoadResult?
+    @State private var isRunningWidgetProbe = false
 
     var body: some View {
         NavigationStack {
@@ -81,6 +83,9 @@ struct ServerConfigSheet: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+#if DEBUG
+                widgetDebugSection
+#endif
             }
             .navigationTitle("Server")
             .navigationBarTitleDisplayMode(.inline)
@@ -104,4 +109,52 @@ struct ServerConfigSheet: View {
         }
         .presentationDetents([.medium])
     }
+
+#if DEBUG
+    @ViewBuilder
+    private var widgetDebugSection: some View {
+        let debugState = SharedAuthStore.debugState(for: appState.serverURL)
+
+        Section("Widget Debug") {
+            LabeledContent("App Group", value: debugState.appGroupAvailable ? "available" : "missing")
+            if let containerPath = debugState.containerPath {
+                Text(containerPath)
+                    .font(.caption2)
+                    .textSelection(.enabled)
+            }
+            LabeledContent("Shared Server", value: debugState.serverURL ?? "none")
+            LabeledContent("Shared Cookies", value: "\(debugState.cookieCount)")
+            if !debugState.cookieNames.isEmpty {
+                Text(debugState.cookieNames.joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button {
+                Task {
+                    isRunningWidgetProbe = true
+                    widgetProbeResult = await WidgetSessionLoader.load()
+                    isRunningWidgetProbe = false
+                }
+            } label: {
+                if isRunningWidgetProbe {
+                    ProgressView()
+                } else {
+                    Text("Run Widget Probe")
+                }
+            }
+
+            if let widgetProbeResult {
+                Text(widgetProbeResult.statusTitle ?? (widgetProbeResult.isSignedIn ? "Signed in" : "Unavailable"))
+                    .font(.subheadline.weight(.medium))
+                if let message = widgetProbeResult.statusMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                LabeledContent("Probe Cookies", value: "\(widgetProbeResult.debugState.cookieCount)")
+            }
+        }
+    }
+#endif
 }
