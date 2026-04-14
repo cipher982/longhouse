@@ -57,7 +57,7 @@ from control_plane.services.provisioner import (  # noqa: E402
     normalize_custom_env_overrides,
     parse_custom_env_json,
 )
-from control_plane.routers.auth import _decode_jwt, _encode_jwt, _hash_password, _issue_session_token  # noqa: E402
+from control_plane.routers.auth import _encode_jwt, _hash_password, _issue_session_token  # noqa: E402
 from control_plane.config import settings  # noqa: E402
 from control_plane.services.gmail_pubsub import HostedGmailPubSubError, ensure_instance_gmail_subscription  # noqa: E402
 
@@ -219,51 +219,6 @@ def test_open_instance_preserves_tenant_return_to(client, db_session):
     query = urllib.parse.parse_qs(parsed.query)
     assert parsed.path == "/api/auth/accept-token"
     assert query["return_to"] == ["/loop/card/abc?view=compact"]
-
-
-def test_native_open_instance_redirects_anonymous_user_back_through_login(client):
-    response = client.get("/auth/native/open-instance?tenant=testuser", follow_redirects=False)
-
-    assert response.status_code == 302
-    assert response.headers["location"] == "/?return_to=%2Fauth%2Fnative%2Fopen-instance%3Ftenant%3Dtestuser"
-
-
-def test_native_open_instance_redirects_back_to_ios_with_sso_token(client, db_session):
-    user = _make_user(db_session, email="owner@test.com")
-    _make_instance(db_session, user, subdomain="testuser")
-    client.cookies.update(_login_cookie(user))
-
-    response = client.get("/auth/native/open-instance?tenant=testuser", follow_redirects=False)
-
-    assert response.status_code == 302
-    redirect_url = response.headers["location"]
-    parsed = urllib.parse.urlparse(redirect_url)
-    query = urllib.parse.parse_qs(parsed.query)
-    assert parsed.scheme == "ai.longhouse.ios"
-    assert parsed.netloc == "auth-callback"
-    assert query["tenant"] == ["testuser"]
-    assert "sso_token" in query
-
-    payload = _decode_jwt(query["sso_token"][0], settings.instance_jwt_secret)
-    assert payload["email"] == "owner@test.com"
-    assert payload["instance"] == "testuser"
-
-
-def test_native_open_instance_redirects_back_to_ios_with_error_for_unknown_instance(client, db_session):
-    user = _make_user(db_session, email="owner@test.com")
-    _make_instance(db_session, user, subdomain="testuser")
-    client.cookies.update(_login_cookie(user))
-
-    response = client.get("/auth/native/open-instance?tenant=wrongtenant", follow_redirects=False)
-
-    assert response.status_code == 302
-    redirect_url = response.headers["location"]
-    parsed = urllib.parse.urlparse(redirect_url)
-    query = urllib.parse.parse_qs(parsed.query)
-    assert parsed.scheme == "ai.longhouse.ios"
-    assert parsed.netloc == "auth-callback"
-    assert query["tenant"] == ["wrongtenant"]
-    assert query["error"] == ["instance_not_found"]
 
 
 def test_open_instance_redirects_anonymous_user_back_through_login_with_full_query(client):

@@ -55,8 +55,6 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - com.googleusercontent.apps.658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2
-          - CFBundleURLSchemes:
-              - ai.longhouse.ios
 
   LonghouseWidgetExtension:
     type: app-extension
