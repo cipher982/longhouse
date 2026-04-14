@@ -82,7 +82,7 @@ make ship SHA="<full-sha>"
 make ship-watch SHA="<full-sha>"
 ```
 
-Use them even if the commit was pushed earlier in the session. `make ship SHA=<full-sha>` prints a start banner with the exact target SHA and commit subject so wrong-commit mistakes are obvious immediately. Do not use branch-latest `gh run list --limit 1` patterns on a busy `main`, and do not infer delayed `cowbell` requests from current `HEAD`. `deploy-and-verify.yml` does wait for the matching `contract-first-ci.yml` and `runtime-image.yml` runs for the same SHA before any remote deploy action, and manual dispatch stays isolated for recovery use.
+For `cowbell`, the agent resolves `<full-sha>` itself. Use the latest commit that represents the finished task. If the task is only edited files so far, commit them first; if the task was already pushed earlier, reuse that same task SHA. `make ship SHA=<full-sha>` prints a start banner with the exact target SHA and commit subject so wrong-commit mistakes are obvious immediately. Do not ask David for a hash, do not use branch-latest `gh run list --limit 1` patterns on a busy `main`, and do not infer delayed `cowbell` requests from current `HEAD`. `deploy-and-verify.yml` does wait for the matching `contract-first-ci.yml` and `runtime-image.yml` runs for the same SHA before any remote deploy action, and manual dispatch stays isolated for recovery use.
 
 If `make ship` returns non-zero for the target SHA, ship failed. You may explain why you think it failed, including suspected pre-existing drift, but do not relabel that outcome as success.
 
