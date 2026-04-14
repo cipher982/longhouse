@@ -103,6 +103,12 @@ export function SessionContextPane({
         <div className="session-context-badges">
           <Badge variant={runtimeBadgeVariant}>{runtime.displayPhase}</Badge>
           <Badge variant={interaction.capabilityVariant}>{interaction.capabilityLabel}</Badge>
+          <Badge
+            variant={interaction.managementVariant}
+            data-testid="session-management-badge"
+          >
+            {interaction.managementLabel}
+          </Badge>
           <Badge variant="neutral">{turnCount} turns</Badge>
           <Badge variant="neutral">{session.tool_calls} tools</Badge>
           {homeLabel ? <Badge variant="neutral">{homeLabel}</Badge> : null}
@@ -115,6 +121,12 @@ export function SessionContextPane({
             {interaction.capabilityDescription}
           </div>
         )}
+        <div
+          className="session-context-managed-copy"
+          data-testid="session-management-summary"
+        >
+          {interaction.managementDescription}
+        </div>
       </div>
 
       <div className="session-pane-section">

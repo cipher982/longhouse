@@ -5,17 +5,26 @@ import { CodeBlock } from "./CodeBlock";
 export default function RemoteControlPage() {
   usePageMeta({
     title: "Remote Control - Longhouse Docs",
-    description: "Keep a control channel open on sessions started through Longhouse.",
+    description: "Keep managed sessions steerable after launch.",
   });
 
   return (
     <>
       <h1>Control After Launch</h1>
       <p className="docs-subtitle">
-        When you start a session through Longhouse, it stays reachable after the
-        terminal closes. Message it, tail it, or continue it later — from the
-        browser, CLI, or API.
+        Managed sessions stay reachable after the terminal closes. Message
+        them, tail them, or continue them later from the browser, CLI, or API.
       </p>
+      <div className="docs-callout">
+        <p>
+          <strong>Managed vs unmanaged.</strong> Sessions started with bare
+          provider CLIs are imported as unmanaged history—they land in the
+          timeline but Longhouse does not own their live control channel. When
+          you use <code>longhouse claude</code> or <code>longhouse codex</code>{" "}
+          you launch a managed session that stays steerable long after the
+          terminal closes.
+        </p>
+      </div>
       <div className="docs-callout">
         <p>
           <strong>Provider truth matters.</strong> Claude is the strongest
@@ -29,7 +38,7 @@ export default function RemoteControlPage() {
       <p>
         A bare <code>claude</code> or <code>codex</code> command runs a
         session that is only reachable in the terminal where you started it.
-        When you start through Longhouse instead, Longhouse keeps a control
+        When you launch a managed session through Longhouse instead, Longhouse keeps a control
         channel open alongside the session:
       </p>
       <CodeBlock title="terminal">
@@ -86,7 +95,7 @@ longhouse wall --json       # machine-readable output`}
         "CLI session" — there is one session with multiple ways to reach it.
       </p>
 
-      <h2>When to use bare CLI vs. Longhouse</h2>
+      <h2>When to use unmanaged vs. managed</h2>
       <table>
         <thead>
           <tr>
@@ -115,10 +124,11 @@ longhouse wall --json       # machine-readable output`}
       </table>
       <div className="docs-callout">
         <p>
-          <strong>Both paths land in the timeline.</strong> Sessions started
-          with bare CLIs still get imported and searchable. Longhouse in the
-          launch path adds the control channel — it does not create a different
-          kind of session.
+          <strong>Both paths land in the timeline.</strong> Unmanaged sessions
+          from bare CLIs still get imported and searchable, but they cannot be
+          steered from the browser. Managed sessions launched through Longhouse
+          keep the control channel open so you can message them, tail them,
+          or continue them from any surface.
         </p>
       </div>
 

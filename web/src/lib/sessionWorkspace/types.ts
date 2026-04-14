@@ -82,6 +82,9 @@ export type SessionInteractionCapabilities = {
   liveControlAvailable: boolean;
   hostReattachAvailable: boolean;
   canChatFromBrowser: boolean;
+  managementLabel: string;
+  managementVariant: "neutral" | "success";
+  managementDescription: string;
   capabilityLabel: string;
   capabilityVariant: "neutral" | "success" | "warning";
   capabilityDescription: string | null;

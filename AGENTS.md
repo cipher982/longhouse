@@ -172,6 +172,13 @@ Treat these as frozen for launch:
 
 If you touch a secondary area, either simplify it toward the core story or explain why it still survives launch.
 
+## Managed vs Unmanaged Sessions
+
+- **Managed** means Longhouse owns the control path for the session. Today that usually means the session was launched with `longhouse claude`, `longhouse codex`, or another Longhouse wrapper, and it is reflected by `session.capabilities.live_control_available` or `host_reattach_available`.
+- **Unmanaged** means Longhouse imported or discovered the session but does not own its live control path. Bare provider CLI runs are unmanaged compatibility ingest: searchable, sometimes partially live, but not steerable from the browser.
+- Do not use "started in Longhouse" in user-facing copy. It sounds like the website. Prefer `managed` / `unmanaged`, then separately describe whether the session is steerable, observe-only, or only has transcript-level liveness.
+- The timeline, wall, and workspace should all tell you whether the session you are looking at is managed before you try to drive it. Always rely on `session.capabilities` so you do not assume bare CLI sessions can behave like managed ones.
+
 ## High-Signal Gotchas
 
 - `make dev` is interactive.

@@ -24,7 +24,7 @@ const faqs: FAQ[] = [
   {
     question: "Are imported sessions different from sessions started through Longhouse?",
     answer:
-      "No. They are the same kind of session object. Importing makes them searchable and inspectable. Starting through Longhouse adds capability later, such as live control or an explicit reattach path.",
+      "Yes. Imported sessions are unmanaged: searchable and inspectable, but not steerable. Sessions launched with Longhouse are managed and keep the control path for live control or reattach later.",
   },
   {
     question: "Which providers are strongest today?",

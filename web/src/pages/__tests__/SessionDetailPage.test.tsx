@@ -207,6 +207,10 @@ describe("SessionDetailPage", () => {
 
     expect(screen.queryByTestId("session-continuation-unavailable")).not.toBeInTheDocument();
     expect(screen.getAllByText("Live control")).toHaveLength(1);
+    expect(screen.getByTestId("session-management-badge")).toHaveTextContent("Managed");
+    expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
+      "Longhouse owns the live control path for this session.",
+    );
     expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
       "Message this live Codex session from Longhouse, or reattach on the host machine.",
     );
@@ -302,10 +306,14 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "This Gemini session is fully searchable here.",
+      "This unmanaged Gemini session is searchable here, but Longhouse cannot steer it from the browser.",
+    );
+    expect(screen.getByTestId("session-management-badge")).toHaveTextContent("Unmanaged");
+    expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
+      "Longhouse imported this Gemini session, but it does not own the live control path. Launch through Longhouse when you need a managed session.",
     );
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
-      "Gemini session — search only",
+      "Gemini session — unmanaged",
     );
   });
 });
