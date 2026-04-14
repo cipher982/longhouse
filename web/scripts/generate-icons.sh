@@ -31,10 +31,6 @@ magick "${PUBLIC_DIR}/favicon-16.png" "${PUBLIC_DIR}/favicon-32.png" "${PUBLIC_D
 echo "Generating Apple touch icon (180px)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 180x180 "${PUBLIC_DIR}/apple-touch-icon.png"
 
-echo "Generating maskable icons (192px, 512px)…"
-magick "${PUBLIC_DIR}/favicon-512.png" -resize 192x192 "${PUBLIC_DIR}/maskable-icon-192.png"
-cp "${PUBLIC_DIR}/favicon-512.png" "${PUBLIC_DIR}/maskable-icon-512.png"
-
 echo "Generating menu bar icon from master logo geometry…"
 mkdir -p "$(dirname "${MENUBAR_OUT}")"
 node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_OUT}" 36 36
