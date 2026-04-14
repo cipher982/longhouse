@@ -36,8 +36,9 @@ longhouse serve --demo         # start with demo data`}
 longhouse codex                # start Codex CLI`}
       </CodeBlock>
       <p>
-        Bare <code>claude</code> and <code>codex</code> runs still import into
-        the timeline, but they remain unmanaged history.
+        Use these as the default launch path for new work. Bare{" "}
+        <code>claude</code> and <code>codex</code> runs still import into the
+        timeline, but they remain unmanaged history.
       </p>
 
       <h3>longhouse ship</h3>

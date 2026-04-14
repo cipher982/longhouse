@@ -2,7 +2,7 @@
 
 Longhouse puts Claude Code, Codex CLI, and Gemini CLI sessions into one searchable timeline and keeps a control channel open when they start through Longhouse.
 
-Import sessions you already have, or route new work through Longhouse, then inspect, message, and keep working from the web UI, CLI, or HTTP.
+Import sessions you already have so Longhouse is useful immediately, then start new work through Longhouse when you want to inspect, message, and keep working from the web UI, CLI, or HTTP.
 
 A session stays the same object either way. Longhouse in the launch path changes what you can do with that session later; it does not create a second class of session.
 
@@ -23,12 +23,14 @@ curl -fsSL https://get.longhouse.ai/install.sh | bash
 
 The installer only acquires Longhouse. It installs the `longhouse` CLI, and on macOS it also installs `Longhouse.app` in `/Applications`. On macOS, open `Longhouse.app` to finish setup. On Linux or WSL, run `longhouse onboard`.
 
-When you want control after launch:
+For new work you want to keep steerable:
 
 ```bash
 longhouse claude
 longhouse codex
 ```
+
+Bare `claude` and `codex` still import into the timeline, but they remain unmanaged history.
 
 If you need repair later, start with `longhouse doctor`.
 
