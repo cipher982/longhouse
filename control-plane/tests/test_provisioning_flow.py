@@ -242,11 +242,30 @@ def test_native_open_instance_redirects_back_to_ios_with_sso_token(client, db_se
     assert parsed.scheme == "ai.longhouse.ios"
     assert parsed.netloc == "auth-callback"
     assert query["tenant"] == ["testuser"]
+    assert query["instance_url"] == ["https://testuser.longhouse.ai"]
     assert "sso_token" in query
 
     payload = _decode_jwt(query["sso_token"][0], settings.instance_jwt_secret)
     assert payload["email"] == "owner@test.com"
     assert payload["instance"] == "testuser"
+
+
+def test_native_open_instance_without_tenant_redirects_back_to_ios_with_instance_url(client, db_session):
+    user = _make_user(db_session, email="owner@test.com")
+    _make_instance(db_session, user, subdomain="testuser")
+    client.cookies.update(_login_cookie(user))
+
+    response = client.get("/auth/native/open-instance", follow_redirects=False)
+
+    assert response.status_code == 302
+    redirect_url = response.headers["location"]
+    parsed = urllib.parse.urlparse(redirect_url)
+    query = urllib.parse.parse_qs(parsed.query)
+    assert parsed.scheme == "ai.longhouse.ios"
+    assert parsed.netloc == "auth-callback"
+    assert query["tenant"] == ["testuser"]
+    assert query["instance_url"] == ["https://testuser.longhouse.ai"]
+    assert "sso_token" in query
 
 
 def test_native_open_instance_redirects_back_to_ios_with_error_for_unknown_instance(client, db_session):

@@ -346,8 +346,16 @@ def _issue_instance_sso_token(*, user: User, instance: Instance) -> str:
     )
 
 
-def _native_app_callback_url(*, tenant: str, sso_token: str | None = None, error: str | None = None) -> str:
+def _native_app_callback_url(
+    *,
+    tenant: str,
+    instance_url: str | None = None,
+    sso_token: str | None = None,
+    error: str | None = None,
+) -> str:
     query: dict[str, str] = {"tenant": tenant}
+    if instance_url:
+        query["instance_url"] = instance_url
     if sso_token:
         query["sso_token"] = sso_token
     if error:
@@ -592,8 +600,6 @@ def google_callback(
 def native_open_instance(request: Request, tenant: str | None = None, db: Session = Depends(get_db)):
     """Start hosted iOS auth and return to the app with a tenant SSO token."""
     normalized_tenant = (tenant or "").strip().lower()
-    if not normalized_tenant:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tenant parameter required")
 
     user = get_current_user_or_none(request, db)
     if not user:
@@ -602,9 +608,13 @@ def native_open_instance(request: Request, tenant: str | None = None, db: Sessio
             current_path = f"{current_path}?{request.url.query}"
         return RedirectResponse(_append_return_to("/", current_path), status_code=302)
 
-    instance = (
-        db.query(Instance).filter(Instance.user_id == user.id, Instance.subdomain == normalized_tenant).first()
-    )
+    query = db.query(Instance).filter(Instance.user_id == user.id)
+    if normalized_tenant:
+        instance = query.filter(Instance.subdomain == normalized_tenant).first()
+    else:
+        instance = query.order_by(Instance.id.asc()).first()
+        if instance:
+            normalized_tenant = instance.subdomain
     if not instance:
         return RedirectResponse(
             _native_app_callback_url(tenant=normalized_tenant, error="instance_not_found"),
@@ -612,8 +622,9 @@ def native_open_instance(request: Request, tenant: str | None = None, db: Sessio
         )
 
     sso_token = _issue_instance_sso_token(user=user, instance=instance)
+    instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
     return RedirectResponse(
-        _native_app_callback_url(tenant=normalized_tenant, sso_token=sso_token),
+        _native_app_callback_url(tenant=normalized_tenant, instance_url=instance_url, sso_token=sso_token),
         status_code=302,
     )
 
