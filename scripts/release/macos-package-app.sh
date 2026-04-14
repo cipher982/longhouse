@@ -149,6 +149,11 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BINARY_PATH" "${MACOS_DIR}/${EXEC_NAME}"
 chmod +x "${MACOS_DIR}/${EXEC_NAME}"
 
+BINARY_DIR="$(cd "$(dirname "$BINARY_PATH")" && pwd)"
+while IFS= read -r -d '' RESOURCE_BUNDLE; do
+  cp -R "$RESOURCE_BUNDLE" "${RESOURCES_DIR}/$(basename "$RESOURCE_BUNDLE")"
+done < <(find "$BINARY_DIR" -maxdepth 1 -type d -name '*.bundle' -print0)
+
 if [[ -n "$ICON_PNG" ]]; then
   if [[ ! -f "$ICON_PNG" ]]; then
     echo "Icon PNG not found: $ICON_PNG" >&2

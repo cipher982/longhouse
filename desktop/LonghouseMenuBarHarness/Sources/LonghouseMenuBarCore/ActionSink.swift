@@ -50,8 +50,6 @@ public protocol HealthActionSink {
 
 public struct SpyHealthActionSink: HealthActionSink {
     public static let defaultLonghouseURL = "http://127.0.0.1:8080"
-    public static let defaultInstallScriptURL = "https://get.longhouse.ai/install.sh"
-    public static let standardInstallerCommand = "curl -fsSL \(defaultInstallScriptURL) | bash"
 
     public let logURL: URL?
     public let uiURL: URL?
@@ -228,10 +226,14 @@ public struct SpyHealthActionSink: HealthActionSink {
         return "longhouse upgrade"
     }
 
-    private func startStandardInstaller() -> URL? {
-        startBackgroundProcess(
-            launchPath: "/bin/zsh",
-            arguments: ["-lc", Self.standardInstallerCommand]
+    private func startBundledSetup() -> URL? {
+        guard let invocation = LonghouseCLI.setupInvocation() else {
+            return nil
+        }
+
+        return startBackgroundProcess(
+            launchPath: invocation.launchPath,
+            arguments: invocation.arguments
         )
     }
 
@@ -328,19 +330,19 @@ public struct SpyHealthActionSink: HealthActionSink {
         }
 
         if snapshot.isSetupRequired {
-            if startStandardInstaller() != nil {
+            if startBundledSetup() != nil {
                 return feedback(
                     for: .repairInstall,
                     style: .info,
                     title: "Setup running",
-                    detail: "Longhouse started the standard installer in the background. Open Logs for progress or errors."
+                    detail: "Longhouse started its built-in setup in the background. Open Logs for progress or errors."
                 )
             }
             return feedback(
                 for: .repairInstall,
                 style: .failure,
                 title: "Setup could not start",
-                detail: "Longhouse could not start the standard installer on this Mac."
+                detail: "Longhouse could not start its built-in setup on this Mac."
             )
         }
 
@@ -353,12 +355,12 @@ public struct SpyHealthActionSink: HealthActionSink {
             )
         }
 
-        if startStandardInstaller() != nil {
+        if startBundledSetup() != nil {
             return feedback(
                 for: .repairInstall,
                 style: .warning,
                 title: "Repair fell back to setup",
-                detail: "Longhouse could not find the local CLI, so it started the standard installer in the background. Open Logs for progress or errors."
+                detail: "Longhouse could not find the local CLI, so it started its built-in setup in the background. Open Logs for progress or errors."
             )
         }
 
@@ -366,7 +368,7 @@ public struct SpyHealthActionSink: HealthActionSink {
             for: .repairInstall,
             style: .failure,
             title: "Repair could not start",
-            detail: "Longhouse could not start `longhouse connect --install` or the standard installer on this Mac."
+            detail: "Longhouse could not start `longhouse connect --install` or its built-in setup on this Mac."
         )
     }
 
@@ -393,7 +395,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 style: snapshot.isSetupRequired ? .info : .warning,
                 title: snapshot.isSetupRequired ? "Setup dry run recorded" : "Repair dry run recorded",
                 detail: snapshot.isSetupRequired
-                    ? "The harness logged the standard Longhouse installer command without changing your machine."
+                    ? "The harness logged the built-in Longhouse setup command without changing your machine."
                     : "The harness logged `longhouse connect --install --machine-name … --menubar` without changing your machine."
             )
         case .openLonghouse:
