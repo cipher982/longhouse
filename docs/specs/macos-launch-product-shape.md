@@ -2,7 +2,7 @@
 
 Status: Active
 Owner: launch product
-Updated: 2026-04-13
+Updated: 2026-04-14
 
 ## Goal
 
@@ -14,9 +14,12 @@ Detailed onboarding, packaging, and naming cleanup planning lives in `docs/specs
 
 Longhouse launches as one product with multiple acquisition channels.
 
-On macOS, the human-facing product should be `Longhouse.app`.
+On macOS, the product should be `Longhouse.app`.
 
-That does **not** mean the CLI goes away. It means the macOS human story stops teaching shell bootstrap and background helpers as separate concepts. The app becomes the visible owner, while the CLI, runtime artifacts, and launchd plumbing stay behind a stable contract.
+That does **not** mean the CLI goes away. It means macOS stops pretending the
+shell installer and the app are separate products. The app becomes the visible
+owner, while the CLI remains a valid automation/bootstrap path to the same
+installed state.
 
 ## Product Rules
 
@@ -38,9 +41,10 @@ That does **not** mean the CLI goes away. It means the macOS human story stops t
 
 ### Human macOS path
 
-Primary launch target:
+Supported acquisition methods:
 
 - download `Longhouse.app` in a notarized direct-download package
+- use terminal bootstrap to install the same app-first state
 
 Expected result:
 
@@ -62,6 +66,8 @@ Why:
 - agents can script them
 - headless and Linux installs still need them
 - they remain the cleanest low-friction path for machine setup and automation
+- on macOS, shell/bootstrap paths should still converge on the same
+  `Longhouse.app` install state instead of creating a second Mac product story
 
 ### Secondary macOS distribution path
 
