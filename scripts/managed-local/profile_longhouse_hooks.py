@@ -270,7 +270,7 @@ def profile_provider_scenario(
     with tempfile.TemporaryDirectory(prefix=f"lh-hook-profile-{provider.name}-{scenario.name}-") as temp_dir:
         sandbox_root = Path(temp_dir)
         sandbox_home = sandbox_root / "home"
-        (sandbox_home / ".claude" / "outbox").mkdir(parents=True, exist_ok=True)
+        (sandbox_home / ".longhouse" / "agent" / "outbox").mkdir(parents=True, exist_ok=True)
         (sandbox_home / ".claude" / "hindsight").mkdir(parents=True, exist_ok=True)
         (sandbox_home / ".codex").mkdir(parents=True, exist_ok=True)
 
@@ -285,7 +285,7 @@ def profile_provider_scenario(
             "PATH": os.environ.get("PATH", ""),
             "HOME": str(sandbox_home),
         }
-        outbox_dir = sandbox_home / ".claude" / "outbox"
+        outbox_dir = sandbox_home / ".longhouse" / "agent" / "outbox"
         engine_log_path = sandbox_root / "engine-bind.log"
 
         samples: list[IterationSample] = []

@@ -30,6 +30,8 @@ from uuid import UUID
 import httpx
 from sqlalchemy.orm import Session
 
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.shipper.token import load_machine_name
 from zerg.session_execution_home import SessionExecutionHome
 
 if TYPE_CHECKING:
@@ -76,13 +78,9 @@ def get_claude_config_dir() -> Path:
 
 def get_machine_name_label() -> str:
     """Return the configured Longhouse machine label, falling back to hostname."""
-    machine_name_path = get_claude_config_dir() / "longhouse-machine-name"
-    try:
-        machine_name = machine_name_path.read_text().strip()
-        if machine_name:
-            return machine_name
-    except OSError:
-        pass
+    machine_name = load_machine_name(resolve_longhouse_home_from_provider_home(get_claude_config_dir()))
+    if machine_name:
+        return machine_name
     return platform.node() or "unknown"
 
 

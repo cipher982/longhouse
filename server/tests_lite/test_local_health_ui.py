@@ -69,6 +69,7 @@ def test_install_desktop_app_service_writes_plist_and_loads(monkeypatch, tmp_pat
     assert "--health-exec" in plist
     assert "zerg.cli.main" in plist
     assert "https://longhouse.ai" in plist
+    assert str(home / ".longhouse" / "agent" / "logs" / "desktop-app.stdout.log") in plist
     assert calls[-1] == ["launchctl", "load", str(plist_path)]
     assert result["plist_path"] == str(plist_path)
     assert result["app_path"] == "/Applications/Longhouse.app"

@@ -5,11 +5,10 @@
 //! - frequent local status-file writes for ambient UX / debugging
 //! - less frequent server heartbeats to `/api/agents/heartbeat`
 
-use std::path::PathBuf;
-
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::config;
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::shipping::client::ShipperClient;
@@ -84,11 +83,11 @@ pub async fn send_heartbeat(client: &ShipperClient, payload: &HeartbeatPayload) 
     client.post_json("/api/agents/heartbeat", json).await
 }
 
-/// Write status to `~/.claude/engine-status.json`.
+/// Write status to `~/.longhouse/agent/engine-status.json`.
 pub fn write_status_file(
     payload: &HeartbeatPayload,
     stats: &HeartbeatStats<'_>,
-    claude_dir: &std::path::Path,
+    status_path: &std::path::Path,
 ) {
     #[derive(Serialize)]
     struct StatusFile<'a> {
@@ -112,9 +111,11 @@ pub fn write_status_file(
         last_updated: now,
     };
 
-    let path = claude_dir.join("engine-status.json");
+    if let Some(parent) = status_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     if let Ok(json) = serde_json::to_string_pretty(&status) {
-        let _ = std::fs::write(&path, json);
+        let _ = std::fs::write(status_path, json);
     }
 }
 
@@ -131,11 +132,11 @@ fn status_dead_letter_from_entry(entry: DeadLetterEntry) -> StatusDeadLetter {
     }
 }
 
-/// Get free bytes on the filesystem containing `~/.claude`.
+/// Get free bytes on the filesystem containing Longhouse agent state.
 fn get_disk_free() -> u64 {
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    let claude_dir = PathBuf::from(home).join(".claude");
-    disk_free_bytes(&claude_dir)
+    config::get_agent_dir()
+        .map(|agent_dir| disk_free_bytes(&agent_dir))
+        .unwrap_or(0)
 }
 
 #[cfg(unix)]
@@ -255,9 +256,10 @@ mod tests {
             last_ship_at: payload.last_ship_at.clone(),
         };
 
-        write_status_file(&payload, &stats, dir.path());
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        write_status_file(&payload, &stats, &status_path);
 
-        let json = std::fs::read_to_string(dir.path().join("engine-status.json")).unwrap();
+        let json = std::fs::read_to_string(status_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["spool_dead_count"], 3);
         assert_eq!(parsed["recent_dead_letters"][0]["provider"], "codex");

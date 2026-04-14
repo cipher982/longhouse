@@ -37,6 +37,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
+from zerg.services.longhouse_paths import get_agent_log_dir
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.runtime_artifacts import RuntimeComponent
+from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
+
 logger = logging.getLogger(__name__)
 
 
@@ -95,12 +100,12 @@ def detect_platform() -> Platform:
 
 
 def _resolve_claude_dir(claude_dir: str | None) -> Path:
-    """Resolve the Claude config directory for logs/state."""
+    """Resolve the Claude config directory for provider-owned integration state."""
     if claude_dir:
-        return Path(claude_dir)
+        return Path(claude_dir).expanduser()
     env_dir = os.getenv("CLAUDE_CONFIG_DIR")
     if env_dir:
-        return Path(env_dir)
+        return Path(env_dir).expanduser()
     return Path.home() / ".claude"
 
 
@@ -118,9 +123,8 @@ def get_engine_executable() -> str:
 
     Resolution order:
     1. Repo dev builds (release then debug)
-    2. shutil.which("longhouse-engine")  — installed on PATH
-    3. ~/.local/bin/longhouse-engine     — pipx / uv tool install
-    4. ~/.claude/bin/longhouse-engine    — Longhouse-managed install
+    2. Installed runtime artifact (canonical local install)
+    3. Binary on PATH via runtime artifact lookup
 
     Raises:
         RuntimeError: If the binary cannot be found anywhere.
@@ -134,20 +138,10 @@ def get_engine_executable() -> str:
             if candidate.exists():
                 return str(candidate)
 
-    # 2. PATH
-    found = shutil.which("longhouse-engine")
-    if found:
-        return found
-
-    # 3. ~/.local/bin
-    local_bin = Path.home() / ".local" / "bin" / "longhouse-engine"
-    if local_bin.exists():
-        return str(local_bin)
-
-    # 4. ~/.claude/bin
-    claude_bin = Path.home() / ".claude" / "bin" / "longhouse-engine"
-    if claude_bin.exists():
-        return str(claude_bin)
+    # 2/3. Canonical installed artifact or PATH fallback.
+    artifact = resolve_installed_runtime_artifact(RuntimeComponent.ENGINE)
+    if artifact:
+        return artifact.launch_path
 
     raise RuntimeError(
         "longhouse-engine not found. " "Install it from https://longhouse.ai/install or build engine (cargo build --release)."
@@ -186,10 +180,22 @@ def _get_systemd_unit_path() -> Path:
     return Path.home() / ".config" / "systemd" / "user" / f"{SYSTEMD_UNIT}.service"
 
 
+def _resolve_default_log_dir(claude_dir: str | None = None) -> Path:
+    if claude_dir:
+        return get_agent_log_dir(resolve_longhouse_home_from_provider_home(claude_dir))
+    return get_agent_log_dir()
+
+
+def _resolve_log_dir_for_state_root(base_dir: str | None = None) -> Path:
+    if base_dir:
+        return get_agent_log_dir(Path(base_dir).expanduser())
+    return get_agent_log_dir()
+
+
 def _resolve_log_dir(config: ServiceConfig) -> Path:
     if config.log_dir:
         return Path(config.log_dir)
-    return _resolve_claude_dir(config.claude_dir) / "logs"
+    return _resolve_default_log_dir(config.claude_dir)
 
 
 def _generate_launchd_plist(config: ServiceConfig) -> str:
@@ -197,6 +203,7 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
     engine = get_engine_executable()
     log_dir = _resolve_log_dir(config)
     claude_dir = _resolve_claude_dir(config.claude_dir)
+    longhouse_home = resolve_longhouse_home_from_provider_home(claude_dir)
 
     args = [
         engine,
@@ -229,6 +236,8 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
     <dict>
         <key>CLAUDE_CONFIG_DIR</key>
         <string>{claude_dir}</string>
+        <key>LONGHOUSE_HOME</key>
+        <string>{longhouse_home}</string>
         <key>LONGHOUSE_LOG_DIR</key>
         <string>{log_dir}</string>
     </dict>
@@ -258,6 +267,7 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
     engine = get_engine_executable()
     log_dir = _resolve_log_dir(config)
     claude_dir = _resolve_claude_dir(config.claude_dir)
+    longhouse_home = resolve_longhouse_home_from_provider_home(claude_dir)
 
     machine_name_arg = f" --machine-name {config.machine_name}" if config.machine_name else ""
     exec_start = (
@@ -280,6 +290,7 @@ ExecStart={exec_start}
 Restart=on-failure
 RestartSec=10
 Environment="CLAUDE_CONFIG_DIR={claude_dir}"
+Environment="LONGHOUSE_HOME={longhouse_home}"
 Environment="LONGHOUSE_LOG_DIR={log_dir}"
 
 [Install]
@@ -561,11 +572,11 @@ def _get_systemd_status() -> ServiceStatus:
     return "running" if result.stdout.strip() == "active" else "stopped"
 
 
-def get_service_info() -> dict:
+def get_service_info(claude_dir: str | None = None) -> dict:
     """Get detailed information about the engine service."""
     platform = detect_platform()
     status = get_service_status()
-    log_dir = _resolve_claude_dir(None) / "logs"
+    log_dir = _resolve_log_dir_for_state_root(claude_dir)
 
     info = {
         "platform": platform.value,

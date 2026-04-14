@@ -1,6 +1,6 @@
-"""Config file support for Longhouse CLI.
+"""Config file support for Longhouse runtime configuration.
 
-Loads and manages ~/.longhouse/config.toml configuration.
+Loads and manages ``~/.longhouse/config.toml``.
 
 Example config.toml:
     [server]
@@ -8,9 +8,8 @@ Example config.toml:
     port = 8080
 
     [shipper]
-    mode = "watch"  # or "poll"
-    api_url = "http://localhost:8080"
-    interval = 30
+    flush_ms = 500
+    fallback_scan_secs = 300
 
 Precedence: file config < env vars < CLI args
 """
@@ -22,6 +21,8 @@ from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 from typing import Any
+
+from zerg.services.longhouse_paths import get_runtime_config_path
 
 # tomllib is built-in from Python 3.11+
 try:
@@ -44,7 +45,6 @@ class ServerConfig:
 class ShipperConfig:
     """Engine (longhouse-engine) configuration."""
 
-    api_url: str = "http://localhost:8080"
     flush_ms: int = 500
     fallback_scan_secs: int = 300
 
@@ -62,7 +62,7 @@ class LonghouseConfig:
 
 def get_config_path() -> Path:
     """Get the path to the config file."""
-    return Path.home() / ".longhouse" / "config.toml"
+    return get_runtime_config_path()
 
 
 def load_config(config_path: Path | None = None) -> LonghouseConfig:
@@ -101,9 +101,6 @@ def load_config(config_path: Path | None = None) -> LonghouseConfig:
             # Load shipper config
             if "shipper" in data:
                 shipper_data = data["shipper"]
-                if "api_url" in shipper_data:
-                    config.shipper.api_url = shipper_data["api_url"]
-                    sources["shipper.api_url"] = "file"
                 if "flush_ms" in shipper_data:
                     config.shipper.flush_ms = int(shipper_data["flush_ms"])
                     sources["shipper.flush_ms"] = "file"
@@ -132,9 +129,6 @@ def load_config(config_path: Path | None = None) -> LonghouseConfig:
             import logging
 
             logging.getLogger(__name__).warning(f"Invalid LONGHOUSE_PORT value: {os.environ['LONGHOUSE_PORT']!r}, ignoring")
-    if os.getenv("LONGHOUSE_API_URL"):
-        config.shipper.api_url = os.environ["LONGHOUSE_API_URL"]
-        sources["shipper.api_url"] = "env"
     if os.getenv("LONGHOUSE_FLUSH_MS"):
         try:
             config.shipper.flush_ms = int(os.environ["LONGHOUSE_FLUSH_MS"])
@@ -206,7 +200,6 @@ def get_effective_config_display(config: LonghouseConfig) -> list[tuple[str, str
         ("server.host", config.server.host, config._sources.get("server.host", "default")),
         ("server.port", str(config.server.port), config._sources.get("server.port", "default")),
         ("server.public_url", config.server.public_url or "(not set)", config._sources.get("server.public_url", "default")),
-        ("shipper.api_url", config.shipper.api_url, config._sources.get("shipper.api_url", "default")),
         ("shipper.flush_ms", str(config.shipper.flush_ms), config._sources.get("shipper.flush_ms", "default")),
         (
             "shipper.fallback_scan_secs",

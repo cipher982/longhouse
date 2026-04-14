@@ -2,15 +2,12 @@
 
 import json
 import stat
-from pathlib import Path
 
-from zerg.services.shipper.hooks import (
-    CODEX_HOOK_SCRIPT,
-    install_hooks,
-    install_codex_hooks,
-    _is_longhouse_codex_hook,
-    _merge_codex_hooks_for_event,
-)
+from zerg.services.shipper.hooks import CODEX_HOOK_SCRIPT
+from zerg.services.shipper.hooks import _is_longhouse_codex_hook
+from zerg.services.shipper.hooks import _merge_codex_hooks_for_event
+from zerg.services.shipper.hooks import install_codex_hooks
+from zerg.services.shipper.hooks import install_hooks
 
 
 def test_codex_hook_script_template_has_required_markers():
@@ -18,6 +15,7 @@ def test_codex_hook_script_template_has_required_markers():
     assert "hook_event_name" in CODEX_HOOK_SCRIPT, "must read Codex snake_case hook event input"
     assert "session_id" in CODEX_HOOK_SCRIPT, "must read Codex session ID"
     assert "transcript_path" in CODEX_HOOK_SCRIPT, "must read transcript path"
+    assert 'LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"' in CODEX_HOOK_SCRIPT
     assert "prs." in CODEX_HOOK_SCRIPT, "must use prs.*.json outbox naming"
     assert ".tmp." in CODEX_HOOK_SCRIPT, "must use atomic tmp write pattern"
     assert "__ENGINE_PATH__" in CODEX_HOOK_SCRIPT, "must have engine path placeholder"
@@ -25,7 +23,7 @@ def test_codex_hook_script_template_has_required_markers():
     # "longhouse-engine" appears in comments but the actual command line must
     # use the placeholder so install_codex_hooks can bake in the real path.
     assert 'ENGINE="__ENGINE_PATH__"' in CODEX_HOOK_SCRIPT, "must use placeholder in the command variable"
-    assert 'provider: $provider' in CODEX_HOOK_SCRIPT, "must include provider in presence payload"
+    assert "provider: $provider" in CODEX_HOOK_SCRIPT, "must include provider in presence payload"
 
 
 def test_codex_hook_script_has_managed_session_id_support():
@@ -112,6 +110,7 @@ def test_install_codex_hooks_creates_hook_script(tmp_path, monkeypatch):
 
     content = hook_script.read_text()
     assert "/usr/bin/longhouse-engine" in content
+    assert str(tmp_path / ".longhouse") in content
     assert "hook_event_name" in content
 
 
@@ -257,6 +256,53 @@ def test_install_hooks_skips_codex_when_not_installed(tmp_path, monkeypatch):
     # No Codex hooks.json should have been created
     codex_hooks_json = tmp_path / ".codex" / "hooks.json"
     assert not codex_hooks_json.exists()
+
+
+def test_install_hooks_points_session_start_at_longhouse_machine_state(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True)
+
+    install_hooks(
+        url="http://localhost:8080",
+        claude_dir=str(claude_dir),
+        engine_path="/usr/bin/longhouse-engine",
+    )
+
+    session_start_script = claude_dir / "hooks" / "longhouse-session-start.sh"
+    content = session_start_script.read_text()
+
+    assert f'{tmp_path / ".longhouse"}' in content
+    assert "machine/device-token" in content
+    assert "machine/target-url" in content
+
+
+def test_install_hooks_points_lifecycle_hooks_at_longhouse_agent_state(tmp_path, monkeypatch):
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir(parents=True)
+    codex_dir = tmp_path / ".codex"
+    codex_dir.mkdir()
+
+    install_hooks(
+        url="http://localhost:8080",
+        claude_dir=str(claude_dir),
+        engine_path="/usr/bin/longhouse-engine",
+    )
+
+    claude_hook = (claude_dir / "hooks" / "longhouse-hook.sh").read_text()
+    codex_hook = (codex_dir / "hooks" / "longhouse-codex-hook.sh")
+    expected_home = str(tmp_path / ".longhouse")
+
+    assert expected_home in claude_hook
+    assert f'{claude_dir / "hindsight"}' in claude_hook
+    assert "$LONGHOUSE_HOME/agent/outbox" in claude_hook
+
+    codex_content = codex_hook.read_text()
+    assert expected_home in codex_content
+    assert "$LONGHOUSE_HOME/agent/outbox" in codex_content
 
 
 def test_install_hooks_ensures_claude_projects_root(tmp_path, monkeypatch):

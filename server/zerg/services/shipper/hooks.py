@@ -9,7 +9,7 @@ Claude hooks (via settings.json):
 
 - **longhouse-hook.sh** (Stop, UserPromptSubmit, PreToolUse, PostToolUse):
   Unified hook. Writes presence events to a local outbox directory
-  (~/.claude/outbox/) as small JSON files (<2ms, no network). The
+  (~/.longhouse/agent/outbox/) as small JSON files (<2ms, no network). The
   longhouse-engine daemon drains the outbox on a 1-second poll and POSTs
   to /api/agents/presence. On Stop, also seeds the session_binding table
   so the daemon ships with the correct managed session ID. All
@@ -21,7 +21,7 @@ Claude hooks (via settings.json):
 Codex hooks (via hooks.json):
 
 - **longhouse-codex-hook.sh** (SessionStart, UserPromptSubmit, Stop):
-  Writes presence events to the same ~/.claude/outbox/ directory using
+  Writes presence events to the same ~/.longhouse/agent/outbox/ directory using
   Codex's snake_case hook command input fields. Seeds session_binding for
   managed sessions so the daemon ships with the correct ID.
   Codex has fewer hook events than Claude (no PreToolUse/PostToolUse),
@@ -45,6 +45,8 @@ import stat
 import tomllib
 from pathlib import Path
 
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -58,10 +60,11 @@ HOOK_SCRIPT = """\
 # Registered on: Stop, UserPromptSubmit, PreToolUse, PostToolUse,
 #                PermissionRequest, Notification
 # Presence delivery:
-#   - Always write a small JSON event into ~/.claude/outbox/
+#   - Always write a small JSON event into ~/.longhouse/agent/outbox/
 #   - longhouse-engine is the only process that talks to remote endpoints
 # Session binding: seeds managed session ID so daemon ships correctly.
 INPUT=$(cat)
+LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
 # Require jq — exit silently if missing (hook is best-effort)
 command -v jq >/dev/null 2>&1 || exit 0
@@ -84,7 +87,7 @@ MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-}"
 [ -z "$SESSION_ID" ] && exit 0
 
 FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"
-HINDSIGHT_ROOT="$HOME/.claude/hindsight"
+HINDSIGHT_ROOT="__HINDSIGHT_ROOT__"
 if [[ "$FORCE_SIDECHAIN" != "1" ]] && [[ -n "$CWD" ]]; then
   case "$CWD" in
     "$HINDSIGHT_ROOT"|"$HINDSIGHT_ROOT"/*) FORCE_SIDECHAIN="1" ;;
@@ -93,7 +96,7 @@ fi
 
 write_presence_outbox() {
   payload="$1"
-  OUTBOX="$HOME/.claude/outbox"
+  OUTBOX="$LONGHOUSE_HOME/agent/outbox"
   [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX" || return 1
   TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX") || return 1
   printf '%s\n' "$payload" > "$TMPFILE" || { rm -f "$TMPFILE"; return 1; }
@@ -150,11 +153,12 @@ if [[ "$SOURCE" != "startup" ]]; then exit 0; fi
 PROJECT=$(basename "$CWD")
 if [[ -z "$PROJECT" ]]; then exit 0; fi
 
+LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
 URL="${LONGHOUSE_HOOK_URL:-}"
 if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]; then
-  TOKEN_FILE="$HOME/.claude/longhouse-device-token"
-  URL_FILE="$HOME/.claude/longhouse-url"
+  TOKEN_FILE="$LONGHOUSE_HOME/machine/device-token"
+  URL_FILE="$LONGHOUSE_HOME/machine/target-url"
   if [[ ! -f "$TOKEN_FILE" ]] || [[ ! -f "$URL_FILE" ]]; then exit 0; fi
   TOKEN=$(cat "$TOKEN_FILE" | tr -d '[:space:]')
   URL=$(cat "$URL_FILE" | tr -d '[:space:]')
@@ -188,10 +192,11 @@ CODEX_HOOK_SCRIPT = """\
 # Installed by: longhouse connect --install
 # Registered on: SessionStart, UserPromptSubmit, Stop (via ~/.codex/hooks.json)
 # Presence delivery:
-#   - Always write a small JSON event into ~/.claude/outbox/
+#   - Always write a small JSON event into ~/.longhouse/agent/outbox/
 #   - longhouse-engine is the only process that talks to remote endpoints
 # Session binding: seeds managed session ID so daemon ships correctly.
 INPUT=$(cat)
+LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
 # Codex command hooks use snake_case field names.
 IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT <<< "$(
@@ -214,7 +219,7 @@ fi
 
 write_presence_outbox() {
   payload="$1"
-  OUTBOX="$HOME/.claude/outbox"
+  OUTBOX="$LONGHOUSE_HOME/agent/outbox"
   [ -d "$OUTBOX" ] || mkdir -p "$OUTBOX" || return 1
   TMPFILE=$(mktemp "$OUTBOX/.tmp.XXXXXX") || return 1
   printf '%s\n' "$payload" > "$TMPFILE" || { rm -f "$TMPFILE"; return 1; }
@@ -374,6 +379,11 @@ def _write_settings(settings_path: Path, data: dict) -> None:
     settings_path.write_text(json.dumps(data, indent=2) + "\n")
 
 
+def _shell_double_quote(value: str) -> str:
+    """Escape a string for safe insertion into a shell double-quoted context."""
+    return value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -402,7 +412,7 @@ def install_hooks(
         url: Longhouse API URL (used only for logging; the unified hook
              does not read it at runtime — presence goes via outbox).
         token: Device token (unused by this function; the session-start
-               hook reads ``~/.claude/longhouse-device-token`` at runtime).
+               hook reads Longhouse-owned machine state at runtime).
         claude_dir: Override for Claude config directory.
 
     Returns:
@@ -422,10 +432,10 @@ def install_hooks(
     actions.append(f"Ensured {projects_dir}")
 
     # ------------------------------------------------------------------
-    # 2. Write hook scripts (with resolved config dir so token/url reads
-    #    point to the right place even when --claude-dir is used)
+    # 2. Write hook scripts with explicit provider + Longhouse paths baked in.
     # ------------------------------------------------------------------
-    resolved_dir = str(config_dir)
+    longhouse_home = resolve_longhouse_home_from_provider_home(config_dir)
+    hindsight_root = config_dir / "hindsight"
 
     # Resolve engine path at install time and bake it into the hook script.
     if engine_path is None:
@@ -436,16 +446,23 @@ def install_hooks(
         except RuntimeError:
             engine_path = "longhouse-engine"  # last resort: rely on PATH
 
-    hook_script_content = HOOK_SCRIPT.replace(
-        "$HOME/.claude/",
-        f"{resolved_dir}/",
-    ).replace(
-        "__ENGINE_PATH__",
-        engine_path,
+    hook_script_content = (
+        HOOK_SCRIPT.replace(
+            "__LONGHOUSE_HOME__",
+            _shell_double_quote(str(longhouse_home)),
+        )
+        .replace(
+            "__HINDSIGHT_ROOT__",
+            _shell_double_quote(str(hindsight_root)),
+        )
+        .replace(
+            "__ENGINE_PATH__",
+            engine_path,
+        )
     )
     session_start_script_content = SESSION_START_HOOK_SCRIPT.replace(
-        "$HOME/.claude/",
-        f"{resolved_dir}/",
+        "__LONGHOUSE_HOME__",
+        _shell_double_quote(str(longhouse_home)),
     )
 
     hook_script = hooks_dir / "longhouse-hook.sh"
@@ -511,7 +528,7 @@ def install_hooks(
     # ------------------------------------------------------------------
     # 6. Install Codex hooks (best-effort — Codex may not be installed)
     # ------------------------------------------------------------------
-    codex_actions = install_codex_hooks(engine_path=engine_path)
+    codex_actions = install_codex_hooks(engine_path=engine_path, claude_dir=claude_dir)
     actions.extend(codex_actions)
 
     return actions
@@ -558,6 +575,7 @@ def _merge_codex_hooks_for_event(
 
 def install_codex_hooks(
     engine_path: str | None = None,
+    claude_dir: str | None = None,
 ) -> list[str]:
     """Install Longhouse hook script and hooks.json for Codex CLI.
 
@@ -593,12 +611,10 @@ def install_codex_hooks(
         except RuntimeError:
             engine_path = "longhouse-engine"
 
-    # Resolve outbox dir — Codex hook writes to the same outbox the engine
-    # already drains (~/.claude/outbox/), keeping one daemon for all providers.
-    claude_outbox = str(Path.home() / ".claude" / "outbox")
+    longhouse_home = resolve_longhouse_home_from_provider_home(_resolve_claude_dir(claude_dir))
     hook_content = CODEX_HOOK_SCRIPT.replace(
-        "$HOME/.claude/outbox",
-        claude_outbox,
+        "__LONGHOUSE_HOME__",
+        _shell_double_quote(str(longhouse_home)),
     ).replace(
         "__ENGINE_PATH__",
         engine_path,

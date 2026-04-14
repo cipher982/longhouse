@@ -4,12 +4,15 @@ from pathlib import Path
 from zerg.cli import doctor
 from zerg.services import desktop_app
 from zerg.services import shipper
+from zerg.services.longhouse_paths import get_machine_token_path
 from zerg.services.shipper.service import Platform
 
 
 def _seed_claude_dir(claude_dir: Path, settings: dict) -> None:
     (claude_dir / "projects" / "demo-project").mkdir(parents=True, exist_ok=True)
-    (claude_dir / "longhouse-device-token").write_text("dev-token\n", encoding="utf-8")
+    token_path = get_machine_token_path(claude_dir)
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    token_path.write_text("dev-token\n", encoding="utf-8")
     (claude_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
 
 

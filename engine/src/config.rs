@@ -1,7 +1,7 @@
 //! Shipper configuration.
 //!
-//! Reads API URL and token from `~/.claude/longhouse-url` and
-//! `~/.claude/longhouse-device-token` (same files as the Python shipper).
+//! Reads API URL and token from `~/.longhouse/machine/target-url` and
+//! `~/.longhouse/machine/device-token` (same files as the Python helpers).
 
 use std::path::{Path, PathBuf};
 
@@ -19,7 +19,7 @@ pub struct ShipperConfig {
     pub max_retries_429: u32,
     pub base_backoff_seconds: f64,
     /// Human-readable machine label (set by user during `longhouse connect --install`).
-    /// Stored in `~/.claude/longhouse-machine-name`. Defaults to hostname.
+    /// Stored in `~/.longhouse/machine/name`. Defaults to hostname.
     pub machine_name: String,
 }
 
@@ -42,11 +42,11 @@ impl Default for ShipperConfig {
 impl ShipperConfig {
     /// Load config from standard file locations.
     pub fn from_env() -> Result<Self> {
-        let claude_dir = get_claude_dir()?;
+        let machine_dir = get_machine_dir()?;
         let mut config = Self::default();
 
         // Read machine name from file (set during --install)
-        let machine_name_path = claude_dir.join("longhouse-machine-name");
+        let machine_name_path = machine_dir.join("name");
         if machine_name_path.exists() {
             if let Ok(name) = std::fs::read_to_string(&machine_name_path) {
                 let name = name.trim().to_string();
@@ -57,7 +57,7 @@ impl ShipperConfig {
         }
 
         // Read URL from file
-        let url_path = claude_dir.join("longhouse-url");
+        let url_path = machine_dir.join("target-url");
         if url_path.exists() {
             let url = std::fs::read_to_string(&url_path)
                 .with_context(|| format!("reading {}", url_path.display()))?
@@ -69,7 +69,7 @@ impl ShipperConfig {
         }
 
         // Read token from file
-        let token_path = claude_dir.join("longhouse-device-token");
+        let token_path = machine_dir.join("device-token");
         if token_path.exists() {
             let token = std::fs::read_to_string(&token_path)
                 .with_context(|| format!("reading {}", token_path.display()))?
@@ -144,8 +144,9 @@ mod tests {
     /// Build a ShipperConfig as if CLAUDE_CONFIG_DIR points to a temp dir.
     fn config_from_dir(dir: &std::path::Path) -> ShipperConfig {
         let mut config = ShipperConfig::default();
+        let machine_dir = dir.join("machine");
 
-        let machine_name_path = dir.join("longhouse-machine-name");
+        let machine_name_path = machine_dir.join("name");
         if machine_name_path.exists() {
             if let Ok(name) = fs::read_to_string(&machine_name_path) {
                 let name = name.trim().to_string();
@@ -160,7 +161,8 @@ mod tests {
     #[test]
     fn test_machine_name_loaded_from_file() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("longhouse-machine-name"), "work-macbook\n").unwrap();
+        fs::create_dir_all(dir.path().join("machine")).unwrap();
+        fs::write(dir.path().join("machine").join("name"), "work-macbook\n").unwrap();
 
         let config = config_from_dir(dir.path());
         assert_eq!(config.machine_name, "work-macbook");
@@ -177,7 +179,8 @@ mod tests {
     #[test]
     fn test_machine_name_empty_file_ignored() {
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("longhouse-machine-name"), "   \n").unwrap();
+        fs::create_dir_all(dir.path().join("machine")).unwrap();
+        fs::write(dir.path().join("machine").join("name"), "   \n").unwrap();
 
         let config = config_from_dir(dir.path());
         // Empty file → falls back to hostname, not empty string
@@ -221,13 +224,56 @@ mod tests {
             ShipperConfig::default().with_overrides(None, None, None, None, None, Some(1234));
         assert_eq!(config.max_batch_bytes, 1234);
     }
+
+    #[test]
+    fn test_provider_home_maps_custom_env_path_to_sibling_longhouse() {
+        let mapped = provider_home_to_longhouse_home(PathBuf::from("/tmp/custom-claude"));
+        assert_eq!(mapped, PathBuf::from("/tmp/.longhouse"));
+    }
 }
 
-/// Resolve `~/.claude/` or `CLAUDE_CONFIG_DIR`.
-fn get_claude_dir() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+/// Resolve the Longhouse-owned machine config directory.
+pub fn get_machine_dir() -> Result<PathBuf> {
+    Ok(get_longhouse_home()?.join("machine"))
+}
+
+/// Resolve the Longhouse-owned agent state directory.
+pub fn get_agent_dir() -> Result<PathBuf> {
+    Ok(get_longhouse_home()?.join("agent"))
+}
+
+pub fn get_agent_outbox_dir() -> Result<PathBuf> {
+    Ok(get_agent_dir()?.join("outbox"))
+}
+
+pub fn get_agent_status_path() -> Result<PathBuf> {
+    Ok(get_agent_dir()?.join("engine-status.json"))
+}
+
+pub fn get_agent_db_path() -> Result<PathBuf> {
+    Ok(get_agent_dir()?.join("longhouse-shipper.db"))
+}
+
+pub fn get_agent_log_dir() -> Result<PathBuf> {
+    Ok(get_agent_dir()?.join("logs"))
+}
+
+pub fn get_longhouse_home() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("LONGHOUSE_HOME") {
         return Ok(PathBuf::from(dir));
     }
+    if let Ok(dir) = std::env::var("CLAUDE_CONFIG_DIR") {
+        return Ok(provider_home_to_longhouse_home(PathBuf::from(dir)));
+    }
     let home = std::env::var("HOME").context("HOME not set")?;
-    Ok(PathBuf::from(home).join(".claude"))
+    Ok(PathBuf::from(home).join(".longhouse"))
+}
+
+fn provider_home_to_longhouse_home(path: PathBuf) -> PathBuf {
+    if matches!(path.file_name().and_then(|value| value.to_str()), Some(".longhouse")) {
+        return path;
+    }
+    path.parent()
+        .map(|parent| parent.join(".longhouse"))
+        .unwrap_or_else(|| path.join(".longhouse"))
 }

@@ -226,7 +226,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
 
     let isolated_home = if let Some(home) = config.home_override.as_ref() {
         fs::create_dir_all(home.join(".codex"))?;
-        fs::create_dir_all(home.join(".claude").join("outbox"))?;
+        fs::create_dir_all(home.join(".longhouse").join("agent").join("outbox"))?;
         prepare_isolated_home(home, config.verify_hooks).await?;
         None
     } else if config.isolate_home {
@@ -254,7 +254,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         None
     };
     let outbox_dir = if config.verify_hooks {
-        Some(effective_home.join(".claude").join("outbox"))
+        Some(effective_home.join(".longhouse").join("agent").join("outbox"))
     } else {
         None
     };
@@ -1159,7 +1159,7 @@ fn extract_string(value: &Value, path: &[&str]) -> Option<String> {
 fn create_isolated_home() -> Result<PathBuf> {
     let root = std::env::temp_dir().join(format!("longhouse-codex-canary-{}", Uuid::new_v4()));
     fs::create_dir_all(root.join(".codex"))?;
-    fs::create_dir_all(root.join(".claude").join("outbox"))?;
+    fs::create_dir_all(root.join(".longhouse").join("agent").join("outbox"))?;
     Ok(root)
 }
 
@@ -1290,15 +1290,24 @@ fn rewrite_isolated_codex_hook_assets(home: &Path, real_home: &Path) -> Result<(
         .join("longhouse-codex-hook.sh");
     if hook_script_path.exists() {
         let text = fs::read_to_string(&hook_script_path)?;
+        let source_longhouse_home = real_home.join(".longhouse").display().to_string();
+        let isolated_longhouse_home = home.join(".longhouse").display().to_string();
         let source_outbox = real_home
-            .join(".claude")
+            .join(".longhouse")
+            .join("agent")
             .join("outbox")
             .display()
             .to_string();
-        let isolated_outbox = home.join(".claude").join("outbox").display().to_string();
+        let isolated_outbox = home
+            .join(".longhouse")
+            .join("agent")
+            .join("outbox")
+            .display()
+            .to_string();
         fs::write(
             &hook_script_path,
-            text.replace(&source_outbox, &isolated_outbox),
+            text.replace(&source_longhouse_home, &isolated_longhouse_home)
+                .replace(&source_outbox, &isolated_outbox),
         )?;
     }
 

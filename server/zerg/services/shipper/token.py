@@ -1,9 +1,4 @@
-"""Token storage for device authentication.
-
-Handles local storage of device tokens for the shipper CLI.
-Tokens are stored in the Claude config directory alongside other
-shipper state files.
-"""
+"""Machine target/auth storage for Longhouse local installs."""
 
 from __future__ import annotations
 
@@ -11,39 +6,26 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-
-def get_token_path(claude_config_dir: Path | None = None) -> Path:
-    """Get the path to the device token file.
-
-    Respects CLAUDE_CONFIG_DIR environment variable if set.
-
-    Args:
-        claude_config_dir: Optional override for Claude config directory.
-                          If None, uses CLAUDE_CONFIG_DIR env var or ~/.claude
-
-    Returns:
-        Path to the token file (may not exist)
-    """
-    if claude_config_dir is None:
-        config_dir = os.getenv("CLAUDE_CONFIG_DIR")
-        if config_dir:
-            claude_config_dir = Path(config_dir).expanduser()
-        else:
-            claude_config_dir = Path.home() / ".claude"
-
-    return claude_config_dir / "longhouse-device-token"
+from zerg.services.longhouse_paths import get_machine_name_path
+from zerg.services.longhouse_paths import get_machine_target_url_path
+from zerg.services.longhouse_paths import get_machine_token_path
 
 
-def load_token(claude_config_dir: Path | None = None) -> str | None:
+def get_token_path(config_dir: Path | None = None) -> Path:
+    """Get the path to the device token file."""
+    return get_machine_token_path(config_dir)
+
+
+def load_token(config_dir: Path | None = None) -> str | None:
     """Load the device token from local storage.
 
     Args:
-        claude_config_dir: Optional override for Claude config directory.
+        config_dir: Optional Longhouse home or provider-config override.
 
     Returns:
         The token string if it exists, None otherwise.
     """
-    token_path = get_token_path(claude_config_dir)
+    token_path = get_token_path(config_dir)
 
     if token_path.exists():
         try:
@@ -56,15 +38,15 @@ def load_token(claude_config_dir: Path | None = None) -> str | None:
     return None
 
 
-def save_token(token: str, claude_config_dir: Path | None = None) -> None:
+def save_token(token: str, config_dir: Path | None = None) -> None:
     """Save a device token to local storage.
 
-    Creates the config directory if it doesn't exist.
+    Creates the Longhouse machine config directory if it doesn't exist.
     Uses secure file creation to avoid permission race conditions.
 
     Args:
         token: The token to save.
-        claude_config_dir: Optional override for Claude config directory.
+        config_dir: Optional Longhouse home or provider-config override.
 
     Raises:
         OSError: If unable to write the token file.
@@ -72,7 +54,7 @@ def save_token(token: str, claude_config_dir: Path | None = None) -> None:
     import sys
     import tempfile
 
-    token_path = get_token_path(claude_config_dir)
+    token_path = get_token_path(config_dir)
 
     # Ensure parent directory exists
     token_path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,16 +86,16 @@ def save_token(token: str, claude_config_dir: Path | None = None) -> None:
             raise
 
 
-def clear_token(claude_config_dir: Path | None = None) -> bool:
+def clear_token(config_dir: Path | None = None) -> bool:
     """Remove the device token from local storage.
 
     Args:
-        claude_config_dir: Optional override for Claude config directory.
+        config_dir: Optional Longhouse home or provider-config override.
 
     Returns:
         True if a token was removed, False if no token existed.
     """
-    token_path = get_token_path(claude_config_dir)
+    token_path = get_token_path(config_dir)
 
     if not token_path.exists():
         return False
@@ -125,16 +107,16 @@ def clear_token(claude_config_dir: Path | None = None) -> bool:
         return False
 
 
-def clear_zerg_url(claude_config_dir: Path | None = None) -> bool:
+def clear_zerg_url(config_dir: Path | None = None) -> bool:
     """Remove the stored Zerg API URL from local storage.
 
     Args:
-        claude_config_dir: Optional override for Claude config directory.
+        config_dir: Optional Longhouse home or provider-config override.
 
     Returns:
         True if the URL was removed, False if no URL existed.
     """
-    url_path = _get_url_path(claude_config_dir)
+    url_path = _get_url_path(config_dir)
 
     if not url_path.exists():
         return False
@@ -146,16 +128,16 @@ def clear_zerg_url(claude_config_dir: Path | None = None) -> bool:
         return False
 
 
-def get_zerg_url(claude_config_dir: Path | None = None) -> str | None:
+def get_zerg_url(config_dir: Path | None = None) -> str | None:
     """Load the configured Longhouse API URL from local storage.
 
     Args:
-        claude_config_dir: Optional override for Claude config directory.
+        config_dir: Optional Longhouse home or provider-config override.
 
     Returns:
         The URL string if configured, None otherwise.
     """
-    url_path = _get_url_path(claude_config_dir)
+    url_path = _get_url_path(config_dir)
 
     if url_path.exists():
         try:
@@ -190,14 +172,14 @@ def normalize_zerg_url(url: object | None) -> str | None:
     return normalized
 
 
-def save_zerg_url(url: str, claude_config_dir: Path | None = None) -> None:
+def save_zerg_url(url: str, config_dir: Path | None = None) -> None:
     """Save the Longhouse API URL to local storage.
 
     Uses secure file creation to avoid permission race conditions.
 
     Args:
         url: The URL to save.
-        claude_config_dir: Optional override for Claude config directory.
+        config_dir: Optional Longhouse home or provider-config override.
     """
     import sys
     import tempfile
@@ -206,7 +188,7 @@ def save_zerg_url(url: str, claude_config_dir: Path | None = None) -> None:
     if normalized_url is None:
         raise ValueError(f"Invalid Longhouse URL: {url!r}")
 
-    url_path = _get_url_path(claude_config_dir)
+    url_path = _get_url_path(config_dir)
 
     # Ensure parent directory exists
     url_path.parent.mkdir(parents=True, exist_ok=True)
@@ -256,12 +238,27 @@ def sanitize_machine_name(name: str) -> str:
     return name[:64] or "unknown"
 
 
-def save_machine_name(name: str, claude_config_dir: Path | None = None) -> None:
-    """Save the machine name label to ~/.claude/longhouse-machine-name."""
+def load_machine_name(config_dir: Path | None = None) -> str | None:
+    """Load the configured Longhouse machine label."""
+    machine_path = _get_machine_name_path(config_dir)
+
+    if machine_path.exists():
+        try:
+            machine_name = machine_path.read_text().strip()
+            if machine_name:
+                return machine_name
+        except (OSError, IOError):
+            pass
+
+    return None
+
+
+def save_machine_name(name: str, config_dir: Path | None = None) -> None:
+    """Save the machine name label to Longhouse-owned machine state."""
     import sys
     import tempfile
 
-    machine_path = _get_machine_name_path(claude_config_dir)
+    machine_path = _get_machine_name_path(config_dir)
     machine_path.parent.mkdir(parents=True, exist_ok=True)
     content = name.strip() + "\n"
 
@@ -287,24 +284,11 @@ def save_machine_name(name: str, claude_config_dir: Path | None = None) -> None:
             raise
 
 
-def _get_machine_name_path(claude_config_dir: Path | None = None) -> Path:
+def _get_machine_name_path(config_dir: Path | None = None) -> Path:
     """Get the path to the machine name file."""
-    if claude_config_dir is None:
-        config_dir = os.getenv("CLAUDE_CONFIG_DIR")
-        if config_dir:
-            claude_config_dir = Path(config_dir).expanduser()
-        else:
-            claude_config_dir = Path.home() / ".claude"
-    return claude_config_dir / "longhouse-machine-name"
+    return get_machine_name_path(config_dir)
 
 
-def _get_url_path(claude_config_dir: Path | None = None) -> Path:
+def _get_url_path(config_dir: Path | None = None) -> Path:
     """Get the path to the Longhouse URL file."""
-    if claude_config_dir is None:
-        config_dir = os.getenv("CLAUDE_CONFIG_DIR")
-        if config_dir:
-            claude_config_dir = Path(config_dir).expanduser()
-        else:
-            claude_config_dir = Path.home() / ".claude"
-
-    return claude_config_dir / "longhouse-url"
+    return get_machine_target_url_path(config_dir)

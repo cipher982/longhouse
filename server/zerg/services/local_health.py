@@ -18,6 +18,13 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
+from zerg.services.longhouse_paths import get_agent_db_path
+from zerg.services.longhouse_paths import get_agent_log_dir
+from zerg.services.longhouse_paths import get_agent_outbox_dir
+from zerg.services.longhouse_paths import get_agent_status_path
+from zerg.services.longhouse_paths import get_machine_name_path
+from zerg.services.longhouse_paths import get_machine_target_url_path
+from zerg.services.longhouse_paths import resolve_longhouse_home
 from zerg.services.shipper.service import get_service_info
 from zerg.services.shipper.token import normalize_zerg_url
 
@@ -52,10 +59,7 @@ def _to_rfc3339(dt: datetime) -> str:
 def _coerce_path(path: str | Path | None) -> Path:
     if path is not None:
         return Path(path).expanduser()
-    config_dir = os.getenv("CLAUDE_CONFIG_DIR")
-    if config_dir:
-        return Path(config_dir).expanduser()
-    return Path.home() / ".claude"
+    return resolve_longhouse_home()
 
 
 def _read_trimmed_file(path: Path) -> str | None:
@@ -136,9 +140,9 @@ def _recent_touch_entry(source_path: str, provider: str, last_updated: str) -> d
     }
 
 
-def _collect_local_config(claude_dir: Path) -> dict[str, Any]:
-    url_path = claude_dir / "longhouse-url"
-    machine_name_path = claude_dir / "longhouse-machine-name"
+def _collect_local_config(base_dir: Path) -> dict[str, Any]:
+    url_path = get_machine_target_url_path(base_dir)
+    machine_name_path = get_machine_name_path(base_dir)
     stored_url = normalize_zerg_url(_read_trimmed_file(url_path))
     return {
         "url_path": str(url_path),
@@ -255,8 +259,8 @@ def _extract_service_machine_name(service_file: str | None) -> str | None:
     return None
 
 
-def _collect_launch_readiness(claude_dir: Path, *, service: dict[str, Any]) -> dict[str, Any]:
-    config = _collect_local_config(claude_dir)
+def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dict[str, Any]:
+    config = _collect_local_config(base_dir)
     runner = _collect_runner_config()
     service_machine_name = _extract_service_machine_name(service.get("service_file"))
     reasons: list[str] = []
@@ -313,8 +317,8 @@ def _collect_launch_readiness(claude_dir: Path, *, service: dict[str, Any]) -> d
     }
 
 
-def _collect_engine_status(claude_dir: Path, *, now: datetime) -> dict[str, Any]:
-    status_path = claude_dir / "engine-status.json"
+def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
+    status_path = get_agent_status_path(base_dir)
     if not status_path.exists():
         return {
             "path": str(status_path),
@@ -359,8 +363,8 @@ def _collect_engine_status(claude_dir: Path, *, now: datetime) -> dict[str, Any]
     }
 
 
-def _collect_outbox(claude_dir: Path, *, now: datetime) -> dict[str, Any]:
-    outbox_dir = claude_dir / "outbox"
+def _collect_outbox(base_dir: Path, *, now: datetime) -> dict[str, Any]:
+    outbox_dir = get_agent_outbox_dir(base_dir)
     if not outbox_dir.exists():
         return {
             "path": str(outbox_dir),
@@ -391,8 +395,8 @@ def _collect_outbox(claude_dir: Path, *, now: datetime) -> dict[str, Any]:
     }
 
 
-def _collect_service() -> dict[str, Any]:
-    return get_service_info()
+def _collect_service(base_dir: Path) -> dict[str, Any]:
+    return get_service_info(str(base_dir))
 
 
 def _collect_version_info() -> dict[str, Any] | None:
@@ -416,8 +420,8 @@ def _collect_version_info() -> dict[str, Any] | None:
     }
 
 
-def _collect_activity_summary(claude_dir: Path, *, now: datetime) -> dict[str, Any]:
-    db_path = claude_dir / "longhouse-shipper.db"
+def _collect_activity_summary(base_dir: Path, *, now: datetime) -> dict[str, Any]:
+    db_path = get_agent_db_path(base_dir)
     summary = {
         "path": str(db_path),
         "exists": db_path.exists(),
@@ -592,6 +596,8 @@ def _classify_health(
 
     service_status = str(service.get("status") or "not-installed")
     payload = engine_status.get("payload") or {}
+    engine_status_path = str(engine_status.get("path") or get_agent_status_path())
+    engine_log_path = str(service.get("log_path") or (get_agent_log_dir() / "engine.log.*"))
     engine_exists = bool(engine_status.get("exists"))
     engine_error = engine_status.get("error")
     engine_age = engine_status.get("age_seconds")
@@ -620,7 +626,7 @@ def _classify_health(
 
     if engine_error:
         reasons.append("engine_status_unreadable")
-        _with_action(actions, "Inspect: ~/.claude/engine-status.json")
+        _with_action(actions, f"Inspect: {engine_status_path}")
     elif not engine_exists:
         reasons.append("engine_status_missing")
         if service_status == "running":
@@ -629,7 +635,7 @@ def _classify_health(
             _with_action(actions, "Run: longhouse connect --install")
     elif engine_age is not None and engine_age > ENGINE_STALE_SECONDS:
         reasons.append("engine_status_stale")
-        _with_action(actions, "Inspect logs: ~/.claude/logs/engine.log.*")
+        _with_action(actions, f"Inspect logs: {engine_log_path}")
     elif engine_age is not None and engine_age > ENGINE_FRESH_SECONDS:
         reasons.append("engine_status_aging")
 
@@ -639,7 +645,7 @@ def _classify_health(
 
     if ship_failures > 0:
         reasons.append("ship_failures")
-        _with_action(actions, "Inspect logs: ~/.claude/logs/engine.log.*")
+        _with_action(actions, f"Inspect logs: {engine_log_path}")
 
     if parse_errors > 0:
         reasons.append("parse_errors")
@@ -656,7 +662,7 @@ def _classify_health(
         reasons.append("outbox_backlog")
     if outbox_count > 0 and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS:
         reasons.append("outbox_stuck")
-        _with_action(actions, "Inspect logs: ~/.claude/logs/engine.log.*")
+        _with_action(actions, f"Inspect logs: {engine_log_path}")
 
     if isinstance(disk_free_bytes, int):
         if disk_free_bytes < DISK_BROKEN_BYTES:
@@ -755,12 +761,12 @@ def _classify_health(
 
 def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]:
     now = _utc_now()
-    resolved_claude_dir = _coerce_path(claude_dir)
-    service = _collect_service()
-    engine_status = _collect_engine_status(resolved_claude_dir, now=now)
-    outbox = _collect_outbox(resolved_claude_dir, now=now)
-    activity_summary = _collect_activity_summary(resolved_claude_dir, now=now)
-    launch_readiness = _collect_launch_readiness(resolved_claude_dir, service=service)
+    resolved_base_dir = _coerce_path(claude_dir)
+    service = _collect_service(resolved_base_dir)
+    engine_status = _collect_engine_status(resolved_base_dir, now=now)
+    outbox = _collect_outbox(resolved_base_dir, now=now)
+    activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
+    launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
         engine_status=engine_status,

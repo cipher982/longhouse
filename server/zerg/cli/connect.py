@@ -18,6 +18,7 @@ from zerg.services.desktop_app import default_install_desktop_app
 from zerg.services.desktop_app import get_desktop_app_service_info
 from zerg.services.desktop_app import uninstall_desktop_app_service
 from zerg.services.local_runtime_installer import install_local_runtime
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.shipper import clear_token
 from zerg.services.shipper import clear_zerg_url
 from zerg.services.shipper import get_service_info
@@ -188,7 +189,7 @@ def auth(
         longhouse auth --token zdt_your_token_here
         longhouse auth --clear
     """
-    config_dir = Path(claude_dir) if claude_dir else None
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
 
     # Handle --clear
     if clear:
@@ -351,7 +352,7 @@ def ship(
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    config_dir = Path(claude_dir) if claude_dir else None
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
 
     url = _resolve_configured_url(url, config_dir)
     if not token:
@@ -487,7 +488,7 @@ def connect(
     if verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
-    config_dir = Path(claude_dir) if claude_dir else None
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
 
     # --domain is shorthand for --url https://<domain>
     if isinstance(domain, str) and not url:
@@ -632,7 +633,7 @@ def recall(
         longhouse recall "database migration" --project zerg --days-back 30
         longhouse recall "deploy fix" --json
     """
-    config_dir = Path(claude_dir) if claude_dir else None
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
 
     # Load stored credentials if not provided
     if not url:

@@ -26,6 +26,8 @@ import typer
 from zerg.cli.update_manager import check_for_updates
 from zerg.cli.update_manager import current_installed_version
 from zerg.cli.update_manager import load_install_metadata
+from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.services.shipper.token import get_token_path
 
 # ---------------------------------------------------------------------------
 # Result types
@@ -71,7 +73,7 @@ class CheckResult:
 
 
 def _get_longhouse_home() -> Path:
-    return Path.home() / ".longhouse"
+    return resolve_longhouse_home()
 
 
 def _get_claude_dir() -> Path:
@@ -312,7 +314,7 @@ def _check_shipper() -> list[CheckResult]:
         results.append(CheckResult(WARN, "No Claude Code sessions directory", "Install Claude Code to start shipping sessions"))
 
     # Device token
-    token_path = claude_dir / "longhouse-device-token"
+    token_path = get_token_path(claude_dir)
     if token_path.exists():
         results.append(CheckResult(PASS, "Device token configured"))
     else:

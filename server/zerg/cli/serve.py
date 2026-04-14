@@ -23,6 +23,8 @@ from urllib.parse import urlparse
 
 import typer
 
+from zerg.services.longhouse_paths import resolve_longhouse_home
+
 app = typer.Typer(help="Longhouse server commands")
 
 
@@ -62,7 +64,7 @@ def _apply_runtime_public_url(public_url: str | None, *, force: bool = False) ->
 
 def _get_longhouse_home() -> Path:
     """Return the Longhouse home directory (~/.longhouse), creating if needed."""
-    longhouse_home = Path.home() / ".longhouse"
+    longhouse_home = resolve_longhouse_home()
     longhouse_home.mkdir(parents=True, exist_ok=True)
     return longhouse_home
 
@@ -460,14 +462,6 @@ def serve(
         typer.echo(f"  Or find what's using it: lsof -i :{port}")
         raise typer.Exit(code=1) from e
 
-    # Write the URL file so MCP server, hooks, and engine can find us.
-    # Always write 127.0.0.1 — that's what local clients connect to,
-    # even when the server binds 0.0.0.0.
-    from zerg.services.shipper.token import save_zerg_url
-
-    local_url = f"http://127.0.0.1:{port}"
-    save_zerg_url(local_url)
-
     # Persist public domain to config if provided, then load from config as fallback.
     from zerg.cli.config_file import load_config
     from zerg.cli.config_file import save_config
@@ -483,7 +477,6 @@ def serve(
                     "public_url": public_url,
                 },
                 "shipper": {
-                    "api_url": file_cfg.shipper.api_url,
                     "flush_ms": file_cfg.shipper.flush_ms,
                     "fallback_scan_secs": file_cfg.shipper.fallback_scan_secs,
                 },
@@ -642,7 +635,7 @@ def status(
             if payload.get("consecutive_ship_failures"):
                 typer.secho(f"  Ship failures:  {payload['consecutive_ship_failures']}", fg=typer.colors.YELLOW)
         else:
-            typer.echo(f"  Engine status:  not found ({engine.get('path', '~/.claude/engine-status.json')})")
+            typer.echo(f"  Engine status:  not found ({engine.get('path', '~/.longhouse/agent/engine-status.json')})")
 
         # Outbox
         outbox = health.get("outbox") or {}
