@@ -13,6 +13,7 @@ import typer
 from zerg.services.desktop_app import build_snapshot_arguments
 from zerg.services.local_health import collect_local_health
 from zerg.services.runtime_artifacts import RuntimeComponent
+from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 from zerg.services.shipper import get_zerg_url
 
@@ -167,7 +168,8 @@ def _launch_desktop_surface(
     else:
         if not allow_source_fallback:
             typer.secho(
-                "Longhouse.app is not installed. Run `longhouse connect --install` to install or repair the local runtime.",
+                f"Longhouse.app is not installed in {desktop_app_canonical_bundle_path()}. "
+                "Run `longhouse connect --install` to install or repair the local runtime.",
                 fg=typer.colors.RED,
             )
             raise typer.Exit(code=1)

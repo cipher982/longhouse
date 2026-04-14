@@ -75,8 +75,8 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
         lambda **kwargs: calls.append(("desktop", kwargs)) or {
             "message": "desktop app installed",
             "plist_path": "/tmp/menubar.plist",
-            "app_path": "/Users/test/Applications/Longhouse.app",
-            "launch_path": "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            "app_path": "/Applications/Longhouse.app",
+            "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
         },
     )
 
@@ -100,8 +100,8 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
     assert result.desktop_app_result == {
         "message": "desktop app installed",
         "plist_path": "/tmp/menubar.plist",
-        "app_path": "/Users/test/Applications/Longhouse.app",
-        "launch_path": "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+        "app_path": "/Applications/Longhouse.app",
+        "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
     }
 
 

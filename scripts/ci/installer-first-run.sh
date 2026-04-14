@@ -807,8 +807,8 @@ if [[ "$EXPECT_SERVICE_INSTALL" -eq 1 || -z "${CI:-}" ]]; then
     fail "connect --status did not settle to the expected running services"
   fi
   printf '%s\n' "$CONNECT_STATUS_OUTPUT"
-  if [[ "$EXPECT_SERVICE_INSTALL" -eq 1 && ! -d "$HOME/Applications/Longhouse.app" ]]; then
-    fail "Longhouse.app was not installed into ~/Applications"
+  if [[ "$EXPECT_SERVICE_INSTALL" -eq 1 && ! -d "/Applications/Longhouse.app" ]]; then
+    fail "Longhouse.app was not installed into /Applications"
   fi
 elif [[ -n "${CI:-}" ]]; then
   log "ℹ️  Skipping service-manager status assertion in CI."
