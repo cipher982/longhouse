@@ -65,7 +65,8 @@ What ships:
 Primary automation:
 
 ```bash
-make ship
+SHA="$(git rev-parse HEAD)"
+make ship SHA="$SHA"
 ```
 
 GitHub then runs at least:
@@ -74,7 +75,14 @@ GitHub then runs at least:
 
 Other push workflows may also appear for the same SHA depending on touched paths.
 
-Use `make ship-watch SHA=<full-sha>` when you need to verify an already-pushed commit without pushing again. Do not use branch-latest `gh run list --limit 1` patterns on a busy `main`. `deploy-and-verify.yml` does wait for the matching `contract-first-ci.yml` and `runtime-image.yml` runs for the same SHA before any remote deploy action, and manual dispatch stays isolated for recovery use.
+For agent use, always prefer the explicit-SHA forms:
+
+```bash
+make ship SHA="<full-sha>"
+make ship-watch SHA="<full-sha>"
+```
+
+Use them even if the commit was pushed earlier in the session. `make ship SHA=<full-sha>` prints a start banner with the exact target SHA and commit subject so wrong-commit mistakes are obvious immediately. Do not use branch-latest `gh run list --limit 1` patterns on a busy `main`, and do not infer delayed `cowbell` requests from current `HEAD`. `deploy-and-verify.yml` does wait for the matching `contract-first-ci.yml` and `runtime-image.yml` runs for the same SHA before any remote deploy action, and manual dispatch stays isolated for recovery use.
 
 Manual fallback:
 
