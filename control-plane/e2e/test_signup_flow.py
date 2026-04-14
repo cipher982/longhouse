@@ -85,9 +85,9 @@ def test_full_signup_verify_dashboard(page: Page, base_url: str, email_capture: 
     else:
         local_verify_url = verify_url
 
-    # 3. Click verification link → should land on /dashboard
+    # 3. Click verification link → should land on dashboard or subdomain picker
     page.goto(local_verify_url)
-    page.wait_for_url(re.compile(r"/dashboard"), timeout=5000)
+    page.wait_for_url(re.compile(r"/dashboard|/onboarding/"), timeout=5000)
 
     # 4. Dashboard must render without a 500
     expect(page.locator("body")).to_be_visible()

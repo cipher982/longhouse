@@ -36,7 +36,8 @@ def test_login_valid_credentials(page: Page, base_url: str, db_session) -> None:
     page.fill("input[type='password']", "ValidPass123")
     page.click("button[type='submit']")
 
-    page.wait_for_url(re.compile(r"/dashboard"), timeout=5000)
+    # Unpaid users land on the subdomain picker before reaching the dashboard
+    page.wait_for_url(re.compile(r"/dashboard|/onboarding/"), timeout=5000)
 
 
 def test_login_bad_password_shows_error(page: Page, base_url: str, db_session) -> None:  # type: ignore[no-untyped-def]

@@ -64,6 +64,7 @@ def test_verified_user_can_reach_dashboard(
     ])
 
     page.goto(f"{base_url}/dashboard")
-    # Should stay on /dashboard (not redirected away)
-    page.wait_for_url(re.compile(r"/dashboard"), timeout=5000)
+    # Verified unpaid users land on the subdomain picker (next step in the flow).
+    # Either /dashboard or /onboarding/* is acceptable — just not /verify-email or /.
+    page.wait_for_url(re.compile(r"/dashboard|/onboarding/"), timeout=5000)
     expect(page.locator("body")).to_be_visible()
