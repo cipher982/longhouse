@@ -4,19 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    paths:
-      - '.dockerignore'
-      - 'bun.lock'
-      - 'control-plane/**'
-      - 'server/**'
-      - 'web/**'
-      - 'config/**'
-      - 'docker/entrypoint.sh'
-      - 'docker/runtime.dockerfile'
-      - 'scripts/ci/provision-e2e.sh'
-      - 'scripts/lib/hosted-instance.sh'
-      - '.github/workflows/provision-e2e.yml'
-      - '.github/workflows/runtime-image.yml'
   workflow_dispatch: {}
 
 permissions:
@@ -25,8 +12,33 @@ permissions:
   packages: read
 
 jobs:
+  changes:
+    name: "Detect provisioning scope"
+    runs-on: ubuntu-latest
+    outputs:
+      provision_e2e: ${{ steps.decide.outputs.provision_e2e }}
+    steps:
+      - uses: actions/checkout@v6
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        with:
+          fetch-depth: 1
+      - uses: dorny/paths-filter@v3
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        id: filter
+        with:
+          filters: .github/path-filters.yml
+      - name: Resolve provisioning scope
+        id: decide
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "provision_e2e=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "provision_e2e=${{ steps.filter.outputs.provision_e2e }}" >> "$GITHUB_OUTPUT"
+          fi
+
   wait-for-image:
-    if: ${{ github.event_name == 'push' }}
+    needs: changes
+    if: ${{ needs.changes.outputs.provision_e2e == 'true' && github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -45,8 +57,8 @@ jobs:
           timeout_seconds: "600"
 
   provision-e2e-core:
-    needs: [wait-for-image]
-    if: ${{ always() && (needs.wait-for-image.result == 'success' || github.event_name != 'push') }}
+    needs: [changes, wait-for-image]
+    if: ${{ needs.changes.outputs.provision_e2e == 'true' && (github.event_name != 'push' || needs.wait-for-image.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -100,8 +112,8 @@ jobs:
         run: ./scripts/ci/provision-e2e.sh --mode core
 
   provision-e2e-extended:
-    needs: [wait-for-image]
-    if: ${{ always() && github.event_name != 'pull_request' && (needs.wait-for-image.result == 'success' || github.event_name != 'push') }}
+    needs: [changes, wait-for-image]
+    if: ${{ needs.changes.outputs.provision_e2e == 'true' && github.event_name != 'pull_request' && (github.event_name != 'push' || needs.wait-for-image.result == 'success') }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
 

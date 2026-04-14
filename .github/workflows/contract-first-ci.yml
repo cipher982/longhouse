@@ -40,40 +40,7 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          filters: |
-            backend:
-              - 'server/**'
-              - 'config/**'
-            frontend:
-              - 'web/**'
-              - 'bun.lock'
-              - 'package.json'
-            engine:
-              - 'engine/**'
-            schemas:
-              - 'schemas/**'
-              - 'scripts/generate/**'
-              - 'Makefile'
-            control_plane:
-              - 'control-plane/**'
-            packaging:
-              - 'server/pyproject.toml'
-              - 'server/setup.cfg'
-              - 'web/**'
-              - 'scripts/qa/test-wheel-package.sh'
-            runner:
-              - 'runner/**'
-            e2e:
-              - 'e2e/**'
-              - 'server/**'
-              - 'web/**'
-              - 'config/**'
-            models:
-              - 'config/models.json'
-              - 'server/zerg/llm/**'
-              - 'scripts/qa/smoke_models.py'
-            scripts:
-              - 'scripts/**'
+          filters: .github/path-filters.yml
 
   validate:
     needs: changes

@@ -331,7 +331,11 @@ def verify_live_state(root: Path, sha: str, runs: list[RunInfo]) -> tuple[dict[s
     raw = proc.stdout
     surfaces = parse_deploy_status(raw)
     short_sha = sha[:10]
-    workflow_names = {run.workflowName for run in runs}
+    successful_workflow_names = {
+        run.workflowName
+        for run in runs
+        if run.status == "completed" and run.conclusion == "success"
+    }
     errors: list[str] = []
 
     def require_surface(surface_name: str, allowed_health: set[str]) -> None:
@@ -344,11 +348,11 @@ def verify_live_state(root: Path, sha: str, runs: list[RunInfo]) -> tuple[dict[s
         if surface.health not in allowed_health:
             errors.append(f"{surface_name} health is {surface.health}, expected one of {sorted(allowed_health)}")
 
-    if DEPLOY_AND_VERIFY in workflow_names:
+    if DEPLOY_AND_VERIFY in successful_workflow_names:
         require_surface("Demo runtime", RUNTIME_HEALTH)
         require_surface("Canary (david010)", RUNTIME_HEALTH)
 
-    if DEPLOY_CONTROL_PLANE in workflow_names:
+    if DEPLOY_CONTROL_PLANE in successful_workflow_names:
         require_surface("Control plane", CONTROL_PLANE_HEALTH)
 
     return surfaces, errors, raw
