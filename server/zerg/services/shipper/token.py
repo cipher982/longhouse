@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def get_token_path(claude_config_dir: Path | None = None) -> Path:
@@ -158,13 +159,35 @@ def get_zerg_url(claude_config_dir: Path | None = None) -> str | None:
 
     if url_path.exists():
         try:
-            url = url_path.read_text().strip()
+            url = normalize_zerg_url(url_path.read_text())
             if url:
                 return url
         except (OSError, IOError):
             pass
 
     return None
+
+
+def normalize_zerg_url(url: object | None) -> str | None:
+    """Return a valid Longhouse URL or None.
+
+    This guards against poisoned config like Typer OptionInfo objects being
+    stringified into the persisted url file.
+    """
+    if not isinstance(url, str):
+        return None
+
+    normalized = url.strip()
+    if not normalized:
+        return None
+    if "typer.models.OptionInfo" in normalized or "<" in normalized or ">" in normalized:
+        return None
+
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.hostname is None:
+        return None
+
+    return normalized
 
 
 def save_zerg_url(url: str, claude_config_dir: Path | None = None) -> None:
@@ -179,12 +202,16 @@ def save_zerg_url(url: str, claude_config_dir: Path | None = None) -> None:
     import sys
     import tempfile
 
+    normalized_url = normalize_zerg_url(url)
+    if normalized_url is None:
+        raise ValueError(f"Invalid Longhouse URL: {url!r}")
+
     url_path = _get_url_path(claude_config_dir)
 
     # Ensure parent directory exists
     url_path.parent.mkdir(parents=True, exist_ok=True)
 
-    content = url.strip() + "\n"
+    content = normalized_url + "\n"
 
     if sys.platform == "win32":
         # Windows: simple write, chmod not fully supported

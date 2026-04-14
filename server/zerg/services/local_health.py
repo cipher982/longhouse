@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.services.shipper.service import get_service_info
+from zerg.services.shipper.token import normalize_zerg_url
 
 SCHEMA_VERSION = 1
 ENGINE_FRESH_SECONDS = 30
@@ -138,10 +139,11 @@ def _recent_touch_entry(source_path: str, provider: str, last_updated: str) -> d
 def _collect_local_config(claude_dir: Path) -> dict[str, Any]:
     url_path = claude_dir / "longhouse-url"
     machine_name_path = claude_dir / "longhouse-machine-name"
+    stored_url = normalize_zerg_url(_read_trimmed_file(url_path))
     return {
         "url_path": str(url_path),
         "machine_name_path": str(machine_name_path),
-        "stored_url": _read_trimmed_file(url_path),
+        "stored_url": stored_url,
         "machine_name": _read_trimmed_file(machine_name_path),
     }
 
