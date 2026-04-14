@@ -25,6 +25,7 @@ from control_plane.models import User
 from control_plane.routers.auth import SESSION_COOKIE_NAME
 from control_plane.routers.auth import _append_return_to
 from control_plane.routers.auth import _decode_jwt
+from control_plane.routers.auth import _issue_instance_sso_token
 from control_plane.routers.instances import _build_migration_status
 from control_plane.services.provisioner import Provisioner
 from longhouse_shared.redirects import normalize_local_return_to
@@ -757,15 +758,7 @@ def open_instance(request: Request, return_to: str | None = Query(default=None),
 
     instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
 
-    # Issue a short-lived JWT signed with the instance JWT secret
-    import time
-
-    from control_plane.routers.instances import _encode_jwt
-
-    token = _encode_jwt(
-        {"sub": str(user.id), "email": user.email, "instance": instance.subdomain, "exp": int(time.time()) + 300},
-        settings.instance_jwt_secret,
-    )
+    token = _issue_instance_sso_token(user=user, instance=instance)
 
     handoff_url = f"{instance_url}/api/auth/accept-token?token={urllib.parse.quote(token, safe='')}"
     safe_return_to = normalize_local_return_to(return_to)

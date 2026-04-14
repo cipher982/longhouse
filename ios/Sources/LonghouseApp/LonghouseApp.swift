@@ -1,5 +1,10 @@
 import GoogleSignIn
 import SwiftUI
+import WidgetKit
+
+enum LonghouseAuthConfig {
+    static let hostedCallbackScheme = "ai.longhouse.ios"
+}
 
 @main
 struct LonghouseApp: App {
@@ -13,7 +18,7 @@ struct LonghouseApp: App {
                     GIDSignIn.sharedInstance.handle(url)
                 }
                 .task {
-                    await appState.validateTokenIfNeeded()
+                    await appState.restoreSession()
                 }
         }
     }
@@ -23,50 +28,223 @@ struct LonghouseApp: App {
 final class AppState: ObservableObject {
     @Published var serverURL: String
     @Published var isAuthenticated = false
-    @Published var sessionToken: String = ""
+    @Published var isValidating = true
+    @Published var authError: String?
 
     init() {
         self.serverURL = KeychainHelper.loadServerURL() ?? "https://david010.longhouse.ai"
+    }
 
-        if let stored = KeychainHelper.loadAuthToken(),
-           stored.hasPrefix("longhouse_session=") {
-            let token = String(stored.dropFirst("longhouse_session=".count))
-            self.sessionToken = token
-            self.isAuthenticated = true
+    func restoreSession() async {
+        isValidating = true
+
+        var session = await BrowserSessionStore.webKitSession(for: serverURL)
+        if !session.hasCookies {
+            await BrowserSessionStore.syncSharedCookiesToWebKit(for: serverURL)
+            session = await BrowserSessionStore.webKitSession(for: serverURL)
+        }
+
+        let result: SessionRestoreResult
+        if session.refreshCookie != nil {
+            result = await refreshBrowserSession()
+        } else if session.sessionCookie != nil {
+            result = await verifyBrowserSession()
+        } else {
+            result = .unauthenticated
+        }
+
+        switch result {
+        case .authenticated:
+            isAuthenticated = true
+            authError = nil
+            await BrowserSessionStore.persistAccessTokenFromWebKit(for: serverURL)
+        case .indeterminate:
+            isAuthenticated = session.hasCookies
+            await BrowserSessionStore.persistAccessTokenFromWebKit(for: serverURL)
+        case .unauthenticated:
+            await clearLocalSession()
+        }
+        isValidating = false
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    func finishLoginFromSharedCookies() async -> Bool {
+        await BrowserSessionStore.syncSharedCookiesToWebKit(for: serverURL)
+        let session = await BrowserSessionStore.webKitSession(for: serverURL)
+        let isSignedIn = session.hasCookies
+
+        if isSignedIn {
+            await BrowserSessionStore.persistAccessTokenFromWebKit(for: serverURL)
+            authError = nil
+        } else {
+            KeychainHelper.deleteAuthToken()
+            authError = "Signed in, but failed to restore the browser session"
+        }
+
+        isAuthenticated = isSignedIn
+        isValidating = false
+        WidgetCenter.shared.reloadAllTimelines()
+        return isSignedIn
+    }
+
+    func exchangeHostedSSOToken(_ ssoToken: String) async -> Bool {
+        guard let url = URL(string: "\(serverURL)/api/auth/accept-token") else {
+            authError = "Invalid server URL"
+            return false
+        }
+
+        await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: ["token": ssoToken])
+
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                let fallback = "Hosted sign-in failed"
+                authError = Self.apiErrorMessage(from: data) ?? fallback
+                return false
+            }
+
+            return await finishLoginFromSharedCookies()
+        } catch {
+            authError = "Network error: \(error.localizedDescription)"
+            return false
         }
     }
 
-    func validateTokenIfNeeded() async {
-        guard isAuthenticated, !sessionToken.isEmpty else { return }
+    func clearAuthError() {
+        authError = nil
+    }
 
-        guard let url = URL(string: "\(serverURL)/api/timeline/sessions?limit=1") else {
-            signOut()
+    func setServer(_ url: String) {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
             return
         }
 
+        let previousURL = serverURL
+        serverURL = trimmed
+        KeychainHelper.saveServerURL(trimmed)
+        authError = nil
+
+        Task {
+            if previousURL != trimmed {
+                await BrowserSessionStore.clearAll(for: previousURL)
+                KeychainHelper.deleteAuthToken()
+            }
+            await restoreSession()
+        }
+    }
+
+    func signOut() {
+        Task {
+            await signOutLocallyAndRemotely()
+        }
+    }
+
+    private enum SessionRestoreResult {
+        case authenticated
+        case unauthenticated
+        case indeterminate
+    }
+
+    private func refreshBrowserSession() async -> SessionRestoreResult {
+        guard let url = URL(string: "\(serverURL)/api/auth/refresh") else {
+            return .unauthenticated
+        }
+
+        await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
+
         var request = URLRequest(url: url)
-        request.addValue("longhouse_session=\(sessionToken)", forHTTPHeaderField: "Cookie")
+        request.httpMethod = "POST"
+        request.timeoutInterval = 8
+
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                return .indeterminate
+            }
+
+            if http.statusCode == 200 {
+                await BrowserSessionStore.syncSharedCookiesToWebKit(for: serverURL)
+                return .authenticated
+            }
+            return http.statusCode == 401 ? .unauthenticated : .indeterminate
+        } catch {
+            return .indeterminate
+        }
+    }
+
+    private func verifyBrowserSession() async -> SessionRestoreResult {
+        guard let url = URL(string: "\(serverURL)/api/auth/verify") else {
+            return .unauthenticated
+        }
+
+        await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
+
+        var request = URLRequest(url: url)
         request.timeoutInterval = 5
 
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, http.statusCode == 401 {
-                signOut()
+            guard let http = response as? HTTPURLResponse else {
+                return .indeterminate
             }
+
+            if http.statusCode == 204 {
+                return .authenticated
+            }
+            return http.statusCode == 401 ? .unauthenticated : .indeterminate
         } catch {
-            // Network error — keep token, user might be offline
+            return .indeterminate
         }
     }
 
-    func setServer(_ url: String) {
-        serverURL = url
-        KeychainHelper.saveServerURL(url)
+    private func signOutLocallyAndRemotely() async {
+        if let url = URL(string: "\(serverURL)/api/auth/logout") {
+            await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 5
+            _ = try? await URLSession.shared.data(for: request)
+        }
+
+        GIDSignIn.sharedInstance.signOut()
+        await clearLocalSession()
+        authError = nil
+        isValidating = false
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
-    func signOut() {
-        GIDSignIn.sharedInstance.signOut()
+    private func clearLocalSession() async {
+        await BrowserSessionStore.clearAll(for: serverURL)
         KeychainHelper.deleteAuthToken()
-        sessionToken = ""
         isAuthenticated = false
+    }
+
+    private static func apiErrorMessage(from data: Data) -> String? {
+        guard !data.isEmpty else {
+            return nil
+        }
+
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let detail = json["detail"] as? String,
+           !detail.isEmpty {
+            return detail
+        }
+
+        if let body = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !body.isEmpty {
+            return body
+        }
+
+        return nil
     }
 }

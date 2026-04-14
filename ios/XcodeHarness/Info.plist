@@ -24,6 +24,12 @@
 				<string>com.googleusercontent.apps.658453123272-8d0plghk6gbsgamhp66rn8gi2vbc65i2</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>ai.longhouse.ios</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>1</string>
