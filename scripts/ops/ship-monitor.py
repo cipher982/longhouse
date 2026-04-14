@@ -42,6 +42,7 @@ class RunInfo:
     status: str
     conclusion: str | None
     url: str
+    headSha: str | None = None
     createdAt: str | None = None
 
 
@@ -62,8 +63,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--initial-timeout",
         type=int,
-        default=90,
-        help="How long to wait for the first push workflow run to appear. Default: 90.",
+        default=180,
+        help="How long to wait for the first push workflow run to appear. Default: 180.",
     )
     parser.add_argument("--poll", type=int, default=10, help="Polling interval in seconds. Default: 10.")
     parser.add_argument(
@@ -121,11 +122,63 @@ def fetch_runs(repo: str, sha: str) -> list[RunInfo]:
                 status=item.get("status") or "",
                 conclusion=item.get("conclusion"),
                 url=item.get("url") or "",
+                headSha=item.get("headSha"),
                 createdAt=item.get("createdAt"),
             )
         )
     runs.sort(key=lambda run: (run.workflowName, run.databaseId))
     return runs
+
+
+def fetch_recent_push_runs(repo: str, limit: int = 12) -> list[RunInfo]:
+    proc = run(
+        [
+            "gh",
+            "run",
+            "list",
+            "-R",
+            repo,
+            "--event",
+            "push",
+            "--limit",
+            str(limit),
+            "--json",
+            "databaseId,workflowName,status,conclusion,url,headSha,createdAt",
+        ]
+    )
+    payload = json.loads(proc.stdout or "[]")
+    runs: list[RunInfo] = []
+    for item in payload:
+        head_sha = item.get("headSha") or ""
+        runs.append(
+            RunInfo(
+                databaseId=int(item["databaseId"]),
+                workflowName=item.get("workflowName") or f"run-{item['databaseId']}",
+                status=item.get("status") or "",
+                conclusion=item.get("conclusion"),
+                url=item.get("url") or "",
+                headSha=head_sha,
+                createdAt=item.get("createdAt"),
+            )
+        )
+    return runs
+
+
+def fetch_remote_head(repo: str, branch: str = "main") -> str | None:
+    proc = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/git/ref/heads/{branch}",
+            "--jq",
+            ".object.sha",
+        ],
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None
+    value = proc.stdout.strip()
+    return value or None
 
 
 def fingerprint(runs: list[RunInfo]) -> tuple[tuple[int, str, str | None], ...]:
@@ -150,6 +203,32 @@ def summarize_runs(runs: list[RunInfo], short_sha: str) -> str:
         conclusion = run.conclusion or "-"
         lines.append(f"  - {run.workflowName} #{run.databaseId}: {run.status}/{conclusion}")
     return "\n".join(lines)
+
+
+def summarize_recent_runs(runs: list[RunInfo]) -> list[dict[str, str | int | None]]:
+    summary: list[dict[str, str | int | None]] = []
+    seen: set[tuple[str, str]] = set()
+    for run in runs:
+        head_sha = run.headSha or ""
+        short_sha = head_sha[:10] if head_sha else "unknown"
+        key = (short_sha, run.workflowName)
+        if key in seen:
+            continue
+        seen.add(key)
+        summary.append(
+            {
+                "head_sha": head_sha,
+                "short_sha": short_sha,
+                "workflow_name": run.workflowName,
+                "run_id": run.databaseId,
+                "status": run.status,
+                "conclusion": run.conclusion,
+                "url": run.url,
+            }
+        )
+        if len(summary) >= 8:
+            break
+    return summary
 
 
 def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
@@ -255,17 +334,37 @@ def main() -> int:
         runs = wait_for_workflows(args, target_sha)
     except NoRunsError as exc:
         message = str(exc)
+        remote_head = fetch_remote_head(args.repo)
+        recent_runs = summarize_recent_runs(fetch_recent_push_runs(args.repo))
         payload = {
             "repo": args.repo,
             "target_sha": target_sha,
             "result": "no_runs",
             "message": message,
             "workflows": [],
+            "remote_head_sha": remote_head,
+            "recent_push_runs": recent_runs,
         }
         if args.json:
             emit_json(payload)
         else:
-            print(message, file=sys.stderr)
+            print(f"{message} ({args.initial_timeout}s).", file=sys.stderr)
+            if remote_head:
+                print(f"Current remote main head: {remote_head[:10]}", file=sys.stderr)
+            if recent_runs:
+                print("Recent push workflow attribution:", file=sys.stderr)
+                for item in recent_runs:
+                    conclusion = item["conclusion"] or "-"
+                    print(
+                        f"  - {item['short_sha']} {item['workflow_name']} #{item['run_id']}: "
+                        f"{item['status']}/{conclusion}",
+                        file=sys.stderr,
+                    )
+            print(
+                "No exact-SHA workflows were found. Do not infer success from another SHA unless "
+                "a later descendant-coverage mode explicitly supports that.",
+                file=sys.stderr,
+            )
         return EXIT_NO_RUNS
     except PollTimeoutError as exc:
         payload = {
