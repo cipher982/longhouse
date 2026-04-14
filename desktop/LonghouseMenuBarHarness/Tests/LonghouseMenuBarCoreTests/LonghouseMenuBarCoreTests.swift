@@ -216,6 +216,20 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func appLocationBlockedDryRunReturnsMoveFeedback() throws {
+        let snapshot = HealthSnapshot.installLocationBlockedSnapshot(
+            currentPath: "/Users/test/Applications/Longhouse.app"
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handle(.repairInstall, snapshot: snapshot)
+
+        #expect(snapshot.isInstallLocationBlocked == true)
+        #expect(feedback?.style == .warning)
+        #expect(feedback?.title == "Move dry run recorded")
+    }
+
+    @Test
     func cliSourceReturnsSetupRequiredSnapshotWhenLonghouseIsMissing() throws {
         let source = CLIHealthSnapshotSource(
             launchPath: "/bin/zsh",
@@ -227,6 +241,31 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.isSetupRequired == true)
         #expect(snapshot.headline == "Longhouse setup required")
         #expect(snapshot.launchReadiness?.state == "setup-required")
+    }
+
+    @Test
+    func cliSourceReturnsInstallLocationBlockedSnapshotWhenBundlePathIsUnsupported() throws {
+        let source = CLIHealthSnapshotSource(
+            launchPath: "/bin/zsh",
+            arguments: ["-lc", "__longhouse_missing_for_test__ local-health --json"],
+            currentBundlePath: "/Users/test/Applications/Longhouse.app"
+        )
+
+        let snapshot = try source.load()
+
+        #expect(snapshot.isInstallLocationBlocked == true)
+        #expect(snapshot.headline == "Move Longhouse.app to Applications")
+        #expect(snapshot.launchReadiness?.state == "move-app")
+    }
+
+    @Test
+    func appBundleLocationOnlyAllowsApplicationsPath() {
+        #expect(AppBundleLocation.unsupportedBundlePath(currentBundlePath: "/Applications/Longhouse.app") == nil)
+        #expect(
+            AppBundleLocation.unsupportedBundlePath(currentBundlePath: "/Users/test/Applications/Longhouse.app")
+            == "/Users/test/Applications/Longhouse.app"
+        )
+        #expect(AppBundleLocation.unsupportedBundlePath(currentBundlePath: "/tmp/LonghouseMenuBarHarness") == nil)
     }
 
     @Test

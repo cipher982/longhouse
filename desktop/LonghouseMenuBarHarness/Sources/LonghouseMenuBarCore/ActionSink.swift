@@ -318,6 +318,15 @@ public struct SpyHealthActionSink: HealthActionSink {
     }
 
     private func startRepair(snapshot: HealthSnapshot) -> HealthActionFeedback {
+        if snapshot.isInstallLocationBlocked {
+            return feedback(
+                for: .repairInstall,
+                style: .warning,
+                title: "Move the app first",
+                detail: "Longhouse.app only runs from /Applications. Quit, move it there, then relaunch."
+            )
+        }
+
         if snapshot.isSetupRequired {
             if startStandardInstaller() != nil {
                 return feedback(
@@ -371,6 +380,14 @@ public struct SpyHealthActionSink: HealthActionSink {
                 detail: "The harness logged `longhouse doctor` without opening Terminal."
             )
         case .repairInstall:
+            if snapshot.isInstallLocationBlocked {
+                return feedback(
+                    for: action,
+                    style: .warning,
+                    title: "Move dry run recorded",
+                    detail: "The harness logged the wrong-location blocker without starting setup or repair."
+                )
+            }
             return feedback(
                 for: action,
                 style: snapshot.isSetupRequired ? .info : .warning,

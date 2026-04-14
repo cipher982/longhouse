@@ -456,7 +456,7 @@ public struct MenuBarPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
                 Button {
-                    perform(.repairInstall)
+                    perform(primaryIssueAction)
                 } label: {
                     Label(primaryInstallActionTitle, systemImage: primaryInstallActionSymbol)
                         .frame(maxWidth: .infinity)
@@ -467,7 +467,7 @@ public struct MenuBarPanelView: View {
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.repair)
                 .accessibilityLabel(Text(primaryInstallActionTitle))
 
-                if !snapshot.isSetupRequired {
+                if !snapshot.isSetupRequired && !snapshot.isInstallLocationBlocked {
                     Button {
                         perform(.openLonghouse)
                     } label: {
@@ -602,15 +602,28 @@ public struct MenuBarPanelView: View {
     }
 
     private var primaryInstallActionTitle: String {
-        snapshot.isSetupRequired ? "Set Up" : "Repair"
+        if snapshot.isInstallLocationBlocked {
+            return "Quit"
+        }
+        return snapshot.isSetupRequired ? "Set Up" : "Repair"
     }
 
     private var primaryInstallActionSymbol: String {
-        snapshot.isSetupRequired ? "square.and.arrow.down" : "wrench.and.screwdriver"
+        if snapshot.isInstallLocationBlocked {
+            return "xmark.circle"
+        }
+        return snapshot.isSetupRequired ? "square.and.arrow.down" : "wrench.and.screwdriver"
     }
 
     private var primaryInstallActionTint: Color {
-        snapshot.isSetupRequired ? .blue : .red
+        if snapshot.isInstallLocationBlocked {
+            return .gray
+        }
+        return snapshot.isSetupRequired ? .blue : .red
+    }
+
+    private var primaryIssueAction: HarnessAction {
+        snapshot.isInstallLocationBlocked ? .quitApp : .repairInstall
     }
 
     private func perform(_ action: HarnessAction) {
