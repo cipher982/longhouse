@@ -2,7 +2,7 @@
   "id": "/loop",
   "name": "Longhouse Loop",
   "short_name": "Loop",
-  "description": "Handle finished coding turns from your phone with one-tap approvals.",
+  "description": "Open the sessions waiting on you and send a quick reply from your phone.",
   "start_url": "/loop",
   "scope": "/loop",
   "icons": [
