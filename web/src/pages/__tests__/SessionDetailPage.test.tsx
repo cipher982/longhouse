@@ -306,11 +306,11 @@ describe("SessionDetailPage", () => {
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
-      "This unmanaged Gemini session is searchable here, but Longhouse cannot steer it from the browser.",
+      "Longhouse can search this unmanaged Gemini session here, but it cannot steer the live session. Launch new Gemini sessions through Longhouse when you want live control.",
     );
     expect(screen.getByTestId("session-management-badge")).toHaveTextContent("Unmanaged");
     expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
-      "Longhouse imported this Gemini session, but it does not own the live control path. Launch through Longhouse when you need a managed session.",
+      "Longhouse imported this Gemini session. Launch new Gemini sessions through Longhouse when you want live control.",
     );
     expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
       "Gemini session — unmanaged",

@@ -102,10 +102,13 @@ export function SessionContextPane({
         </div>
         <div className="session-context-badges">
           <Badge variant={runtimeBadgeVariant}>{runtime.displayPhase}</Badge>
-          <Badge variant={interaction.capabilityVariant}>{interaction.capabilityLabel}</Badge>
+          <Badge variant={interaction.capabilityVariant} title={interaction.capabilityDescription ?? undefined}>
+            {interaction.capabilityLabel}
+          </Badge>
           <Badge
             variant={interaction.managementVariant}
             data-testid="session-management-badge"
+            title={interaction.managementDescription}
           >
             {interaction.managementLabel}
           </Badge>
