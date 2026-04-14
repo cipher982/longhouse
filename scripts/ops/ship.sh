@@ -57,7 +57,7 @@ if [[ -z "$BRANCH" ]]; then
   BRANCH="$(git -C "$ROOT" symbolic-ref --quiet --short HEAD)"
 fi
 
-git -C "$ROOT" cat-file -e "${SHA}^{commit}"
+SHA="$(git -C "$ROOT" rev-parse --verify "${SHA}^{commit}")"
 SUBJECT="$(git -C "$ROOT" log -1 --format=%s "$SHA")"
 
 echo "Starting cowbell for commit ${SHA:0:10}: ${SUBJECT}" >&2

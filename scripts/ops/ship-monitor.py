@@ -98,6 +98,11 @@ def resolve_head_sha(root: Path) -> str:
     return proc.stdout.strip()
 
 
+def resolve_commit_sha(root: Path, rev: str) -> str:
+    proc = run(["git", "rev-parse", "--verify", f"{rev}^{{commit}}"], cwd=root)
+    return proc.stdout.strip()
+
+
 def fetch_runs(repo: str, sha: str) -> list[RunInfo]:
     proc = run(
         [
@@ -366,8 +371,7 @@ def emit_json(payload: dict) -> None:
 def main() -> int:
     args = parse_args()
     root = repo_root()
-    target_sha = args.sha or resolve_head_sha(root)
-    target_sha = target_sha.strip()
+    target_sha = resolve_commit_sha(root, args.sha.strip()) if args.sha else resolve_head_sha(root)
     short_sha = target_sha[:10]
 
     try:
