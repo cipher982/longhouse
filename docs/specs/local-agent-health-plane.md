@@ -43,9 +43,9 @@ The user should not have to infer health from missing sessions, stale presence, 
 
 Today the raw pieces already exist:
 
-- hooks write presence JSON to `~/.claude/outbox`
+- hooks write presence JSON to `~/.longhouse/agent/outbox`
 - the engine drains outbox every second
-- the engine writes `~/.claude/engine-status.json`
+- the engine writes `~/.longhouse/agent/engine-status.json`
 - the engine service is supervised by launchd on macOS with `KeepAlive=true`
 - `longhouse doctor` and `longhouse connect --status` already expose fragments of the picture
 
@@ -103,7 +103,7 @@ Introduce an explicit **Local Agent Health Plane** with four layers:
 These gather facts only. No product policy.
 
 - `engine_status_probe`
-  - reads `~/.claude/engine-status.json`
+  - reads `~/.longhouse/agent/engine-status.json`
   - reports age, `last_ship_at`, spool counts, dead letters, disk free, offline flag
 - `service_probe`
   - reports installed/running/stopped state from launchd/systemd through existing service helpers

@@ -8,17 +8,17 @@
     "engine_status_stale"
   ],
   "suggested_actions": [
-    "Inspect logs: ~/.claude/logs/engine.log.*"
+    "Inspect logs: ~/.longhouse/agent/logs/engine.log.*"
   ],
   "service": {
     "platform": "macos",
     "status": "running",
     "service_name": "com.longhouse.shipper",
     "service_file": "/Users/davidrose/Library/LaunchAgents/com.longhouse.shipper.plist",
-    "log_path": "/Users/davidrose/.claude/logs/engine.log.*"
+    "log_path": "/Users/davidrose/.longhouse/agent/logs/engine.log.*"
   },
   "engine_status": {
-    "path": "/Users/davidrose/.claude/engine-status.json",
+    "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
     "exists": true,
     "fresh": false,
     "age_seconds": 137,
@@ -38,12 +38,12 @@
     "error": null
   },
   "outbox": {
-    "path": "/Users/davidrose/.claude/outbox",
+    "path": "/Users/davidrose/.longhouse/agent/outbox",
     "file_count": 1,
     "oldest_age_seconds": 23
   },
   "activity_summary": {
-    "path": "/Users/davidrose/.claude/longhouse-shipper.db",
+    "path": "/Users/davidrose/.longhouse/agent/longhouse-shipper.db",
     "exists": true,
     "error": null,
     "sessions_today": 11,

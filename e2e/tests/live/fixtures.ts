@@ -82,7 +82,7 @@ export function readDeviceToken(): string {
   }
 
   try {
-    return readFileSync(`${homedir()}/.claude/longhouse-device-token`, 'utf8').trim();
+    return readFileSync(`${homedir()}/.longhouse/machine/device-token`, 'utf8').trim();
   } catch {
     return '';
   }
