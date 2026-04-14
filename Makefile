@@ -282,7 +282,7 @@ ship-watch: ## Wait for exact-SHA push workflows + live deploy verification (SHA
 	@./scripts/ops/ship-monitor.py $(if $(SHA),--sha $(SHA),) $(ARGS)
 
 ship: ## Push current HEAD, then wait for exact-SHA push workflows + live deploy verification
-	@./scripts/ops/ship.sh $(ARGS)
+	@./scripts/ops/ship.sh $(if $(SHA),--sha $(SHA),) $(ARGS)
 
 # ---------------------------------------------------------------------------
 # Tools

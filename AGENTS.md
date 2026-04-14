@@ -72,7 +72,8 @@ Boundary rules:
 - Never infer state from "latest" branch runs, generic tails, or recent logs. Those are often another agent's commit, another deploy, or an older still-running workflow.
 - Anchor every CI or deploy check to your exact `HEAD` SHA or explicit run id. If deployment matters, also verify live surface SHAs because demo, control plane, and canary can be on different commits during rollout.
 - If you tail anything, say what you are tailing first: exact workflow run id, exact commit SHA, exact session id, or exact container/service.
-- Reserved trigger: when David says `cowbell`, treat it as "carry the task through commit/push and run `make ship` in the foreground; do not return before exact-SHA ship verification reaches success or failure."
+- Reserved trigger: when David says `cowbell`, do not guess from current repo state. Identify the one exact commit SHA this session owns, then run `make ship SHA=<that-sha>` in the foreground. If that commit was already pushed earlier, `make ship SHA=<that-sha>` is still correct. If you cannot identify one exact owned SHA, stop and say so instead of guessing from `HEAD` or "latest on main".
+- `make ship SHA=<sha>` prints a start banner with the exact target SHA and commit subject. Read that line before trusting the run.
 
 ## Task Tracking
 
@@ -207,12 +208,16 @@ Extra rules:
 - If you add a DB column, new required env var, or touch schema, call it out and run `make reprovision` after CI.
 - Hosted tenants get engine changes through the runtime image; users running the engine locally still need `make install-engine`.
 - For the full ship cycle and manual deploy fallbacks, use `.agents/skills/zerg-ship/SKILL.md`.
+- After making a commit, report its SHA in the conversation. Later `cowbell` requests should reuse that exact SHA, not infer from current repo state.
 
 Default path:
 
 ```bash
-make ship
+SHA=$(git rev-parse HEAD)
+make ship SHA="$SHA"
 ```
+
+For agent use, the explicit `SHA=` form is canonical. Bare `make ship` is only a human convenience fallback and is unsafe for delayed shipping in a shared worktree.
 
 Local fallback when remote CI is unavailable or David explicitly wants a local run:
 
