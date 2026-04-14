@@ -75,6 +75,37 @@ def test_install_desktop_app_service_writes_plist_and_loads(monkeypatch, tmp_pat
     assert result["launch_path"] == "/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse"
 
 
+def test_install_desktop_app_service_omits_invalid_ui_url(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(desktop_app, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(
+        desktop_app,
+        "ensure_runtime_artifact",
+        lambda component, source_override=None: SimpleNamespace(
+            path="/Users/test/Applications/Longhouse.app",
+            launch_path="/Users/test/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            source="override",
+            installed_now=True,
+        ),
+    )
+    monkeypatch.setattr(
+        desktop_app.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+
+    desktop_app.install_desktop_app_service(
+        ui_url="https://<typer.models.OptionInfo object at 0x1234>",
+        claude_dir=str(home / ".claude"),
+    )
+
+    plist_path = home / "Library" / "LaunchAgents" / "ai.longhouse.app.plist"
+    plist = plist_path.read_text(encoding="utf-8")
+    assert "--ui-url" not in plist
+
+
 def test_get_desktop_app_service_status_returns_not_installed_when_plist_missing(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

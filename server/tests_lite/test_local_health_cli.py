@@ -205,6 +205,28 @@ def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, t
     assert any("connect --install" in action for action in snapshot["suggested_actions"])
 
 
+def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: Path):
+    service_file = _write_service_plist(tmp_path, machine_name="test-box")
+    runner_env = _write_runner_env(tmp_path, url="https://david010.longhouse.ai", runner_name="cinder")
+    _write_local_config(
+        tmp_path,
+        url="https://<typer.models.OptionInfo object at 0x1234>",
+        machine_name="test-box",
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda: _service_info("running", service_file=str(service_file)))
+    monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [runner_env])
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["launch_readiness"]["stored_url"] is None
+    assert "config_url_runner_url_mismatch" not in snapshot["reasons"]
+    assert any(
+        action == "Run: longhouse connect --install --url https://david010.longhouse.ai --machine-name cinder"
+        for action in snapshot["suggested_actions"]
+    )
+
+
 def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     _disable_real_runner_env(monkeypatch, tmp_path)

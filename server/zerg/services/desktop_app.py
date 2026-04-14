@@ -16,6 +16,7 @@ from zerg.services.runtime_artifacts import ensure_runtime_artifact
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 from zerg.services.shipper.service import Platform
 from zerg.services.shipper.service import detect_platform
+from zerg.services.shipper.token import normalize_zerg_url
 
 DesktopAppStatus = Literal["running", "stopped", "not-installed"]
 
@@ -115,8 +116,9 @@ def _generate_launchd_plist(
     ]
     for argument in health_arguments[1:]:
         program_arguments.extend(["--health-arg", str(argument)])
-    if ui_url:
-        program_arguments.extend(["--ui-url", ui_url])
+    normalized_ui_url = normalize_zerg_url(ui_url)
+    if normalized_ui_url:
+        program_arguments.extend(["--ui-url", normalized_ui_url])
 
     program_args_xml = "\n".join(f"        <string>{saxutils.escape(str(arg))}</string>" for arg in program_arguments)
     log_dir = _log_dir(claude_dir)

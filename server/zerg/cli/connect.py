@@ -29,6 +29,7 @@ from zerg.services.shipper import uninstall_service
 from zerg.services.shipper.service import Platform
 from zerg.services.shipper.service import detect_platform
 from zerg.services.shipper.service import get_engine_executable
+from zerg.services.shipper.token import normalize_zerg_url
 
 
 def _verify_and_warn_path() -> None:
@@ -291,10 +292,12 @@ def _validate_token(url: str, token: str) -> bool:
         return False
 
 
-def _resolve_configured_url(url: str | None, config_dir: Path | None) -> str:
-    if url:
-        return url
-    stored_url = get_zerg_url(config_dir)
+def _resolve_configured_url(url: object | None, config_dir: Path | None) -> str:
+    explicit_url = normalize_zerg_url(url)
+    if explicit_url:
+        return explicit_url
+
+    stored_url = normalize_zerg_url(get_zerg_url(config_dir))
     if stored_url:
         return stored_url
 

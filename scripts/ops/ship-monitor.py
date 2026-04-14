@@ -25,6 +25,8 @@ CONTROL_PLANE_HEALTH = {"ok", "healthy"}
 RUNTIME_HEALTH = {"healthy"}
 DEPLOY_AND_VERIFY = "Deploy and Verify"
 DEPLOY_CONTROL_PLANE = "Deploy Control Plane"
+DEPLOY_AND_VERIFY_JOB = "Deploy demo + canary + hosted live QA"
+DEPLOY_CONTROL_PLANE_JOB = "Deploy Control Plane"
 
 
 class NoRunsError(RuntimeError):
@@ -173,6 +175,23 @@ def fetch_recent_push_runs(repo: str, limit: int = 12) -> list[RunInfo]:
             )
         )
     return runs
+
+
+def fetch_run_jobs(repo: str, run_id: int) -> list[dict]:
+    proc = run(
+        [
+            "gh",
+            "run",
+            "view",
+            str(run_id),
+            "-R",
+            repo,
+            "--json",
+            "jobs",
+        ]
+    )
+    payload = json.loads(proc.stdout or "{}")
+    return payload.get("jobs") or []
 
 
 def fetch_remote_head(repo: str, branch: str = "main") -> str | None:
@@ -331,17 +350,25 @@ def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
     return surfaces
 
 
-def verify_live_state(root: Path, sha: str, runs: list[RunInfo]) -> tuple[dict[str, SurfaceInfo], list[str], str]:
+def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> tuple[dict[str, SurfaceInfo], list[str], str]:
     proc = run([str(root / "scripts" / "ops" / "deploy-status.sh")], cwd=root)
     raw = proc.stdout
     surfaces = parse_deploy_status(raw)
     short_sha = sha[:10]
-    successful_workflow_names = {
-        run.workflowName
-        for run in runs
-        if run.status == "completed" and run.conclusion == "success"
-    }
     errors: list[str] = []
+    jobs_by_run_id: dict[int, list[dict]] = {}
+
+    def deploy_job_succeeded(run: RunInfo, expected_job_name: str) -> bool:
+        if run.status != "completed" or run.conclusion != "success":
+            return False
+        jobs = jobs_by_run_id.get(run.databaseId)
+        if jobs is None:
+            jobs = fetch_run_jobs(repo, run.databaseId)
+            jobs_by_run_id[run.databaseId] = jobs
+        for job in jobs:
+            if job.get("name") == expected_job_name and job.get("conclusion") == "success":
+                return True
+        return False
 
     def require_surface(surface_name: str, allowed_health: set[str]) -> None:
         surface = surfaces.get(surface_name)
@@ -353,11 +380,17 @@ def verify_live_state(root: Path, sha: str, runs: list[RunInfo]) -> tuple[dict[s
         if surface.health not in allowed_health:
             errors.append(f"{surface_name} health is {surface.health}, expected one of {sorted(allowed_health)}")
 
-    if DEPLOY_AND_VERIFY in successful_workflow_names:
+    if any(
+        run.workflowName == DEPLOY_AND_VERIFY and deploy_job_succeeded(run, DEPLOY_AND_VERIFY_JOB)
+        for run in runs
+    ):
         require_surface("Demo runtime", RUNTIME_HEALTH)
         require_surface("Canary (david010)", RUNTIME_HEALTH)
 
-    if DEPLOY_CONTROL_PLANE in successful_workflow_names:
+    if any(
+        run.workflowName == DEPLOY_CONTROL_PLANE and deploy_job_succeeded(run, DEPLOY_CONTROL_PLANE_JOB)
+        for run in runs
+    ):
         require_surface("Control plane", CONTROL_PLANE_HEALTH)
 
     return surfaces, errors, raw
@@ -450,7 +483,7 @@ def main() -> int:
     live_errors: list[str] = []
     live_output = ""
     if not args.skip_live:
-        surfaces, live_errors, live_output = verify_live_state(root, target_sha, runs)
+        surfaces, live_errors, live_output = verify_live_state(root, args.repo, target_sha, runs)
         live_surfaces = {name: asdict(info) for name, info in surfaces.items()}
         if live_errors:
             payload = {

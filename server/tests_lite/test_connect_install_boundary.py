@@ -137,6 +137,46 @@ def test_connect_install_skips_auto_auth_when_no_token(monkeypatch):
     ]
 
 
+def test_connect_install_uses_stored_url_when_called_directly_without_url(monkeypatch):
+    calls: list[tuple[str, dict]] = []
+
+    monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: "https://example.com")
+    monkeypatch.setattr(connect, "load_token", lambda config_dir=None: None)
+    monkeypatch.setattr(
+        connect,
+        "_handle_install",
+        lambda **kwargs: calls.append(("install", kwargs)),
+    )
+
+    connect.connect(
+        token=None,
+        interval=300,
+        debounce=500,
+        claude_dir=None,
+        verbose=False,
+        install=True,
+        hooks_only=False,
+        uninstall=False,
+        status=False,
+        machine_name="test-box",
+        menubar=False,
+    )
+
+    assert calls == [
+        (
+            "install",
+            {
+                "url": "https://example.com",
+                "token": None,
+                "claude_dir": None,
+                "interval": 300,
+                "machine_name": "test-box",
+                "menubar": False,
+            },
+        )
+    ]
+
+
 def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
     monkeypatch.setattr(
         connect,
