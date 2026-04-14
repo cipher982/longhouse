@@ -1,0 +1,6 @@
+.build/
+.swiftpm/
+XcodeHarness/LonghouseIOS.xcodeproj/
+xcuserdata/
+DerivedData/
+*.xcresult
