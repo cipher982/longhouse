@@ -7,8 +7,9 @@ struct LonghouseAPI: Sendable {
         self.baseURL = baseURL
     }
 
-    init(host: String) {
-        self.init(baseURL: URL(string: host)!)
+    init?(host: String) {
+        guard let url = URL(string: host) else { return nil }
+        self.init(baseURL: url)
     }
 
     func sessionsNeedingAttention() async throws -> [SessionSummary] {
@@ -54,6 +55,7 @@ struct LonghouseAPI: Sendable {
 
     private func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         var request = request
+        request.timeoutInterval = 15
         if let cookieHeader = SharedAuthStore.cookieHeader(for: baseURL.absoluteString) {
             request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
         }

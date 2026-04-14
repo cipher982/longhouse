@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 struct SharedAuthDebugState: Sendable {
     let appGroupAvailable: Bool
@@ -20,6 +21,7 @@ enum SharedAuthStore {
 
     private static let serverURLKey = "longhouse_server_url"
     private static let cookieStoragePrefix = "managed_cookies."
+    private static let keychainService = "ai.longhouse.shared-cookies"
 
     private static var defaults: UserDefaults? {
         UserDefaults(suiteName: appGroupIdentifier)
@@ -59,7 +61,13 @@ enum SharedAuthStore {
             return []
         }
 
-        let rawCookies = defaults?.array(forKey: cookieStorageKeyForHost(host)) as? [[String: Any]] ?? []
+        guard let data = loadKeychainData(account: cookieStorageKeyForHost(host)),
+              let rawCookies = try? PropertyListSerialization.propertyList(
+                  from: data, format: nil
+              ) as? [[String: Any]] else {
+            return []
+        }
+
         return rawCookies.compactMap { dictionary in
             let properties = Dictionary(
                 uniqueKeysWithValues: dictionary.map { (HTTPCookiePropertyKey($0.key), $0.value) }
@@ -78,14 +86,21 @@ enum SharedAuthStore {
 
     static func setManagedCookies(_ cookies: [HTTPCookie], for serverURL: String) {
         let validCookies = cookies.filter { cookie in
-            managedCookieNames.contains(cookie.name) && domainMatches(cookie.domain, host: normalizedHost(for: serverURL))
+            managedCookieNames.contains(cookie.name)
+                && domainMatches(cookie.domain, host: normalizedHost(for: serverURL))
+                && !isExpired(cookie)
         }
         let encoded = validCookies.compactMap(cookieDictionary(from:))
-        defaults?.set(encoded, forKey: cookieStorageKey(for: serverURL))
+        guard let data = try? PropertyListSerialization.data(
+            fromPropertyList: encoded, format: .binary, options: 0
+        ) else {
+            return
+        }
+        saveKeychainData(data, account: cookieStorageKey(for: serverURL))
     }
 
     static func clearManagedCookies(for serverURL: String) {
-        defaults?.removeObject(forKey: cookieStorageKey(for: serverURL))
+        deleteKeychainData(account: cookieStorageKey(for: serverURL))
     }
 
     static func cookieHeader(for serverURL: String) -> String? {
@@ -153,5 +168,39 @@ enum SharedAuthStore {
             return false
         }
         return host == domain || host.hasSuffix(".\(domain)")
+    }
+
+    // MARK: - Keychain storage (shared via app group entitlement)
+
+    private static func keychainQuery(account: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: keychainService,
+            kSecAttrAccount as String: account,
+            kSecAttrAccessGroup as String: appGroupIdentifier,
+        ]
+    }
+
+    private static func saveKeychainData(_ data: Data, account: String) {
+        let query = keychainQuery(account: account)
+        SecItemDelete(query as CFDictionary)
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        addQuery[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        SecItemAdd(addQuery as CFDictionary, nil)
+    }
+
+    private static func loadKeychainData(account: String) -> Data? {
+        var query = keychainQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else { return nil }
+        return result as? Data
+    }
+
+    private static func deleteKeychainData(account: String) {
+        SecItemDelete(keychainQuery(account: account) as CFDictionary)
     }
 }

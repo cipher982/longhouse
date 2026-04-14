@@ -80,7 +80,15 @@ enum WidgetSessionLoader {
             )
         }
 
-        let api = LonghouseAPI(host: serverURL)
+        guard let api = LonghouseAPI(host: serverURL) else {
+            logger.error("Widget auth unavailable: invalid server URL \(serverURL, privacy: .public)")
+            return .unavailable(
+                title: "Invalid server URL",
+                message: "Open Longhouse and update your server.",
+                debugState: debugState
+            )
+        }
+
         do {
             let sessions = try await api.sessionsNeedingAttention()
             logger.log("Widget loaded \(sessions.count, privacy: .public) sessions")
