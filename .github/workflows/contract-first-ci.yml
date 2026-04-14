@@ -236,19 +236,9 @@ jobs:
 
     - name: Run iOS tests
       run: |
-        mkdir -p "$RUNNER_TEMP/ios-test-results"
-        xcodebuild \
-          -project ios/XcodeHarness/LonghouseIOS.xcodeproj \
-          -scheme Longhouse \
-          -destination "${{ steps.simulator.outputs.destination }}" \
-          -resultBundlePath "$RUNNER_TEMP/ios-test-results/LonghouseIOS.xcresult" \
-          test
-        xcodebuild \
-          -project ios/XcodeHarness/LonghouseIOS.xcodeproj \
-          -scheme LonghouseSmoke \
-          -destination "${{ steps.simulator.outputs.destination }}" \
-          -resultBundlePath "$RUNNER_TEMP/ios-test-results/LonghouseSmoke.xcresult" \
-          test
+        IOS_DERIVED_DATA_PATH="$RUNNER_TEMP/LonghouseIOSDerivedData" \
+        IOS_RESULTS_DIR="$RUNNER_TEMP/ios-test-results" \
+        ./scripts/ci/run_ios_tests.sh "${{ steps.simulator.outputs.destination }}"
 
     - name: Upload iOS test results
       if: failure()
