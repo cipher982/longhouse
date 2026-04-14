@@ -28,6 +28,7 @@ from zerg.cli.config_file import save_loaded_config
 from zerg.cli.serve import _get_longhouse_home
 from zerg.cli.serve import _is_server_running
 from zerg.services.local_runtime_installer import install_local_runtime
+from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
 from zerg.services.shipper import load_token
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,30 @@ def _allow_service_install_in_ci() -> bool:
     if not raw:
         return False
     return raw.strip().lower() not in {"0", "false", "no"}
+
+
+def _open_longhouse_surface(api_url: str) -> None:
+    """Open the human-facing Longhouse surface, preferring the macOS app."""
+    if sys.platform == "darwin":
+        app_bundle = desktop_app_canonical_bundle_path()
+        if app_bundle.exists():
+            typer.echo(f"  Opening Longhouse.app ({app_bundle})...")
+            try:
+                subprocess.run(
+                    ["open", str(app_bundle)],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return
+            except Exception:
+                typer.echo(f"  Could not open Longhouse.app. Opening {api_url} instead...")
+
+    typer.echo(f"  Opening {api_url}...")
+    try:
+        webbrowser.open(api_url)
+    except Exception:
+        typer.echo(f"  Could not open browser. Visit: {api_url}")
 
 
 def _check_server_health(host: str = "127.0.0.1", port: int = 8080, timeout: float = 2.0) -> bool:
@@ -338,7 +363,7 @@ def onboard(
     no_browser: bool = typer.Option(
         False,
         "--no-browser",
-        help="Skip auto-opening the browser at the end of onboarding.",
+        help="Skip auto-opening Longhouse at the end of onboarding.",
     ),
 ) -> None:
     """Run the default local quickstart."""
@@ -504,11 +529,7 @@ def onboard(
     typer.echo("")
 
     if not no_browser and _has_gui() and _check_server_health(host, port):
-        typer.echo(f"  Opening {api_url}...")
-        try:
-            webbrowser.open(api_url)
-        except Exception:
-            typer.echo(f"  Could not open browser. Visit: {api_url}")
+        _open_longhouse_surface(api_url)
 
     typer.echo("")
 
