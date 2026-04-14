@@ -66,6 +66,14 @@ Boundary rules:
 - Do not dump file inventories or command transcripts unless they are needed to explain a blocker.
 - Mention tests when they fail, were skipped, or materially change confidence.
 
+## Concurrent Agent Reality
+
+- Multiple agents may be working in this exact repo, on the same `main` branch, and even in the same local worktree on this laptop at the same time.
+- Never infer state from "latest" branch runs, generic tails, or recent logs. Those are often another agent's commit, another deploy, or an older still-running workflow.
+- Anchor every CI or deploy check to your exact `HEAD` SHA or explicit run id. If deployment matters, also verify live surface SHAs because demo, control plane, and canary can be on different commits during rollout.
+- If you tail anything, say what you are tailing first: exact workflow run id, exact commit SHA, exact session id, or exact container/service.
+- Reserved trigger: when David says `cowbell`, treat it as "carry the task through commit/push and run `make ship` in the foreground; do not return before exact-SHA ship verification reaches success or failure."
+
 ## Task Tracking
 
 - Do not create repo-local TODO lists, backlog files, or handoff trackers.
@@ -74,14 +82,9 @@ Boundary rules:
 
 ## Read Next
 
-- `VISION.md`
-- `docs/specs/macos-launch-product-shape.md`
-- `docs/specs/distribution-update-loop.md`
-- `docs/specs/agents-machine-surface.md`
-- `README.md`
-- `runner/README.md`
-- `control-plane/README.md`
-- `server/README.md`
+Start with `VISION.md`, `README.md`, `docs/specs/agents-machine-surface.md`, and `docs/specs/distribution-update-loop.md`.
+
+Then read the component README you are touching: `server/README.md`, `control-plane/README.md`, or `runner/README.md`.
 
 ## Quick Commands
 
@@ -169,12 +172,10 @@ If you touch a secondary area, either simplify it toward the core story or expla
 
 - `make dev` is interactive.
 - After local runtime changes (engine, hooks, `connect`, desktop app/menu bar), run `make dogfood-refresh` to reinstall the real local runtime from current repo source. DMG drag-install is release transport, not the daily dogfood loop.
-- `make test-ci`, `make test-e2e`, `make test-full`, and long `cargo` builds run locally and can saturate the laptop. Prefer the repo's GitHub ARC workflows on cube when possible.
-- `scripts/ci/installer-first-run.sh` stays light locally by default; use `make test-install-first-run-fresh` only when you need a rebuilt frontend, and treat `--menubar` / `make test-install-macos-ambient` as the heavy macOS path. Prefer GitHub Actions unless menu bar install debugging is the point.
+- Heavy local validation can saturate the laptop. Prefer GitHub ARC for `make test-ci`, `make test-e2e`, `make test-full`, long `cargo` builds, and heavy installer/menu bar paths unless local debugging is the point.
 - Local SQLite dev DB is `~/.longhouse/dev.db` unless `DATABASE_URL` overrides it.
 - `AGENTS.md` is canonical. `CLAUDE.md` is a symlink.
 - Auth is disabled in dev by default (`AUTH_DISABLED=1`).
-- Do not edit generated files directly.
 - Dirty trees are normal. Stage only your changes.
 - Do not commit valid secret-shaped dummy values. Generate ephemeral secrets in tests/dev code.
 - Do not add `extra_body={\"metadata\": ...}` to provider LLM calls. Providers reject it.
@@ -186,36 +187,31 @@ If you touch a secondary area, either simplify it toward the core story or expla
 
 ## Pushing Changes
 
-**`git push` is the full deploy action in 95% of cases.** GitHub Actions detects which paths changed and fires the right lane automatically. Agents do not need to figure out what to build — just push.
+**`git push` is the deploy trigger in 95% of cases.** Hosted surfaces update from push-triggered CI; self-installed CLI/app users do not.
 
-Two completely separate user populations update differently:
+Hosted push lanes:
 
-**Hosted users** (demo + paid tenants on your infra) — update on every push via CI:
+- Runtime paths (`server/`, `web/`, `engine/`, `config/`, `docker/runtime.dockerfile`) rebuild the runtime image and roll demo + canary.
+- `control-plane/` changes deploy the control plane.
+- `runner/` changes use the runner lane.
+- Docs/scripts/tests may run CI only.
 
-| Changed paths | Lane | Extra step? |
-|---|---|---|
-| `server/`, `web/`, `engine/`, `config/`, `docker/runtime.dockerfile` | Rebuilds runtime image, redeploys demo, reprovisions canary | Only if DB migration added → `make reprovision` |
-| `control-plane/` | Control-plane deploy only | No |
-| `runner/` | Runner lane | No |
-| Docs/scripts/tests | CI only, no deploy | No |
+Separate release paths:
 
-**Self-installed users** (CLI via PyPI, `Longhouse.app` download) — completely decoupled from push:
-- Only get an update when you publish a GitHub release (`vX.Y.Z` tag → triggers PyPI publish)
-- Must manually run `longhouse upgrade` or `uv tool upgrade longhouse` — no silent auto-update
-- `longhouse version --check` tells them if they're behind
-- After CLI upgrade, they may also need `longhouse connect --install` to rewire hooks/engine service
+- Self-installed CLI and `Longhouse.app` users only update on a published `vX.Y.Z` release.
+- `longhouse upgrade` / `uv tool upgrade longhouse` updates the CLI; some upgrades still need `longhouse connect --install`.
+- macOS app packaging smoke runs on push, but real app distribution is release-only.
 
-**Mac app binary:** every push runs a packaging smoke test (builds + signs `.app` to catch breakage early) but does NOT distribute. Real signed + notarized release only fires on a published `vX.Y.Z` GitHub release.
+Extra rules:
 
-**Provisioning rule:** if your change adds a new DB column, new required env var, or touches schema — flag it explicitly and run `make reprovision` after CI passes. Otherwise skip it.
-
-**Machine agent (Rust engine):** hosted tenants get the new binary automatically via the runtime image. Users running the engine locally need `make install-engine`. Mention this when shipping engine changes.
+- If you add a DB column, new required env var, or touch schema, call it out and run `make reprovision` after CI.
+- Hosted tenants get engine changes through the runtime image; users running the engine locally still need `make install-engine`.
+- For the full ship cycle and manual deploy fallbacks, use `.agents/skills/zerg-ship/SKILL.md`.
 
 Default path:
 
 ```bash
-git push
-gh run list -R cipher982/longhouse --limit 3  # confirm lanes fired
+make ship
 ```
 
 Local fallback when remote CI is unavailable or David explicitly wants a local run:
@@ -248,15 +244,9 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - New columns on existing models must also be added to `_migrate_agents_columns()` in `server/zerg/database.py`.
 - Agent infra models live on `AgentsBase`, not `Base`.
 - Browser auth and machine auth are different systems. Browser pages use the `longhouse_session` cookie; `/api/agents/*` uses `X-Agents-Token`.
-- The Rust engine is the shipping path. `longhouse connect` manages the service; it does not run a Python shipper.
 - Demo session reset/reseed uses `provider_session_id LIKE 'demo-%'`, not `device_id`.
 - Control-plane admin calls are user-agent sensitive. Use the existing scripts and curl patterns before improvising custom Python clients.
 - Hosted tenant data on `zerg` lives under `/var/app-data/longhouse/<subdomain>` and mounts to `/data` in the container.
-- macOS menu bar surfaces should open from cached/loading state and refresh off the main thread; SwiftUI menu hosts are prone to size and open-latency regressions, so prefer explicit AppKit popover control for fixed panels.
-- Public macOS onboarding should talk about `Longhouse.app` / the desktop app only; keep `local-health` as internal diagnostic terminology, not public copy or artifact naming.
-- For macOS menu bar UI changes, PNG harness renders are required QA; inspect the literal full-frame images before reinstalling `Longhouse.app`.
-- The tight master logo SVG is not enough proof for the macOS status item; the generated menu bar glyph still needs menu-bar-specific optical framing and a live installed-app capture check before ship.
-- Timeline card `mouseenter` prefetch can turn scrolling under a stationary cursor into accidental workspace-request churn; treat hover prefetch as scroll-sensitive, not as free.
-- Timeline card `transition: all` hover animations can explode software-raster cost when cards slide under a stationary cursor during scroll; active scrolling should suppress card hover transitions.
-- Decorative shell animations can also steal software-render budget from timeline scroll. On the timeline route, pause header glow animations during active scrolling instead of only tuning the cards.
+- macOS menu bar work is latency-sensitive: open from cached/loading state, refresh off the main thread, keep `local-health` internal-only, and require PNG harness plus live installed-app capture QA before ship.
+- Timeline scroll performance is fragile: hover prefetch, card hover transitions, and decorative shell animations can steal raster budget during active scroll and should be suppressed when scrolling.
 - `/api/threads/{id}/runs` needs direct backend coverage. Dead runtime imports can survive broad suites and only surface in hosted chat smoke.

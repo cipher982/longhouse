@@ -65,16 +65,16 @@ What ships:
 Primary automation:
 
 ```bash
-git push origin main
-gh run watch $(gh run list --workflow runtime-image.yml --limit 1 --json databaseId -q '.[0].databaseId') --exit-status
+make ship
 ```
 
-GitHub then runs:
+GitHub then runs at least:
 - `runtime-image.yml`
 - `deploy-and-verify.yml`
-- `hosted-live-qa.yml`
 
-Superseded branch CI/image/deploy runs now collapse automatically instead of chewing through stale commits. `deploy-and-verify.yml` still waits for the matching `contract-first-ci.yml` run for the same SHA to finish green before any remote deploy action, and manual dispatch stays isolated for recovery use.
+Other push workflows may also appear for the same SHA depending on touched paths.
+
+Use `make ship-watch SHA=<full-sha>` when you need to verify an already-pushed commit without pushing again. Do not use branch-latest `gh run list --limit 1` patterns on a busy `main`. `deploy-and-verify.yml` does wait for the matching `contract-first-ci.yml` and `runtime-image.yml` runs for the same SHA before any remote deploy action, and manual dispatch stays isolated for recovery use.
 
 Manual fallback:
 
@@ -98,7 +98,7 @@ What ships:
 Primary automation:
 - `deploy-control-plane.yml`
 
-The control-plane lane now waits for the matching `contract-first-ci.yml` run for the same SHA before any remote deploy step, and stale branch runs collapse automatically.
+The control-plane lane waits for the matching `contract-first-ci.yml` run for the same SHA before any remote deploy step. Anchor all checks on the pushed SHA; do not infer state from the latest branch run.
 
 Manual fallback:
 
