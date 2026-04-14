@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from uuid import UUID
 
@@ -12,9 +11,10 @@ from sqlalchemy.orm import Session
 import zerg.services.live_session_dispatch as live_session_dispatch
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
-from zerg.models.agents import SessionPresence
 from zerg.models.user import User
-from zerg.services.presence_cache import get_presence_cache
+from zerg.services.session_runtime import load_presence_map
+from zerg.services.session_runtime import load_runtime_state_map
+from zerg.services.session_runtime import resolve_runtime_overlay
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,6 @@ MESSAGE_STATUS_STORED_ONLY = "stored_only"
 MESSAGE_STATUS_FAILED = "failed"
 
 MESSAGE_DELIVERABLE_STATES = {"idle", "thinking", "needs_user"}
-_PRESENCE_TTL = timedelta(minutes=10)
 MAX_MESSAGES_PER_SAFE_BOUNDARY = 10
 
 
@@ -51,29 +50,22 @@ def is_session_message_deliverable_state(state: str | None) -> bool:
     return state in MESSAGE_DELIVERABLE_STATES
 
 
-def _normalize_utc(value: datetime | None) -> datetime | None:
-    if value is None:
+def _current_live_presence_state(db: Session, session_id: UUID, *, session: AgentSession | None = None) -> str | None:
+    target_session = session or db.query(AgentSession).filter(AgentSession.id == session_id).first()
+    if target_session is None:
         return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
-
-def _current_presence_state(db: Session, session_id: UUID) -> str | None:
     now = datetime.now(timezone.utc)
-    cache_entry = get_presence_cache().get(str(session_id))
-    if cache_entry is not None:
-        updated_at = _normalize_utc(cache_entry.updated_at)
-        if updated_at is not None and (now - updated_at) < _PRESENCE_TTL:
-            return cache_entry.state
-
-    presence = db.query(SessionPresence).filter(SessionPresence.session_id == str(session_id)).first()
-    if presence is None:
-        return None
-    updated_at = _normalize_utc(getattr(presence, "updated_at", None))
-    if updated_at is None or (now - updated_at) >= _PRESENCE_TTL:
-        return None
-    return str(getattr(presence, "state", "") or "").strip() or None
+    presence_map = load_presence_map(db, [session_id])
+    runtime_state_map = load_runtime_state_map(db, [session_id])
+    runtime_overlay = resolve_runtime_overlay(
+        target_session,
+        last_activity_at=target_session.last_activity_at,
+        presence_map=presence_map,
+        runtime_state_map=runtime_state_map,
+        now=now,
+    )
+    return runtime_overlay.presence_state
 
 
 def _build_injected_message(from_session: AgentSession, message: SessionMessage) -> str:
@@ -109,7 +101,11 @@ async def deliver_next_queued_session_message(
     if not live_session_dispatch.supports_live_text_dispatch(target_session):
         return None
 
-    current_state = target_presence_state or _current_presence_state(db, target_session_id)
+    current_state = target_presence_state or _current_live_presence_state(
+        db,
+        target_session_id,
+        session=target_session,
+    )
     if not is_session_message_deliverable_state(current_state):
         return None
 
@@ -207,7 +203,7 @@ async def deliver_queued_session_messages(
     current_state = target_presence_state
 
     for _ in range(max_messages):
-        if not is_session_message_deliverable_state(current_state or _current_presence_state(db, target_session_id)):
+        if not is_session_message_deliverable_state(current_state or _current_live_presence_state(db, target_session_id)):
             break
 
         outcome = await deliver_next_queued_session_message(
@@ -223,7 +219,7 @@ async def deliver_queued_session_messages(
         if outcome.delivery_status != MESSAGE_STATUS_DELIVERED:
             break
 
-        current_state = _current_presence_state(db, target_session_id)
+        current_state = _current_live_presence_state(db, target_session_id)
 
     return outcomes
 
@@ -263,7 +259,7 @@ async def create_session_message(
     if initial_status == MESSAGE_STATUS_STORED_ONLY:
         return SessionMessageDispatchOutcome(message=message, delivery_status=message.delivery_status)
 
-    current_state = _current_presence_state(db, to_session_id)
+    current_state = _current_live_presence_state(db, to_session_id, session=to_session)
     if is_session_message_deliverable_state(current_state):
         await deliver_queued_session_messages(
             db=db,

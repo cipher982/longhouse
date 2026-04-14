@@ -6,6 +6,7 @@ This module owns the provider-agnostic runtime reducer used by Timeline.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timedelta
@@ -313,6 +314,67 @@ def should_include_runtime_view(
         or runtime_view.presence_updated_at is not None
         or runtime_view.last_live_at is not None
         or runtime_view.runtime_source not in {None, "fallback"}
+    )
+
+
+def load_presence_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionPresence]:
+    if not session_ids:
+        return {}
+    str_session_ids = [str(session_id) for session_id in session_ids]
+
+    from zerg.services.presence_cache import get_presence_cache
+
+    cache = get_presence_cache()
+    if not cache.is_cold:
+        cached = cache.get_many(str_session_ids)
+        missing_ids = [sid for sid in str_session_ids if sid not in cached]
+        if missing_ids:
+            rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(missing_ids)).all()
+            if rows:
+                cache.warm_from_db(rows)
+                cached = cache.get_many(str_session_ids)
+        return {sid: cache.to_presence_obj(entry) for sid, entry in cached.items()}
+
+    rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()
+    return {row.session_id: row for row in rows}
+
+
+def resolve_runtime_overlay(
+    session: AgentSession,
+    *,
+    last_activity_at: datetime | None,
+    presence_map: Mapping[str, SessionPresence],
+    runtime_state_map: Mapping[str, SessionRuntimeState],
+    now: datetime,
+) -> SessionRuntimeView:
+    session_key = str(session.id)
+    presence = presence_map.get(session_key)
+    runtime_state = runtime_state_map.get(session_key)
+    if runtime_state is not None:
+        runtime_signal_at = _normalize_utc(runtime_state.last_runtime_signal_at)
+        presence_updated_at = _normalize_utc(presence.updated_at if presence is not None else None)
+        if (
+            presence_updated_at is not None
+            and (now - presence_updated_at) < PRESENCE_STALE_THRESHOLD
+            and (runtime_signal_at is None or presence_updated_at > runtime_signal_at)
+        ):
+            return build_fallback_runtime_view(
+                session=session,
+                last_activity_at=last_activity_at,
+                presence=presence,
+                now=now,
+            )
+        return build_runtime_view(
+            state=runtime_state,
+            session=session,
+            now=now,
+        )
+
+    return build_fallback_runtime_view(
+        session=session,
+        last_activity_at=last_activity_at,
+        presence=presence,
+        now=now,
     )
 
 

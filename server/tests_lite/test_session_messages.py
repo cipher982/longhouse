@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -21,7 +22,10 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.models.agents import SessionPresence
+from zerg.models.agents import SessionRuntimeState
 from zerg.services.presence_cache import get_presence_cache
+from zerg.services.session_runtime import phase_freshness_ms
+from zerg.services.session_runtime import runtime_key_for_session
 
 
 def _make_db(tmp_path):
@@ -53,6 +57,7 @@ def _make_client(session_factory, *, token_device_id: str = "shipper-laptop"):
 def _seed_session(
     db,
     *,
+    provider: str = "claude",
     execution_home: str = "legacy",
     managed_transport: str | None = None,
     source_runner_id: int | None = None,
@@ -63,7 +68,7 @@ def _seed_session(
     session_id = uuid4()
     session = AgentSession(
         id=session_id,
-        provider="claude",
+        provider=provider,
         environment="development",
         project="zerg",
         device_id=device_id,
@@ -92,6 +97,50 @@ def _seed_session(
     db.commit()
     db.refresh(session)
     return session
+
+
+def _upsert_runtime_state(db, session: AgentSession, phase: str):
+    now = datetime.now(timezone.utc)
+    runtime_key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
+    state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
+    freshness_ms = phase_freshness_ms(phase) or int(timedelta(minutes=5).total_seconds() * 1000)
+    freshness_expires_at = now + timedelta(milliseconds=freshness_ms)
+    if state is None:
+        state = SessionRuntimeState(
+            runtime_key=runtime_key,
+            session_id=session.id,
+            provider=str(session.provider or "claude"),
+            device_id=session.device_id,
+            phase=phase,
+            phase_source="semantic",
+            active_tool=None,
+            phase_started_at=now,
+            last_runtime_signal_at=now,
+            last_progress_at=now,
+            last_live_at=now,
+            timeline_anchor_at=now,
+            freshness_expires_at=freshness_expires_at,
+            terminal_state=None,
+            terminal_at=None,
+            runtime_version=1,
+        )
+        db.add(state)
+    else:
+        state.phase = phase
+        state.phase_source = "semantic"
+        state.active_tool = None
+        state.phase_started_at = now
+        state.last_runtime_signal_at = now
+        state.last_progress_at = now
+        state.last_live_at = now
+        state.timeline_anchor_at = now
+        state.freshness_expires_at = freshness_expires_at
+        state.terminal_state = None
+        state.terminal_at = None
+        state.runtime_version = int(getattr(state, "runtime_version", 0) or 0) + 1
+    db.commit()
+    db.refresh(state)
+    return state
 
 
 def _upsert_presence(db, session_id: str, state: str):
@@ -232,6 +281,65 @@ def test_create_message_queues_when_target_is_running(monkeypatch, tmp_path):
         api_app_ref.dependency_overrides = {}
 
 
+def test_create_message_uses_runtime_state_when_presence_missing(monkeypatch, tmp_path):
+    _clear_presence_cache()
+    session_local = _make_db(tmp_path)
+    send_calls: list[dict[str, object]] = []
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(
+            db,
+            provider="codex",
+            execution_home="managed_local",
+            managed_transport="codex_app_server",
+            source_runner_id=7,
+            source_runner_name="cinder",
+            device_id="cinder",
+            device_name="cinder",
+        )
+        _upsert_runtime_state(db, to_session, "needs_user")
+
+    async def fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
+        send_calls.append(
+            {
+                "owner_id": owner_id,
+                "session_id": str(session.id),
+                "text": text,
+            }
+        )
+        return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
+
+    client, api_app_ref = _make_client(session_local)
+    try:
+        response = client.post(
+            "/api/agents/messages",
+            json={
+                "from_session_id": str(from_session.id),
+                "to_session_id": str(to_session.id),
+                "text": "Codex should receive this without a presence row.",
+            },
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["delivery_status"] == "delivered"
+        assert len(send_calls) == 1
+        assert send_calls[0]["session_id"] == str(to_session.id)
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tmp_path):
     _clear_presence_cache()
     session_local = _make_db(tmp_path)
@@ -286,6 +394,82 @@ def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tm
             },
         )
         assert response.status_code == 204, response.text
+        assert len(send_calls) == 1
+
+        with session_local() as verify_db:
+            message = verify_db.query(SessionMessage).one()
+            assert message.delivery_status == "delivered"
+            assert message.delivered_at is not None
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_runtime_safe_transition_delivers_queued_message_without_presence(monkeypatch, tmp_path):
+    _clear_presence_cache()
+    session_local = _make_db(tmp_path)
+    send_calls: list[str] = []
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(
+            db,
+            provider="codex",
+            execution_home="managed_local",
+            managed_transport="codex_app_server",
+            source_runner_id=7,
+            source_runner_name="cinder",
+            device_id="cinder",
+            device_name="cinder",
+        )
+        db.add(
+            SessionMessage(
+                from_session_id=from_session.id,
+                to_session_id=to_session.id,
+                body="Deliver this after the Codex bridge reports idle.",
+                delivery_status="queued",
+            )
+        )
+        db.commit()
+
+    async def fake_send_text(
+        *,
+        db,
+        owner_id,
+        session,
+        text,
+        commis_id=None,
+        timeout_secs=15,
+        verify_turn_started=False,
+        verification_timeout_secs=None,
+    ):
+        send_calls.append(text)
+        return SimpleNamespace(ok=True, error=None)
+
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
+
+    client, api_app_ref = _make_client(session_local)
+    try:
+        response = client.post(
+            "/api/agents/runtime/events/batch",
+            json={
+                "events": [
+                    {
+                        "runtime_key": runtime_key_for_session("codex", str(to_session.id)),
+                        "session_id": str(to_session.id),
+                        "provider": "codex",
+                        "device_id": "cinder",
+                        "source": "codex_bridge",
+                        "kind": "phase_signal",
+                        "phase": "idle",
+                        "occurred_at": datetime.now(timezone.utc).isoformat(),
+                        "freshness_ms": phase_freshness_ms("idle"),
+                        "dedupe_key": "codex-idle-1",
+                        "payload": {},
+                    }
+                ]
+            },
+        )
+        assert response.status_code == 200, response.text
         assert len(send_calls) == 1
 
         with session_local() as verify_db:

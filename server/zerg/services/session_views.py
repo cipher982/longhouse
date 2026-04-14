@@ -15,22 +15,19 @@ from typing import Any
 from typing import Dict
 from typing import List
 from typing import Optional
-from uuid import UUID
 
 from pydantic import BaseModel
 from pydantic import Field
-from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPresence
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_runtime import SessionRuntimeView
-from zerg.services.session_runtime import build_fallback_runtime_view
-from zerg.services.session_runtime import build_runtime_view
+from zerg.services.session_runtime import load_presence_map  # noqa: F401 — re-exported
 from zerg.services.session_runtime import load_runtime_state_map  # noqa: F401 — re-exported
+from zerg.services.session_runtime import resolve_runtime_overlay  # noqa: F401 — re-exported
 from zerg.services.session_runtime import should_include_runtime_view
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_loop_mode import SessionLoopMode
@@ -576,52 +573,6 @@ def normalize_utc_datetime(value: datetime | None) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
-
-
-def load_presence_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionPresence]:
-    if not session_ids:
-        return {}
-    str_session_ids = [str(session_id) for session_id in session_ids]
-
-    from zerg.services.presence_cache import get_presence_cache
-
-    cache = get_presence_cache()
-    if not cache.is_cold:
-        cached = cache.get_many(str_session_ids)
-        missing_ids = [sid for sid in str_session_ids if sid not in cached]
-        if missing_ids:
-            rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(missing_ids)).all()
-            if rows:
-                cache.warm_from_db(rows)
-                cached = cache.get_many(str_session_ids)
-        return {sid: cache.to_presence_obj(entry) for sid, entry in cached.items()}
-
-    rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()
-    return {row.session_id: row for row in rows}
-
-
-def resolve_runtime_overlay(
-    session: AgentSession,
-    *,
-    last_activity_at: datetime | None,
-    presence_map: dict[str, SessionPresence],
-    runtime_state_map: dict[str, Any],
-    now: datetime,
-) -> SessionRuntimeView:
-    runtime_state = runtime_state_map.get(str(session.id))
-    if runtime_state is not None:
-        return build_runtime_view(
-            state=runtime_state,
-            session=session,
-            now=now,
-        )
-
-    return build_fallback_runtime_view(
-        session=session,
-        last_activity_at=last_activity_at,
-        presence=presence_map.get(str(session.id)),
-        now=now,
-    )
 
 
 def get_thread_meta(store: AgentsStore, session: AgentSession, thread_cache: Dict[str, tuple[str, int]]) -> tuple[str, int]:

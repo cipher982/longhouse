@@ -25,8 +25,8 @@ from zerg.services.session_messages import MESSAGE_STATUS_FAILED
 from zerg.services.session_messages import MESSAGE_STATUS_QUEUED
 from zerg.services.session_views import WallSessionResponse
 from zerg.services.session_views import load_presence_map
-
-_PRESENCE_TTL = timedelta(minutes=10)
+from zerg.services.session_views import load_runtime_state_map
+from zerg.services.session_views import resolve_runtime_overlay
 
 
 def serialize_session_message(message: SessionMessage, *, delivery_status: str | None = None) -> dict[str, Any]:
@@ -86,6 +86,7 @@ def query_wall_sessions(
     last_user_msg = store.get_last_timestamp_by_role_map(session_ids, "user")
     last_tool_call = store.get_last_tool_call_map(session_ids)
     presence_map = load_presence_map(db, session_ids)
+    runtime_state_map = load_runtime_state_map(db, session_ids)
     pending_inbound_map: dict[UUID, int] = {}
     if session_ids:
         pending_rows = (
@@ -101,17 +102,15 @@ def query_wall_sessions(
     now = datetime.now(timezone.utc)
     items: list[WallSessionResponse] = []
     for session in sessions:
-        presence = presence_map.get(session.id)
-        has_live_presence = False
-        presence_state = None
-        if presence is not None:
-            presence_updated = getattr(presence, "updated_at", None)
-            if presence_updated is not None:
-                if presence_updated.tzinfo is None:
-                    presence_updated = presence_updated.replace(tzinfo=timezone.utc)
-                has_live_presence = (now - presence_updated) < _PRESENCE_TTL
-            if has_live_presence:
-                presence_state = getattr(presence, "state", None)
+        runtime_overlay = resolve_runtime_overlay(
+            session,
+            last_activity_at=last_activity.get(session.id),
+            presence_map=presence_map,
+            runtime_state_map=runtime_state_map,
+            now=now,
+        )
+        has_live_presence = runtime_overlay.presence_state is not None
+        presence_state = runtime_overlay.presence_state
 
         items.append(
             WallSessionResponse(

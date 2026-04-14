@@ -23,6 +23,7 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
+from zerg.models.agents import SessionRuntimeState
 
 # ---------------------------------------------------------------------------
 # DB / client helpers
@@ -220,6 +221,55 @@ def test_wall_includes_pending_inbound_message_count(tmp_path):
         data = resp.json()
         session = next(s for s in data["sessions"] if s["device_name"] == "cube")
         assert session["pending_inbound_messages"] == 1
+    finally:
+        api_ref.dependency_overrides = {}
+
+
+def test_wall_uses_runtime_state_for_live_presence_without_presence_row(tmp_path):
+    """Wall prefers live runtime state even when session_presence is empty."""
+    SessionLocal = _make_db(tmp_path)
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            device_id="shipper-cube",
+            device_name="cube",
+            git_repo="runtime-only",
+            project="zerg",
+            last_activity_at=now - timedelta(seconds=20),
+        )
+        db.add(
+            SessionRuntimeState(
+                runtime_key=f"codex:{session.id}",
+                session_id=session.id,
+                provider="codex",
+                device_id="shipper-cube",
+                phase="needs_user",
+                phase_source="semantic",
+                active_tool=None,
+                phase_started_at=now - timedelta(seconds=20),
+                last_runtime_signal_at=now - timedelta(seconds=20),
+                last_progress_at=now - timedelta(seconds=20),
+                last_live_at=now - timedelta(seconds=20),
+                timeline_anchor_at=now - timedelta(seconds=20),
+                freshness_expires_at=now + timedelta(minutes=5),
+                terminal_state=None,
+                terminal_at=None,
+                runtime_version=1,
+            )
+        )
+        db.commit()
+
+    client, api_ref = _make_client(SessionLocal)
+    try:
+        resp = client.get("/api/agents/sessions/wall")
+        assert resp.status_code == 200
+        data = resp.json()
+        row = next(s for s in data["sessions"] if s["device_name"] == "cube")
+        assert row["has_live_presence"] is True
+        assert row["presence_state"] == "needs_user"
     finally:
         api_ref.dependency_overrides = {}
 
