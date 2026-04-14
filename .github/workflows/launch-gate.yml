@@ -80,6 +80,42 @@ jobs:
         with:
           bun-version: '1.2.20'
 
+      - name: Wait for released macOS desktop artifacts
+        if: ${{ github.event_name == 'release' && matrix.os == 'macos-latest' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          deadline=$((SECONDS + 900))
+          required_assets=(
+            "Longhouse-macos-arm64.zip"
+            "local-runtime-checksums.txt"
+          )
+
+          while (( SECONDS < deadline )); do
+            assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+            missing=""
+
+            for asset in "${required_assets[@]}"; do
+              if ! grep -Fx "$asset" <<<"$assets" >/dev/null; then
+                missing="$asset"
+                break
+              fi
+            done
+
+            if [[ -z "$missing" ]]; then
+              echo "Release assets are available for $RELEASE_TAG."
+              exit 0
+            fi
+
+            echo "Waiting for release asset on $RELEASE_TAG: $missing"
+            sleep 15
+          done
+
+          echo "Timed out waiting for release assets on $RELEASE_TAG." >&2
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' >&2
+          exit 1
+
       - name: Run disposable installer smoke (wheel build + installer onboarding + released artifacts)
         run: |
           chmod +x scripts/ci/installer-first-run.sh
