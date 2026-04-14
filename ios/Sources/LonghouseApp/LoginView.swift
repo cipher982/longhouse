@@ -242,6 +242,16 @@ struct LoginView: View {
             return
         }
 
+        guard let baseURL = URL(string: appState.serverURL),
+              baseURL.scheme?.lowercased() == "https" || baseURL.host == "localhost" || baseURL.host == "127.0.0.1" else {
+            await MainActor.run {
+                isLoadingAuthMethods = false
+                authMethods = nil
+                localErrorMessage = "Server URL must use HTTPS"
+            }
+            return
+        }
+
         guard let url = URL(string: "\(appState.serverURL)/api/auth/methods") else {
             await MainActor.run {
                 isLoadingAuthMethods = false
@@ -452,7 +462,10 @@ struct LoginView: View {
     }
 
     private func exchangeGoogleToken(_ idToken: String) async {
-        let url = URL(string: "\(appState.serverURL)/api/auth/google")!
+        guard let url = URL(string: "\(appState.serverURL)/api/auth/google") else {
+            await MainActor.run { isSigningIn = false; localErrorMessage = "Invalid server URL" }
+            return
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -502,7 +515,10 @@ struct LoginView: View {
     }
 
     private func exchangePassword() async {
-        let url = URL(string: "\(appState.serverURL)/api/auth/password")!
+        guard let url = URL(string: "\(appState.serverURL)/api/auth/password") else {
+            await MainActor.run { isSigningIn = false; localErrorMessage = "Invalid server URL" }
+            return
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
