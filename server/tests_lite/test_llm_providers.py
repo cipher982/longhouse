@@ -163,6 +163,7 @@ class TestLlmCapabilities:
             providers = client.get("/llm/providers").json()
             assert len(providers) == 1
             assert providers[0]["provider_name"] == "groq"
+            assert providers[0]["api_key_preview"] == "gs...st"
 
 
 class TestEffectiveProviders:
@@ -181,6 +182,7 @@ class TestEffectiveProviders:
                 assert text["provider_name"] == "openrouter"
                 assert text["source"] == "environment"
                 assert text["base_url"] == "https://openrouter.ai/api/v1"
+                assert text["api_key_preview"] == "sk-o...-123"
 
     def test_effective_endpoint_prefers_db_override(self, tmp_path):
         """Per-user DB config should win over env in the settings-effective view."""
@@ -202,6 +204,7 @@ class TestEffectiveProviders:
                 text = next(provider for provider in data if provider["capability"] == "text")
                 assert text["provider_name"] == "groq"
                 assert text["source"] == "database"
+                assert text["api_key_preview"] == "gs...st"
 
 
 # ---------------------------------------------------------------------------
@@ -484,3 +487,37 @@ class TestProviderConnection:
             assert resp.status_code == 200
             assert resp.json() == {"success": True, "message": "Connection successful"}
             assert captured["client_kwargs"]["api_key"] == "sk-stored"
+
+    def test_test_endpoint_uses_env_key_when_api_key_omitted(self, tmp_path):
+        """POST /test can reuse the current env-backed key for the active provider."""
+        sf = _make_db(tmp_path)
+        captured: dict[str, object] = {}
+
+        class FakeAsyncOpenAI:
+            def __init__(self, **kwargs):
+                captured["client_kwargs"] = kwargs
+                self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+            async def _create(self, **kwargs):
+                captured["request_kwargs"] = kwargs
+                return SimpleNamespace(
+                    choices=[SimpleNamespace(message=SimpleNamespace(content="ok"))],
+                )
+
+            async def close(self):
+                captured["closed"] = True
+
+        for client in _get_client(sf):
+            with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-or-test-123"}, clear=False):
+                with patch("openai.AsyncOpenAI", FakeAsyncOpenAI):
+                    resp = client.post(
+                        "/llm/providers/text/test",
+                        json={
+                            "provider_name": "openrouter",
+                            "base_url": None,
+                        },
+                    )
+
+            assert resp.status_code == 200
+            assert resp.json() == {"success": True, "message": "Connection successful"}
+            assert captured["client_kwargs"]["api_key"] == "sk-or-test-123"

@@ -108,6 +108,7 @@ function CapabilityRow({
 export default function LlmProviderCard() {
   const queryClient = useQueryClient();
   const [configuringCap, setConfiguringCap] = useState<Capability | null>(null);
+  const [isEditing, setIsEditing] = useState(false);
   const [form, setForm] = useState<ConfigFormState>({
     providerName: "openai",
     apiKey: "",
@@ -163,6 +164,7 @@ export default function LlmProviderCard() {
   function resetForm() {
     setForm({ providerName: "openai", apiKey: "", baseUrl: "" });
     setTestResult(null);
+    setIsEditing(false);
   }
 
   function handleConfigure(cap: Capability) {
@@ -179,8 +181,10 @@ export default function LlmProviderCard() {
         apiKey: "",
         baseUrl: existing.base_url || "",
       });
+      setIsEditing(false);
     } else {
       resetForm();
+      setIsEditing(true);
     }
     setConfiguringCap(cap);
     setTestResult(null);
@@ -250,7 +254,11 @@ export default function LlmProviderCard() {
     ? providers.find((p) => p.capability === configuringCap) ?? null
     : null;
   const configuringUsesStoredKey = configuringProvider?.source === "database";
-  const canTestCurrentConfig = Boolean(form.apiKey || configuringUsesStoredKey);
+  const hasCurrentKeyPreview = Boolean(configuringProvider?.api_key_preview);
+  const canTestCurrentConfig = Boolean(form.apiKey || hasCurrentKeyPreview);
+  const currentApiKeyPreview = configuringProvider?.api_key_preview ?? "Not configured";
+  const currentProviderName = configuringProvider?.provider_name ?? "Not configured";
+  const currentBaseUrl = configuringProvider?.base_url || "Provider default";
 
   return (
     <Card>
@@ -309,58 +317,36 @@ export default function LlmProviderCard() {
 
             {configuringCap && (
               <div className="llm-config-form">
-                <div className="llm-test-result">
-                  {configuringUsesStoredKey
-                    ? "Your current key is hidden. Leave API key blank to keep it, or enter a new key to replace it."
-                    : configuringProvider
-                      ? "This capability is currently active from platform settings. Add your own key here only if you want a personal override."
-                      : "Add your own provider key to enable this capability."}
-                </div>
-
-                <div className="llm-provider-select">
-                  {KNOWN_PROVIDERS.map((p) => (
-                    <label key={p.id} className="llm-provider-option">
-                      <input
-                        type="radio"
-                        name="provider"
-                        value={p.id}
-                        checked={form.providerName === p.id}
-                        onChange={() => handleProviderSelect(p.id)}
-                      />
-                      <span>{p.name}</span>
-                    </label>
-                  ))}
-                </div>
-
                 <div className="llm-config-fields">
                   <div className="form-group">
-                    <label className="form-label">API Key</label>
+                    <label className="form-label">Current Provider</label>
                     <Input
-                      type="password"
-                      value={form.apiKey}
-                      onChange={(e) => {
-                        setForm({ ...form, apiKey: e.target.value });
-                        setTestResult(null);
-                      }}
-                      placeholder={
-                        configuringUsesStoredKey
-                          ? "Configured. Enter a new key to replace it."
-                          : "sk-..."
-                      }
+                      value={currentProviderName}
+                      readOnly
                     />
+                    <small>Effective provider currently in use</small>
                   </div>
 
                   <div className="form-group">
-                    <label className="form-label">Base URL</label>
+                    <label className="form-label">Current API Key</label>
                     <Input
-                      value={form.baseUrl}
-                      onChange={(e) => {
-                        setForm({ ...form, baseUrl: e.target.value });
-                        setTestResult(null);
-                      }}
-                      placeholder={form.providerName === "openai" ? "Default (api.openai.com)" : "https://..."}
+                      value={currentApiKeyPreview}
+                      readOnly
                     />
-                    <small>Leave empty for provider default</small>
+                    <small>
+                      {configuringProvider?.api_key_preview
+                        ? "Masked preview of the configured API key."
+                        : "No API key configured."}
+                    </small>
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Current Base URL</label>
+                    <Input
+                      value={currentBaseUrl}
+                      readOnly
+                    />
+                    <small>Effective base URL currently in use</small>
                   </div>
                 </div>
 
@@ -372,24 +358,124 @@ export default function LlmProviderCard() {
                   </div>
                 )}
 
-                <div className="llm-config-actions">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={handleTest}
-                    disabled={!canTestCurrentConfig || isTesting}
-                  >
-                    {isTesting ? "Testing..." : configuringUsesStoredKey && !form.apiKey ? "Test Current Config" : "Test Connection"}
-                  </Button>
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    onClick={handleSave}
-                    disabled={saveMutation.isPending || (!configuringUsesStoredKey && !form.apiKey)}
-                  >
-                    {saveMutation.isPending ? "Saving..." : "Save"}
-                  </Button>
-                </div>
+                {!isEditing && (
+                  <div className="llm-config-actions">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={handleTest}
+                      disabled={!canTestCurrentConfig || isTesting}
+                    >
+                      {isTesting ? "Testing..." : hasCurrentKeyPreview && !form.apiKey ? "Test Current Config" : "Test Connection"}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setIsEditing(true)}
+                    >
+                      {configuringProvider ? "Edit Settings" : "Add Settings"}
+                    </Button>
+                  </div>
+                )}
+
+                {isEditing && (
+                  <>
+                    <div className="llm-test-result">
+                      {configuringProvider
+                        ? "Update provider details below. Enter a new API key only if you want to replace the current one."
+                        : "Add your own provider key to enable this capability."}
+                    </div>
+
+                    <div className="llm-provider-select">
+                      {KNOWN_PROVIDERS.map((p) => (
+                        <label key={p.id} className="llm-provider-option">
+                          <input
+                            type="radio"
+                            name="provider"
+                            value={p.id}
+                            checked={form.providerName === p.id}
+                            onChange={() => handleProviderSelect(p.id)}
+                          />
+                          <span>{p.name}</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    <div className="llm-config-fields">
+                      <div className="form-group">
+                        <label className="form-label">New API Key</label>
+                        <Input
+                          type="password"
+                          value={form.apiKey}
+                          onChange={(e) => {
+                            setForm({ ...form, apiKey: e.target.value });
+                            setTestResult(null);
+                          }}
+                          placeholder={
+                            configuringProvider?.api_key_preview
+                              ? "Replace current API key"
+                              : "sk-..."
+                          }
+                        />
+                        <small>
+                          {configuringProvider?.api_key_preview
+                            ? "Leave empty to keep the current API key."
+                            : "Required when adding a provider override."}
+                        </small>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">Base URL</label>
+                        <Input
+                          value={form.baseUrl}
+                          onChange={(e) => {
+                            setForm({ ...form, baseUrl: e.target.value });
+                            setTestResult(null);
+                          }}
+                          placeholder={form.providerName === "openai" ? "Default (api.openai.com)" : "https://..."}
+                        />
+                        <small>Leave empty for provider default</small>
+                      </div>
+                    </div>
+
+                    <div className="llm-config-actions">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setIsEditing(false);
+                          if (configuringProvider) {
+                            setForm({
+                              providerName: configuringProvider.provider_name,
+                              apiKey: "",
+                              baseUrl: configuringProvider.base_url || "",
+                            });
+                          } else {
+                            resetForm();
+                          }
+                        }}
+                      >
+                        Stop Editing
+                      </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={handleTest}
+                        disabled={!canTestCurrentConfig || isTesting}
+                      >
+                        {isTesting ? "Testing..." : hasCurrentKeyPreview && !form.apiKey ? "Test Current Config" : "Test Connection"}
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={handleSave}
+                        disabled={saveMutation.isPending || (!configuringUsesStoredKey && !form.apiKey)}
+                      >
+                        {saveMutation.isPending ? "Saving..." : "Save"}
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

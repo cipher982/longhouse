@@ -33,6 +33,7 @@ export interface LlmProviderInfo {
   capability: string;
   provider_name: string;
   base_url: string | null;
+  api_key_preview: string | null;
   source: string;
   has_key: boolean;
   created_at: string | null;

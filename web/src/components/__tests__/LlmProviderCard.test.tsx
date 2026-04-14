@@ -57,6 +57,7 @@ describe("LlmProviderCard", () => {
         capability: "text",
         provider_name: "openrouter",
         base_url: "https://openrouter.ai/api/v1",
+        api_key_preview: "sk-o...1234",
         source: "environment",
         has_key: true,
         created_at: null,
@@ -68,16 +69,18 @@ describe("LlmProviderCard", () => {
     vi.mocked(systemApi.testLlmProvider).mockResolvedValue({ success: true, message: "ok" });
   });
 
-  it("shows effective platform provider details in the configure form", async () => {
+  it("shows current provider state before revealing edit controls", async () => {
     const user = userEvent.setup();
     renderCard();
 
     await user.click((await screen.findAllByRole("button", { name: "Configure" }))[0]);
 
+    expect(await screen.findByDisplayValue("openrouter")).toBeTruthy();
+    expect(screen.getByDisplayValue("sk-o...1234")).toBeTruthy();
     expect(await screen.findByDisplayValue("https://openrouter.ai/api/v1")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Edit Settings" }));
     expect(screen.getByRole("radio", { name: "OpenRouter (recommended)" })).toHaveProperty("checked", true);
-    expect(
-      screen.getByText("This capability is currently active from platform settings. Add your own key here only if you want a personal override."),
-    ).toBeTruthy();
+    expect(screen.getByPlaceholderText("Replace current API key")).toBeTruthy();
   });
 });

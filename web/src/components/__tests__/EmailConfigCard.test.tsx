@@ -40,6 +40,8 @@ describe("EmailConfigCard", () => {
     vi.mocked(emailApi.fetchEmailStatus).mockResolvedValue({
       configured: true,
       source: "env",
+      aws_ses_access_key_preview: "AKIA...1234",
+      aws_ses_secret_access_key_preview: "secr...abcd",
       aws_ses_region: "eu-west-1",
       from_email: "notify@longhouse.ai",
       notify_email: "owner@example.com",
@@ -56,18 +58,20 @@ describe("EmailConfigCard", () => {
     vi.mocked(emailApi.deleteEmailConfig).mockResolvedValue({ success: true, keys_deleted: 1 });
   });
 
-  it("prefills safe effective values and keeps secrets hidden", async () => {
+  it("shows read-only current config previews before revealing edit inputs", async () => {
     const user = userEvent.setup();
     renderCard();
 
     await user.click(await screen.findByRole("button", { name: "Configure" }));
 
+    expect(await screen.findByDisplayValue("AKIA...1234")).toBeTruthy();
+    expect(screen.getByDisplayValue("secr...abcd")).toBeTruthy();
     expect(await screen.findByDisplayValue("eu-west-1")).toBeTruthy();
     expect(screen.getByDisplayValue("notify@longhouse.ai")).toBeTruthy();
     expect(screen.getByDisplayValue("owner@example.com")).toBeTruthy();
-    expect(screen.getByPlaceholderText("Configured. Enter a new key to replace it.")).toBeTruthy();
-    expect(
-      screen.getByText("Secret fields stay blank by design. Enter a new value only if you want to replace the current one."),
-    ).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Edit Settings" }));
+    expect(screen.getByPlaceholderText("Replace current access key")).toBeTruthy();
+    expect(screen.getByPlaceholderText("Replace current secret key")).toBeTruthy();
   });
 });

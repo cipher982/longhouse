@@ -79,6 +79,7 @@ class LlmProviderInfo(BaseModel):
     capability: str
     provider_name: str
     base_url: str | None = None
+    api_key_preview: str | None = None
     source: str = "database"
     has_key: bool = True
     created_at: str | None = None
@@ -227,6 +228,50 @@ def _default_base_url_for_provider(provider_name: str | None) -> str | None:
     return _KNOWN_PROVIDERS.get(provider_name)
 
 
+def _mask_secret_preview(value: str | None) -> str | None:
+    """Show the first and last characters of a secret without exposing the full value."""
+    if value is None:
+        return None
+
+    trimmed = value.strip()
+    if not trimmed:
+        return None
+
+    if len(trimmed) <= 2:
+        return trimmed
+
+    if len(trimmed) <= 6:
+        return f"{trimmed[0]}...{trimmed[-1]}"
+
+    if len(trimmed) <= 8:
+        return f"{trimmed[:2]}...{trimmed[-2:]}"
+
+    return f"{trimmed[:4]}...{trimmed[-4:]}"
+
+
+def _resolve_env_api_key(provider_name: str | None) -> str | None:
+    """Resolve an env-backed API key for a known provider."""
+    if not provider_name:
+        return None
+
+    from zerg.models_config import _PROVIDER_DEFAULT_API_KEY_ENVS
+
+    for provider, env_var in _PROVIDER_DEFAULT_API_KEY_ENVS.items():
+        if provider.value == provider_name:
+            value = os.getenv(env_var)
+            return value.strip() if value and value.strip() else None
+
+    return None
+
+
+def _safe_api_key_preview_from_row(row: LlmProviderConfig) -> str | None:
+    """Best-effort masked preview for a stored encrypted API key."""
+    try:
+        return _mask_secret_preview(decrypt(row.encrypted_api_key))
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Capabilities endpoint (public — no auth, used by frontend at load)
 # ---------------------------------------------------------------------------
@@ -278,6 +323,7 @@ def list_llm_providers(
             capability=row.capability,
             provider_name=row.provider_name,
             base_url=row.base_url,
+            api_key_preview=_safe_api_key_preview_from_row(row),
             source="database",
             has_key=True,
             created_at=row.created_at.isoformat() if row.created_at else None,
@@ -310,6 +356,7 @@ def list_effective_llm_providers(
                     capability=row.capability,
                     provider_name=row.provider_name,
                     base_url=row.base_url,
+                    api_key_preview=_safe_api_key_preview_from_row(row),
                     source="database",
                     has_key=True,
                     created_at=row.created_at.isoformat() if row.created_at else None,
@@ -327,6 +374,7 @@ def list_effective_llm_providers(
                 capability=capability,
                 provider_name=provider_name,
                 base_url=_default_base_url_for_provider(provider_name),
+                api_key_preview=_mask_secret_preview(_resolve_env_api_key(provider_name)),
                 source=source,
                 has_key=True,
                 created_at=None,
@@ -450,6 +498,9 @@ async def test_llm_provider(
                     api_key = decrypt(existing.encrypted_api_key)
                 except Exception:
                     api_key = None
+
+        if not api_key:
+            api_key = _resolve_env_api_key(request.provider_name)
 
         if not api_key:
             return LlmProviderTestResponse(success=False, message="API key is required to test this connection")
