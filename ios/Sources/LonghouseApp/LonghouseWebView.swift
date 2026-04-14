@@ -16,12 +16,12 @@ struct LonghouseWebView: UIViewRepresentable {
         let contentController = WKUserContentController()
         contentController.add(context.coordinator, name: "nativeAuth")
 
-        let blockGIS = WKUserScript(
-            source: Self.earlyInjectionJS,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: false
+        let replaceGoogleButton = WKUserScript(
+            source: Self.buttonReplacementJS,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
         )
-        contentController.addUserScript(blockGIS)
+        contentController.addUserScript(replaceGoogleButton)
         config.userContentController = contentController
 
         let webView = WKWebView(frame: .zero, configuration: config)
@@ -35,98 +35,56 @@ struct LonghouseWebView: UIViewRepresentable {
 
         context.coordinator.webView = webView
 
-        if let url = URL(string: serverURL + "/timeline") {
-            webView.load(URLRequest(url: url))
+        Self.installContentBlocker(on: config) {
+            if let url = URL(string: self.serverURL + "/timeline") {
+                webView.load(URLRequest(url: url))
+            }
         }
 
         return webView
     }
 
-    func updateUIView(_ webView: WKWebView, context: Context) {
-        let targetURL = serverURL + "/timeline"
-        if let current = webView.url?.absoluteString, !current.hasPrefix(serverURL) {
-            if let url = URL(string: targetURL) {
-                webView.load(URLRequest(url: url))
+    func updateUIView(_ webView: WKWebView, context: Context) {}
+
+    private static func installContentBlocker(on config: WKWebViewConfiguration, then: @escaping () -> Void) {
+        let rules = """
+        [{
+            "trigger": { "url-filter": "accounts\\\\.google\\\\.com" },
+            "action": { "type": "block" }
+        }]
+        """
+        WKContentRuleList.compile(from: rules, identifier: "block-google-auth") { ruleList, error in
+            if let ruleList {
+                config.userContentController.add(ruleList)
             }
+            DispatchQueue.main.async { then() }
         }
     }
 
-    private static let earlyInjectionJS = """
+    private static let buttonReplacementJS = """
     (function() {
-        // Block GIS script from loading — it doesn't work in WKWebView
-        var origCreateElement = document.createElement.bind(document);
-        document.createElement = function(tag) {
-            var el = origCreateElement(tag);
-            if (tag.toLowerCase() === 'script') {
-                var origSetAttribute = el.setAttribute.bind(el);
-                var origSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype, 'src');
-                Object.defineProperty(el, 'src', {
-                    set: function(val) {
-                        if (val && val.indexOf('accounts.google.com/gsi/client') !== -1) {
-                            console.log('[Longhouse] Blocked GIS script, using native auth');
-                            return;
-                        }
-                        origSrcDescriptor.set.call(el, val);
-                    },
-                    get: function() { return origSrcDescriptor.get.call(el); },
-                    configurable: true
-                });
-            }
-            return el;
-        };
-
-        // Intercept google.accounts.id.renderButton to inject our native button
-        var _googleProxy = undefined;
-        Object.defineProperty(window, 'google', {
-            get: function() { return _googleProxy; },
-            set: function(val) {
-                _googleProxy = val;
-                if (val && val.accounts && val.accounts.id) {
-                    val.accounts.id.renderButton = function(container, options) {
-                        if (!container) return;
-                        container.innerHTML = '';
-                        var btn = document.createElement('button');
-                        btn.textContent = 'Sign in with Google';
-                        btn.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 16px;border:1px solid #444;border-radius:8px;background:#1a1a1a;color:#fff;font-size:14px;font-family:-apple-system,system-ui,sans-serif;cursor:pointer;';
-                        btn.onmouseover = function() { btn.style.background = '#2a2a2a'; };
-                        btn.onmouseout = function() { btn.style.background = '#1a1a1a'; };
-                        btn.onclick = function(e) {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            window.webkit.messageHandlers.nativeAuth.postMessage('google');
-                        };
-                        container.appendChild(btn);
-                    };
-                    val.accounts.id.initialize = function() {};
-                    val.accounts.id.prompt = function() {};
-                }
-            },
-            configurable: true
-        });
-
-        // Fallback: watch for the button container and replace if GIS somehow renders
-        var observer = new MutationObserver(function(mutations) {
+        function replaceGoogleButton() {
             var container = document.getElementById('google-signin-button');
-            if (container && !container.dataset.nativeBound) {
-                container.dataset.nativeBound = 'true';
-                // If GIS managed to render, replace its contents
-                setTimeout(function() {
-                    var iframes = container.querySelectorAll('iframe');
-                    if (iframes.length > 0 || container.querySelector('[role="button"]')) {
-                        container.innerHTML = '';
-                        var btn = document.createElement('button');
-                        btn.textContent = 'Sign in with Google';
-                        btn.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px 16px;border:1px solid #444;border-radius:8px;background:#1a1a1a;color:#fff;font-size:14px;font-family:-apple-system,system-ui,sans-serif;cursor:pointer;';
-                        btn.onclick = function(e) {
-                            e.preventDefault();
-                            window.webkit.messageHandlers.nativeAuth.postMessage('google');
-                        };
-                        container.appendChild(btn);
-                    }
-                }, 500);
-            }
-        });
-        observer.observe(document.documentElement, { childList: true, subtree: true });
+            if (!container || container.dataset.nativeBound) return;
+            container.dataset.nativeBound = 'true';
+            container.innerHTML = '';
+            var btn = document.createElement('button');
+            btn.textContent = 'Sign in with Google';
+            btn.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:12px 24px;border:1px solid rgba(255,255,255,0.2);border-radius:20px;background:rgba(255,255,255,0.06);color:#fff;font-size:14px;font-weight:500;font-family:-apple-system,system-ui,sans-serif;cursor:pointer;backdrop-filter:blur(8px);transition:background 0.15s;';
+            btn.onmouseover = function() { btn.style.background = 'rgba(255,255,255,0.12)'; };
+            btn.onmouseout = function() { btn.style.background = 'rgba(255,255,255,0.06)'; };
+            btn.onclick = function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                window.webkit.messageHandlers.nativeAuth.postMessage('google');
+            };
+            container.appendChild(btn);
+        }
+
+        replaceGoogleButton();
+
+        new MutationObserver(function() { replaceGoogleButton(); })
+            .observe(document.documentElement, { childList: true, subtree: true });
     })();
     """
 
@@ -180,7 +138,6 @@ struct LonghouseWebView: UIViewRepresentable {
                 return
             }
 
-            // Catch any direct navigations to Google OAuth as a safety net
             if url.host?.contains("accounts.google.com") == true {
                 decisionHandler(.cancel)
                 if !authInProgress {
