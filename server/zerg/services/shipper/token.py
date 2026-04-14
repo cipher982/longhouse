@@ -6,9 +6,10 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 
-from zerg.services.longhouse_paths import get_machine_name_path
-from zerg.services.longhouse_paths import get_machine_target_url_path
 from zerg.services.longhouse_paths import get_machine_token_path
+from zerg.services.machine_state import clear_machine_runtime_url
+from zerg.services.machine_state import load_machine_state
+from zerg.services.machine_state import write_machine_state
 
 
 def get_token_path(config_dir: Path | None = None) -> Path:
@@ -116,15 +117,9 @@ def clear_zerg_url(config_dir: Path | None = None) -> bool:
     Returns:
         True if the URL was removed, False if no URL existed.
     """
-    url_path = _get_url_path(config_dir)
-
-    if not url_path.exists():
-        return False
-
     try:
-        url_path.unlink()
-        return True
-    except (OSError, IOError):
+        return clear_machine_runtime_url(config_dir, written_by="shipper-clear-url")
+    except RuntimeError:
         return False
 
 
@@ -137,17 +132,8 @@ def get_zerg_url(config_dir: Path | None = None) -> str | None:
     Returns:
         The URL string if configured, None otherwise.
     """
-    url_path = _get_url_path(config_dir)
-
-    if url_path.exists():
-        try:
-            url = normalize_zerg_url(url_path.read_text())
-            if url:
-                return url
-        except (OSError, IOError):
-            pass
-
-    return None
+    state = load_machine_state(config_dir)
+    return state.runtime_url if state else None
 
 
 def normalize_zerg_url(url: object | None) -> str | None:
@@ -181,42 +167,14 @@ def save_zerg_url(url: str, config_dir: Path | None = None) -> None:
         url: The URL to save.
         config_dir: Optional Longhouse home or provider-config override.
     """
-    import sys
-    import tempfile
-
     normalized_url = normalize_zerg_url(url)
     if normalized_url is None:
         raise ValueError(f"Invalid Longhouse URL: {url!r}")
-
-    url_path = _get_url_path(config_dir)
-
-    # Ensure parent directory exists
-    url_path.parent.mkdir(parents=True, exist_ok=True)
-
-    content = normalized_url + "\n"
-
-    if sys.platform == "win32":
-        # Windows: simple write, chmod not fully supported
-        url_path.write_text(content)
-    else:
-        # Unix: atomic write with secure permissions
-        fd, tmp_path = tempfile.mkstemp(
-            dir=url_path.parent,
-            prefix=".url-",
-            suffix=".tmp",
-        )
-        try:
-            os.write(fd, content.encode())
-            os.fchmod(fd, 0o600)
-            os.close(fd)
-            os.rename(tmp_path, url_path)
-        except Exception:
-            os.close(fd)
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
+    write_machine_state(
+        base_dir=config_dir,
+        written_by="shipper-save-url",
+        runtime_url=normalized_url,
+    )
 
 
 def sanitize_machine_name(name: str) -> str:
@@ -240,55 +198,15 @@ def sanitize_machine_name(name: str) -> str:
 
 def load_machine_name(config_dir: Path | None = None) -> str | None:
     """Load the configured Longhouse machine label."""
-    machine_path = _get_machine_name_path(config_dir)
-
-    if machine_path.exists():
-        try:
-            machine_name = machine_path.read_text().strip()
-            if machine_name:
-                return machine_name
-        except (OSError, IOError):
-            pass
-
-    return None
+    state = load_machine_state(config_dir)
+    return state.machine_name if state else None
 
 
 def save_machine_name(name: str, config_dir: Path | None = None) -> None:
     """Save the machine name label to Longhouse-owned machine state."""
-    import sys
-    import tempfile
-
-    machine_path = _get_machine_name_path(config_dir)
-    machine_path.parent.mkdir(parents=True, exist_ok=True)
-    content = name.strip() + "\n"
-
-    if sys.platform == "win32":
-        machine_path.write_text(content)
-    else:
-        fd, tmp_path = tempfile.mkstemp(
-            dir=machine_path.parent,
-            prefix=".machine-name-",
-            suffix=".tmp",
-        )
-        try:
-            os.write(fd, content.encode())
-            os.fchmod(fd, 0o600)
-            os.close(fd)
-            os.rename(tmp_path, machine_path)
-        except Exception:
-            os.close(fd)
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-            raise
-
-
-def _get_machine_name_path(config_dir: Path | None = None) -> Path:
-    """Get the path to the machine name file."""
-    return get_machine_name_path(config_dir)
-
-
-def _get_url_path(config_dir: Path | None = None) -> Path:
-    """Get the path to the Longhouse URL file."""
-    return get_machine_target_url_path(config_dir)
+    normalized_name = sanitize_machine_name(name)
+    write_machine_state(
+        base_dir=config_dir,
+        written_by="shipper-save-machine-name",
+        machine_name=normalized_name,
+    )

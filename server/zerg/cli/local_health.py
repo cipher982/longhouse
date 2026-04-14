@@ -10,10 +10,11 @@ from pathlib import Path
 
 import typer
 
-from zerg.cli.config_file import get_browser_default_url
+from zerg.cli.config_file import load_config
 from zerg.services.desktop_app import build_snapshot_arguments
 from zerg.services.local_health import collect_local_health
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.machine_state import normalize_runtime_url
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
 from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
@@ -142,6 +143,31 @@ def _prebuilt_runtime_artifact(component: RuntimeComponent):
     return resolve_installed_runtime_artifact(component)
 
 
+def _resolve_local_runtime_url(claude_dir: str | None) -> str | None:
+    browser_config_dir = Path(claude_dir) if claude_dir else None
+    config = load_config(claude_dir=browser_config_dir)
+
+    public_url = normalize_runtime_url(config.server.public_url)
+    if public_url:
+        return public_url
+
+    host = str(config.server.host or "").strip()
+    port = int(config.server.port or 0)
+    if not host or port <= 0:
+        return None
+
+    if host == "0.0.0.0":
+        client_host = "127.0.0.1"
+    elif host in {"::", "[::]"}:
+        client_host = "[::1]"
+    elif ":" in host and not host.startswith("["):
+        client_host = f"[{host}]"
+    else:
+        client_host = host
+
+    return f"http://{client_host}:{port}"
+
+
 def _launch_desktop_surface(
     *,
     product: str,
@@ -151,8 +177,7 @@ def _launch_desktop_surface(
     allow_source_fallback: bool = False,
 ) -> None:
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
-    browser_config_dir = Path(claude_dir) if claude_dir else None
-    ui_url = get_browser_default_url(claude_dir=browser_config_dir) or get_zerg_url(config_dir)
+    ui_url = get_zerg_url(config_dir) or _resolve_local_runtime_url(claude_dir)
     health_arguments = build_snapshot_arguments(claude_dir=claude_dir)
 
     prebuilt_artifact = _prebuilt_runtime_artifact(component) if component is not None else None

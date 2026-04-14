@@ -67,14 +67,14 @@ def get_machine_token_path(base_dir: Path | None = None) -> Path:
     return get_machine_state_dir(base_dir) / "device-token"
 
 
-def get_machine_target_url_path(base_dir: Path | None = None) -> Path:
-    """Return the durable machine target URL path."""
-    return get_machine_state_dir(base_dir) / "target-url"
+def get_machine_state_path(base_dir: Path | None = None) -> Path:
+    """Return the canonical machine state file path."""
+    return get_machine_state_dir(base_dir) / "state.json"
 
 
-def get_machine_name_path(base_dir: Path | None = None) -> Path:
-    """Return the configured machine label path."""
-    return get_machine_state_dir(base_dir) / "name"
+def get_machine_state_journal_path(base_dir: Path | None = None) -> Path:
+    """Return the append-only machine state journal path."""
+    return get_machine_state_dir(base_dir) / "state-journal.jsonl"
 
 
 def get_agent_state_dir(base_dir: Path | None = None) -> Path:

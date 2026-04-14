@@ -78,11 +78,15 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
             "claude_dir": None,
             "machine_name": "test-box",
             "menubar": False,
+            "written_by": "onboard",
+            "topology_intent": "serve-local",
         }
     ]
     assert len(saved_configs) == 1
-    assert saved_configs[0].browser.default_url == "http://127.0.0.1:8080"
-    assert saved_configs[0].shipper.api_url == "http://127.0.0.1:8080"
+    assert saved_configs[0].server.host == "127.0.0.1"
+    assert saved_configs[0].server.port == 8080
+    assert saved_configs[0].browser.default_url is None
+    assert saved_configs[0].shipper.api_url is None
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
 
 
@@ -133,6 +137,8 @@ def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
             "claude_dir": None,
             "machine_name": "test-box",
             "menubar": False,
+            "written_by": "onboard",
+            "topology_intent": "serve-local",
         }
     ]
 
@@ -225,6 +231,8 @@ def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch,
             "claude_dir": None,
             "machine_name": "test-box",
             "menubar": True,
+            "written_by": "onboard",
+            "topology_intent": "serve-local",
         }
     ]
     assert ["open", str(app_path)] in subprocess_calls

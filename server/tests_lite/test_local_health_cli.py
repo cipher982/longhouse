@@ -72,8 +72,18 @@ def _write_outbox_file(tmp_path: Path, *, age_seconds: int = 0, name: str = "prs
 def _write_local_config(tmp_path: Path, *, url: str, machine_name: str) -> None:
     machine_dir = tmp_path / "machine"
     machine_dir.mkdir(parents=True, exist_ok=True)
-    (machine_dir / "target-url").write_text(url + "\n")
-    (machine_dir / "name").write_text(machine_name + "\n")
+    (machine_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "config_generation": "test-generation",
+                "runtime_url": url,
+                "machine_name": machine_name,
+                "written_by": "test",
+                "written_at": "2026-04-14T00:00:00Z",
+            }
+        )
+    )
 
 
 def _write_runner_env(tmp_path: Path, *, url: str, runner_name: str) -> Path:
@@ -193,7 +203,7 @@ def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monk
 
 def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, tmp_path: Path):
     service_file = _write_service_plist(tmp_path, machine_name="cinder.local")
-    runner_env = _write_runner_env(tmp_path, url="https://david010.longhouse.ai", runner_name="cinder")
+    runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
     _write_local_config(tmp_path, url="http://127.0.0.1:8080", machine_name="cinder.local")
     _write_engine_status(tmp_path, age_seconds=5)
     monkeypatch.setattr(
@@ -216,7 +226,7 @@ def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, t
 
 def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: Path):
     service_file = _write_service_plist(tmp_path, machine_name="test-box")
-    runner_env = _write_runner_env(tmp_path, url="https://david010.longhouse.ai", runner_name="cinder")
+    runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
     _write_local_config(
         tmp_path,
         url="https://<typer.models.OptionInfo object at 0x1234>",
@@ -235,7 +245,7 @@ def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: 
     assert snapshot["launch_readiness"]["stored_url"] is None
     assert "config_url_runner_url_mismatch" not in snapshot["reasons"]
     assert any(
-        action == "Run: longhouse connect --install --url https://david010.longhouse.ai --machine-name cinder"
+        action == "Run: longhouse connect --install --url https://demo.longhouse.test --machine-name cinder"
         for action in snapshot["suggested_actions"]
     )
 
@@ -413,7 +423,7 @@ def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path
         calls.append({"command": command, "check": check, "cwd": cwd})
 
     monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
-    monkeypatch.setattr(local_health_cli, "get_browser_default_url", lambda claude_dir=None: "https://david010.longhouse.ai")
+    monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://demo.longhouse.test")
     monkeypatch.setattr(local_health_cli, "_prebuilt_runtime_artifact", lambda component: None)
 
     result = runner.invoke(
@@ -441,8 +451,8 @@ def test_local_health_window_launch_without_url(monkeypatch):
         calls.append(command)
 
     monkeypatch.setattr(local_health_cli.subprocess, "run", fake_run)
-    monkeypatch.setattr(local_health_cli, "get_browser_default_url", lambda claude_dir=None: None)
     monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: None)
+    monkeypatch.setattr(local_health_cli, "_resolve_local_runtime_url", lambda claude_dir=None: None)
     monkeypatch.setattr(local_health_cli, "_prebuilt_runtime_artifact", lambda component: None)
 
     result = runner.invoke(app, ["local-health", "window"])
@@ -471,7 +481,7 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
             launch_path="/Applications/Longhouse.app/Contents/MacOS/Longhouse",
         ),
     )
-    monkeypatch.setattr(local_health_cli, "get_browser_default_url", lambda claude_dir=None: "https://longhouse.ai")
+    monkeypatch.setattr(local_health_cli, "get_zerg_url", lambda config_dir=None: "https://longhouse.ai")
 
     result = runner.invoke(app, ["local-health", "menubar"])
 

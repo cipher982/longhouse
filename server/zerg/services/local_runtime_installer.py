@@ -11,15 +11,14 @@ from dataclasses import dataclass
 
 from zerg.services.desktop_app import install_desktop_app_service
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.machine_state import write_machine_state
 from zerg.services.runtime_artifacts import InstalledRuntimeBinary
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import ensure_runtime_binary
 from zerg.services.shipper import install_hooks
 from zerg.services.shipper import install_service
 from zerg.services.shipper import sanitize_machine_name
-from zerg.services.shipper import save_machine_name
 from zerg.services.shipper import save_token
-from zerg.services.shipper import save_zerg_url
 
 
 @dataclass(frozen=True)
@@ -44,16 +43,23 @@ def install_local_runtime(
     claude_dir: str | None,
     machine_name: str,
     menubar: bool,
+    written_by: str = "connect-install",
+    topology_intent: str | None = None,
 ) -> LocalRuntimeInstallResult:
     """Install the machine agent, CLI hooks, and optional desktop app."""
 
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
-    save_zerg_url(url, config_dir)
+    resolved_name = sanitize_machine_name(machine_name)
+    write_machine_state(
+        base_dir=config_dir,
+        written_by=written_by,
+        runtime_url=url,
+        machine_name=resolved_name,
+        desktop_app_enabled=menubar,
+        topology_intent=topology_intent,
+    )
     if token:
         save_token(token, config_dir)
-
-    resolved_name = sanitize_machine_name(machine_name)
-    save_machine_name(resolved_name, config_dir)
 
     engine_runtime = ensure_runtime_binary(RuntimeComponent.ENGINE)
     service_result = install_service(

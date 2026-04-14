@@ -469,6 +469,8 @@ def onboard(
                     claude_dir=None,
                     machine_name=socket.gethostname(),
                     menubar=install_menubar,
+                    written_by="onboard",
+                    topology_intent="serve-local",
                 )
                 installed_desktop_app = install_menubar and bool(getattr(install_result, "desktop_app_result", None))
                 typer.secho("  [OK] Machine agent installed for automatic imports", fg=typer.colors.GREEN)
@@ -508,8 +510,6 @@ def onboard(
         config = load_config(config_path=config_path)
         config.server.host = host
         config.server.port = port
-        config.browser.default_url = api_url
-        config.shipper.api_url = api_url
         save_loaded_config(config, config_path=config_path)
         typer.secho(f"  [OK] Config saved: {config_path}", fg=typer.colors.GREEN)
     except Exception as e:

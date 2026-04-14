@@ -22,11 +22,9 @@ from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
-from zerg.services.longhouse_paths import get_machine_name_path
-from zerg.services.longhouse_paths import get_machine_target_url_path
 from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.services.machine_state import read_machine_state
 from zerg.services.shipper.service import get_service_info
-from zerg.services.shipper.token import normalize_zerg_url
 
 SCHEMA_VERSION = 1
 ENGINE_FRESH_SECONDS = 30
@@ -141,14 +139,14 @@ def _recent_touch_entry(source_path: str, provider: str, last_updated: str) -> d
 
 
 def _collect_local_config(base_dir: Path) -> dict[str, Any]:
-    url_path = get_machine_target_url_path(base_dir)
-    machine_name_path = get_machine_name_path(base_dir)
-    stored_url = normalize_zerg_url(_read_trimmed_file(url_path))
+    state_path, machine_state, state_error = read_machine_state(base_dir)
     return {
-        "url_path": str(url_path),
-        "machine_name_path": str(machine_name_path),
-        "stored_url": stored_url,
-        "machine_name": _read_trimmed_file(machine_name_path),
+        "state_path": str(state_path),
+        "state_exists": state_path.exists(),
+        "state_error": state_error,
+        "config_generation": machine_state.config_generation if machine_state else None,
+        "stored_url": machine_state.runtime_url if machine_state else None,
+        "machine_name": machine_state.machine_name if machine_state else None,
     }
 
 
@@ -268,8 +266,17 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
 
     stored_url = str(config.get("stored_url") or "").strip() or None
     machine_name = str(config.get("machine_name") or "").strip() or None
+    state_exists = bool(config.get("state_exists"))
+    state_error = str(config.get("state_error") or "").strip() or None
     runner_name = str(runner.get("runner_name") or "").strip() or None
     runner_urls = [str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()]
+
+    if state_error:
+        reasons.append("machine_state_invalid")
+        _with_action(actions, "Run: longhouse connect --install")
+    elif not state_exists and (service_machine_name or runner.get("exists")):
+        reasons.append("machine_state_missing")
+        _with_action(actions, "Run: longhouse connect --install")
 
     if stored_url and runner_urls and stored_url not in runner_urls:
         reasons.append("config_url_runner_url_mismatch")
@@ -293,7 +300,7 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         reasons.append("service_runner_name_mismatch")
         _with_action(actions, "Run: longhouse connect --install")
 
-    configured = bool(stored_url or machine_name or service_machine_name or runner.get("exists"))
+    configured = bool(state_exists or stored_url or machine_name or service_machine_name or runner.get("exists"))
 
     if reasons:
         state = "broken"
@@ -312,6 +319,9 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         "suggested_actions": actions,
         "stored_url": stored_url,
         "machine_name": machine_name,
+        "state_exists": state_exists,
+        "state_error": state_error,
+        "config_generation": config.get("config_generation"),
         "service_machine_name": service_machine_name,
         "runner": runner,
     }
@@ -729,6 +739,8 @@ def _classify_health(
         if any(
             reason in reasons
             for reason in (
+                "machine_state_invalid",
+                "machine_state_missing",
                 "config_url_runner_url_mismatch",
                 "machine_name_runner_name_mismatch",
                 "service_machine_name_mismatch",

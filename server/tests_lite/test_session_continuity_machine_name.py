@@ -6,7 +6,7 @@ def test_get_machine_name_label_prefers_saved_machine_name(tmp_path, monkeypatch
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
     machine_dir = tmp_path / ".longhouse" / "machine"
     machine_dir.mkdir(parents=True)
-    (machine_dir / "name").write_text("work-laptop\n")
+    (machine_dir / "state.json").write_text('{"machine_name":"work-laptop"}')
 
     assert session_continuity.get_machine_name_label() == "work-laptop"
 
