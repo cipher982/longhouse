@@ -30,6 +30,7 @@ export {
   getToolDuration,
   getToolExitCode,
   getToolSummary,
+  isAgentToolInteraction,
   isOutsideActiveContext,
   parseLonghouseOutput,
   timelineItemContainsSelection,
