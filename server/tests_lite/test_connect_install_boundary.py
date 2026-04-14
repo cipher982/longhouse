@@ -213,6 +213,41 @@ def test_handle_status_shows_ambient_app_bundle_details(monkeypatch, capsys):
     assert "Launch: /Applications/Longhouse.app/Contents/MacOS/Longhouse" in output
 
 
+def test_handle_status_accepts_local_source_build_desktop_app(monkeypatch, capsys):
+    monkeypatch.setattr(
+        connect,
+        "get_service_info",
+        lambda: {
+            "platform": "macos",
+            "status": "running",
+            "service_name": "com.longhouse.shipper",
+            "service_file": "/tmp/shipper.plist",
+            "log_path": "/tmp/engine.log",
+        },
+    )
+    monkeypatch.setattr(connect, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(
+        connect,
+        "get_desktop_app_service_info",
+        lambda: {
+            "status": "running",
+            "service_name": "ai.longhouse.app",
+            "service_file": "/tmp/menubar.plist",
+            "log_path": "/tmp/menubar.log",
+            "artifact_path": "/Applications/Longhouse.app",
+            "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+            "runtime_mode": "source-build",
+            "bundle_version": "0.0.0-dev",
+        },
+    )
+
+    connect._handle_status()
+
+    output = capsys.readouterr().out
+    assert "Desktop App runtime: local source build (0.0.0-dev)" in output
+    assert "install is missing, broken, or unsupported" not in output
+
+
 def test_connect_hooks_only_exits_with_error(monkeypatch):
     monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: "https://example.com")
     monkeypatch.setattr(connect, "load_token", lambda config_dir=None: None)

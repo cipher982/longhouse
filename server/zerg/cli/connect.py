@@ -818,7 +818,13 @@ def _handle_status() -> None:
                 typer.echo(f"App: {artifact_path}")
             if launch_path:
                 typer.echo(f"Launch: {launch_path}")
-            if runtime_mode == "broken-install":
+            if runtime_mode == "source-build":
+                version = menubar.get("bundle_version")
+                detail = "Desktop App runtime: local source build"
+                if version:
+                    detail = f"{detail} ({version})"
+                typer.secho(detail, fg=typer.colors.GREEN)
+            elif runtime_mode == "broken-install":
                 typer.secho(
                     "Desktop App runtime: install is missing, broken, or unsupported (run: longhouse connect --install)",
                     fg=typer.colors.YELLOW,

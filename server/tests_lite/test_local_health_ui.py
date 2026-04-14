@@ -15,6 +15,21 @@ from zerg.services import desktop_app
 from zerg.services.shipper.service import Platform
 
 
+def _write_app_bundle(app_bundle: Path, *, version: str) -> None:
+    contents = app_bundle / "Contents"
+    macos_dir = contents / "MacOS"
+    macos_dir.mkdir(parents=True, exist_ok=True)
+    (macos_dir / "Longhouse").write_text("#!/bin/sh\n", encoding="utf-8")
+    (contents / "Info.plist").write_bytes(
+        plistlib.dumps(
+            {
+                "CFBundleShortVersionString": version,
+                "CFBundleVersion": version,
+            }
+        )
+    )
+
+
 def test_build_local_health_command_includes_current_python_and_claude_dir():
     command = desktop_app.build_local_health_command(claude_dir="/tmp/claude")
     arguments = desktop_app.build_local_health_arguments(claude_dir="/tmp/claude")
@@ -145,12 +160,13 @@ def test_get_desktop_app_service_info_reads_legacy_plist_log_dir(monkeypatch, tm
     home = tmp_path / "home"
     launch_agents = home / "Library" / "LaunchAgents"
     launch_agents.mkdir(parents=True)
+    legacy_app = tmp_path / "Legacy" / "Longhouse.app"
     plist_path = launch_agents / "com.longhouse.local-health-menubar.plist"
     plist_path.write_bytes(
         plistlib.dumps(
             {
                 "Label": "com.longhouse.local-health-menubar",
-                "ProgramArguments": ["/Applications/Longhouse.app/Contents/MacOS/Longhouse"],
+                "ProgramArguments": [str(legacy_app / "Contents" / "MacOS" / "Longhouse")],
                 "StandardOutPath": "/tmp/custom-claude/logs/local-health-menubar.stdout.log",
             }
         )
@@ -166,3 +182,32 @@ def test_get_desktop_app_service_info_reads_legacy_plist_log_dir(monkeypatch, tm
     assert info["service_name"] == "com.longhouse.local-health-menubar"
     assert info["log_path"] == "/tmp/custom-claude/logs/local-health-menubar.*.log"
     assert info["runtime_mode"] == "broken-install"
+
+
+def test_get_desktop_app_service_info_marks_local_source_build(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    launch_agents = home / "Library" / "LaunchAgents"
+    launch_agents.mkdir(parents=True)
+    app_bundle = tmp_path / "Applications" / "Longhouse.app"
+    _write_app_bundle(app_bundle, version="0.0.0-dev")
+    plist_path = launch_agents / "ai.longhouse.app.plist"
+    plist_path.write_bytes(
+        plistlib.dumps(
+            {
+                "Label": "ai.longhouse.app",
+                "ProgramArguments": [str(app_bundle / "Contents" / "MacOS" / "Longhouse")],
+            }
+        )
+    )
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(desktop_app, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(desktop_app, "get_desktop_app_service_status", lambda: "running")
+    monkeypatch.setattr(desktop_app, "resolve_installed_runtime_artifact", lambda component: None)
+    monkeypatch.setattr(desktop_app, "desktop_app_canonical_bundle_path", lambda: app_bundle)
+
+    info = desktop_app.get_desktop_app_service_info()
+
+    assert info["service_name"] == "ai.longhouse.app"
+    assert info["runtime_mode"] == "source-build"
+    assert info["bundle_version"] == "0.0.0-dev"
