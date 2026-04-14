@@ -67,6 +67,25 @@ read_trimmed_file() {
   fi
 }
 
+read_machine_state_field() {
+  local field="$1"
+  local state_path="$LONGHOUSE_HOME/machine/state.json"
+  [[ -f "$state_path" ]] || return 0
+
+  python3 - "$state_path" "$field" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+field = sys.argv[2]
+payload = json.loads(path.read_text(encoding="utf-8"))
+value = payload.get(field)
+if isinstance(value, str):
+    print(value.strip())
+PY
+}
+
 current_version() {
   python3 - "$SERVER_PROJECT/pyproject.toml" <<'PY'
 import sys
@@ -85,13 +104,13 @@ resolve_url() {
   fi
 
   local configured_url
-  configured_url="$(read_trimmed_file "$LONGHOUSE_HOME/machine/target-url")"
+  configured_url="$(read_machine_state_field runtime_url)"
   if [[ -n "$configured_url" ]]; then
     printf '%s\n' "$configured_url"
     return
   fi
 
-  fail "No configured Longhouse URL found. Pass --url or run onboarding first."
+  fail "No canonical machine state found at $LONGHOUSE_HOME/machine/state.json. Pass --url or run longhouse connect --install once."
 }
 
 resolve_machine_name() {
@@ -101,7 +120,7 @@ resolve_machine_name() {
   fi
 
   local configured_name
-  configured_name="$(read_trimmed_file "$LONGHOUSE_HOME/machine/name")"
+  configured_name="$(read_machine_state_field machine_name)"
   if [[ -n "$configured_name" ]]; then
     printf '%s\n' "$configured_name"
     return
@@ -124,6 +143,15 @@ install_engine_from_source() {
 
   ln -sf "$ENGINE_DIR/target/release/longhouse-engine" "$HOME/.local/bin/longhouse-engine"
   log "Engine ready at $HOME/.local/bin/longhouse-engine"
+}
+
+install_cli_from_source() {
+  require_cmd uv
+
+  log "==> Installing Longhouse CLI from current repo source"
+  uv tool install --editable "$SERVER_PROJECT" --force >/dev/null
+  log "CLI ready at $(command -v longhouse)"
+  log "CLI version: $(longhouse --version)"
 }
 
 build_desktop_app_bundle() {
@@ -169,6 +197,11 @@ run_repo_longhouse() {
 
 run_check() {
   log "==> Installed runtime status"
+  if command -v longhouse >/dev/null 2>&1; then
+    log "CLI: $(command -v longhouse) ($(longhouse --version))"
+  else
+    log "CLI: not found on PATH"
+  fi
   run_repo_longhouse connect --status
   log ""
   log "==> Local health"
@@ -179,17 +212,19 @@ run_refresh() {
   local url
   local machine_name
   local app_bundle=""
-  url="$(resolve_url)"
-  machine_name="$(resolve_machine_name)"
 
   require_cmd uv
   require_cmd python3
+  url="$(resolve_url)"
+  machine_name="$(resolve_machine_name)"
 
   if (( SKIP_ENGINE == 0 )); then
     install_engine_from_source
   else
     log "==> Skipping engine rebuild"
   fi
+
+  install_cli_from_source
 
   if [[ "$(uname -s)" == "Darwin" ]] && (( MENUBAR == 1 )); then
     app_bundle="$(build_desktop_app_bundle)"

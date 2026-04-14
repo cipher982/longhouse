@@ -14,7 +14,7 @@
 #
 # Requirements:
 #   - longhouse-engine daemon running (launchd: com.longhouse.shipper)
-#   - ~/.longhouse/machine/{target-url,device-token} present
+#   - ~/.longhouse/machine/{state.json,device-token} present
 #   - jq, curl
 
 set -euo pipefail
@@ -26,7 +26,7 @@ else
   LONGHOUSE_HOME="$(dirname "$CLAUDE_DIR")/.longhouse"
 fi
 OUTBOX="$LONGHOUSE_HOME/agent/outbox"
-URL_FILE="$LONGHOUSE_HOME/machine/target-url"
+STATE_FILE="$LONGHOUSE_HOME/machine/state.json"
 TOKEN_FILE="$LONGHOUSE_HOME/machine/device-token"
 
 PASS_COUNT=0
@@ -49,13 +49,13 @@ DAEMON_RUNNING=$(launchctl list 2>/dev/null | grep -c "com.longhouse.shipper" ||
   && pass "daemon running (com.longhouse.shipper)" \
   || { fail "daemon not running — start with: longhouse connect"; exit 1; }
 
-[ -f "$URL_FILE" ]   && pass "target-url present"   || { fail "missing $URL_FILE"; exit 1; }
+[ -f "$STATE_FILE" ] && pass "state.json present"   || { fail "missing $STATE_FILE"; exit 1; }
 [ -f "$TOKEN_FILE" ] && pass "device-token present" || { fail "missing $TOKEN_FILE"; exit 1; }
 
-API_URL="$(tr -d '[:space:]' < "$URL_FILE")"
+API_URL="$(jq -r '.runtime_url // empty' "$STATE_FILE" | tr -d '[:space:]')"
 TOKEN="$(tr -d '[:space:]' < "$TOKEN_FILE")"
 
-[ -n "$API_URL" ]  && pass "API URL: $API_URL" || { fail "target-url is empty"; exit 1; }
+[ -n "$API_URL" ]  && pass "API URL: $API_URL" || { fail "runtime_url missing in state.json"; exit 1; }
 [ -n "$TOKEN" ]    && pass "device token present" || { fail "device-token is empty"; exit 1; }
 
 # ---------------------------------------------------------------------------
