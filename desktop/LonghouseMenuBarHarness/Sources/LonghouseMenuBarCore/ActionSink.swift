@@ -8,7 +8,6 @@ public enum HarnessAction: String, Codable {
     case openLogs
     case openLonghouse
     case copyDiagnostics
-    case upgradeNow
     case quitApp
 }
 
@@ -157,22 +156,6 @@ public struct SpyHealthActionSink: HealthActionSink {
                 title: "Diagnostics copy failed",
                 detail: "Longhouse could not encode the current status snapshot."
             )
-        case .upgradeNow:
-            let command = upgradeCommand(for: snapshot)
-            if openTerminal(command: command) {
-                return feedback(
-                    for: action,
-                    style: .success,
-                    title: "Upgrade opened in Terminal",
-                    detail: command
-                )
-            }
-            return feedback(
-                for: action,
-                style: .failure,
-                title: "Upgrade could not open",
-                detail: command
-            )
         case .quitApp:
             Task { @MainActor in
                 NSApplication.shared.terminate(nil)
@@ -216,14 +199,6 @@ public struct SpyHealthActionSink: HealthActionSink {
         }
         _ = try? handle.seekToEnd()
         try? handle.write(contentsOf: Data(line.utf8))
-    }
-
-    private func upgradeCommand(for snapshot: HealthSnapshot) -> String {
-        let command = snapshot.updateInfo?.upgradeCommand.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let command, !command.isEmpty {
-            return command
-        }
-        return "longhouse upgrade"
     }
 
     private func startBundledSetup() -> URL? {
@@ -418,13 +393,6 @@ public struct SpyHealthActionSink: HealthActionSink {
                 style: .info,
                 title: "Copy diagnostics dry run recorded",
                 detail: "The harness logged the clipboard action without touching the pasteboard."
-            )
-        case .upgradeNow:
-            return feedback(
-                for: action,
-                style: .info,
-                title: "Upgrade dry run recorded",
-                detail: "The harness logged the upgrade action without opening Terminal."
             )
         case .quitApp:
             return feedback(

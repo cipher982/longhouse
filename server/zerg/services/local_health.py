@@ -496,27 +496,6 @@ def _collect_service(base_dir: Path) -> dict[str, Any]:
     return get_service_info(str(base_dir))
 
 
-def _collect_version_info() -> dict[str, Any] | None:
-    """Read cached PyPI update check — no network call, cache only."""
-    try:
-        # Import lazily so the service layer does not take a hard module-import
-        # dependency on CLI startup order.
-        from zerg.cli.update_manager import load_update_cache
-
-        cached = load_update_cache()
-    except Exception:
-        return None
-    if cached is None:
-        return None
-    return {
-        "installed_version": cached.installed_version,
-        "latest_version": cached.latest_version,
-        "update_available": cached.update_available,
-        "upgrade_command": cached.upgrade_command,
-        "checked_at": cached.checked_at,
-    }
-
-
 def _collect_activity_summary(base_dir: Path, *, now: datetime) -> dict[str, Any]:
     db_path = get_agent_db_path(base_dir)
     summary = {
@@ -898,7 +877,6 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "outbox": outbox,
         "activity_summary": activity_summary,
         "launch_readiness": launch_readiness,
-        "update_info": _collect_version_info(),
         "thresholds": {
             "engine_fresh_seconds": ENGINE_FRESH_SECONDS,
             "engine_stale_seconds": ENGINE_STALE_SECONDS,

@@ -392,34 +392,6 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func decodesUpdateInfoFromSnakeCaseJSON() throws {
-        let data = Data("""
-        {
-          "health_state": "healthy",
-          "severity": "green",
-          "headline": "Longhouse shipping healthy",
-          "reasons": [],
-          "suggested_actions": [],
-          "update_info": {
-            "installed_version": "0.1.8",
-            "latest_version": "0.1.9",
-            "update_available": true,
-            "upgrade_command": "uv tool upgrade longhouse",
-            "checked_at": "2026-04-11T10:00:00+00:00"
-          }
-        }
-        """.utf8)
-
-        let snapshot = try HealthSnapshotDecoder.decode(data: data)
-
-        #expect(snapshot.updateInfo?.installedVersion == "0.1.8")
-        #expect(snapshot.updateInfo?.latestVersion == "0.1.9")
-        #expect(snapshot.updateInfo?.updateAvailable == true)
-        #expect(snapshot.updateInfo?.upgradeCommand == "uv tool upgrade longhouse")
-        #expect(snapshot.updateInfo?.checkedAt == "2026-04-11T10:00:00+00:00")
-    }
-
-    @Test
     func relativeLabelsAdvanceAgainstPresentationTime() {
         let snapshot = HealthSnapshot(
             schemaVersion: 1,

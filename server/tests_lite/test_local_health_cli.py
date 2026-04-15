@@ -569,7 +569,7 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# update_info in health snapshot
+# local-health omits CLI-only update cache state
 # ---------------------------------------------------------------------------
 
 
@@ -597,73 +597,22 @@ def _write_update_cache(
     return path
 
 
-def test_collect_local_health_includes_update_info_when_update_available(monkeypatch, tmp_path: Path):
+def test_collect_local_health_omits_update_info_even_when_cli_update_cache_exists(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
-
-    # Point update_manager at our tmp dir for the cache file
-    monkeypatch.setattr("zerg.cli.update_manager._get_longhouse_home", lambda: tmp_path)
     _write_update_cache(tmp_path, update_available=True, installed="0.1.8", latest="0.1.9")
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert snapshot["update_info"] is not None
-    info = snapshot["update_info"]
-    assert info["update_available"] is True
-    assert info["installed_version"] == "0.1.8"
-    assert info["latest_version"] == "0.1.9"
-    assert info["upgrade_command"] == "uv tool upgrade longhouse"
-    assert "checked_at" in info
+    assert "update_info" not in snapshot
 
 
-def test_collect_local_health_includes_update_info_when_up_to_date(monkeypatch, tmp_path: Path):
-    _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
-    _write_engine_status(tmp_path, age_seconds=5)
-
-    monkeypatch.setattr("zerg.cli.update_manager._get_longhouse_home", lambda: tmp_path)
-    _write_update_cache(tmp_path, update_available=False, installed="0.1.9", latest="0.1.9")
-
-    snapshot = local_health_service.collect_local_health(tmp_path)
-
-    assert snapshot["update_info"] is not None
-    assert snapshot["update_info"]["update_available"] is False
-
-
-def test_collect_local_health_update_info_is_none_when_no_cache(monkeypatch, tmp_path: Path):
-    _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
-    _write_engine_status(tmp_path, age_seconds=5)
-
-    # No update-check.json written — cache is absent
-    monkeypatch.setattr("zerg.cli.update_manager._get_longhouse_home", lambda: tmp_path)
-
-    snapshot = local_health_service.collect_local_health(tmp_path)
-
-    assert snapshot["update_info"] is None
-
-
-def test_collect_local_health_update_info_survives_corrupt_cache(monkeypatch, tmp_path: Path):
-    _disable_real_runner_env(monkeypatch, tmp_path)
-    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
-    _write_engine_status(tmp_path, age_seconds=5)
-
-    monkeypatch.setattr("zerg.cli.update_manager._get_longhouse_home", lambda: tmp_path)
-    (tmp_path / "update-check.json").write_text("not-json{{")
-
-    snapshot = local_health_service.collect_local_health(tmp_path)
-
-    # Corrupt cache must not crash — just returns None
-    assert snapshot["update_info"] is None
-
-
-def test_update_info_present_in_json_cli_output(monkeypatch, tmp_path: Path):
+def test_update_info_not_present_in_json_cli_output(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path / ".longhouse", age_seconds=5)
 
-    monkeypatch.setattr("zerg.cli.update_manager._get_longhouse_home", lambda: tmp_path / ".longhouse")
     _write_update_cache(tmp_path / ".longhouse", update_available=True)
 
     runner = CliRunner()
@@ -671,4 +620,4 @@ def test_update_info_present_in_json_cli_output(monkeypatch, tmp_path: Path):
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["update_info"]["update_available"] is True
+    assert "update_info" not in payload
