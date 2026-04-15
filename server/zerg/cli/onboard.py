@@ -107,6 +107,16 @@ def _check_server_health(host: str = "127.0.0.1", port: int = 8080, timeout: flo
         return False
 
 
+def _check_server_health_at_url(url: str, timeout: float = 2.0) -> bool:
+    """Check if server is responding at a given URL."""
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.get(f"{url.rstrip('/')}/api/health")
+            return response.status_code == 200
+    except Exception:
+        return False
+
+
 def _wait_for_server(host: str = "127.0.0.1", port: int = 8080, timeout: float = 30.0) -> bool:
     """Wait for server to become healthy."""
     start = time.time()
@@ -365,10 +375,48 @@ def onboard(
         "--no-browser",
         help="Skip auto-opening Longhouse at the end of onboarding.",
     ),
+    remote_url: str = typer.Option(
+        None,
+        "--remote-url",
+        help="Skip local runtime and connect to an existing Longhouse at this URL",
+    ),
 ) -> None:
-    """Run the default local quickstart."""
+    """Run the default local quickstart or connect to existing Longhouse."""
     typer.echo("")
     typer.secho("Welcome to Longhouse", fg=typer.colors.CYAN, bold=True)
+    typer.echo("")
+
+    # Topology choice: decide where the server runs (unless --remote-url specified)
+    if remote_url:
+        # User specified --remote-url flag, use remote path directly
+        topology_intent = "connect-remote"
+        api_url = remote_url
+        skip_local_server = True
+    else:
+        # Interactive topology choice
+        typer.echo("Where should your Longhouse server run?")
+        typer.echo("")
+        typer.echo("  1. Try on this Mac (localhost, trial-mode, works but stops when laptop sleeps)")
+        typer.echo("  2. Connect to existing Longhouse (agent on this Mac, server on VPS/homelab/Mac mini)")
+        typer.echo("")
+
+        import click
+
+        choice = typer.prompt("Choose", type=click.Choice(["1", "2"], case_sensitive=False), default="1")
+
+        if choice == "2":
+            # Remote server path
+            topology_intent = "connect-remote"
+            remote_url = typer.prompt("URL of your Longhouse server", default="https://longhouse.example.com")
+            api_url = remote_url
+            skip_local_server = True
+        else:
+            # Local trial path (default)
+            topology_intent = "serve-local"
+            api_url = _derive_client_url(host, port)
+            skip_local_server = False
+
+    typer.echo("")
     typer.echo("Install Longhouse, open it, and find one prior session. Start Longhouse sessions later when you want control.")
     typer.echo("")
 
@@ -409,43 +457,52 @@ def onboard(
 
     typer.echo("")
 
-    # Step 2: Start the local runtime
-    typer.secho("Step 2: Start the local runtime", fg=typer.colors.BLUE, bold=True)
-    typer.echo("")
-
-    api_url = _derive_client_url(host, port)
-
-    if no_server:
-        typer.echo("  Skipping local runtime startup (--no-server)")
-    else:
-        # Check if server is already running
-        is_running, pid = _is_server_running()
-
-        if is_running:
-            typer.secho(f"  [OK] Local runtime already running (PID {pid})", fg=typer.colors.GREEN)
-        elif _check_server_health(host, port):
-            typer.secho(f"  [OK] Local runtime responding at {api_url}", fg=typer.colors.GREEN)
+    # Step 2: Start the local runtime (or skip if remote)
+    if skip_local_server:
+        typer.secho("Step 2: Connect to existing Longhouse", fg=typer.colors.BLUE, bold=True)
+        typer.echo("")
+        typer.echo(f"  Connecting to {api_url}...")
+        server_healthy = _check_server_health_at_url(api_url)
+        if server_healthy:
+            typer.secho(f"  [OK] Longhouse is responding at {api_url}", fg=typer.colors.GREEN)
         else:
-            typer.echo("  Starting local runtime...")
+            typer.secho(f"  [WARN] Could not reach {api_url}", fg=typer.colors.YELLOW)
+            typer.echo("         Make sure your Longhouse server is running and accessible.")
+    else:
+        typer.secho("Step 2: Start the local runtime", fg=typer.colors.BLUE, bold=True)
+        typer.echo("")
 
-            try:
-                subprocess.run(
-                    ["longhouse", "serve", "--daemon", "--host", host, "--port", str(port)],
-                    check=True,
-                    capture_output=True,
-                )
+        if no_server:
+            typer.echo("  Skipping local runtime startup (--no-server)")
+        else:
+            # Check if server is already running
+            is_running, pid = _is_server_running()
 
-                typer.echo("  Waiting for local runtime...")
-                if _wait_for_server(host, port, timeout=30):
-                    typer.secho(f"  [OK] Local runtime ready at {api_url}", fg=typer.colors.GREEN)
-                else:
-                    typer.secho("  [WARN] Local runtime started but not responding", fg=typer.colors.YELLOW)
-                    typer.echo(f"         Check logs: {_get_longhouse_home() / 'server.log'}")
-            except subprocess.CalledProcessError as e:
-                typer.secho(f"  [ERROR] Failed to start local runtime: {e}", fg=typer.colors.RED)
-                typer.echo("         Try starting manually: longhouse serve")
+            if is_running:
+                typer.secho(f"  [OK] Local runtime already running (PID {pid})", fg=typer.colors.GREEN)
+            elif _check_server_health(host, port):
+                typer.secho(f"  [OK] Local runtime responding at {api_url}", fg=typer.colors.GREEN)
+            else:
+                typer.echo("  Starting local runtime...")
 
-    server_healthy = no_server or _check_server_health(host, port)
+                try:
+                    subprocess.run(
+                        ["longhouse", "serve", "--daemon", "--host", host, "--port", str(port)],
+                        check=True,
+                        capture_output=True,
+                    )
+
+                    typer.echo("  Waiting for local runtime...")
+                    if _wait_for_server(host, port, timeout=30):
+                        typer.secho(f"  [OK] Local runtime ready at {api_url}", fg=typer.colors.GREEN)
+                    else:
+                        typer.secho("  [WARN] Local runtime started but not responding", fg=typer.colors.YELLOW)
+                        typer.echo(f"         Check logs: {_get_longhouse_home() / 'server.log'}")
+                except subprocess.CalledProcessError as e:
+                    typer.secho(f"  [ERROR] Failed to start local runtime: {e}", fg=typer.colors.RED)
+                    typer.echo("         Try starting manually: longhouse serve")
+
+        server_healthy = no_server or _check_server_health(host, port)
 
     typer.echo("")
 
@@ -470,7 +527,7 @@ def onboard(
                     machine_name=socket.gethostname(),
                     menubar=install_menubar,
                     written_by="onboard",
-                    topology_intent="serve-local",
+                    topology_intent=topology_intent,
                 )
                 installed_desktop_app = install_menubar and bool(getattr(install_result, "desktop_app_result", None))
                 typer.secho("  [OK] Machine agent installed for automatic imports", fg=typer.colors.GREEN)
