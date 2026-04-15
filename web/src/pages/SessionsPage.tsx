@@ -580,23 +580,21 @@ export default function SessionsPage() {
               </div>
             }
           />
-          {!demoLoading && (
-            <div className="sessions-guided-steps">
-              <p className="sessions-guided-steps-label">Run this on your machine:</p>
-              <ol className="sessions-guided-steps-list">
-                <li><code>curl -fsSL https://longhouse.ai/install.sh | sh</code> &mdash; install the CLI</li>
-                <li><code>longhouse connect --install</code> &mdash; link this machine and start background import</li>
-                <li><code>longhouse ship</code> &mdash; pull your existing sessions in now</li>
-              </ol>
-              <p className="sessions-guided-cli-hint">
-                Works with{" "}
-                <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
-                <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
-                <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
-                Demo sessions are loading in the background.
-              </p>
-            </div>
-          )}
+          <div className="sessions-guided-steps">
+            <p className="sessions-guided-steps-label">Run this on your machine:</p>
+            <ol className="sessions-guided-steps-list">
+              <li><code>curl -fsSL https://longhouse.ai/install.sh | sh</code> &mdash; install the CLI</li>
+              <li><code>longhouse connect --install</code> &mdash; link this machine and start background import</li>
+              <li><code>longhouse ship</code> &mdash; pull your existing sessions in now</li>
+            </ol>
+            <p className="sessions-guided-cli-hint">
+              Works with{" "}
+              <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
+              <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
+              <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
+              {demoLoading && " Demo sessions are loading in the background."}
+            </p>
+          </div>
           {addRunnerModal}
         </div>
       </PageShell>
