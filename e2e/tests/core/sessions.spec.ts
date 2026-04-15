@@ -212,11 +212,10 @@ test.describe("Sessions Page", () => {
     await page.goto("/timeline");
     await page.waitForSelector('[data-ready="true"]', { timeout: 10000 });
 
-    // If hero state, seed demos first so search input is on toolbar
+    // If hero state, auto-seed fires automatically — wait for toolbar to appear
     const heroEmpty = page.locator(".sessions-hero-empty");
     if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await page.getByRole("button", { name: /Load demo/i }).click();
-      await page.waitForSelector(".sessions-toolbar", { timeout: 15000 });
+      await page.waitForSelector(".sessions-toolbar", { timeout: 20000 });
     }
 
     // Type in search

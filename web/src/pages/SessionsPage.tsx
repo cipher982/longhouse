@@ -543,14 +543,9 @@ export default function SessionsPage() {
         <div className="sessions-hero-empty">
           <EmptyState
             icon={demoLoading ? <Spinner size="lg" /> : undefined}
-            title={demoLoading ? "Loading example sessions..." : "Connect your first machine"}
-            description={
-              demoLoading
-                ? "Seeding a few demo sessions so you can see what Longhouse looks like with real data."
-                : "Run one command on the machine where you use Claude Code, Codex, or Gemini and your sessions will start appearing here."
-            }
+            title="Connect your first machine"
+            description="Run one command on the machine where you use Claude Code, Codex, or Gemini and your sessions will start appearing here."
             action={
-              demoLoading ? undefined : (
               <div className="sessions-guided-actions">
                 <Button
                   variant="primary"
@@ -583,7 +578,7 @@ export default function SessionsPage() {
                   </p>
                 )}
               </div>
-            )}
+            }
           />
           {!demoLoading && (
             <div className="sessions-guided-steps">

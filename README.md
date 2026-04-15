@@ -467,12 +467,8 @@ Onboarding contract (CI). Do not edit unless the README steps change.
   "primary_route": "/timeline",
   "cta_buttons": [
     {
-      "label": "See import steps",
-      "selector": "button:has-text(\"See import steps\")"
-    },
-    {
-      "label": "Load demo sessions instead",
-      "selector": "button:has-text(\"Load demo sessions instead\")"
+      "label": "Connect Machine",
+      "selector": "button:has-text(\"Connect Machine\")"
     }
   ]
 }
