@@ -15,26 +15,15 @@ import {
 } from "../components/ui";
 import { PlusIcon } from "../components/icons";
 import { parseUTC } from "../lib/dateUtils";
+import {
+  formatCompactDuration,
+  formatRunnerVersionValue,
+  normalizeRunnerMetadata,
+  runnerStatusVariant,
+  updatePolicyLabel,
+  versionStatusLabel,
+} from "../lib/runnerPresentation";
 import "../styles/runners.css";
-
-type RunnerMetadataSummary = {
-  platform?: string;
-  arch?: string;
-  hostname?: string;
-};
-
-function normalizeRunnerMetadata(metadata: unknown): RunnerMetadataSummary | null {
-  if (!metadata || typeof metadata !== "object") {
-    return null;
-  }
-
-  const record = metadata as Record<string, unknown>;
-  return {
-    platform: typeof record.platform === "string" ? record.platform : undefined,
-    arch: typeof record.arch === "string" ? record.arch : undefined,
-    hostname: typeof record.hostname === "string" ? record.hostname : undefined,
-  };
-}
 
 function platformLabel(meta: Runner["runner_metadata"]): string {
   const metadata = normalizeRunnerMetadata(meta);
@@ -48,40 +37,6 @@ function platformLabel(meta: Runner["runner_metadata"]): string {
 
 function hostname(meta: Runner["runner_metadata"]): string | null {
   return normalizeRunnerMetadata(meta)?.hostname ?? null;
-}
-
-function getStatusVariant(status: string): "success" | "warning" | "error" | "neutral" {
-  switch (status) {
-    case "online":
-      return "success";
-    case "offline":
-      return "warning";
-    case "revoked":
-      return "error";
-    default:
-      return "neutral";
-  }
-}
-
-function formatCompactDuration(totalSeconds: number): string {
-  const seconds = Math.max(0, Math.floor(totalSeconds));
-  if (seconds < 60) return `${seconds}s`;
-
-  const minutes = Math.floor(seconds / 60);
-  const remSeconds = seconds % 60;
-  if (minutes < 60) {
-    return remSeconds > 0 ? `${minutes}m ${remSeconds}s` : `${minutes}m`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  const remMinutes = minutes % 60;
-  if (hours < 24) {
-    return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
-  }
-
-  const days = Math.floor(hours / 24);
-  const remHours = hours % 24;
-  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
 function formatLastSeen(timestamp: string | null | undefined) {
@@ -122,19 +77,6 @@ function fallbackStatusSummary(status: string): string {
   }
 }
 
-function versionStatusLabel(status: string | null | undefined): string | null {
-  switch (status) {
-    case "current":
-      return "up to date";
-    case "outdated":
-      return "update available";
-    case "ahead":
-      return "ahead of latest";
-    default:
-      return null;
-  }
-}
-
 function versionBadgeVariant(status: string | null | undefined): "success" | "warning" | "neutral" {
   switch (status) {
     case "current":
@@ -144,19 +86,6 @@ function versionBadgeVariant(status: string | null | undefined): "success" | "wa
     default:
       return "neutral";
   }
-}
-
-function formatVersionValue(runner: Runner): string {
-  if (runner.runner_version && runner.latest_runner_version && runner.runner_version !== runner.latest_runner_version) {
-    return `v${runner.runner_version} (latest v${runner.latest_runner_version})`;
-  }
-  if (runner.runner_version) {
-    return `v${runner.runner_version}`;
-  }
-  if (runner.latest_runner_version) {
-    return `Latest v${runner.latest_runner_version}`;
-  }
-  return "Unknown";
 }
 
 function formatVersionHint(runner: Runner): string | null {
@@ -173,19 +102,6 @@ function formatVersionHint(runner: Runner): string | null {
         : "Runner version is ahead of the configured latest build.";
     default:
       return null;
-  }
-}
-
-function updatePolicyLabel(policy: string | null | undefined): string {
-  switch (policy) {
-    case "apply":
-      return "Auto-apply";
-    case "off":
-      return "Updates off";
-    case "notify":
-      return "Notify only";
-    default:
-      return "Policy unknown";
   }
 }
 
@@ -293,7 +209,7 @@ export default function RunnersPage() {
                       </span>
                     )}
                   </div>
-                  <Badge variant={getStatusVariant(runner.status)}>
+                  <Badge variant={runnerStatusVariant(runner.status)}>
                     {runner.status}
                   </Badge>
                 </Card.Header>
@@ -352,7 +268,7 @@ export default function RunnersPage() {
                     <div className="runner-detail-row">
                       <span className="runner-detail-label">Version</span>
                       <div className="runner-detail-stack">
-                        <span className="runner-detail-value">{formatVersionValue(runner)}</span>
+                        <span className="runner-detail-value">{formatRunnerVersionValue(runner)}</span>
                         {formatVersionHint(runner) && (
                           <span className="runner-detail-subvalue">{formatVersionHint(runner)}</span>
                         )}

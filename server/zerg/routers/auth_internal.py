@@ -11,8 +11,8 @@ from fastapi import status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from zerg.auth.jwt_utils import decode_jwt_with_secret_candidates
 from zerg.auth.session_tokens import JWT_SECRET
-from zerg.auth.strategy import _decode_jwt_fallback
 from zerg.config import get_settings
 from zerg.crud import create_user
 from zerg.crud import get_user_by_email
@@ -47,13 +47,7 @@ def _decode_handoff_token(token: str) -> str:
         # secret; CP key fetch is only a best-effort fallback during rotations.
         pass
 
-    payload = None
-    for secret in secrets_to_try:
-        try:
-            payload = _decode_jwt_fallback(token, secret)
-            break
-        except Exception:
-            continue
+    payload = decode_jwt_with_secret_candidates(token, secrets_to_try)
 
     if payload is None:
         raise HTTPException(

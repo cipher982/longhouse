@@ -18,12 +18,12 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from zerg.auth import refresh_tokens
+from zerg.auth.jwt_utils import decode_jwt_with_secret_candidates
 from zerg.auth.session_tokens import ACCESS_TOKEN_LIFETIME
 from zerg.auth.session_tokens import JWT_SECRET
 from zerg.auth.session_tokens import _issue_access_token
 from zerg.auth.session_tokens import _set_refresh_cookie
 from zerg.auth.session_tokens import _set_session_cookie
-from zerg.auth.strategy import _decode_jwt_fallback
 from zerg.config import get_settings
 from zerg.crud import create_user
 from zerg.crud import get_user
@@ -58,15 +58,8 @@ async def _accept_token(response: Response, token: str, db: Session) -> TokenOut
         )
 
     secrets_to_try = [JWT_SECRET]
-    secrets_to_try.extend(k for k in sso_keys_service.get_sso_keys() if k != JWT_SECRET)
-
-    payload: dict[str, Any] | None = None
-    for secret in secrets_to_try:
-        try:
-            payload = _decode_jwt_fallback(token, secret)
-            break
-        except Exception:
-            continue
+    secrets_to_try.extend(sso_keys_service.get_sso_keys())
+    payload: dict[str, Any] | None = decode_jwt_with_secret_candidates(token, secrets_to_try)
 
     if payload is None:
         raise HTTPException(
