@@ -76,7 +76,7 @@ def _start_native_codex_bridge(
     return thread_id, ws_url
 
 
-def _run_native_codex_tui(*, ws_url: str, cwd: Path) -> int:
+def _run_native_codex_tui(*, ws_url: str, cwd: Path, bypass_approvals: bool = False) -> int:
     codex_bin = _check_codex_binary()
     if not codex_bin:
         typer.secho("Session launch requires the 'codex' CLI but it is not installed.", fg=typer.colors.RED)
@@ -84,14 +84,12 @@ def _run_native_codex_tui(*, ws_url: str, cwd: Path) -> int:
     # Connect TUI to the bridge's app-server. The TUI calls thread/start which
     # creates the thread; the bridge daemon observes the thread/started notification
     # and posts idle once it knows which thread to drive.
+    cmd = [codex_bin]
+    if bypass_approvals:
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    cmd += ["--enable", "tui_app_server", "--remote", ws_url]
     completed = subprocess.run(
-        [
-            codex_bin,
-            "--enable",
-            "tui_app_server",
-            "--remote",
-            ws_url,
-        ],
+        cmd,
         check=False,
         cwd=str(cwd),
         env=os.environ.copy(),
@@ -167,6 +165,11 @@ def codex(
         "--claude-dir",
         help="Longhouse config directory (default: ~/.claude).",
     ),
+    bypass_approvals: bool = typer.Option(
+        False,
+        "--dangerously-bypass-approvals-and-sandbox",
+        help="Pass --dangerously-bypass-approvals-and-sandbox to the Codex TUI. Opt-in only.",
+    ),
 ) -> None:
     """Launch a Longhouse Codex session on this machine via the Longhouse API."""
 
@@ -212,16 +215,17 @@ def codex(
         if not _open_session_url(session_url):
             typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
 
+    _bypass_flag = " --dangerously-bypass-approvals-and-sandbox" if bypass_approvals else ""
     if not attach:
-        typer.echo("Attach: " + f"codex --enable tui_app_server --remote {ws_url}")
+        typer.echo("Attach: " + f"codex{_bypass_flag} --enable tui_app_server --remote {ws_url}")
         return
     if not _interactive_stdio():
         typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
-        typer.echo("Attach: " + f"codex --enable tui_app_server --remote {ws_url}")
+        typer.echo("Attach: " + f"codex{_bypass_flag} --enable tui_app_server --remote {ws_url}")
         return
 
     typer.echo("Attaching...")
-    exit_code = _run_native_codex_tui(ws_url=ws_url, cwd=cwd)
+    exit_code = _run_native_codex_tui(ws_url=ws_url, cwd=cwd, bypass_approvals=bypass_approvals)
     if exit_code != 0:
         typer.secho(
             f"Auto-attach exited with code {exit_code}. Run the printed remote resume command manually.",
