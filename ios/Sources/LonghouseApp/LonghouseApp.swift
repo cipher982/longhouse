@@ -42,6 +42,10 @@ final class AppState: ObservableObject {
     @Published var isValidating = true
     @Published var authError: String?
     @Published var hostedAuthAttemptURL: String?
+    /// Path to load after a forced re-login (e.g. /timeline/abc-123).
+    /// Set by the WebView delegate when intercepting a /login redirect.
+    /// Cleared after use so normal logins still land on /timeline.
+    @Published var postLoginPath: String = "/timeline"
 
     init() {
         self.serverURL = KeychainHelper.loadServerURL() ?? ""
@@ -53,6 +57,7 @@ final class AppState: ObservableObject {
     func restoreSession() async {
         isValidating = true
         hostedAuthAttemptURL = nil
+        postLoginPath = "/timeline"
         SharedAuthStore.saveServerURL(serverURL)
         if serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             isAuthenticated = false
@@ -218,9 +223,17 @@ final class AppState: ObservableObject {
     }
 
     /// Called by the WebView delegate when the web app redirects to /login.
-    /// Runs the full sign-out cleanup so no stale state is left behind,
-    /// then drops back to the native LoginView.
-    func signOutAndReturnToLogin() async {
+    /// Extracts the return_to path from the intercepted URL (if any), stores it
+    /// so the WebView can restore context after re-auth, then runs full sign-out.
+    func signOutAndReturnToLogin(interceptedURL: URL? = nil) async {
+        if let url = interceptedURL,
+           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+           let returnTo = components.queryItems?.first(where: { $0.name == "return_to" })?.value,
+           returnTo.hasPrefix("/"), !returnTo.hasPrefix("//") {
+            postLoginPath = returnTo
+        } else {
+            postLoginPath = "/timeline"
+        }
         await signOutLocallyAndRemotely()
     }
 
