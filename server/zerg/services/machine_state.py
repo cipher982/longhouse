@@ -29,6 +29,7 @@ class MachineState:
     machine_name: str | None = None
     topology_intent: str | None = None
     desktop_app_enabled: bool | None = None
+    runner_enabled: bool | None = None
     desired_bundle_version: str | None = None
     written_by: str | None = None
     written_at: str | None = None
@@ -41,6 +42,7 @@ class MachineState:
             "machine_name": self.machine_name,
             "topology_intent": self.topology_intent,
             "desktop_app_enabled": self.desktop_app_enabled,
+            "runner_enabled": self.runner_enabled,
             "desired_bundle_version": self.desired_bundle_version,
             "written_by": self.written_by,
             "written_at": self.written_at,
@@ -115,6 +117,7 @@ def write_machine_state(
     machine_name: object = _MISSING,
     topology_intent: object = _MISSING,
     desktop_app_enabled: object = _MISSING,
+    runner_enabled: object = _MISSING,
     desired_bundle_version: object = _MISSING,
 ) -> MachineState:
     """Persist canonical machine state and append a provenance journal entry."""
@@ -133,6 +136,7 @@ def write_machine_state(
         machine_name=_resolve_machine_name(machine_name, current_state),
         topology_intent=_resolve_text(topology_intent, current_state.topology_intent if current_state else None),
         desktop_app_enabled=_resolve_bool(desktop_app_enabled, current_state.desktop_app_enabled if current_state else None),
+        runner_enabled=_resolve_bool(runner_enabled, current_state.runner_enabled if current_state else None),
         desired_bundle_version=_resolve_text(
             desired_bundle_version,
             current_state.desired_bundle_version if current_state else None,
@@ -176,6 +180,7 @@ def _machine_state_from_payload(payload: dict[str, object]) -> MachineState:
         machine_name=sanitize_machine_name(payload.get("machine_name")),
         topology_intent=_normalize_text(payload.get("topology_intent")),
         desktop_app_enabled=payload.get("desktop_app_enabled") if isinstance(payload.get("desktop_app_enabled"), bool) else None,
+        runner_enabled=payload.get("runner_enabled") if isinstance(payload.get("runner_enabled"), bool) else None,
         desired_bundle_version=_normalize_text(payload.get("desired_bundle_version")),
         written_by=_normalize_text(payload.get("written_by")),
         written_at=_normalize_text(payload.get("written_at")),

@@ -75,21 +75,26 @@ def _write_outbox_file(tmp_path: Path, *, age_seconds: int = 0, name: str = "prs
     os.utime(path, (timestamp, timestamp))
 
 
-def _write_local_config(tmp_path: Path, *, url: str, machine_name: str) -> None:
+def _write_local_config(
+    tmp_path: Path,
+    *,
+    url: str,
+    machine_name: str,
+    runner_enabled: bool | None = None,
+) -> None:
     machine_dir = tmp_path / "machine"
     machine_dir.mkdir(parents=True, exist_ok=True)
-    (machine_dir / "state.json").write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "config_generation": "test-generation",
-                "runtime_url": url,
-                "machine_name": machine_name,
-                "written_by": "test",
-                "written_at": "2026-04-14T00:00:00Z",
-            }
-        )
-    )
+    payload = {
+        "schema_version": 1,
+        "config_generation": "test-generation",
+        "runtime_url": url,
+        "machine_name": machine_name,
+        "written_by": "test",
+        "written_at": "2026-04-14T00:00:00Z",
+    }
+    if runner_enabled is not None:
+        payload["runner_enabled"] = runner_enabled
+    (machine_dir / "state.json").write_text(json.dumps(payload))
 
 
 def _write_runner_env(tmp_path: Path, *, url: str, runner_name: str) -> Path:
@@ -212,7 +217,12 @@ def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monk
 def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, tmp_path: Path):
     service_file = _write_service_plist(tmp_path, machine_name="cinder.local")
     runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
-    _write_local_config(tmp_path, url="http://127.0.0.1:8080", machine_name="cinder.local")
+    _write_local_config(
+        tmp_path,
+        url="http://127.0.0.1:8080",
+        machine_name="cinder.local",
+        runner_enabled=True,
+    )
     _write_engine_status(tmp_path, age_seconds=5)
     monkeypatch.setattr(
         local_health_service,
@@ -230,6 +240,27 @@ def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, t
     assert "machine_name_runner_name_mismatch" in snapshot["reasons"]
     assert "launch config" in snapshot["headline"].lower()
     assert "Run: longhouse machine reconcile" in snapshot["suggested_actions"]
+
+
+def test_collect_local_health_ignores_runner_drift_when_runner_not_enabled(monkeypatch, tmp_path: Path):
+    service_file = _write_service_plist(tmp_path, machine_name="cinder.local")
+    runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
+    _write_local_config(tmp_path, url="http://127.0.0.1:8080", machine_name="cinder.local")
+    _write_engine_status(tmp_path, age_seconds=5)
+    monkeypatch.setattr(
+        local_health_service,
+        "get_service_info",
+        lambda *args, **kwargs: _service_info("running", service_file=str(service_file)),
+    )
+    monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [runner_env])
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["launch_readiness"]["state"] == "ready"
+    assert "config_url_runner_url_mismatch" not in snapshot["reasons"]
+    assert "machine_name_runner_name_mismatch" not in snapshot["reasons"]
+    assert snapshot["launch_readiness"]["runner_expected"] is False
 
 
 def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: Path):

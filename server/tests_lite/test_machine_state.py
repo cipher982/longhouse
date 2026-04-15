@@ -16,6 +16,7 @@ def test_write_machine_state_updates_single_authoritative_record(tmp_path: Path)
         machine_name="test box",
         topology_intent="connect-remote",
         desktop_app_enabled=True,
+        runner_enabled=True,
     )
     second = write_machine_state(
         base_dir=tmp_path,
@@ -29,6 +30,7 @@ def test_write_machine_state_updates_single_authoritative_record(tmp_path: Path)
     assert second.machine_name == "test-box"
     assert second.topology_intent == "connect-remote"
     assert second.desktop_app_enabled is True
+    assert second.runner_enabled is True
 
     state_path, loaded, error = read_machine_state(tmp_path)
     assert error is None
