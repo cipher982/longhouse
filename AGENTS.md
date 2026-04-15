@@ -145,6 +145,7 @@ Run the tier that matches the change. Do not over-test.
 - **Backend tests:** add new backend tests in `server/tests_lite/`.
 - **Oikos tools:** registration is centralized in `server/zerg/tools/builtin/oikos_tools.py`.
 - **Machine surface:** if a capability matters to agents or CLI workflows, it should exist on `/api/agents/*`.
+- **Agent history ownership:** Longhouse owns raw session history. Other systems should call `/api/agents/*` or store narrow references, not build second ingest/query stacks.
 - **High-frequency writes:** presence, heartbeat, ingest, runtime, and runner WebSocket writes must go through `WriteSerializer`.
 - **Rust engine owns shipping:** the old Python shipper is gone. After engine changes, run `make install-engine`.
 
