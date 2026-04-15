@@ -272,6 +272,26 @@
     justify-content: center;
   }
 
+  /* Runners Modal */
+
+  .runners-modal-container {
+    max-width: 900px;
+    width: 92%;
+  }
+
+  .runners-modal-body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-6);
+  }
+
+  .runners-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--color-border-subtle);
+  }
+
   /* Responsive */
 
   @media (max-width: 768px) {

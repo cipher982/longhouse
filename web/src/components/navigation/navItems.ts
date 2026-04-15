@@ -8,6 +8,7 @@ export type NavItem = {
 
 const BASE_ITEMS: NavItem[] = [
   { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
+  { label: "Machines", href: "/runners", testId: "global-runners-tab" },
 ];
 
 const DEMO_ITEMS: NavItem[] = [

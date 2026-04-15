@@ -323,6 +323,14 @@ describe("SessionsPage", () => {
     expect(mockUseAgentFilters).toHaveBeenLastCalledWith(14, true);
   });
 
+  it("does not render a redundant timeline page heading above the toolbar", async () => {
+    renderSessionsPage("/timeline");
+
+    expect(await screen.findByPlaceholderText("Search sessions...")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Machines" })).toBeInTheDocument();
+  });
+
   it("prefetches the session workspace queries when a session card gets hover intent", async () => {
     const queryClient = createQueryClient();
     const prefetchSpy = vi.spyOn(queryClient, "prefetchQuery").mockImplementation(async (options) => {
@@ -575,16 +583,14 @@ describe("SessionsPage", () => {
     expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
     expect(screen.getByText(/Run one command on the machine where you use Claude Code/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "See setup steps" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Connect Machine" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Machines" })).toBeInTheDocument();
     expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
     expect(screen.getByText("longhouse ship")).toBeInTheDocument();
     expect(screen.queryByText("Welcome to Longhouse")).not.toBeInTheDocument();
   });
 
-  it("sends users to the machines page when a runner is available", async () => {
+  it("opens the machines modal when a runner is available", async () => {
     const user = userEvent.setup();
-    const navigateMock = vi.fn();
-    vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigateMock);
 
     mockUseRunners.mockReturnValue({
       data: [makeRunner()],
@@ -594,12 +600,13 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
-    await user.click(await screen.findByRole("button", { name: "Open Machines" }));
+    await user.click(await screen.findByRole("button", { name: "Machines" }));
 
-    expect(navigateMock).toHaveBeenCalledWith("/runners");
+    expect(await screen.findByTestId("runners-modal")).toBeInTheDocument();
+    expect(screen.getByTestId("runner-card-1")).toBeInTheDocument();
   });
 
-  it("sends users to runners when they need to choose a launch target", async () => {
+  it("navigates to the selected runner from the machines modal", async () => {
     const user = userEvent.setup();
     const navigateMock = vi.fn();
     vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigateMock);
@@ -615,9 +622,10 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
-    await user.click(await screen.findByRole("button", { name: "Open Machines" }));
+    await user.click(await screen.findByRole("button", { name: "Machines" }));
+    await user.click(await screen.findByTestId("runner-card-1"));
 
-    expect(navigateMock).toHaveBeenCalledWith("/runners");
+    expect(navigateMock).toHaveBeenCalledWith("/runners/1");
   });
 
   it("treats demo sessions as preview data instead of the primary onboarding path", async () => {
