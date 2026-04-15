@@ -113,3 +113,105 @@ def test_install_service_allows_reinstall_when_existing_shipper_db_present(tmp_p
 
     assert result["message"] == "ok"
     assert install_calls == [db_path]
+
+
+def test_install_service_migrates_legacy_shipper_db_on_first_install(tmp_path, monkeypatch):
+    claude_dir = tmp_path / ".claude"
+    legacy_db_path = claude_dir / "longhouse-shipper.db"
+    launchd_path = tmp_path / "LaunchAgents" / "com.longhouse.shipper.plist"
+    log_dir = tmp_path / ".longhouse" / "agent" / "logs"
+    install_calls: list[Path] = []
+
+    legacy_db_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_db_path.write_text("legacy-db", encoding="utf-8")
+    Path(f"{legacy_db_path}-wal").write_text("legacy-wal", encoding="utf-8")
+    Path(f"{legacy_db_path}-shm").write_text("legacy-shm", encoding="utf-8")
+
+    monkeypatch.setattr(shipper_service, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(shipper_service, "_get_launchd_plist_path", lambda: launchd_path)
+    monkeypatch.setattr(
+        shipper_service,
+        "_get_legacy_engine_plist_path",
+        lambda: tmp_path / "LaunchAgents" / "com.longhouse.engine.plist",
+    )
+    monkeypatch.setattr(shipper_service, "_resolve_log_dir", lambda config: log_dir)
+    monkeypatch.setattr(
+        shipper_service,
+        "_install_launchd",
+        lambda config: install_calls.append(Path(shipper_service._resolve_agent_db_path(config)))
+        or {
+            "success": True,
+            "platform": "macos",
+            "service": "com.longhouse.shipper",
+            "plist_path": str(launchd_path),
+            "message": "ok",
+        },
+    )
+
+    result = shipper_service.install_service(
+        url="https://example.com",
+        token=None,
+        claude_dir=str(claude_dir),
+    )
+
+    migrated_db_path = tmp_path / ".longhouse" / "agent" / "longhouse-shipper.db"
+    assert result["message"] == "ok"
+    assert install_calls == [migrated_db_path]
+    assert migrated_db_path.read_text(encoding="utf-8") == "legacy-db"
+    assert Path(f"{migrated_db_path}-wal").read_text(encoding="utf-8") == "legacy-wal"
+    assert Path(f"{migrated_db_path}-shm").read_text(encoding="utf-8") == "legacy-shm"
+    assert not legacy_db_path.exists()
+    assert not Path(f"{legacy_db_path}-wal").exists()
+    assert not Path(f"{legacy_db_path}-shm").exists()
+
+
+def test_install_service_reuses_legacy_shipper_db_on_reinstall_before_guard(tmp_path, monkeypatch):
+    claude_dir = tmp_path / ".claude"
+    legacy_db_path = claude_dir / "longhouse-shipper.db"
+    launchd_path = tmp_path / "LaunchAgents" / "com.longhouse.shipper.plist"
+    log_dir = tmp_path / ".longhouse" / "agent" / "logs"
+    install_calls: list[Path] = []
+    stop_calls: list[list[str]] = []
+
+    launchd_path.parent.mkdir(parents=True, exist_ok=True)
+    launchd_path.write_text("<plist/>", encoding="utf-8")
+    legacy_db_path.parent.mkdir(parents=True, exist_ok=True)
+    legacy_db_path.write_text("legacy-db", encoding="utf-8")
+
+    monkeypatch.setattr(shipper_service, "detect_platform", lambda: Platform.MACOS)
+    monkeypatch.setattr(shipper_service, "_get_launchd_plist_path", lambda: launchd_path)
+    monkeypatch.setattr(
+        shipper_service,
+        "_get_legacy_engine_plist_path",
+        lambda: tmp_path / "LaunchAgents" / "com.longhouse.engine.plist",
+    )
+    monkeypatch.setattr(
+        shipper_service.subprocess,
+        "run",
+        lambda args, **kwargs: stop_calls.append(list(args)),
+    )
+    monkeypatch.setattr(shipper_service, "_resolve_log_dir", lambda config: log_dir)
+    monkeypatch.setattr(
+        shipper_service,
+        "_install_launchd",
+        lambda config: install_calls.append(Path(shipper_service._resolve_agent_db_path(config)))
+        or {
+            "success": True,
+            "platform": "macos",
+            "service": "com.longhouse.shipper",
+            "plist_path": str(launchd_path),
+            "message": "ok",
+        },
+    )
+
+    result = shipper_service.install_service(
+        url="https://example.com",
+        token=None,
+        claude_dir=str(claude_dir),
+    )
+
+    migrated_db_path = tmp_path / ".longhouse" / "agent" / "longhouse-shipper.db"
+    assert result["message"] == "ok"
+    assert install_calls == [migrated_db_path]
+    assert migrated_db_path.read_text(encoding="utf-8") == "legacy-db"
+    assert stop_calls == [["launchctl", "unload", str(launchd_path)]]
