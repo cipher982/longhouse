@@ -13,9 +13,11 @@ from sqlalchemy.orm import sessionmaker
 from zerg.database import make_engine
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionTask
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
+from zerg.services.agents_store import SourceLineIngest
 
 
 def test_duplicate_event_sqlite_no_pending_rollback(tmp_path):
@@ -412,3 +414,99 @@ def test_duplicate_ingest_keeps_machine_label_when_generic_environment_arrives_l
 
         stored = db.query(AgentSession).filter(AgentSession.id == first.session_id).one()
         assert stored.environment == "work-laptop"
+
+
+def test_duplicate_replay_without_source_line_delta_does_not_requeue_post_ingest_work(tmp_path):
+    db_path = tmp_path / "duplicate_replay_no_source_delta.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    AgentsBase.metadata.create_all(bind=engine)
+
+    SessionLocal = sessionmaker(bind=engine)
+    with SessionLocal() as db:
+        store = AgentsStore(db)
+
+        started_at = datetime(2026, 4, 14, 21, 46, 0, tzinfo=timezone.utc)
+        naive_event_time = datetime(2026, 1, 31, 12, 0, 0)
+        aware_event_time = datetime(2026, 1, 31, 12, 0, 0, tzinfo=timezone.utc)
+        source_path = "/tmp/codex-session.jsonl"
+        raw_line = (
+            '{"type":"response_item","timestamp":"2026-01-31T12:00:00Z",'
+            '"payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hello world"}]}}'
+        )
+
+        first = store.ingest_session(
+            SessionIngest(
+                provider="codex",
+                environment="test",
+                project="duplicate-replay",
+                device_id="dev-machine",
+                cwd="/tmp",
+                started_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="hello world",
+                        timestamp=naive_event_time,
+                        source_path=source_path,
+                        source_offset=0,
+                        raw_json=raw_line,
+                    )
+                ],
+                source_lines=[
+                    SourceLineIngest(
+                        source_path=source_path,
+                        source_offset=0,
+                        raw_json=raw_line,
+                    )
+                ],
+            )
+        )
+
+        session_id = first.session_id
+        assert first.events_inserted == 1
+        assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id), SessionTask.status == "pending").count() == 2
+
+        db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).update(
+            {"status": "done"},
+            synchronize_session=False,
+        )
+        session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        session.needs_embedding = 0
+        db.commit()
+
+        second = store.ingest_session(
+            SessionIngest(
+                id=session_id,
+                provider="codex",
+                environment="test",
+                project="duplicate-replay",
+                device_id="dev-machine",
+                cwd="/tmp",
+                started_at=started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="hello world",
+                        timestamp=aware_event_time,
+                        source_path=source_path,
+                        source_offset=0,
+                        raw_json=raw_line,
+                    )
+                ],
+                source_lines=[
+                    SourceLineIngest(
+                        source_path=source_path,
+                        source_offset=0,
+                        raw_json=raw_line,
+                    )
+                ],
+            )
+        )
+
+        assert second.events_inserted == 1
+
+        stored = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert stored.needs_embedding == 0
+        assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).count() == 2
+        assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id), SessionTask.status == "pending").count() == 0

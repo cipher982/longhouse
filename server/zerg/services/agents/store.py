@@ -1472,15 +1472,23 @@ class AgentsStore:
         head_branch_for_counts = self._align_head_branch_from_leaf_uuid(session_id, ingest_branch.id, leaf_uuid_hint)
         self._sync_session_counts_to_head(session_id, head_branch_for_counts)
 
+        transcript_changed = bool(source_lines_inserted) or not source_lines or rewind_signal is not None
+        if events_inserted > 0 and not transcript_changed:
+            logger.warning(
+                "Ingest inserted %s event rows for session %s without a source-line delta; suppressing post-ingest tasks",
+                events_inserted,
+                session_id,
+            )
+
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
-        if session_obj and events_inserted > 0:
+        if session_obj and events_inserted > 0 and transcript_changed:
             session_obj.needs_embedding = 1
             if latest_inserted_timestamp is not None:
                 current = _normalize_utc_naive(session_obj.last_activity_at)
                 if current is None or latest_inserted_timestamp > current:
                     session_obj.last_activity_at = latest_inserted_timestamp
 
-        if events_inserted > 0:
+        if events_inserted > 0 and transcript_changed:
             from zerg.services.ingest_task_queue import enqueue_ingest_tasks
 
             enqueue_ingest_tasks(self.db, str(session_id))
@@ -1503,7 +1511,7 @@ class AgentsStore:
                 payload={},
             )
         ]
-        if events_inserted > 0 and latest_inserted_timestamp is not None:
+        if events_inserted > 0 and transcript_changed and latest_inserted_timestamp is not None:
             latest_event_id = self.get_latest_event_id(session_id)
             runtime_events.append(
                 RuntimeEventIngest(
@@ -1522,7 +1530,7 @@ class AgentsStore:
 
         self.db.commit()
 
-        if events_inserted > 0:
+        if events_inserted > 0 and transcript_changed:
             from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
             from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
 
