@@ -106,23 +106,6 @@ class SessionMessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000, description="User message")
 
 
-class ManagedLocalSessionLaunchRequest(BaseModel):
-    """Deprecated request to start a managed local AI agent session on a runner."""
-
-    runner_target: str = Field(..., description="Runner name or runner:<id>")
-    cwd: str = Field(..., min_length=1, description="Working directory on the source runner")
-    provider: str = Field("claude", description="AI provider CLI to launch (claude or codex)")
-    project: str | None = Field(None, description="Optional project label")
-    git_repo: str | None = Field(None, description="Optional git repository path")
-    git_branch: str | None = Field(None, description="Optional git branch name")
-    display_name: str | None = Field(None, description="Optional display name for the session")
-    loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
-    claude_launch_env: dict[str, str] | None = Field(
-        None,
-        description="Optional allowlisted Claude launch env overrides to apply on the runner",
-    )
-
-
 class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     """Request to start a managed local AI agent session on the calling device."""
 
@@ -999,43 +982,6 @@ async def send_to_live_session_agents(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Internal error: {str(exc)[:200]}",
         ) from exc
-
-
-@router.post("/managed-local", response_model=ManagedLocalSessionLaunchResponse)
-async def launch_managed_local(
-    body: ManagedLocalSessionLaunchRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_oikos_user),
-):
-    """Legacy browser-managed launch surface.
-
-    Native managed-local launch now starts on the target machine only.
-    """
-    try:
-        result = await launch_managed_local_session(
-            db,
-            ManagedLocalLaunchParams(
-                owner_id=current_user.id,
-                runner_target=body.runner_target,
-                cwd=body.cwd,
-                provider=body.provider,
-                project=body.project,
-                git_repo=body.git_repo,
-                git_branch=body.git_branch,
-                display_name=body.display_name,
-                loop_mode=body.loop_mode.value,
-                claude_launch_env=body.claude_launch_env,
-            ),
-        )
-    except ManagedLocalLaunchError as exc:
-        db.rollback()
-        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-    except Exception:
-        db.rollback()
-        logger.exception("Managed local launch failed unexpectedly")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Managed local launch failed")
-
-    return _managed_local_launch_response(result)
 
 
 @router.post("/managed-local/this-device", response_model=ManagedLocalSessionLaunchResponse)

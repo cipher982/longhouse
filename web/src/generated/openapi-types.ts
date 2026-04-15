@@ -2923,28 +2923,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sessions/managed-local": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Launch Managed Local
-         * @description Legacy browser-managed launch surface.
-         *
-         *     Native managed-local launch now starts on the target machine only.
-         */
-        post: operations["launch_managed_local_sessions_managed_local_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/sessions/managed-local/this-device": {
         parameters: {
             query?: never;
@@ -5742,60 +5720,6 @@ export interface components {
             message: string;
             /** Tools */
             tools?: string[];
-        };
-        /**
-         * ManagedLocalSessionLaunchRequest
-         * @description Deprecated request to start a managed local AI agent session on a runner.
-         */
-        ManagedLocalSessionLaunchRequest: {
-            /**
-             * Runner Target
-             * @description Runner name or runner:<id>
-             */
-            runner_target: string;
-            /**
-             * Cwd
-             * @description Working directory on the source runner
-             */
-            cwd: string;
-            /**
-             * Provider
-             * @description AI provider CLI to launch (claude or codex)
-             * @default claude
-             */
-            provider: string;
-            /**
-             * Project
-             * @description Optional project label
-             */
-            project?: string | null;
-            /**
-             * Git Repo
-             * @description Optional git repository path
-             */
-            git_repo?: string | null;
-            /**
-             * Git Branch
-             * @description Optional git branch name
-             */
-            git_branch?: string | null;
-            /**
-             * Display Name
-             * @description Optional display name for the session
-             */
-            display_name?: string | null;
-            /**
-             * @description manual | assist | autopilot
-             * @default manual
-             */
-            loop_mode: components["schemas"]["SessionLoopMode"];
-            /**
-             * Claude Launch Env
-             * @description Optional allowlisted Claude launch env overrides to apply on the runner
-             */
-            claude_launch_env?: {
-                [key: string]: string;
-            } | null;
         };
         /**
          * ManagedLocalSessionLaunchResponse
@@ -12980,42 +12904,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    launch_managed_local_sessions_managed_local_post: {
-        parameters: {
-            query?: {
-                /** @description Optional JWT token (used by EventSource/SSE which can't send Authorization headers). */
-                token?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ManagedLocalSessionLaunchRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ManagedLocalSessionLaunchResponse"];
                 };
             };
             /** @description Validation Error */

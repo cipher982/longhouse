@@ -18,7 +18,6 @@ from zerg.database import initialize_database
 from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.enums import UserRole
@@ -31,24 +30,6 @@ def _make_db(tmp_path):
     engine = make_engine(f"sqlite:///{db_path}")
     initialize_database(engine)
     return make_sessionmaker(engine)
-
-
-def _make_client(db_session, current_user):
-    from zerg.main import api_app
-    from zerg.main import app
-
-    def override_get_db():
-        try:
-            yield db_session
-        finally:
-            pass
-
-    def override_current_user():
-        return current_user
-
-    api_app.dependency_overrides[get_db] = override_get_db
-    api_app.dependency_overrides[get_current_oikos_user] = override_current_user
-    return TestClient(app, backend="asyncio"), api_app
 
 
 def _make_device_client(db_session, device_token):
@@ -90,34 +71,20 @@ def _seed_user_and_runner(db):
     return user, runner
 
 
-def test_browser_managed_local_launch_is_gone(monkeypatch, tmp_path):
-    from zerg.services import managed_local_launcher
+def test_browser_managed_local_launch_route_is_absent():
+    from zerg.main import app
 
-    SessionLocal = _make_db(tmp_path)
-
-    with SessionLocal() as db:
-        user, _runner = _seed_user_and_runner(db)
-        client, api_app = _make_client(db, user)
-        monkeypatch.setattr(
-            managed_local_launcher,
-            "get_runner_connection_manager",
-            lambda: SimpleNamespace(is_online=lambda *_args: True),
+    with TestClient(app, backend="asyncio") as client:
+        response = client.post(
+            "/api/sessions/managed-local",
+            json={
+                "runner_target": "runner:1",
+                "cwd": "/tmp/demo",
+                "provider": "claude",
+            },
         )
 
-        try:
-            response = client.post(
-                "/api/sessions/managed-local",
-                json={
-                    "runner_target": "runner:1",
-                    "cwd": "/tmp/demo",
-                    "provider": "claude",
-                },
-            )
-        finally:
-            api_app.dependency_overrides = {}
-
-    assert response.status_code == 410
-    assert "Launch from the target machine" in response.json()["detail"]
+    assert response.status_code == 404
 
 
 def test_this_device_launch_requires_healthy_runner(monkeypatch, tmp_path):
