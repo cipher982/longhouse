@@ -67,10 +67,7 @@ export type TimelineModel = {
 export type SessionInteractionMode =
   | "managed_local"
   | "managed_local_unavailable"
-  | "unsupported"
-  | "head"
-  | "promote"
-  | "branch";
+  | "unsupported";
 
 export type ManagedLaunchSuggestion = {
   title: string;

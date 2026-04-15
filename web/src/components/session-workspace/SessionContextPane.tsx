@@ -2,7 +2,6 @@ import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
 import { config } from "../../lib/config";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
-import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
 import {
   formatContinuationStamp,
   formatDuration,
@@ -16,6 +15,7 @@ import {
 import { LoopModeSelector } from "./LoopModeSelector";
 import { ContinuationsList } from "./ContinuationsList";
 import { ManagedLaunchHintCard } from "./ManagedLaunchHintCard";
+import { SessionRuntimeStrip } from "./SessionRuntimeStrip";
 
 interface SessionContextPaneProps {
   session: AgentSession;
@@ -62,37 +62,53 @@ export function SessionContextPane({
     headThreadSession,
   });
   const isManagedLocalCodex = interaction.isManagedLocalCodex;
-  const canDriveManagedLocalFromBrowser = interaction.liveControlAvailable;
   const turnCount = session.user_messages + session.assistant_messages;
-  const runtime = resolveSessionRuntimeState(session);
   const homeLabel = normalizeExecutionVenueLabel(session.home_label);
-  const runtimeBadgeVariant = runtime.isExecuting
-    ? "success"
-    : runtime.needsAttention
-      ? "warning"
-      : "neutral";
   const sessionControl = session.control ?? null;
-  const attachCommand = interaction.hostReattachAvailable ? sessionControl?.attach_command?.trim() || null : null;
-  const attachRunnerLabel = sessionControl?.source_runner_name?.trim() || "this machine";
-  const loopModeCaption =
-    config.demoMode
-      ? "Preview only in the demo. Changes and live control are disabled."
-      : !interaction.isManagedLocalSession
-      ? "Stored session preference for what the assistant may do after each completed turn."
-      : canDriveManagedLocalFromBrowser
-        ? "Loop Mode changes review posture only. Keep driving the live session from Longhouse below or by reattaching on the host machine."
+  const attachCommand = interaction.hostReattachAvailable
+    ? sessionControl?.attach_command?.trim() || null
+    : null;
+  const attachRunnerLabel =
+    sessionControl?.source_runner_name?.trim() ||
+    homeLabel ||
+    interaction.sourceOriginLabel ||
+    "this machine";
+  const statusEyebrow = interaction.liveControlAvailable
+    ? "Live session"
+    : interaction.hostReattachAvailable
+      ? "Managed session"
+      : "Imported session";
+  const statusSummary = interaction.liveControlAvailable
+    ? `Live on ${attachRunnerLabel}. Send prompts from Longhouse or reattach on the host.`
+    : interaction.hostReattachAvailable
+      ? `Live on ${attachRunnerLabel}. This view stays synced, but continue from the host terminal.`
+      : interaction.managedLaunchSuggestion
+        ? `Archived here only. Start the next ${interaction.providerLabel} session through Longhouse when you need live control.`
+        : "Archived here only.";
+  const loopModeCaption = config.demoMode
+    ? "Preview only in the demo."
+    : !interaction.isManagedLocalSession
+      ? "Stored preference only."
+      : interaction.liveControlAvailable
+        ? "Review posture only."
         : isManagedLocalCodex
-          ? "For live Codex sessions, Loop Mode changes review posture only. Keep driving the live session from the host terminal."
-          : "Loop Mode changes review posture only. Keep driving the live session from the host terminal.";
-  const primaryActionDescription = interaction.canChatFromBrowser
-    ? "Open the dock below and send the next prompt into the live session."
-    : interaction.composerDisabledReason ?? interaction.notice?.body ?? interaction.capabilityDescription ?? undefined;
+          ? "Stored here. Applies when Longhouse regains control."
+          : "Stored here. Applies when Longhouse regains control.";
+  const attachDisclosureCopy = interaction.liveControlAvailable
+    ? `Run this on ${attachRunnerLabel} to reopen the live terminal without breaking the Longhouse control path.`
+    : `Run this on ${attachRunnerLabel} to reopen the live terminal session.`;
+  const shouldShowNotice =
+    continuationNotice && !interaction.managedLaunchSuggestion;
+  const showControlSection =
+    interaction.canChatFromBrowser ||
+    attachCommand ||
+    shouldShowNotice ||
+    interaction.managedLaunchSuggestion;
 
   return (
     <div className="session-context-pane">
-      {/* Hero: title, provider, badges */}
       <div className="session-pane-section session-pane-section--hero">
-        <div className="session-pane-eyebrow">Session</div>
+        <div className="session-pane-eyebrow">{statusEyebrow}</div>
         <div className="session-context-title">{title}</div>
         <div className="session-context-subtitle">
           <span className="session-context-provider">
@@ -102,11 +118,13 @@ export function SessionContextPane({
             />
             {formatProviderLabel(session.provider)}
           </span>
-          <span>{runtime.displayPhase}</span>
+          {homeLabel ? <span>{homeLabel}</span> : null}
         </div>
         <div className="session-context-badges">
-          <Badge variant={runtimeBadgeVariant}>{runtime.displayPhase}</Badge>
-          <Badge variant={interaction.capabilityVariant} title={interaction.capabilityDescription ?? undefined}>
+          <Badge
+            variant={interaction.capabilityVariant}
+            title={interaction.capabilityDescription ?? undefined}
+          >
             {interaction.capabilityLabel}
           </Badge>
           <Badge
@@ -118,56 +136,33 @@ export function SessionContextPane({
           </Badge>
           <Badge variant="neutral">{turnCount} turns</Badge>
           <Badge variant="neutral">{session.tool_calls} tools</Badge>
-          {homeLabel ? <Badge variant="neutral">{homeLabel}</Badge> : null}
           {session.environment && session.environment !== "production" ? (
             <Badge variant="warning">{session.environment}</Badge>
           ) : null}
         </div>
-        {interaction.capabilityDescription && (
-          <div className="session-context-capability-summary" data-testid="session-capability-summary">
-            {interaction.capabilityDescription}
-          </div>
-        )}
+        <SessionRuntimeStrip
+          session={session}
+          interaction={interaction}
+          hostLabel={attachRunnerLabel}
+          variant="block"
+          testId="session-sidebar-runtime"
+        />
         <div
           className="session-context-managed-copy"
           data-testid="session-management-summary"
         >
-          {interaction.managementDescription}
-        </div>
-        {interaction.managedLaunchSuggestion ? (
-          <ManagedLaunchHintCard
-            suggestion={interaction.managedLaunchSuggestion}
-            testId="session-managed-launch-hint"
-          />
-        ) : null}
-      </div>
-
-      <div className="session-pane-section">
-        <div className="session-pane-section-title">Next action</div>
-        <div className="session-context-primary-action">
-          <Button
-            type="button"
-            variant="primary"
-            size="sm"
-            onClick={onPrimaryAction}
-            disabled={!interaction.canChatFromBrowser}
-            title={!interaction.canChatFromBrowser ? primaryActionDescription : undefined}
-          >
-            {interaction.primaryActionLabel}
-          </Button>
-          <div className="session-context-primary-action-copy">
-            {primaryActionDescription}
-          </div>
+          {statusSummary}
         </div>
       </div>
 
-      {/* Branch banner (not viewing head) */}
       {!isViewingHead && headThreadSession ? (
         <div
           className="session-pane-callout session-pane-callout--warning session-branch-banner"
           data-testid="session-branch-banner"
         >
-          <div className="session-pane-callout-title">This is not the latest branch</div>
+          <div className="session-pane-callout-title">
+            This is not the latest branch
+          </div>
           <div className="session-pane-callout-copy">
             Latest head: {getSessionOriginLabel(headThreadSession)} from{" "}
             {formatContinuationStamp(headThreadSession.started_at)}.
@@ -178,71 +173,116 @@ export function SessionContextPane({
         </div>
       ) : null}
 
-      {/* Metadata */}
+      {showControlSection ? (
+        <div className="session-pane-section">
+          <div className="session-pane-section-title">Control</div>
+          {interaction.canChatFromBrowser && onPrimaryAction ? (
+            <div className="session-context-primary-action">
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                onClick={onPrimaryAction}
+              >
+                Focus composer
+              </Button>
+              <div className="session-context-primary-action-copy">
+                Send the next prompt from the dock below.
+              </div>
+            </div>
+          ) : null}
+          {attachCommand ? (
+            <details
+              className="session-pane-disclosure"
+              data-testid="session-attach-callout"
+            >
+              <summary className="session-pane-disclosure__summary">
+                <span className="session-pane-disclosure__title">
+                  {isManagedLocalCodex
+                    ? "Reattach the live Codex terminal"
+                    : "Reattach on the host machine"}
+                </span>
+                <span className="session-pane-disclosure__meta">
+                  {attachRunnerLabel}
+                </span>
+              </summary>
+              <div className="session-pane-disclosure__body">
+                <div className="session-pane-disclosure__copy">
+                  {attachDisclosureCopy}
+                </div>
+                <pre
+                  className="inspector-code-block"
+                  data-testid="session-attach-command"
+                >
+                  <code>{attachCommand}</code>
+                </pre>
+              </div>
+            </details>
+          ) : null}
+          {interaction.managedLaunchSuggestion ? (
+            <ManagedLaunchHintCard
+              suggestion={interaction.managedLaunchSuggestion}
+              testId="session-managed-launch-hint"
+            />
+          ) : null}
+          {shouldShowNotice ? (
+            <div
+              className="session-pane-callout session-pane-callout--muted"
+              data-testid="session-continuation-unavailable"
+            >
+              <div className="session-pane-callout-title">
+                {continuationNotice.title}
+              </div>
+              <div className="session-pane-callout-copy">
+                {continuationNotice.body}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="session-pane-section">
-        <div className="session-pane-section-title">Metadata</div>
+        <div className="session-pane-section-title">Details</div>
         <div className="session-context-meta">
           <MetaRow label="Started" value={formatFullDate(session.started_at)} />
-          <MetaRow label="Duration" value={formatDuration(session.started_at, session.ended_at)} />
-          {session.git_branch ? <MetaRow label="Branch" value={session.git_branch} /> : null}
-          {session.cwd ? <MetaRow label="Workspace" value={truncatePath(session.cwd, 60)} /> : null}
-          {session.project ? <MetaRow label="Project" value={session.project} /> : null}
+          <MetaRow
+            label="Duration"
+            value={formatDuration(session.started_at, session.ended_at)}
+          />
+          {session.git_branch ? (
+            <MetaRow label="Branch" value={session.git_branch} />
+          ) : null}
+          {session.cwd ? (
+            <MetaRow label="Workspace" value={truncatePath(session.cwd, 60)} />
+          ) : null}
+          {session.project ? (
+            <MetaRow label="Project" value={session.project} />
+          ) : null}
         </div>
       </div>
 
-      {/* Reattach command */}
-      {attachCommand ? (
-        <div className="session-pane-section">
-          <div className="session-pane-section-title">Reattach</div>
-          <div className="session-pane-callout session-pane-callout--muted" data-testid="session-attach-callout">
-            <div className="session-pane-callout-title">
-              {isManagedLocalCodex ? "Reattach the live Codex terminal" : "Reattach on the host machine"}
-            </div>
-            <div className="session-pane-callout-copy">
-              {isManagedLocalCodex
-                ? canDriveManagedLocalFromBrowser
-                  ? `This live Codex session is running on ${attachRunnerLabel}. Reopen the Codex TUI on the host machine anytime, or send prompts from Longhouse below.`
-                  : `This live Codex session is running on ${attachRunnerLabel}. Use the host-machine command below to reopen the Codex TUI.`
-                : canDriveManagedLocalFromBrowser
-                  ? `This session is running on ${attachRunnerLabel}. Reattach on the host machine anytime, or keep sending prompts from Longhouse below.`
-                  : `This session is running on ${attachRunnerLabel}. Use the host-machine command below to reopen the live terminal session.`}
-            </div>
-            <pre className="inspector-code-block" data-testid="session-attach-command">
-              <code>{attachCommand}</code>
-            </pre>
-          </div>
-        </div>
+      {interaction.isManagedLocalSession ? (
+        <LoopModeSelector
+          currentMode={session.loop_mode}
+          caption={loopModeCaption}
+          pending={loopModePending}
+          onChange={onLoopModeChange}
+        />
       ) : null}
 
-      {/* Loop mode selector */}
-      <LoopModeSelector
-        currentMode={session.loop_mode}
-        caption={loopModeCaption}
-        pending={loopModePending}
-        onChange={onLoopModeChange}
-      />
-
-
-      {/* Continuation notice */}
-      {continuationNotice ? (
-        <div
-          className="session-pane-callout session-pane-callout--muted"
-          data-testid="session-continuation-unavailable"
-        >
-          <div className="session-pane-callout-title">{continuationNotice.title}</div>
-          <div className="session-pane-callout-copy">{continuationNotice.body}</div>
-        </div>
-      ) : null}
-
-      {/* Summary */}
       {session.summary ? (
-        <div className="session-pane-section">
-          <div className="session-pane-section-title">Summary</div>
-          <div className="session-context-summary">{session.summary}</div>
-        </div>
+        <details className="session-pane-disclosure">
+          <summary className="session-pane-disclosure__summary">
+            <span className="session-pane-disclosure__title">
+              Session summary
+            </span>
+          </summary>
+          <div className="session-pane-disclosure__body">
+            <div className="session-context-summary">{session.summary}</div>
+          </div>
+        </details>
       ) : null}
 
-      {/* Continuations list */}
       <ContinuationsList
         sessions={threadSessions}
         currentSessionId={session.id}

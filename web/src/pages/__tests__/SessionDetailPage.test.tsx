@@ -5,7 +5,11 @@ import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildTimelineModel } from "../../lib/sessionWorkspace";
-import type { AgentSession, AgentSessionProjectionItem, SessionCapabilities } from "../../services/api/agents";
+import type {
+  AgentSession,
+  AgentSessionProjectionItem,
+  SessionCapabilities,
+} from "../../services/api/agents";
 import { TestRouter } from "../../test/test-utils";
 import SessionDetailPage from "../SessionDetailPage";
 
@@ -64,7 +68,9 @@ vi.mock("../../components/workspace/WorkspaceShell", () => ({
   ),
 }));
 
-function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
+function makeCapabilities(
+  overrides: Partial<SessionCapabilities> = {},
+): SessionCapabilities {
   return {
     live_control_available: true,
     host_reattach_available: true,
@@ -105,7 +111,8 @@ function makeSession(overrides: Partial<AgentSession> = {}): AgentSession {
       managed_transport: "codex_app_server",
       source_runner_id: 7,
       source_runner_name: "cinder",
-      attach_command: "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
+      attach_command:
+        "zsh -lc 'exec longhouse-engine codex-bridge attach --session-id session-codex'",
     },
     capabilities: makeCapabilities(),
     loop_mode: "manual",
@@ -137,7 +144,16 @@ describe("SessionDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    const session = makeSession();
+    const session = makeSession({
+      ended_at: null,
+      status: "working",
+      presence_state: "running",
+      active_tool: "Bash",
+      runtime_source: "managed_local_transport",
+      confidence: "live",
+      display_phase: "Running Bash",
+      last_live_at: "2026-03-22T22:04:30Z",
+    });
     const projectionItems: AgentSessionProjectionItem[] = [
       {
         kind: "event",
@@ -196,7 +212,9 @@ describe("SessionDetailPage", () => {
         showAbandonedBranches: false,
         setShowAbandonedBranches: vi.fn(),
         selectedKey,
-        selectedSelection: selectedKey ? model.selectionMap.get(selectedKey) ?? null : null,
+        selectedSelection: selectedKey
+          ? (model.selectionMap.get(selectedKey) ?? null)
+          : null,
         selectKey: setSelectedKey,
         handleVisibleSelectionChange: vi.fn(),
         registerTimelineList: vi.fn(),
@@ -208,29 +226,46 @@ describe("SessionDetailPage", () => {
     const user = userEvent.setup();
     renderSessionDetailPage();
 
-    expect(screen.queryByTestId("session-continuation-unavailable")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("session-continuation-unavailable"),
+    ).not.toBeInTheDocument();
     expect(screen.getAllByText("Live control")).toHaveLength(1);
-    expect(screen.getByTestId("session-management-badge")).toHaveTextContent("Managed");
+    expect(screen.getByTestId("session-management-badge")).toHaveTextContent(
+      "Managed",
+    );
     expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
-      "Longhouse owns the live control path for this session.",
+      "Live on cinder. Send prompts from Longhouse or reattach on the host.",
     );
-    expect(screen.getByTestId("session-capability-summary")).toHaveTextContent(
-      "Message this live Codex session from Longhouse, or reattach on the host machine.",
+    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
+      "Running Shell",
     );
-    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent("Reattach the live Codex terminal");
+    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
+      "Live on cinder",
+    );
+    expect(
+      screen.getByTestId("session-detail-header-runtime"),
+    ).toHaveTextContent("Running Shell");
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Running Shell",
+    );
+    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent(
+      "Reattach the live Codex terminal",
+    );
     expect(screen.getByTestId("session-attach-command")).toHaveTextContent(
       "codex-bridge attach --session-id session-codex",
     );
-    expect(screen.queryByTestId("session-launch-profile")).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-attach-callout")).toHaveTextContent(
-      "send prompts from Longhouse below",
-    );
     expect(
-      screen.getByText(/Keep driving the live session from Longhouse below or by reattaching on the host machine/i),
-    ).toBeInTheDocument();
+      screen.queryByTestId("session-launch-profile"),
+    ).not.toBeInTheDocument();
     expect(screen.getByTestId("session-chat")).toBeInTheDocument();
-    expect(screen.getByTestId("session-chat")).toHaveAttribute("data-disabled-reason", "");
-    expect(screen.getByTestId("session-chat")).toHaveAttribute("data-launch-command", "");
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-disabled-reason",
+      "",
+    );
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-launch-command",
+      "",
+    );
     expect(screen.getByText("Transcript row from Codex.")).toBeInTheDocument();
 
     const toolLabel = screen.getByText("Bash");
@@ -251,6 +286,11 @@ describe("SessionDetailPage", () => {
       control: null,
       continuation_kind: "local",
       id: "session-gemini",
+      ended_at: null,
+      runtime_source: "progress",
+      confidence: "stale",
+      display_phase: "Running",
+      last_live_at: "2026-03-22T22:05:00Z",
       capabilities: makeCapabilities({
         live_control_available: false,
         host_reattach_available: false,
@@ -298,7 +338,9 @@ describe("SessionDetailPage", () => {
         showAbandonedBranches: false,
         setShowAbandonedBranches: vi.fn(),
         selectedKey,
-        selectedSelection: selectedKey ? model.selectionMap.get(selectedKey) ?? null : null,
+        selectedSelection: selectedKey
+          ? (model.selectionMap.get(selectedKey) ?? null)
+          : null,
         selectKey: setSelectedKey,
         handleVisibleSelectionChange: vi.fn(),
         registerTimelineList: vi.fn(),
@@ -312,14 +354,27 @@ describe("SessionDetailPage", () => {
       "data-disabled-reason",
       "Longhouse can search this unmanaged Gemini session here, but it cannot steer the live session. Launch new Gemini sessions through Longhouse when you want live control.",
     );
-    expect(screen.getByTestId("session-chat")).toHaveAttribute("data-launch-command", "");
-    expect(screen.getByTestId("session-management-badge")).toHaveTextContent("Unmanaged");
-    expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
-      "Longhouse imported this Gemini session. Launch new Gemini sessions through Longhouse when you want live control.",
+    expect(screen.getByTestId("session-chat")).toHaveAttribute(
+      "data-launch-command",
+      "",
     );
-    expect(screen.queryByTestId("session-managed-launch-hint")).not.toBeInTheDocument();
-    expect(screen.getByTestId("session-continuation-unavailable")).toHaveTextContent(
-      "Gemini session — unmanaged",
+    expect(screen.getByTestId("session-management-badge")).toHaveTextContent(
+      "Unmanaged",
+    );
+    expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
+      "Archived here only.",
+    );
+    expect(
+      screen.queryByTestId("session-managed-launch-hint"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByTestId("session-continuation-unavailable"),
+    ).toHaveTextContent("Gemini session — unmanaged");
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Search only",
+    );
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Recent progress",
     );
   });
 
@@ -377,7 +432,9 @@ describe("SessionDetailPage", () => {
         showAbandonedBranches: false,
         setShowAbandonedBranches: vi.fn(),
         selectedKey,
-        selectedSelection: selectedKey ? model.selectionMap.get(selectedKey) ?? null : null,
+        selectedSelection: selectedKey
+          ? (model.selectionMap.get(selectedKey) ?? null)
+          : null,
         selectKey: setSelectedKey,
         handleVisibleSelectionChange: vi.fn(),
         registerTimelineList: vi.fn(),
@@ -386,23 +443,28 @@ describe("SessionDetailPage", () => {
 
     renderSessionDetailPage();
 
-    expect(screen.getByTestId("session-management-badge")).toHaveTextContent("Unmanaged");
+    expect(screen.getByTestId("session-management-badge")).toHaveTextContent(
+      "Unmanaged",
+    );
     expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
-      "Longhouse imported this Codex session.",
+      "Archived here only. Start the next Codex session through Longhouse when you need live control.",
     );
     expect(screen.getByTestId("session-managed-launch-hint")).toHaveTextContent(
       "Start the next Codex session through Longhouse",
     );
-    expect(screen.getByTestId("session-managed-launch-hint-command")).toHaveTextContent(
-      "longhouse codex",
-    );
+    expect(
+      screen.getByTestId("session-managed-launch-hint-command"),
+    ).toHaveTextContent("longhouse codex");
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-disabled-reason",
       "Live control is unavailable for this unmanaged Codex session.",
     );
     expect(screen.getByTestId("session-chat")).toHaveAttribute(
       "data-launch-command",
-      "longhouse codex",
+      "",
     );
+    expect(
+      screen.queryByTestId("session-continuation-unavailable"),
+    ).not.toBeInTheDocument();
   });
 });
