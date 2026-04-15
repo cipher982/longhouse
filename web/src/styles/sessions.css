@@ -1003,12 +1003,25 @@
       row-gap: 6px;
     }
 
+    .session-card-identity-secondary .environment-badge--secondary {
+      font-size: 9px;
+      padding: 2px 5px;
+      opacity: 0.86;
+    }
+
     .session-card-branch-badge {
       max-width: min(140px, 100%);
     }
 
     .session-card-runtime {
+      gap: 6px;
       max-width: 100%;
+      min-height: 20px;
+      padding: 3px 7px;
+    }
+
+    .session-card-runtime-phase {
+      font-size: 10px;
     }
 
     .session-card-runtime-meta {
@@ -1019,6 +1032,12 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+
+    .session-card-management-pill,
+    .session-card-capability-pill {
+      font-size: 9px;
+      padding: 2px 5px;
     }
 
     .session-card-footer {
