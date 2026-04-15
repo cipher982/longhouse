@@ -313,8 +313,8 @@ async def serve_config_js():
                     _llm_avail_bool = (_db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "text").first()) is not None
                 if not _emb_avail_bool:
                     _emb_avail_bool = (_db.query(LlmProviderConfig).filter(LlmProviderConfig.capability == "embedding").first()) is not None
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("config.js provider availability check failed; using env fallback: %s", exc)
     google_client_id = "" if _settings.control_plane_url else (_settings.google_client_id or "")
     runtime_config = {
         "API_BASE_URL": "/api",

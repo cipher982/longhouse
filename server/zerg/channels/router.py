@@ -117,8 +117,8 @@ class ChannelRouter:
         for unsub in self._unsubscribe_fns:
             try:
                 unsub()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Channel unsubscribe callback failed: %s", exc)
 
         self._unsubscribe_fns.clear()
         logger.info("Router stopped")

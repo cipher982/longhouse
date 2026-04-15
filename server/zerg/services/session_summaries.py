@@ -349,8 +349,8 @@ async def generate_summary_impl(session_id: str) -> None:
         if client is not None:
             try:
                 await client.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Failed to close summarization client for session %s: %s", session_id, exc)
 
 
 async def generate_embeddings_background(session_id: str) -> None:
