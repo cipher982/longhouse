@@ -599,8 +599,9 @@ function SessionCard({
     !!startedOriginLabel &&
     startedOriginLabel !== headOriginLabel;
   const showContinuationCount = !compatibilityMode && thread.continuation_count > 1;
+  const inlineHeadOriginLabel = showHeadOriginLabel && !showStartedOriginLabel && !showContinuationCount;
   const showIdentitySecondary =
-    showHeadOriginLabel || showStartedOriginLabel || showContinuationCount;
+    !inlineHeadOriginLabel && (showHeadOriginLabel || showStartedOriginLabel || showContinuationCount);
   const showManagementPill = !interaction.isManagedLocalSession;
   const showStatusRow = runtime.hasSignal || showManagementPill || !!cardCapabilityLabel;
 
@@ -709,6 +710,9 @@ function SessionCard({
                 <span className="environment-badge">
                   {homeLabel}
                 </span>
+              )}
+              {inlineHeadOriginLabel && (
+                <span className="environment-badge environment-badge--secondary">Head: {headOriginLabel}</span>
               )}
             </div>
 
