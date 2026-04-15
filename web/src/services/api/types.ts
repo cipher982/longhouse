@@ -12,6 +12,23 @@ export type Run = Schemas["RunOut"];
 export type Thread = Schemas["Thread"];
 export type ThreadMessage = Schemas["ThreadMessageResponse"] & { created_at?: string };
 export type ThreadUpdatePayload = Schemas["ThreadUpdate"];
+export type SessionLockInfo = Schemas["SessionLockInfo"];
+
+export type TokenBreakdown = Schemas["TokenBreakdown"];
+export type UsageLimit = Schemas["UsageLimit"];
+export type UserUsageResponse = Schemas["UserUsageResponse"];
+export type PeriodUsage = Schemas["PeriodUsage"];
+export type UserUsageSummary = Schemas["UserUsageSummary"];
+export type AdminUserRow = Schemas["AdminUserRow"];
+export type AdminUsersResponse = Schemas["AdminUsersResponse"];
+export type DailyBreakdown = Schemas["DailyBreakdown"];
+export type TopAutomationUsage = Schemas["TopAutomationUsage"];
+export type AdminUserDetailResponse = Schemas["AdminUserDetailResponse"];
+export type OpsSummary = Schemas["OpsSummary"];
+export type OpsTopAutomation = Schemas["OpsTopAutomation"];
+
+export type EmailKeyStatus = Schemas["EmailKeyStatus"];
+export type EmailStatusResponse = Schemas["EmailStatusResponse"];
 
 export interface GmailWatchState {
   status: "active" | "failed" | "not_configured";

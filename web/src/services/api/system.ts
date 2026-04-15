@@ -1,4 +1,11 @@
 import { request } from "./base";
+import type { components } from "../../generated/openapi-types";
+
+type Schemas = components["schemas"];
+type ApiCapabilityStatus = Schemas["CapabilityStatus"];
+type ApiLlmCapabilities = Schemas["CapabilitiesResponse"];
+type ApiLlmProviderInfo = Schemas["LlmProviderInfo"];
+type ApiLlmProviderTestResult = Schemas["LlmProviderTestResponse"];
 
 export interface SystemCapabilities {
   llm_available: boolean;
@@ -17,33 +24,18 @@ export async function fetchSystemCapabilities(): Promise<SystemCapabilities> {
 // LLM Provider Configuration
 // ---------------------------------------------------------------------------
 
-export interface CapabilityStatus {
-  available: boolean;
+export interface CapabilityStatus extends Omit<ApiCapabilityStatus, "source" | "provider_name"> {
   source: string | null;
   provider_name: string | null;
-  features: string[];
 }
 
-export interface LlmCapabilities {
+export interface LlmCapabilities extends Omit<ApiLlmCapabilities, "text" | "embedding"> {
   text: CapabilityStatus;
   embedding: CapabilityStatus;
 }
 
-export interface LlmProviderInfo {
-  capability: string;
-  provider_name: string;
-  base_url: string | null;
-  api_key_preview: string | null;
-  source: string;
-  has_key: boolean;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface LlmProviderTestResult {
-  success: boolean;
-  message: string;
-}
+export type LlmProviderInfo = ApiLlmProviderInfo;
+export type LlmProviderTestResult = ApiLlmProviderTestResult;
 
 /** Fetch detailed LLM capability status (text + embedding). */
 export async function fetchLlmCapabilities(): Promise<LlmCapabilities> {

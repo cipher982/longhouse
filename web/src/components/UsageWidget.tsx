@@ -13,29 +13,8 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import config from "../lib/config";
 import { fetchWithRefresh } from "../lib/auth-refresh";
+import type { UserUsageResponse } from "../services/api/types";
 import { ZapIcon } from "./icons";
-
-// Types matching backend schema
-interface TokenBreakdown {
-  prompt: number | null;
-  completion: number | null;
-  total: number;
-}
-
-interface UsageLimit {
-  daily_cost_cents: number;
-  used_percent: number;
-  remaining_usd: number;
-  status: "ok" | "warning" | "exceeded" | "unlimited";
-}
-
-interface UserUsageResponse {
-  period: "today" | "7d" | "30d";
-  tokens: TokenBreakdown;
-  cost_usd: number;
-  runs: number;
-  limit: UsageLimit;
-}
 
 // Fetch user usage from API
 async function fetchUserUsage(period: "today" | "7d" | "30d" = "today"): Promise<UserUsageResponse> {
