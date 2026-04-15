@@ -72,9 +72,11 @@ struct LonghouseWebView: UIViewRepresentable {
             // Intercept /login navigations — cancel the WebView load and hand off
             // to the native shell's login flow. This prevents the desktop web login
             // UI from rendering inside the app when a session expires.
+            // Match /login exactly (with or without query string) to avoid
+            // accidentally intercepting unrelated paths like /login-help.
             if let serverHost = URL(string: serverURL)?.host,
                url.host == serverHost,
-               url.path.hasPrefix("/login") {
+               url.path == "/login" {
                 decisionHandler(.cancel)
                 onLoginRedirect()
                 return
