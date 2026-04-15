@@ -248,7 +248,7 @@ public struct MenuBarPanelView: View {
     }
 
     private var healthySurface: some View {
-        VStack(alignment: .leading, spacing: MenuBarPanelLayout.sectionSpacing) {
+        VStack(alignment: .leading, spacing: 0) {
             PanelSection(title: "Right now") {
                 MissionReadoutGrid(readouts: primaryReadouts)
 
@@ -261,6 +261,8 @@ public struct MenuBarPanelView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
             }
+
+            sectionDivider.padding(.horizontal, 4)
 
             PanelSection(title: "Recent activity", trailing: snapshot.recentActivitySummaryLabel) {
                 if recentActivityEntries.isEmpty {
@@ -291,6 +293,8 @@ public struct MenuBarPanelView: View {
                     }
                 }
             }
+
+            sectionDivider.padding(.horizontal, 4)
 
             PanelSection(title: "Today", trailing: "\(snapshot.sessionsTodayLabel) sessions") {
                 ProviderComparisonRows(
@@ -448,8 +452,7 @@ public struct MenuBarPanelView: View {
                     Label(primaryInstallActionTitle, systemImage: primaryInstallActionSymbol)
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(primaryInstallActionTint)
+                .modifier(ProminentActionButtonStyle(tint: primaryInstallActionTint))
                 .controlSize(.large)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.repair)
                 .accessibilityLabel(Text(primaryInstallActionTitle))
@@ -461,7 +464,7 @@ public struct MenuBarPanelView: View {
                         Label("Open", systemImage: "arrow.up.forward.square")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
+                    .modifier(SecondaryActionButtonStyle())
                     .controlSize(.large)
                     .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLonghouse)
                     .accessibilityLabel(Text("Open Longhouse"))
@@ -475,7 +478,7 @@ public struct MenuBarPanelView: View {
                     Label("Logs", systemImage: "doc.text.magnifyingglass")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .modifier(SecondaryActionButtonStyle())
                 .controlSize(.regular)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
                 .accessibilityLabel(Text("Logs"))
@@ -486,7 +489,7 @@ public struct MenuBarPanelView: View {
                     Label("Copy JSON", systemImage: "doc.on.doc")
                         .frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.bordered)
+                .modifier(SecondaryActionButtonStyle())
                 .controlSize(.regular)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
                 .accessibilityLabel(Text("Copy JSON"))

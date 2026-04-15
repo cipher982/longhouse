@@ -132,10 +132,6 @@ struct PanelSection<Content: View>: View {
             content
         }
         .padding(MenuBarPanelLayout.sectionInsets)
-        .background(
-            RoundedRectangle(cornerRadius: MenuBarPanelLayout.sectionCornerRadius, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
-        )
     }
 }
 
@@ -439,6 +435,32 @@ func providerColor(_ raw: String) -> Color {
         return Color(red: 0.82, green: 0.64, blue: 0.26)
     default:
         return Color.secondary
+    }
+}
+
+struct ProminentActionButtonStyle: ViewModifier {
+    let tint: Color
+
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content
+                .buttonStyle(.glassProminent)
+                .tint(tint)
+        } else {
+            content
+                .buttonStyle(.borderedProminent)
+                .tint(tint)
+        }
+    }
+}
+
+struct SecondaryActionButtonStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content.buttonStyle(.glass)
+        } else {
+            content.buttonStyle(.bordered)
+        }
     }
 }
 
