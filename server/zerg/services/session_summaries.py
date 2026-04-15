@@ -39,6 +39,37 @@ def events_to_dicts(events: list[AgentEvent]) -> list[dict]:
     ]
 
 
+async def _advance_session_revision(
+    *,
+    db: Session,
+    session_id: str,
+    column_name: str,
+    target_revision: int,
+    label: str,
+) -> int:
+    """Mark summary/embed progress current without doing external work."""
+    from sqlalchemy import update as sa_update
+
+    from zerg.services.write_serializer import get_write_serializer
+
+    if target_revision <= 0:
+        return 0
+
+    column = getattr(AgentSession, column_name)
+
+    def _do_update(write_db: Session) -> int:
+        result = write_db.execute(
+            sa_update(AgentSession)
+            .where(AgentSession.id == session_id)
+            .where(column < target_revision)
+            .values(**{column_name: target_revision})
+        )
+        return int(result.rowcount or 0)
+
+    ws = get_write_serializer()
+    return await ws.execute_or_direct(_do_update, db, label=label)
+
+
 async def summarize_and_persist(
     session: AgentSession,
     events: list[AgentEvent],
@@ -76,6 +107,7 @@ async def summarize_and_persist(
         return None
 
     new_last_event_id = events[-1].id if events else None
+    target_revision = int(getattr(session, "transcript_revision", 0) or 0)
 
     def _do_persist(write_db: Session) -> int:
         result = write_db.execute(
@@ -86,6 +118,7 @@ async def summarize_and_persist(
                 summary_title=summary.title,
                 summary_event_count=len(events),
                 last_summarized_event_id=new_last_event_id,
+                summary_revision=target_revision,
             )
         )
         return int(result.rowcount or 0)
@@ -97,6 +130,7 @@ async def summarize_and_persist(
         session.summary_title = summary.title
         session.summary_event_count = len(events)
         session.last_summarized_event_id = new_last_event_id
+        session.summary_revision = target_revision
     return summary
 
 
@@ -146,7 +180,6 @@ async def generate_summary_impl(session_id: str) -> None:
     from sqlalchemy import update
 
     from zerg.database import get_session_factory
-    from zerg.models_config import get_llm_client_with_db_fallback
     from zerg.services.session_processing import incremental_summary
     from zerg.services.write_serializer import get_write_serializer
 
@@ -156,28 +189,25 @@ async def generate_summary_impl(session_id: str) -> None:
         logger.debug("LLM disabled or testing mode, skipping summary for %s", session_id)
         return
 
-    _config_session_factory = get_session_factory()
-    _config_db = _config_session_factory()
-    try:
-        try:
-            client, model, _provider = get_llm_client_with_db_fallback("summary_update", db=_config_db)
-        except ValueError:
-            try:
-                client, model, _provider = get_llm_client_with_db_fallback("summarization", db=_config_db)
-            except ValueError as e:
-                logger.warning("Summarization misconfigured -- session %s will NOT be summarized: %s", session_id, e)
-                await set_structured_title_if_empty(session_id)
-                return
-    finally:
-        _config_db.close()
-
     session_factory = get_session_factory()
     db = session_factory()
     ws = get_write_serializer()
+    client = None
     try:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if not session:
             logger.warning("Session %s not found for summary generation", session_id)
+            return
+
+        transcript_revision = int(getattr(session, "transcript_revision", 0) or 0)
+        summary_revision = int(getattr(session, "summary_revision", 0) or 0)
+        if transcript_revision > 0 and summary_revision >= transcript_revision:
+            logger.debug(
+                "Summary already current for session %s (summary_revision=%s transcript_revision=%s)",
+                session_id,
+                summary_revision,
+                transcript_revision,
+            )
             return
 
         cursor_id = session.last_summarized_event_id
@@ -191,6 +221,13 @@ async def generate_summary_impl(session_id: str) -> None:
             new_events = all_events[old_count:]
 
         if not new_events:
+            await _advance_session_revision(
+                db=db,
+                session_id=session_id,
+                column_name="summary_revision",
+                target_revision=transcript_revision,
+                label="summary-revision",
+            )
             logger.debug("No new events for session %s, skipping summary", session_id)
             return
 
@@ -199,9 +236,32 @@ async def generate_summary_impl(session_id: str) -> None:
         if meaningful_count < 2:
             logger.debug("Only %d new messages for session %s, waiting for more", meaningful_count, session_id)
             await set_structured_title_if_empty(session_id)
+            await _advance_session_revision(
+                db=db,
+                session_id=session_id,
+                column_name="summary_revision",
+                target_revision=transcript_revision,
+                label="summary-revision",
+            )
             return
 
         new_last_event_id = new_events[-1].id
+
+        from zerg.models_config import get_llm_client_with_db_fallback
+
+        _config_db = session_factory()
+        try:
+            try:
+                client, model, _provider = get_llm_client_with_db_fallback("summary_update", db=_config_db)
+            except ValueError:
+                try:
+                    client, model, _provider = get_llm_client_with_db_fallback("summarization", db=_config_db)
+                except ValueError as e:
+                    logger.warning("Summarization misconfigured -- session %s will NOT be summarized: %s", session_id, e)
+                    await set_structured_title_if_empty(session_id)
+                    return
+        finally:
+            _config_db.close()
 
         summary = await incremental_summary(
             session_id=str(session.id),
@@ -218,7 +278,10 @@ async def generate_summary_impl(session_id: str) -> None:
         )
 
         for _attempt in range(2):
-            values: dict = {"last_summarized_event_id": new_last_event_id}
+            values: dict = {
+                "last_summarized_event_id": new_last_event_id,
+                "summary_revision": transcript_revision,
+            }
             if summary:
                 values["summary"] = summary.summary
                 values["summary_title"] = summary.title
@@ -283,10 +346,11 @@ async def generate_summary_impl(session_id: str) -> None:
         raise
     finally:
         db.close()
-        try:
-            await client.close()
-        except Exception:
-            pass
+        if client is not None:
+            try:
+                await client.close()
+            except Exception:
+                pass
 
 
 async def generate_embeddings_background(session_id: str) -> None:
@@ -297,25 +361,36 @@ async def generate_embeddings_background(session_id: str) -> None:
 
 async def generate_embeddings_impl(session_id: str) -> None:
     from zerg.database import get_session_factory
-    from zerg.models_config import get_embedding_config_with_db_fallback
 
     session_factory = get_session_factory()
-
-    _config_db = session_factory()
-    try:
-        config = get_embedding_config_with_db_fallback(db=_config_db)
-    finally:
-        _config_db.close()
-
-    if not config:
-        return
 
     db = session_factory()
     try:
         session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if not session:
             return
-        if getattr(session, "needs_embedding", 1) == 0:
+        transcript_revision = int(getattr(session, "transcript_revision", 0) or 0)
+        embedding_revision = int(getattr(session, "embedding_revision", 0) or 0)
+        if transcript_revision > 0 and embedding_revision >= transcript_revision:
+            logger.debug(
+                "Embeddings already current for session %s (embedding_revision=%s transcript_revision=%s)",
+                session_id,
+                embedding_revision,
+                transcript_revision,
+            )
+            return
+        if transcript_revision <= 0 and getattr(session, "needs_embedding", 1) == 0:
+            return
+
+        from zerg.models_config import get_embedding_config_with_db_fallback
+
+        _config_db = session_factory()
+        try:
+            config = get_embedding_config_with_db_fallback(db=_config_db)
+        finally:
+            _config_db.close()
+
+        if not config:
             return
 
         events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
@@ -325,7 +400,14 @@ async def generate_embeddings_impl(session_id: str) -> None:
         from zerg.services.embedding_cache import EmbeddingCache
         from zerg.services.session_processing.embeddings import embed_session
 
-        count = await embed_session(session_id, session, events, config, db)
+        count = await embed_session(
+            session_id,
+            session,
+            events,
+            config,
+            db,
+            transcript_revision=transcript_revision or None,
+        )
         if count > 0:
             logger.info("Generated %d embeddings for session %s", count, session_id)
             EmbeddingCache().invalidate()

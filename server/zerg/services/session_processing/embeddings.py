@@ -217,6 +217,8 @@ async def embed_session(
     events: list["AgentEvent"],
     config: "EmbeddingConfig",
     db: "DBSession",
+    *,
+    transcript_revision: int | None = None,
 ) -> int:
     """Orchestrate embedding generation for a session.
 
@@ -228,6 +230,8 @@ async def embed_session(
     """
     from zerg.models.agents import SessionEmbedding
     from zerg.services.write_serializer import get_write_serializer
+
+    target_revision = int(transcript_revision or 0)
 
     # Convert ORM events to dicts for transcript building
     event_dicts = [
@@ -334,10 +338,26 @@ async def embed_session(
         # Only clear the flag when the session-level embedding succeeded so
         # backfill can retry on transient failures.
         if session_embedding_ok:
-            write_db.execute(
-                sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"),
-                {"sid": session_id},
-            )
+            if target_revision > 0:
+                write_db.execute(
+                    sa_text(
+                        """
+                        UPDATE sessions
+                        SET needs_embedding = 0,
+                            embedding_revision = CASE
+                                WHEN COALESCE(embedding_revision, 0) < :rev THEN :rev
+                                ELSE COALESCE(embedding_revision, 0)
+                            END
+                        WHERE id = :sid
+                        """
+                    ),
+                    {"sid": session_id, "rev": target_revision},
+                )
+            else:
+                write_db.execute(
+                    sa_text("UPDATE sessions SET needs_embedding = 0 WHERE id = :sid"),
+                    {"sid": session_id},
+                )
 
         return count
 

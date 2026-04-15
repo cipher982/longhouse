@@ -312,7 +312,14 @@ async def _run_embedding_backfill(
                             _embedding_backfill_state["skipped"] += 1
                             return
 
-                        count = await embed_session(str(session_id), sess, events, config, db)
+                        count = await embed_session(
+                            str(session_id),
+                            sess,
+                            events,
+                            config,
+                            db,
+                            transcript_revision=int(getattr(sess, "transcript_revision", 0) or 0),
+                        )
                         if count > 0:
                             _embedding_backfill_state["embedded"] += 1
                         else:
