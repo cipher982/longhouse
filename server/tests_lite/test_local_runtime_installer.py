@@ -77,7 +77,15 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
         "ensure_runtime_binary",
         lambda component: SimpleNamespace(path="/tmp/longhouse-engine", installed_now=True),
     )
-    monkeypatch.setattr(installer, "install_service", lambda **kwargs: {"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"})
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: {
+            "message": "ok",
+            "service": "launchd",
+            "plist_path": "/tmp/test.plist",
+        },
+    )
     monkeypatch.setattr(installer, "install_hooks", lambda **kwargs: ["hooks installed"])
     monkeypatch.setattr(
         installer,
@@ -167,3 +175,109 @@ def test_install_local_runtime_keeps_service_install_when_hooks_warn(tmp_path, m
     assert result.service_result["message"] == "ok"
     assert result.hooks.actions == []
     assert result.hooks.warning == "hooks boom"
+
+
+def test_reconcile_local_runtime_uses_canonical_machine_state(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+
+    monkeypatch.setenv("HOME", str(home))
+    installer.write_machine_state(
+        base_dir=home / ".longhouse",
+        written_by="connect-install",
+        runtime_url="https://example.com",
+        machine_name="test-box",
+        desktop_app_enabled=True,
+        topology_intent="connect-remote",
+    )
+
+    service_calls: list[dict[str, str | None]] = []
+    hook_calls: list[dict[str, str | None]] = []
+    desktop_calls: list[dict[str, str | None]] = []
+
+    monkeypatch.setattr(installer, "load_token", lambda config_dir: "stored-token")
+    monkeypatch.setattr(
+        installer,
+        "ensure_runtime_binary",
+        lambda component: SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: service_calls.append(kwargs)
+        or {
+            "message": "ok",
+            "service": "launchd",
+            "plist_path": "/tmp/test.plist",
+        },
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_hooks",
+        lambda **kwargs: hook_calls.append(kwargs) or ["hooks installed"],
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_desktop_app_service",
+        lambda **kwargs: desktop_calls.append(kwargs) or {
+            "message": "desktop app installed",
+            "plist_path": "/tmp/menubar.plist",
+            "app_path": "/Applications/Longhouse.app",
+            "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+        },
+    )
+
+    result = installer.reconcile_local_runtime(
+        claude_dir=str(claude_dir),
+        written_by="machine-reconcile",
+    )
+
+    assert result.machine_state.runtime_url == "https://example.com"
+    assert result.machine_state.machine_name == "test-box"
+    assert result.machine_state.written_by == "machine-reconcile"
+    assert result.install_result.machine_name == "test-box"
+    assert service_calls == [
+        {
+            "url": "https://example.com",
+            "token": "stored-token",
+            "claude_dir": str(claude_dir),
+            "machine_name": "test-box",
+        }
+    ]
+    assert hook_calls == [
+        {
+            "url": "https://example.com",
+            "token": "stored-token",
+            "claude_dir": str(claude_dir),
+            "engine_path": "/tmp/longhouse-engine",
+        }
+    ]
+    assert desktop_calls == [
+        {
+            "ui_url": "https://example.com",
+            "claude_dir": str(claude_dir),
+        }
+    ]
+
+
+def test_reconcile_local_runtime_requires_complete_machine_state(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+
+    monkeypatch.setenv("HOME", str(home))
+    installer.write_machine_state(
+        base_dir=home / ".longhouse",
+        written_by="connect-install",
+        machine_name="test-box",
+        desktop_app_enabled=True,
+    )
+
+    try:
+        installer.reconcile_local_runtime(
+            claude_dir=str(claude_dir),
+            written_by="machine-reconcile",
+        )
+    except RuntimeError as exc:
+        assert "missing runtime_url" in str(exc)
+    else:
+        raise AssertionError("expected reconcile_local_runtime to reject incomplete machine state")

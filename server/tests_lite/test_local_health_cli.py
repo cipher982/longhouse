@@ -1,3 +1,5 @@
+# ruff: noqa: I001
+
 from __future__ import annotations
 
 import json
@@ -18,15 +20,19 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
-from zerg.cli.main import app
 from zerg.cli import local_health as local_health_cli
+from zerg.cli.main import app
 from zerg.services import local_health as local_health_service
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
 
 
-def _service_info(status: str, *, service_file: str = "/Users/test/Library/LaunchAgents/com.longhouse.shipper.plist") -> dict:
+def _service_info(
+    status: str,
+    *,
+    service_file: str = "/Users/test/Library/LaunchAgents/com.longhouse.shipper.plist",
+) -> dict:
     return {
         "platform": "macos",
         "status": status,
@@ -191,6 +197,7 @@ def test_collect_local_health_degraded_when_status_is_aging(monkeypatch, tmp_pat
 def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("stopped"))
+    _write_local_config(tmp_path, url="https://demo.longhouse.test", machine_name="cinder")
     _write_outbox_file(tmp_path, age_seconds=300)
 
     snapshot = local_health_service.collect_local_health(tmp_path)
@@ -199,6 +206,7 @@ def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monk
     assert snapshot["severity"] == "red"
     assert "service_stopped" in snapshot["reasons"]
     assert "outbox_stuck" in snapshot["reasons"]
+    assert "Run: longhouse machine reconcile" in snapshot["suggested_actions"]
 
 
 def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, tmp_path: Path):
@@ -221,7 +229,7 @@ def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, t
     assert "config_url_runner_url_mismatch" in snapshot["reasons"]
     assert "machine_name_runner_name_mismatch" in snapshot["reasons"]
     assert "launch config" in snapshot["headline"].lower()
-    assert any("connect --install" in action for action in snapshot["suggested_actions"])
+    assert "Run: longhouse machine reconcile" in snapshot["suggested_actions"]
 
 
 def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: Path):
@@ -244,10 +252,8 @@ def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: 
 
     assert snapshot["launch_readiness"]["stored_url"] is None
     assert "config_url_runner_url_mismatch" not in snapshot["reasons"]
-    assert any(
-        action == "Run: longhouse connect --install --url https://demo.longhouse.test --machine-name cinder"
-        for action in snapshot["suggested_actions"]
-    )
+    assert "machine_state_missing_runtime_url" in snapshot["reasons"]
+    assert "Run: longhouse connect --install" in snapshot["suggested_actions"]
 
 
 def test_local_health_command_json_output(monkeypatch, tmp_path: Path):
@@ -497,7 +503,13 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _write_update_cache(tmp_path: Path, *, update_available: bool, installed: str = "0.1.8", latest: str = "0.1.9") -> Path:
+def _write_update_cache(
+    tmp_path: Path,
+    *,
+    update_available: bool,
+    installed: str = "0.1.8",
+    latest: str = "0.1.9",
+) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     cache = {
         "checked_at": "2026-04-11T10:00:00+00:00",

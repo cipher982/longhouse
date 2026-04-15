@@ -200,7 +200,7 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(feedback?.style == .warning)
         #expect(feedback?.title == "Repair dry run recorded")
-        #expect(feedback?.detail.contains("longhouse connect --install") == true)
+        #expect(feedback?.detail.contains("longhouse machine reconcile") == true)
     }
 
     @Test
@@ -283,7 +283,7 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func repairInstallInvocationUsesResolvedCLIAndPreferredMachineName() throws {
+    func repairInstallInvocationUsesResolvedCLI() throws {
         let homeDirectory = try makeFakeHomeDirectory()
         let executableURL = try installFakeLonghouseBinary(homeDirectory: homeDirectory)
         let snapshot = HealthSnapshot(
@@ -306,6 +306,55 @@ struct LonghouseMenuBarCoreTests {
                 storedURL: nil,
                 machineName: "ember",
                 serviceMachineName: "fallback-name",
+                runner: RunnerSnapshot(
+                    path: nil,
+                    exists: true,
+                    error: nil,
+                    runnerName: "ember",
+                    runnerID: nil,
+                    runnerURLs: ["https://demo.longhouse.test"],
+                    installMode: "desktop"
+                )
+            )
+        )
+
+        let invocation = LonghouseCLI.repairInstallInvocation(
+            snapshot: snapshot,
+            homeDirectory: homeDirectory,
+            pathEnvironment: "/usr/bin:/bin"
+        )
+
+        #expect(invocation?.launchPath == executableURL.path)
+        #expect(invocation?.arguments == [
+            "machine",
+            "reconcile",
+        ])
+    }
+
+    @Test
+    func repairInstallInvocationDoesNotDependOnSnapshotURLs() throws {
+        let homeDirectory = try makeFakeHomeDirectory()
+        let executableURL = try installFakeLonghouseBinary(homeDirectory: homeDirectory)
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse launch config is inconsistent",
+            reasons: ["config_url_runner_url_mismatch"],
+            suggestedActions: ["Run: longhouse connect --install"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: LaunchReadinessSnapshot(
+                state: "repair-required",
+                headline: nil,
+                reasons: nil,
+                suggestedActions: nil,
+                storedURL: "https://stored.longhouse.ai",
+                machineName: "ember",
+                serviceMachineName: nil,
                 runner: nil
             )
         )
@@ -318,11 +367,8 @@ struct LonghouseMenuBarCoreTests {
 
         #expect(invocation?.launchPath == executableURL.path)
         #expect(invocation?.arguments == [
-            "connect",
-            "--install",
-            "--machine-name",
-            "ember",
-            "--menubar",
+            "machine",
+            "reconcile",
         ])
     }
 

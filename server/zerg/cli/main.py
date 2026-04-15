@@ -21,6 +21,7 @@ from zerg.cli.coordination import tail
 from zerg.cli.coordination import wall
 from zerg.cli.doctor import doctor
 from zerg.cli.local_health import app as local_health_app
+from zerg.cli.machine import app as machine_app
 from zerg.cli.mcp_serve import mcp_server
 from zerg.cli.onboard import onboard
 from zerg.cli.runtime_artifact_smoke import runtime_artifact_install_command
@@ -100,6 +101,7 @@ app.add_typer(sessions_app, name="sessions", help="Session inspection commands")
 app.add_typer(config_app, name="config", help="Configuration management")
 app.add_typer(claude_channel_app, name="claude-channel", help="Claude channel bridge commands", hidden=True)
 app.add_typer(local_health_app, name="local-health")
+app.add_typer(machine_app, name="machine", help="Machine runtime repair and reconciliation")
 
 for command in (serve, status, claude, codex, wall, peers, message, tail, auth, ship, recall):
     app.command()(command)

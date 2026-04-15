@@ -17,19 +17,21 @@ def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsy
     monkeypatch.setattr(connect, "_verify_and_warn_path", lambda: None)
     monkeypatch.setattr(
         connect,
-        "install_local_runtime",
+        "reconcile_local_runtime",
         lambda **kwargs: calls.append(kwargs)
         or SimpleNamespace(
-            machine_name="test-box",
-            engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=True),
-            service_result={"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
-            hooks=SimpleNamespace(actions=["hooks installed"], warning=None),
-            desktop_app_result={
-                "message": "desktop app installed",
-                "plist_path": "/tmp/menubar.plist",
-                "app_path": "/Applications/Longhouse.app",
-                "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
-            },
+            install_result=SimpleNamespace(
+                machine_name="test-box",
+                engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=True),
+                service_result={"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+                hooks=SimpleNamespace(actions=["hooks installed"], warning=None),
+                desktop_app_result={
+                    "message": "desktop app installed",
+                    "plist_path": "/tmp/menubar.plist",
+                    "app_path": "/Applications/Longhouse.app",
+                    "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+                },
+            )
         ),
     )
 
@@ -45,12 +47,12 @@ def test_handle_install_delegates_to_shared_runtime_installer(monkeypatch, capsy
     output = capsys.readouterr().out
     assert calls == [
         {
-            "url": "https://example.com",
             "token": None,
             "claude_dir": "/tmp/.claude",
+            "written_by": "connect-install",
+            "runtime_url": "https://example.com",
             "machine_name": "test-box",
             "menubar": True,
-            "written_by": "connect-install",
             "topology_intent": "connect-remote",
         }
     ]
@@ -68,14 +70,16 @@ def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
     monkeypatch.setattr(connect.typer, "prompt", lambda message, default: "   ")
     monkeypatch.setattr(
         connect,
-        "install_local_runtime",
+        "reconcile_local_runtime",
         lambda **kwargs: calls.append(kwargs)
         or SimpleNamespace(
-            machine_name="fallback-box",
-            engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
-            service_result={"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
-            hooks=SimpleNamespace(actions=["hooks installed"], warning=None),
-            desktop_app_result=None,
+            install_result=SimpleNamespace(
+                machine_name="fallback-box",
+                engine_runtime=SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
+                service_result={"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+                hooks=SimpleNamespace(actions=["hooks installed"], warning=None),
+                desktop_app_result=None,
+            )
         ),
     )
 
@@ -90,12 +94,12 @@ def test_handle_install_prompts_for_machine_name_when_missing(monkeypatch):
 
     assert calls == [
         {
-            "url": "https://example.com",
             "token": None,
             "claude_dir": None,
+            "written_by": "connect-install",
+            "runtime_url": "https://example.com",
             "machine_name": "fallback-box",
             "menubar": False,
-            "written_by": "connect-install",
             "topology_intent": "connect-remote",
         }
     ]
@@ -106,7 +110,11 @@ def test_connect_install_skips_auto_auth_when_no_token(monkeypatch):
 
     monkeypatch.setattr(connect, "get_zerg_url", lambda config_dir=None: None)
     monkeypatch.setattr(connect, "load_token", lambda config_dir=None: None)
-    monkeypatch.setattr(connect, "_auto_create_token", lambda url: (_ for _ in ()).throw(AssertionError("should not auto-auth")))
+    monkeypatch.setattr(
+        connect,
+        "_auto_create_token",
+        lambda url: (_ for _ in ()).throw(AssertionError("should not auto-auth")),
+    )
     monkeypatch.setattr(
         connect,
         "_handle_install",
