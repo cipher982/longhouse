@@ -1,0 +1,192 @@
+/* Runners drawer — right-side sheet overlay */
+
+@layer components {
+  .rmDrawer-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 1000;
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .rmDrawer-panel {
+    background: var(--color-surface-primary);
+    border-left: 1px solid var(--color-border-primary);
+    width: 420px;
+    max-width: 100vw;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+
+  /* Header */
+
+  .rmDrawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--color-border-primary);
+    flex-shrink: 0;
+  }
+
+  .rmDrawer-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+  }
+
+  .rmDrawer-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .rmDrawer-close {
+    background: transparent;
+    border: none;
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--motion-duration-fast), color var(--motion-duration-fast);
+  }
+
+  .rmDrawer-close:hover {
+    background: var(--color-surface-elevated);
+    color: var(--color-text-primary);
+  }
+
+  /* Body */
+
+  .rmDrawer-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0.75rem 0;
+  }
+
+  .rmDrawer-centered {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem 1.5rem;
+    gap: 0.75rem;
+    text-align: center;
+  }
+
+  .rmDrawer-hint {
+    color: var(--color-text-secondary);
+    font-size: 0.875rem;
+    margin: 0;
+  }
+
+  /* Runner list */
+
+  .rmDrawer-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .rmDrawer-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    padding: 0.875rem 1.25rem;
+    cursor: pointer;
+    border-bottom: 1px solid var(--color-border-subtle);
+    transition: background var(--motion-duration-fast);
+    outline: none;
+  }
+
+  .rmDrawer-row:last-child {
+    border-bottom: none;
+  }
+
+  .rmDrawer-row:hover,
+  .rmDrawer-row:focus-visible {
+    background: var(--color-surface-elevated);
+  }
+
+  .rmDrawer-row-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    min-width: 0;
+  }
+
+  .rmDrawer-dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--color-text-tertiary, var(--color-text-secondary));
+  }
+
+  .rmDrawer-dot--online {
+    background: var(--color-intent-success);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-intent-success) 60%, transparent);
+    animation: rmDrawer-pulse 2s ease-out infinite;
+  }
+
+  .rmDrawer-dot--offline {
+    background: var(--color-text-tertiary, var(--color-text-secondary));
+  }
+
+  .rmDrawer-dot--revoked {
+    background: var(--color-intent-error);
+    opacity: 0.5;
+  }
+
+  @keyframes rmDrawer-pulse {
+    0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-intent-success) 50%, transparent); }
+    70%  { box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-intent-success) 0%, transparent); }
+    100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-intent-success) 0%, transparent); }
+  }
+
+  .rmDrawer-row-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+
+  .rmDrawer-row-name {
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .rmDrawer-row-host {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    font-family: var(--font-family-mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .rmDrawer-row-meta {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+  }
+
+  .rmDrawer-row-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.35rem;
+    flex-shrink: 0;
+  }
+}
