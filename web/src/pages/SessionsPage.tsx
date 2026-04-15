@@ -295,6 +295,59 @@ function getRuntimeMetaLabel(runtime: ReturnType<typeof resolveSessionRuntimeSta
   return null;
 }
 
+function toTitleCaseWords(value: string): string {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      if (word.length <= 3 && word === word.toUpperCase()) {
+        return word;
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
+function compactRuntimeToolLabel(toolName: string | null): string | null {
+  const rawToolName = toolName?.trim();
+  if (!rawToolName) {
+    return null;
+  }
+
+  const canonicalSegment = rawToolName.split("__").pop() ?? rawToolName;
+  const withoutPrefixes = canonicalSegment
+    .replace(/^hatch_/, "")
+    .replace(/^tool_/, "")
+    .replace(/^mcp_/, "");
+  const normalized = withoutPrefixes.replace(/[-_.]+/g, " ").trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  const lower = normalized.toLowerCase();
+  if (lower === "codex") return "Codex";
+  if (lower === "claude") return "Claude";
+  if (lower === "gemini") return "Gemini";
+  if (lower === "default") return "Z.ai";
+  if (lower === "shell" || lower === "bash" || lower === "terminal") return "Shell";
+
+  return toTitleCaseWords(normalized);
+}
+
+function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string {
+  const compactTool = compactRuntimeToolLabel(runtime.presenceTool);
+
+  if (runtime.presenceState === "running" && compactTool) {
+    return `Running ${compactTool}`;
+  }
+  if (runtime.presenceState === "blocked" && compactTool) {
+    return `Blocked on ${compactTool}`;
+  }
+
+  return runtime.displayPhase;
+}
+
 function parsePositiveIntParam(
   rawValue: string | null,
   fallback: number,
@@ -531,6 +584,7 @@ function SessionCard({
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
   const runtimeMetaLabel = getRuntimeMetaLabel(runtime);
+  const runtimePhaseLabel = getCardRuntimePhaseLabel(runtime);
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
@@ -686,7 +740,7 @@ function SessionCard({
                     heuristicActive={runtime.heuristicActive}
                     showUnknown={runtime.truthTier === "stale"}
                   />
-                  <span className="session-card-runtime-phase">{runtime.displayPhase}</span>
+                  <span className="session-card-runtime-phase">{runtimePhaseLabel}</span>
                   {runtimeMetaLabel && (
                     <span className="session-card-runtime-meta">{runtimeMetaLabel}</span>
                   )}

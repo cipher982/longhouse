@@ -927,7 +927,7 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Running bash")).toBeInTheDocument();
+    expect(await screen.findByText("Running Shell")).toBeInTheDocument();
     expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
@@ -1102,7 +1102,7 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    expect(await screen.findByText("Blocked on bash")).toBeInTheDocument();
+    expect(await screen.findByText("Blocked on Shell")).toBeInTheDocument();
     expect(screen.getByText("Live on host")).toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
@@ -1175,6 +1175,41 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("Working")).not.toBeInTheDocument();
     expect(screen.queryByText("Recent progress")).not.toBeInTheDocument();
     expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
+  });
+
+  it("condenses raw runtime tool ids into readable card labels", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            status: "working",
+            confidence: "live",
+            runtime_source: "managed_local_transport",
+            presence_state: "running",
+            presence_tool: "mcp__hatch__hatch_codex",
+            active_tool: "mcp__hatch__hatch_codex",
+            presence_updated_at: "2026-03-21T12:04:00Z",
+            last_live_at: "2026-03-21T12:04:00Z",
+            timeline_anchor_at: "2026-03-21T12:04:00Z",
+            display_phase: "Running mcp__hatch__hatch_codex",
+            capabilities: makeCapabilities({
+              host_reattach_available: true,
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Running Codex")).toBeInTheDocument();
+    expect(screen.queryByText("Running mcp__hatch__hatch_codex")).not.toBeInTheDocument();
   });
 
   it("uses the session timeline anchor for the card timestamp", async () => {
