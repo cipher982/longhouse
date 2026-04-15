@@ -1,0 +1,888 @@
+//! Ship command — one-shot session shipping and single-file shipping.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::Instant;
+
+use rayon::prelude::*;
+
+use crate::bench;
+use crate::config::ShipperConfig;
+use crate::discovery;
+use crate::pipeline::compressor::CompressionAlgo;
+use crate::shipper;
+use crate::shipping::client::ShipperClient;
+use crate::state::db::open_db;
+use crate::state::file_state::FileState;
+use crate::state::spool::Spool;
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+pub fn detect_provider_for_file(
+    path: &std::path::Path,
+    provider_override: Option<&str>,
+) -> anyhow::Result<String> {
+    if let Some(p) = provider_override {
+        return Ok(p.to_lowercase());
+    }
+
+    let providers = discovery::get_providers();
+    if let Some(p) = discovery::provider_for_path(path, &providers) {
+        return Ok(p.to_string());
+    }
+
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase());
+
+    match ext.as_deref() {
+        Some("jsonl") => Ok("claude".to_string()),
+        Some("json") => Ok("gemini".to_string()),
+        _ => anyhow::bail!(
+            "Unable to determine provider for {} (use --provider)",
+            path.display()
+        ),
+    }
+}
+
+pub fn recent_dead_letter_json(
+    spool: &Spool<'_>,
+    limit: usize,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    Ok(spool
+        .recent_dead(limit)?
+        .into_iter()
+        .map(|entry| {
+            serde_json::json!({
+                "provider": entry.provider,
+                "file_path": entry.file_path,
+                "start_offset": entry.start_offset,
+                "end_offset": entry.end_offset,
+                "range_bytes": entry.end_offset.saturating_sub(entry.start_offset),
+                "session_id": entry.session_id,
+                "last_error": entry.last_error,
+                "created_at": entry.created_at,
+            })
+        })
+        .collect())
+}
+
+pub fn print_recent_dead_letters(
+    spool: &Spool<'_>,
+    limit: usize,
+    printer: impl Fn(&str),
+) -> anyhow::Result<()> {
+    for entry in spool.recent_dead(limit)? {
+        let reason = entry.last_error.as_deref().unwrap_or("no error recorded");
+        let line = format!(
+            "  - [{}] {} {}..{} ({} bytes): {}",
+            entry.provider,
+            entry.file_path,
+            entry.start_offset,
+            entry.end_offset,
+            entry.end_offset.saturating_sub(entry.start_offset),
+            reason
+        );
+        printer(&line);
+    }
+    Ok(())
+}
+
+pub fn reported_ship_events(
+    replay_events_shipped: usize,
+    shipped_events: usize,
+    require_reply_evidence: bool,
+    reply_evidence_pending: bool,
+) -> usize {
+    if require_reply_evidence && reply_evidence_pending {
+        return 0;
+    }
+    replay_events_shipped + shipped_events
+}
+
+// ---------------------------------------------------------------------------
+// cmd_ship — scan all providers and ship new events
+// ---------------------------------------------------------------------------
+
+pub async fn cmd_ship(
+    url: Option<&str>,
+    token: Option<&str>,
+    db_path: Option<&std::path::Path>,
+    workers: usize,
+    dry_run: bool,
+    json_output: bool,
+    algo: CompressionAlgo,
+    max_batch_bytes: Option<u64>,
+) -> anyhow::Result<()> {
+    let start = Instant::now();
+
+    // Load config
+    let config = ShipperConfig::from_env()?.with_overrides(
+        url,
+        token,
+        db_path,
+        if workers > 0 { Some(workers) } else { None },
+        None,
+        max_batch_bytes,
+    );
+    crate::pipeline::compressor::set_machine_name(&config.machine_name);
+
+    if !json_output {
+        eprintln!("Shipping to: {}", config.api_url);
+        if dry_run {
+            eprintln!("DRY RUN — will parse and compress but not POST");
+        }
+    }
+
+    // Open state DB
+    let conn = open_db(config.db_path.as_deref())?;
+
+    let recovered = shipper::run_startup_recovery(&conn)?;
+    if recovered > 0 && !json_output {
+        eprintln!("Recovered {} unacked file gaps into spool", recovered);
+    }
+
+    // Discover files
+    let all_files = bench::discover_session_files();
+    if !json_output {
+        eprintln!("Found {} session files", all_files.len());
+    }
+
+    // Filter to files with new content
+    let file_state = FileState::new(&conn);
+    let mut files_to_ship: Vec<(PathBuf, u64)> = Vec::new(); // (path, offset_to_start_from)
+
+    for path in &all_files {
+        let path_str = path.to_string_lossy();
+        let current_offset = file_state.get_offset(&path_str)?;
+        let file_size = match std::fs::metadata(path) {
+            Ok(m) => m.len(),
+            Err(_) => continue,
+        };
+
+        if file_size < current_offset {
+            // File truncated (got smaller than our offset) — reset and re-ship
+            tracing::warn!(
+                "File truncated: {} (was {}, now {}), resetting",
+                path_str,
+                current_offset,
+                file_size
+            );
+            file_state.reset_offsets(&path_str)?;
+            files_to_ship.push((path.clone(), 0));
+        } else if file_size > current_offset {
+            // New content available
+            files_to_ship.push((path.clone(), current_offset));
+        }
+        // file_size == current_offset: no new content, skip
+    }
+
+    if !json_output {
+        eprintln!("{} files with new content to ship", files_to_ship.len());
+    }
+
+    if files_to_ship.is_empty() {
+        let spool = Spool::new(&conn);
+        let spool_pending = spool.pending_count()?;
+        let spool_dead = spool.dead_count()?;
+        let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
+        if json_output {
+            let summary = serde_json::json!({
+                "status": "ok",
+                "files_scanned": all_files.len(),
+                "files_shipped": 0,
+                "events_shipped": 0,
+                "spool_pending": spool_pending,
+                "spool_dead": spool_dead,
+                "recent_dead_letters": recent_dead_letters,
+                "total_seconds": start.elapsed().as_secs_f64(),
+            });
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        } else {
+            eprintln!("Nothing to ship — all files up to date.");
+            if spool_dead > 0 {
+                eprintln!("Dead-lettered ranges retained: {}", spool_dead);
+                print_recent_dead_letters(&spool, 3, |line| eprintln!("{}", line))?;
+            }
+        }
+        return Ok(());
+    }
+
+    // Create HTTP client (unless dry run)
+    let client = if !dry_run {
+        Some(ShipperClient::with_compression(&config, algo)?)
+    } else {
+        None
+    };
+
+    // Configure rayon thread pool
+    let num_workers = if workers > 0 {
+        workers
+    } else {
+        num_cpus::get()
+    };
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_workers)
+        .build_global()
+        .ok(); // Ignore if already initialized
+
+    if !json_output {
+        eprintln!(
+            "Processing with {} workers{}",
+            num_workers,
+            if dry_run { " (dry run)" } else { "" }
+        );
+    }
+
+    // Phase 1: Parse + compress in parallel (CPU-bound, embarrassingly parallel)
+    // Collect results for sequential state writes + HTTP shipping.
+    let files_done = AtomicUsize::new(0);
+    let bytes_done = AtomicU64::new(0);
+    let events_done = AtomicUsize::new(0);
+    let total_files = files_to_ship.len();
+
+    let prepared_files: Vec<Option<shipper::PreparedFile>> = files_to_ship
+        .par_iter()
+        .map(|(path, offset)| {
+            let path_str = path.to_string_lossy().to_string();
+            if std::fs::metadata(path).is_err() {
+                return None;
+            }
+
+            let prepared = match shipper::prepare_path_from_offset(
+                path,
+                "claude",
+                *offset,
+                algo,
+                config.max_batch_bytes,
+            ) {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::warn!("Skip {}: {}", path_str, e);
+                    return None;
+                }
+            };
+
+            let prepared = match prepared {
+                Some(prepared) => prepared,
+                None => return None,
+            };
+            let event_count = prepared.total_event_count();
+            let new_offset = prepared.new_offset;
+
+            // Progress reporting
+            let done = files_done.fetch_add(1, Ordering::Relaxed) + 1;
+            bytes_done.fetch_add(new_offset.saturating_sub(*offset), Ordering::Relaxed);
+            events_done.fetch_add(event_count, Ordering::Relaxed);
+
+            if !json_output && (done % 1000 == 0 || done == total_files) {
+                let elapsed = start.elapsed().as_secs_f64();
+                let mb = bytes_done.load(Ordering::Relaxed) as f64 / 1_048_576.0;
+                let evts = events_done.load(Ordering::Relaxed);
+                eprintln!(
+                    "  [{}/{}] {} events, {:.1} MB, {:.1} MB/s",
+                    done,
+                    total_files,
+                    evts,
+                    mb,
+                    mb / elapsed,
+                );
+            }
+
+            Some(prepared)
+        })
+        .collect();
+
+    let parse_compress_elapsed = start.elapsed();
+    if !json_output {
+        eprintln!(
+            "Parse+compress done in {:.1}s, writing state...",
+            parse_compress_elapsed.as_secs_f64()
+        );
+    }
+
+    // Phase 2: Sequential state writes + HTTP shipping
+    let mut files_shipped = 0usize;
+    let mut events_shipped = 0usize;
+    let mut bytes_shipped = 0u64;
+    let mut files_failed = 0usize;
+    let mut files_skipped = 0usize;
+
+    if dry_run {
+        for prepared in &prepared_files {
+            match prepared {
+                Some(prepared) => {
+                    files_shipped += 1;
+                    events_shipped += prepared.total_event_count();
+                    bytes_shipped += prepared.new_offset - prepared.offset;
+                }
+                None => {
+                    files_skipped += 1;
+                }
+            }
+        }
+    }
+
+    // Live HTTP shipping (skip if dry run — already handled above)
+    if !dry_run {
+        for prepared in prepared_files {
+            let prepared = match prepared {
+                Some(prepared) => prepared,
+                None => {
+                    files_skipped += 1;
+                    continue;
+                }
+            };
+
+            let client = client.as_ref().unwrap();
+            let outcome = shipper::ship_prepared_file(prepared, client, &conn, None).await?;
+            if outcome.events_shipped > 0 || outcome.dead_lettered > 0 {
+                files_shipped += 1;
+            }
+            events_shipped += outcome.events_shipped;
+            bytes_shipped += outcome.bytes_shipped;
+            if !outcome.fully_processed {
+                files_failed += 1;
+            }
+        }
+    } // end if !dry_run
+
+    // Replay spool (if not dry run)
+    let mut spool_replayed = 0usize;
+    if !dry_run {
+        let client = client.as_ref().unwrap();
+        let (ok, _failed) = shipper::replay_spool_batch_with_batch_bytes(
+            &conn,
+            client,
+            algo,
+            100,
+            config.max_batch_bytes,
+        )
+        .await?;
+        spool_replayed = ok;
+    }
+
+    let total_elapsed = start.elapsed();
+    let spool = Spool::new(&conn);
+    let spool_pending = spool.pending_count()?;
+    let spool_dead = spool.dead_count()?;
+    let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
+
+    if json_output {
+        let summary = serde_json::json!({
+            "status": "ok",
+            "files_scanned": all_files.len(),
+            "files_shipped": files_shipped,
+            "files_failed": files_failed,
+            "files_skipped": files_skipped,
+            "events_shipped": events_shipped,
+            "bytes_shipped": bytes_shipped,
+            "spool_replayed": spool_replayed,
+            "spool_pending": spool_pending,
+            "spool_dead": spool_dead,
+            "recent_dead_letters": recent_dead_letters,
+            "total_seconds": total_elapsed.as_secs_f64(),
+            "throughput_mb_s": bytes_shipped as f64 / 1_048_576.0 / total_elapsed.as_secs_f64(),
+            "dry_run": dry_run,
+        });
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        eprintln!("\n=== Ship Results ===");
+        eprintln!("Files shipped: {}", files_shipped);
+        eprintln!("Events shipped: {}", events_shipped);
+        eprintln!(
+            "Bytes shipped: {:.2} MB",
+            bytes_shipped as f64 / 1_048_576.0
+        );
+        if files_failed > 0 {
+            eprintln!("Files failed (spooled): {}", files_failed);
+        }
+        if spool_replayed > 0 {
+            eprintln!("Spool replayed: {}", spool_replayed);
+        }
+        if spool_dead > 0 {
+            eprintln!("Dead-lettered ranges retained: {}", spool_dead);
+            print_recent_dead_letters(&spool, 3, |line| eprintln!("{}", line))?;
+        }
+        eprintln!("Total: {:.3}s", total_elapsed.as_secs_f64());
+        if bytes_shipped > 0 {
+            eprintln!(
+                "Throughput: {:.1} MB/s",
+                bytes_shipped as f64 / 1_048_576.0 / total_elapsed.as_secs_f64()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// cmd_ship_file — ship a single explicit file
+// ---------------------------------------------------------------------------
+
+pub async fn cmd_ship_file(
+    path: &std::path::Path,
+    provider_override: Option<&str>,
+    url: Option<&str>,
+    token: Option<&str>,
+    db_path: Option<&std::path::Path>,
+    dry_run: bool,
+    json_output: bool,
+    algo: CompressionAlgo,
+    max_batch_bytes: Option<u64>,
+    session_id_override: Option<&str>,
+    require_reply_evidence: bool,
+) -> anyhow::Result<()> {
+    if !path.exists() {
+        anyhow::bail!("File not found: {}", path.display());
+    }
+
+    let provider = detect_provider_for_file(path, provider_override)?;
+
+    let config =
+        ShipperConfig::from_env()?.with_overrides(url, token, db_path, None, None, max_batch_bytes);
+    crate::pipeline::compressor::set_machine_name(&config.machine_name);
+
+    if !json_output {
+        eprintln!("Shipping file: {}", path.display());
+        eprintln!("Provider: {}", provider);
+        if dry_run {
+            eprintln!("DRY RUN — will parse and compress but not POST");
+        }
+    }
+
+    let conn = open_db(config.db_path.as_deref())?;
+
+    let mut prepared = shipper::prepare_file_batches(
+        path,
+        &provider,
+        algo,
+        &conn,
+        config.max_batch_bytes,
+        session_id_override,
+    )?;
+    let mut reply_evidence_pending = false;
+    if require_reply_evidence
+        && prepared
+            .as_ref()
+            .is_some_and(|item| !item.has_reply_evidence)
+    {
+        reply_evidence_pending = true;
+        prepared = None;
+    }
+    let mut replay_events_shipped = 0usize;
+    let mut replay_failed = 0usize;
+    let mut replay_had_connect_error = false;
+    let mut replay_blocked_by_spool_backpressure = false;
+
+    if prepared.is_none() && !dry_run {
+        let path_str = path.to_string_lossy().to_string();
+        let recovered_gap = shipper::recover_gap_for_path(&conn, path)?;
+        let has_pending_replay = !Spool::new(&conn)
+            .pending_entries_for_path_now(&path_str, 1)?
+            .is_empty();
+        replay_blocked_by_spool_backpressure =
+            recovered_gap.had_gap && !recovered_gap.replay_ready && !has_pending_replay;
+        if recovered_gap.replay_ready || has_pending_replay {
+            let client = ShipperClient::with_compression(&config, algo)?;
+            let replay = shipper::replay_spool_for_path_now_with_batch_bytes_and_parse_tracker(
+                &conn,
+                &client,
+                algo,
+                path,
+                32,
+                config.max_batch_bytes,
+                None,
+            )
+            .await?;
+            replay_events_shipped = replay.events_shipped;
+            replay_failed = replay.failed;
+            replay_had_connect_error = replay.had_connect_error;
+            prepared = shipper::prepare_file_batches(
+                path,
+                &provider,
+                algo,
+                &conn,
+                config.max_batch_bytes,
+                session_id_override,
+            )?;
+            if require_reply_evidence
+                && prepared
+                    .as_ref()
+                    .is_some_and(|item| !item.has_reply_evidence)
+            {
+                reply_evidence_pending = true;
+                prepared = None;
+            }
+        }
+    }
+
+    if dry_run {
+        let prepared = match prepared {
+            Some(prepared) => prepared,
+            None => {
+                let spool = Spool::new(&conn);
+                let spool_dead = spool.dead_count()?;
+                let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
+                if json_output {
+                    let summary = serde_json::json!({
+                        "status": "ok",
+                        "file": path.display().to_string(),
+                        "events_shipped": 0,
+                        "spool_dead": spool_dead,
+                        "recent_dead_letters": recent_dead_letters,
+                        "dry_run": true,
+                        "reply_evidence_pending": reply_evidence_pending,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&summary)?);
+                } else {
+                    println!("No new events");
+                    if spool_dead > 0 {
+                        println!("Dead-lettered ranges retained: {}", spool_dead);
+                        print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
+                    }
+                }
+                return Ok(());
+            }
+        };
+        if json_output {
+            let summary = serde_json::json!({
+                "status": "ok",
+                "file": prepared.path_str,
+                "events_shipped": prepared.total_event_count(),
+                "dry_run": true,
+            });
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        } else {
+            println!("Would ship {} events", prepared.total_event_count());
+        }
+        return Ok(());
+    }
+
+    let client = ShipperClient::with_compression(&config, algo)?;
+    let prepared = match prepared {
+        Some(prepared) => prepared,
+        None => {
+            let spool = Spool::new(&conn);
+            let spool_dead = spool.dead_count()?;
+            let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
+            if json_output {
+                let summary = serde_json::json!({
+                    "status": "ok",
+                    "file": path.display().to_string(),
+                    "events_shipped": replay_events_shipped,
+                    "spool_dead": spool_dead,
+                    "recent_dead_letters": recent_dead_letters,
+                    "dry_run": false,
+                    "had_connect_error": replay_had_connect_error,
+                    "replay_failed": replay_failed,
+                    "spool_backpressure": replay_blocked_by_spool_backpressure,
+                    "reply_evidence_pending": reply_evidence_pending,
+                });
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else if replay_events_shipped > 0 {
+                println!("Shipped {} events", replay_events_shipped);
+                if replay_had_connect_error {
+                    println!("Some replay work was deferred due to a connection error");
+                } else if replay_failed > 0 {
+                    println!(
+                        "Some replay work was deferred after {} replay failure(s)",
+                        replay_failed
+                    );
+                }
+                if spool_dead > 0 {
+                    println!("Dead-lettered ranges retained: {}", spool_dead);
+                    print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
+                }
+            } else {
+                if replay_blocked_by_spool_backpressure {
+                    println!("Replay deferred because the local spool is at capacity");
+                } else if replay_had_connect_error {
+                    println!("Replay deferred due to connection error");
+                } else if replay_failed > 0 {
+                    println!("Replay deferred after {} replay failure(s)", replay_failed);
+                } else {
+                    println!("No new events");
+                }
+                if spool_dead > 0 {
+                    println!("Dead-lettered ranges retained: {}", spool_dead);
+                    print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
+                }
+            }
+            return Ok(());
+        }
+    };
+    let outcome = shipper::ship_prepared_file(prepared, &client, &conn, None).await?;
+    let events_shipped = reported_ship_events(
+        replay_events_shipped,
+        outcome.events_shipped,
+        require_reply_evidence,
+        reply_evidence_pending,
+    );
+    let spool = Spool::new(&conn);
+    let spool_dead = spool.dead_count()?;
+    let recent_dead_letters = recent_dead_letter_json(&spool, 5)?;
+
+    if json_output {
+        let summary = serde_json::json!({
+            "status": "ok",
+            "file": path.display().to_string(),
+            "events_shipped": events_shipped,
+            "replay_events_shipped": replay_events_shipped,
+            "spool_dead": spool_dead,
+            "recent_dead_letters": recent_dead_letters,
+            "dry_run": false,
+        });
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+    } else {
+        println!("Shipped {} events", events_shipped);
+        if spool_dead > 0 {
+            println!("Dead-lettered ranges retained: {}", spool_dead);
+            print_recent_dead_letters(&spool, 3, |line| println!("{}", line))?;
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests (moved from main.rs)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    fn make_claude_file(dir: &tempfile::TempDir, name: &str, content: &str) -> PathBuf {
+        let path = dir.path().join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    fn spawn_http_response_server(
+        status_line: &str,
+        body: &str,
+    ) -> (String, std::thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let status_line = status_line.to_string();
+        let body = body.to_string();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0_u8; 8192];
+            let _ = stream.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 {}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{}",
+                status_line,
+                body.len(),
+                body,
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        (format!("http://{}", addr), handle)
+    }
+
+    #[test]
+    fn test_cmd_ship_file_dry_run_does_not_mutate_state() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "ffff1111-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"dry-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"dry-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+                "\n",
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            None,
+            None,
+            Some(&db_path),
+            true,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            false,
+        ))
+        .unwrap();
+
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        assert_eq!(
+            file_state.get_offset(&file.to_string_lossy()).unwrap(),
+            0,
+            "dry-run should not advance acked_offset",
+        );
+        assert_eq!(
+            file_state
+                .get_queued_offset(&file.to_string_lossy())
+                .unwrap(),
+            0,
+            "dry-run should not advance queued_offset",
+        );
+    }
+
+    #[test]
+    fn test_cmd_ship_file_recovers_explicit_file_gap_before_noop() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "eeee1111-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"gap-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"gap-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+                "\n",
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        let file_str = file.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&file).unwrap().len();
+
+        file_state
+            .set_queued_offset(
+                &file_str,
+                file_len,
+                "claude",
+                "eeee1111-2222-3333-4444-555566667777",
+                "eeee1111-2222-3333-4444-555566667777",
+            )
+            .unwrap();
+
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            Some(&url),
+            Some("test-token"),
+            Some(&db_path),
+            false,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            false,
+        ))
+        .unwrap();
+        handle.join().unwrap();
+
+        let reopened = open_db(Some(&db_path)).unwrap();
+        let reopened_state = FileState::new(&reopened);
+        let spool = Spool::new(&reopened);
+        assert_eq!(reopened_state.get_offset(&file_str).unwrap(), file_len);
+        assert_eq!(
+            reopened_state.get_queued_offset(&file_str).unwrap(),
+            file_len
+        );
+        assert!(spool
+            .pending_entries_for_path_now(&file_str, 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_cmd_ship_file_require_reply_evidence_skips_user_only_partial_turn() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "replyevidence1111-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"reply-gap-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"reply-gap-2","timestamp":"2026-02-15T10:00:01Z","message":{"con"#,
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            Some("http://127.0.0.1:9"),
+            Some("test-token"),
+            Some(&db_path),
+            false,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            true,
+        ))
+        .unwrap();
+
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        let file_str = file.to_string_lossy().to_string();
+        assert_eq!(file_state.get_offset(&file_str).unwrap(), 0);
+        assert_eq!(file_state.get_queued_offset(&file_str).unwrap(), 0);
+        assert!(spool
+            .pending_entries_for_path_now(&file_str, 10)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_cmd_ship_file_require_reply_evidence_ships_complete_turn() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let file = make_claude_file(
+            &dir,
+            "replyevidence2222-2222-3333-4444-555566667777.jsonl",
+            concat!(
+                r#"{"type":"user","uuid":"reply-ok-1","timestamp":"2026-02-15T10:00:00Z","message":{"content":"hello"}}"#,
+                "\n",
+                r#"{"type":"assistant","uuid":"reply-ok-2","timestamp":"2026-02-15T10:00:01Z","message":{"content":[{"type":"text","text":"hi"}]}}"#,
+                "\n",
+            ),
+        );
+        let db_path = dir.path().join("engine.db");
+        let file_len = std::fs::metadata(&file).unwrap().len();
+        let (url, handle) = spawn_http_response_server("200 OK", "{}");
+
+        rt.block_on(cmd_ship_file(
+            &file,
+            Some("claude"),
+            Some(&url),
+            Some("test-token"),
+            Some(&db_path),
+            false,
+            true,
+            CompressionAlgo::Gzip,
+            None,
+            None,
+            true,
+        ))
+        .unwrap();
+        handle.join().unwrap();
+
+        let conn = open_db(Some(&db_path)).unwrap();
+        let file_state = FileState::new(&conn);
+        let file_str = file.to_string_lossy().to_string();
+        assert_eq!(file_state.get_offset(&file_str).unwrap(), file_len);
+        assert_eq!(file_state.get_queued_offset(&file_str).unwrap(), file_len);
+    }
+
+    #[test]
+    fn test_reported_ship_events_ignore_replay_while_reply_evidence_is_pending() {
+        assert_eq!(reported_ship_events(3, 0, true, true), 0);
+        assert_eq!(reported_ship_events(3, 0, true, false), 3);
+        assert_eq!(reported_ship_events(0, 2, true, false), 2);
+        assert_eq!(reported_ship_events(3, 2, false, true), 5);
+    }
+}
