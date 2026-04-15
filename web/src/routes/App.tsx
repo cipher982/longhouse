@@ -3,7 +3,6 @@ import { useRoutes, Outlet, Navigate, useLocation } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
 import LoginPage from "../pages/LoginPage";
-import PricingPage from "../pages/PricingPage";
 import DocsLayout from "../pages/docs/DocsLayout";
 import DocsOverviewPage from "../pages/docs/OverviewPage";
 import DocsQuickStartPage from "../pages/docs/QuickStartPage";
@@ -175,14 +174,6 @@ export default function App() {
         </ErrorBoundary>
       ),
     },
-    {
-      path: "/pricing",
-      element: (
-        <ErrorBoundary>
-          <PricingPage />
-        </ErrorBoundary>
-      ),
-    },
     ...publicInfoRoutes,
     // Demo timeline — wrapped in Layout with DemoBanner, no AuthGuard
     {
@@ -235,15 +226,6 @@ export default function App() {
         {
           path: "/landing",
           element: <LandingAliasRedirect />,
-        },
-        // Public info pages - NO AuthGuard
-        {
-          path: "/pricing",
-          element: (
-            <ErrorBoundary>
-              <PricingPage />
-            </ErrorBoundary>
-          ),
         },
       ];
 
