@@ -56,7 +56,7 @@ What is missing is a user-facing local health plane.
 The first real machine failure after the menu bar MVP work was not a dead daemon. It was a **coherence failure**:
 
 - local CLI URL pointed at `127.0.0.1:8080`
-- runner daemon was healthy against `david010.longhouse.ai`
+- runner daemon was healthy against `demo.longhouse.test`
 - CLI machine label was `cinder.local`
 - runner identity was `cinder`
 
@@ -208,7 +208,7 @@ Recommended shape:
     "headline": "Managed launch configuration looks coherent",
     "reasons": [],
     "suggested_actions": [],
-    "stored_url": "https://david010.longhouse.ai",
+    "stored_url": "https://demo.longhouse.test",
     "machine_name": "cinder",
     "service_machine_name": "cinder",
     "runner": {
@@ -216,7 +216,7 @@ Recommended shape:
       "exists": true,
       "runner_name": "cinder",
       "runner_urls": [
-        "https://david010.longhouse.ai"
+        "https://demo.longhouse.test"
       ],
       "install_mode": "desktop"
     }

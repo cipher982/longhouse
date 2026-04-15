@@ -75,7 +75,7 @@
     "headline": "Managed launch configuration looks coherent",
     "reasons": [],
     "suggested_actions": [],
-    "stored_url": "https://david010.longhouse.ai",
+    "stored_url": "https://demo.longhouse.test",
     "machine_name": "cinder",
     "service_machine_name": "cinder",
     "runner": {
@@ -85,7 +85,7 @@
       "runner_name": "cinder",
       "runner_id": null,
       "runner_urls": [
-        "https://david010.longhouse.ai"
+        "https://demo.longhouse.test"
       ],
       "install_mode": "desktop"
     }

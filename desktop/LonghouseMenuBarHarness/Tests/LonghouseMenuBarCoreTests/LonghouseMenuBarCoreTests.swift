@@ -89,7 +89,7 @@ struct LonghouseMenuBarCoreTests {
                 headline: nil,
                 reasons: nil,
                 suggestedActions: nil,
-                storedURL: "https://david010.longhouse.ai",
+                storedURL: "https://demo.longhouse.test",
                 machineName: nil,
                 serviceMachineName: nil,
                 runner: nil
@@ -98,7 +98,7 @@ struct LonghouseMenuBarCoreTests {
 
         let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
 
-        #expect(sink.resolveLonghouseURL(snapshot: snapshot)?.absoluteString == "https://david010.longhouse.ai")
+        #expect(sink.resolveLonghouseURL(snapshot: snapshot)?.absoluteString == "https://demo.longhouse.test")
     }
 
     @Test
@@ -370,6 +370,56 @@ struct LonghouseMenuBarCoreTests {
             "machine",
             "reconcile",
         ])
+    }
+
+    @Test
+    func yellowAndRedSnapshotsRequestMenuBarAttention() {
+        let broken = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse launch config is inconsistent",
+            reasons: ["config_url_runner_url_mismatch"],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let degraded = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "degraded",
+            severity: "yellow",
+            headline: "Longhouse shipping is degraded",
+            reasons: ["spool_pending"],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+        let healthy = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        #expect(broken.needsMenuBarAttention == true)
+        #expect(degraded.needsMenuBarAttention == true)
+        #expect(healthy.needsMenuBarAttention == false)
     }
 
     @Test

@@ -67,16 +67,12 @@ final class MenuBarStatusController: NSObject {
             return
         }
 
-        let icon = MenuBarBrandIcon.image.copy() as? NSImage ?? MenuBarBrandIcon.image
-        icon.isTemplate = false
-        button.image = icon
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleNone
         button.target = self
         button.action = #selector(togglePanel(_:))
         button.sendAction(on: [.leftMouseUp])
-        button.toolTip = "Longhouse"
-        button.setAccessibilityLabel("Longhouse")
+        refreshStatusItemAppearance()
     }
 
     private func configureRefreshTimer(_ refreshIntervalSeconds: TimeInterval?) {
@@ -103,6 +99,7 @@ final class MenuBarStatusController: NSObject {
         )
             .sink { [weak self] _ in
                 DispatchQueue.main.async {
+                    self?.refreshStatusItemAppearance()
                     self?.refreshPanelLayout()
                 }
             }
@@ -119,6 +116,7 @@ final class MenuBarStatusController: NSObject {
     private func closePanel() {
         panelGeneration &+= 1
         store.endPresentationUpdates()
+        store.clearFeedback()
         panelController.hide()
         removeEventMonitors()
     }
@@ -128,6 +126,44 @@ final class MenuBarStatusController: NSObject {
         if panelController.isPresented, let button = statusItem.button {
             panelController.reposition(relativeTo: button)
         }
+    }
+
+    private func refreshStatusItemAppearance() {
+        guard let button = statusItem.button else {
+            return
+        }
+
+        button.image = MenuBarBrandIcon.image(attentionColor: statusItemAttentionColor())
+        let tooltip = statusItemAttentionLabel() ?? "Longhouse"
+        button.toolTip = tooltip
+        button.setAccessibilityLabel(tooltip)
+    }
+
+    private func statusItemAttentionColor() -> NSColor? {
+        if store.loadError != nil {
+            return .systemRed
+        }
+        guard let snapshot = store.snapshot, snapshot.needsMenuBarAttention else {
+            return nil
+        }
+        switch snapshot.parsedSeverity {
+        case .yellow:
+            return .systemOrange
+        case .red:
+            return .systemRed
+        case .green, .gray:
+            return .systemRed
+        }
+    }
+
+    private func statusItemAttentionLabel() -> String? {
+        if store.loadError != nil {
+            return "Longhouse needs attention"
+        }
+        guard let snapshot = store.snapshot, snapshot.needsMenuBarAttention else {
+            return nil
+        }
+        return "Longhouse needs attention: \(snapshot.ambientStatusLabel)"
     }
 
     private func installEventMonitors(for generation: UInt64) {

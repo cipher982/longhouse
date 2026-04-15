@@ -12,6 +12,8 @@ public enum SnapshotRenderer {
             snapshot: snapshot,
             history: [],
             presentationDate: Date(),
+            feedback: nil,
+            setFeedback: { _ in },
             actionSink: actionSink,
             isManualRefreshing: false,
             refresh: {}
