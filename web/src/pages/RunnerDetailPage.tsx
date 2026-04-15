@@ -25,28 +25,17 @@ import {
   describeRunnerNativeInstallMode,
   type RunnerNativeInstallMode,
 } from "../lib/runnerInstallCommands";
+import {
+  formatCompactDuration,
+  formatRunnerVersionValue,
+  normalizeRunnerMetadata,
+  type RunnerMetadataSummary,
+  runnerStatusVariant as getStatusVariant,
+  updatePolicyLabel,
+  versionStatusLabel,
+} from "../lib/runnerPresentation";
 import type { Runner, RunnerDoctorResponse, RunnerJob } from "../services/api";
 import "../styles/runner-detail.css";
-
-type RunnerMetadataSummary = {
-  platform?: string;
-  arch?: string;
-  hostname?: string;
-  dockerAvailable?: boolean;
-};
-
-function getStatusVariant(status: string): "success" | "warning" | "error" | "neutral" {
-  switch (status) {
-    case "online":
-      return "success";
-    case "offline":
-      return "warning";
-    case "revoked":
-      return "error";
-    default:
-      return "neutral";
-  }
-}
 
 function getVersionVariant(status: string | null | undefined): "success" | "warning" | "neutral" {
   switch (status) {
@@ -72,27 +61,6 @@ function getJobStatusVariant(status: string): "success" | "warning" | "error" | 
     default:
       return "neutral";
   }
-}
-
-function formatCompactDuration(totalSeconds: number): string {
-  const seconds = Math.max(0, Math.floor(totalSeconds));
-  if (seconds < 60) return `${seconds}s`;
-
-  const minutes = Math.floor(seconds / 60);
-  const remSeconds = seconds % 60;
-  if (minutes < 60) {
-    return remSeconds > 0 ? `${minutes}m ${remSeconds}s` : `${minutes}m`;
-  }
-
-  const hours = Math.floor(minutes / 60);
-  const remMinutes = minutes % 60;
-  if (hours < 24) {
-    return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
-  }
-
-  const days = Math.floor(hours / 24);
-  const remHours = hours % 24;
-  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
 
 function formatTimestamp(timestamp: string | null | undefined) {
@@ -134,32 +102,6 @@ function formatHeartbeatInterval(intervalMs: number | null | undefined): string 
   return `Heartbeats every ${formatCompactDuration(Math.max(1, Math.round(intervalMs / 1000)))}`;
 }
 
-function versionStatusLabel(status: string | null | undefined): string | null {
-  switch (status) {
-    case "current":
-      return "up to date";
-    case "outdated":
-      return "update available";
-    case "ahead":
-      return "ahead of latest";
-    default:
-      return null;
-  }
-}
-
-function formatVersionValue(runner: Runner): string {
-  if (runner.runner_version && runner.latest_runner_version && runner.runner_version !== runner.latest_runner_version) {
-    return `v${runner.runner_version} (latest v${runner.latest_runner_version})`;
-  }
-  if (runner.runner_version) {
-    return `v${runner.runner_version}`;
-  }
-  if (runner.latest_runner_version) {
-    return `Latest v${runner.latest_runner_version}`;
-  }
-  return "Unknown";
-}
-
 function formatVersionHint(runner: Runner): string | null {
   switch (runner.version_status) {
     case "current":
@@ -174,19 +116,6 @@ function formatVersionHint(runner: Runner): string | null {
         : "Runner version is newer than the configured latest.";
     default:
       return null;
-  }
-}
-
-function updatePolicyLabel(policy: string | null | undefined): string {
-  switch (policy) {
-    case "apply":
-      return "Auto-apply";
-    case "off":
-      return "Updates off";
-    case "notify":
-      return "Notify only";
-    default:
-      return "Policy unknown";
   }
 }
 
@@ -266,20 +195,6 @@ function jobPreview(job: RunnerJob): string | null {
   }
 
   return normalized.length > 220 ? `${normalized.slice(0, 217)}...` : normalized;
-}
-
-function normalizeRunnerMetadata(metadata: unknown): RunnerMetadataSummary | null {
-  if (!metadata || typeof metadata !== "object") {
-    return null;
-  }
-
-  const record = metadata as Record<string, unknown>;
-  return {
-    platform: typeof record.platform === "string" ? record.platform : undefined,
-    arch: typeof record.arch === "string" ? record.arch : undefined,
-    hostname: typeof record.hostname === "string" ? record.hostname : undefined,
-    dockerAvailable: typeof record.docker_available === "boolean" ? record.docker_available : undefined,
-  };
 }
 
 function defaultRepairMode(doctor: RunnerDoctorResponse | undefined, metadata: RunnerMetadataSummary | null): RunnerNativeInstallMode {
@@ -636,7 +551,7 @@ export default function RunnerDetailPage() {
               <div className="detail-item">
                 <span className="detail-label">Version</span>
                 <div className="detail-value-stack">
-                  <span className="detail-value">{formatVersionValue(runner)}</span>
+                  <span className="detail-value">{formatRunnerVersionValue(runner)}</span>
                   {formatVersionHint(runner) && (
                     <span className="detail-subvalue">{formatVersionHint(runner)}</span>
                   )}
