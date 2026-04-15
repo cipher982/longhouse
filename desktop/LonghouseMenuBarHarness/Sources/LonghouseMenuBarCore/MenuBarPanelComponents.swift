@@ -56,7 +56,7 @@ struct PanelChrome<Content: View>: View {
             PanelMaterialBackground()
 
             LinearGradient(
-                colors: [accent.opacity(0.05), Color.clear],
+                colors: [accent.opacity(0.04), Color.clear],
                 startPoint: .top,
                 endPoint: .bottom
             )
@@ -70,18 +70,12 @@ struct PanelChrome<Content: View>: View {
         .frame(width: MenuBarPanelLayout.panelWidth, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
         .clipShape(RoundedRectangle(cornerRadius: MenuBarPanelLayout.chromeCornerRadius, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: MenuBarPanelLayout.chromeCornerRadius, style: .continuous)
-                .strokeBorder(Color.white.opacity(0.09), lineWidth: 1)
-        )
         .overlay(alignment: .top) {
-            Capsule(style: .continuous)
-                .fill(accent.opacity(0.64))
+            RoundedRectangle(cornerRadius: MenuBarPanelLayout.chromeCornerRadius, style: .continuous)
+                .fill(accent.opacity(0.72))
                 .frame(height: MenuBarPanelLayout.accentHeight)
-                .padding(.horizontal, MenuBarPanelLayout.accentHorizontalInset)
                 .padding(.top, MenuBarPanelLayout.chromeTopRailInset)
         }
-        .shadow(color: Color.black.opacity(0.18), radius: 12, x: 0, y: 8)
     }
 }
 
@@ -128,11 +122,7 @@ struct PanelSection<Content: View>: View {
         .padding(MenuBarPanelLayout.sectionInsets)
         .background(
             RoundedRectangle(cornerRadius: MenuBarPanelLayout.sectionCornerRadius, style: .continuous)
-                .fill(Color.white.opacity(0.035))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: MenuBarPanelLayout.sectionCornerRadius, style: .continuous)
-                .stroke(Color.white.opacity(0.07), lineWidth: 1)
+                .fill(Color.primary.opacity(0.04))
         )
     }
 }
@@ -184,16 +174,8 @@ struct MissionReadoutGrid: View {
                 }
             }
         }
-        .padding(.horizontal, 4)
-        .padding(.vertical, 4)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.035))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.white.opacity(0.07), lineWidth: 1)
-        )
+        .padding(.horizontal, 2)
+        .padding(.vertical, 2)
     }
 }
 
@@ -290,7 +272,7 @@ struct ProviderComparisonRows: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.secondary)
         } else {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 9) {
                 ForEach(Array(entries.enumerated()), id: \.offset) { index, entry in
                     ProviderComparisonRow(
                         provider: entry.provider,
@@ -347,14 +329,14 @@ private struct ProviderComparisonRow: View {
             GeometryReader { geometry in
                 ZStack(alignment: .leading) {
                     Capsule(style: .continuous)
-                        .fill(Color.white.opacity(0.05))
+                        .fill(Color.white.opacity(0.07))
 
                     Capsule(style: .continuous)
-                        .fill(providerColor(provider))
-                        .frame(width: max(18, geometry.size.width * CGFloat(count) / CGFloat(max(baselineCount, 1))))
+                        .fill(providerColor(provider).opacity(0.85))
+                        .frame(width: max(14, geometry.size.width * CGFloat(count) / CGFloat(max(baselineCount, 1))))
                 }
             }
-            .frame(height: 12)
+            .frame(height: 6)
         }
     }
 
