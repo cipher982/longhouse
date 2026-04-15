@@ -127,6 +127,7 @@ def test_claude_command_fails_when_native_channels_unavailable(monkeypatch, tmp_
     runner = CliRunner()
     launch_calls: list[dict] = []
 
+    monkeypatch.delenv(claude_cli._FORCE_NATIVE_CLAUDE_CHANNELS_ENV, raising=False)
     monkeypatch.setattr(
         claude_cli,
         "_load_api_credentials",
@@ -376,6 +377,7 @@ def test_claude_command_rejects_launch_envs_that_disable_native_channels(monkeyp
     runner = CliRunner()
     launch_calls: list[dict] = []
 
+    monkeypatch.delenv(claude_cli._FORCE_NATIVE_CLAUDE_CHANNELS_ENV, raising=False)
     monkeypatch.setattr(
         claude_cli,
         "_load_api_credentials",
@@ -422,6 +424,7 @@ def test_claude_command_rejects_native_bridge_when_launch_env_requires_flag_capa
     runner = CliRunner()
     native_finalize_calls: list[dict] = []
 
+    monkeypatch.delenv(claude_cli._FORCE_NATIVE_CLAUDE_CHANNELS_ENV, raising=False)
     monkeypatch.setattr(
         claude_cli,
         "_load_api_credentials",
