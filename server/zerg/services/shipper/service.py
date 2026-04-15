@@ -37,6 +37,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
+from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.runtime_artifacts import RuntimeComponent
@@ -200,6 +201,36 @@ def _resolve_log_dir(config: ServiceConfig) -> Path:
     return _resolve_default_log_dir(config.claude_dir)
 
 
+def _resolve_agent_db_path(config: ServiceConfig) -> Path:
+    if config.claude_dir:
+        return get_agent_db_path(resolve_longhouse_home_from_provider_home(config.claude_dir))
+    return get_agent_db_path()
+
+
+def _has_existing_service_install(platform: Platform) -> bool:
+    if platform == Platform.MACOS:
+        return _get_launchd_plist_path().exists() or _get_legacy_engine_plist_path().exists()
+    if platform == Platform.LINUX:
+        return _get_systemd_unit_path().exists() or _get_legacy_systemd_unit_path().exists()
+    return False
+
+
+def _assert_reinstall_preserves_shipper_state(platform: Platform, config: ServiceConfig) -> None:
+    """Refuse reinstall when an existing service lost its local shipping state."""
+    if not _has_existing_service_install(platform):
+        return
+
+    db_path = _resolve_agent_db_path(config)
+    if db_path.exists():
+        return
+
+    raise RuntimeError(
+        "Refusing to reinstall the Machine Agent because an existing local install "
+        f"is missing its shipper state DB at {db_path}. "
+        "Restore that state or intentionally reset local shipping state before rerunning install."
+    )
+
+
 def _generate_launchd_plist(config: ServiceConfig) -> str:
     """Generate launchd plist calling longhouse-engine connect."""
     engine = get_engine_executable()
@@ -360,6 +391,8 @@ def install_service(
         machine_config_generation=machine_config_generation,
         machine_state_hash=machine_state_hash,
     )
+
+    _assert_reinstall_preserves_shipper_state(platform, config)
 
     # Ensure log directory exists
     _resolve_log_dir(config).mkdir(parents=True, exist_ok=True)

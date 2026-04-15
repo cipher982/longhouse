@@ -321,6 +321,8 @@ def _repair_command(*, can_reconcile_from_state: bool) -> str:
 def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dict[str, Any]:
     config = _collect_local_config(base_dir)
     runner = _collect_runner_config()
+    shipper_db_path = get_agent_db_path(base_dir)
+    service_file = Path(str(service.get("service_file") or "").strip()) if str(service.get("service_file") or "").strip() else None
     service_machine_name = _extract_service_machine_name(service.get("service_file"))
     service_metadata = _extract_service_metadata(service.get("service_file"))
     reasons: list[str] = []
@@ -337,6 +339,9 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
     runner_urls = [str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()]
     service_config_generation = str(service_metadata.get("config_generation") or "").strip() or None
     service_state_hash = str(service_metadata.get("state_hash") or "").strip() or None
+    service_status = str(service.get("status") or "not-installed")
+    service_file_exists = bool(service_file and service_file.exists())
+    shipper_state_exists = shipper_db_path.exists()
     can_reconcile_from_state = _can_reconcile_launch_from_state(
         state_exists=state_exists,
         state_error=state_error,
@@ -379,6 +384,10 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         reasons.append("service_state_hash_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
+    if service_status != "not-installed" and service_file_exists and not shipper_state_exists:
+        reasons.append("shipper_state_missing")
+        _with_action(actions, f"Inspect or restore shipper state: {shipper_db_path}")
+
     if runner_expected and can_reconcile_from_state and runner_name and service_machine_name and runner_name != service_machine_name:
         reasons.append("service_runner_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
@@ -410,6 +419,9 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         "service_machine_name": service_machine_name,
         "service_config_generation": service_config_generation,
         "service_state_hash": service_state_hash,
+        "service_file_exists": service_file_exists,
+        "shipper_db_path": str(shipper_db_path),
+        "shipper_state_exists": shipper_state_exists,
         "runner": runner,
     }
 
@@ -715,6 +727,7 @@ def _classify_health(
     launch_state = str(launch_readiness.get("state") or "unconfigured")
     launch_reasons = [str(item) for item in list(launch_readiness.get("reasons") or [])]
     launch_actions = [str(item) for item in list(launch_readiness.get("suggested_actions") or [])]
+    shipper_state_missing = "shipper_state_missing" in launch_reasons
     repair_action = _repair_command(
         can_reconcile_from_state=_can_reconcile_launch_from_state(
             state_exists=bool(launch_readiness.get("state_exists")),
@@ -730,10 +743,12 @@ def _classify_health(
 
     if service_status == "not-installed":
         reasons.append("service_not_installed")
-        _with_action(actions, repair_action)
+        if not shipper_state_missing:
+            _with_action(actions, repair_action)
     elif service_status == "stopped":
         reasons.append("service_stopped")
-        _with_action(actions, repair_action)
+        if not shipper_state_missing:
+            _with_action(actions, repair_action)
 
     if engine_error:
         reasons.append("engine_status_unreadable")
@@ -742,7 +757,7 @@ def _classify_health(
         reasons.append("engine_status_missing")
         if service_status == "running":
             _with_action(actions, "Wait for the first local status update or inspect engine logs")
-        else:
+        elif not shipper_state_missing:
             _with_action(actions, repair_action)
     elif engine_age is not None and engine_age > ENGINE_STALE_SECONDS:
         reasons.append("engine_status_stale")
@@ -840,6 +855,7 @@ def _classify_health(
         if any(
             reason in reasons
             for reason in (
+                "shipper_state_missing",
                 "machine_state_invalid",
                 "machine_state_missing",
                 "machine_state_missing_runtime_url",
@@ -853,6 +869,8 @@ def _classify_health(
             )
         ):
             headline = "Longhouse launch config is inconsistent"
+            if "shipper_state_missing" in reasons:
+                headline = "Longhouse shipper state is missing"
         elif "service_stopped" in reasons:
             headline = "Longhouse engine service is stopped"
         elif "spool_dead" in reasons:
