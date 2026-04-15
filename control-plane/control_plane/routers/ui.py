@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import html
+from pathlib import Path
 import re as _re
 import time
 import urllib.parse
@@ -41,6 +42,16 @@ _STYLES = ""  # All styles now served via /static/style.css
 
 
 _GOOGLE_ICON = '<svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2a10.3 10.3 0 0 0-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92a8.78 8.78 0 0 0 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.83.86-3.04.86-2.34 0-4.32-1.58-5.03-3.71H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.71A5.41 5.41 0 0 1 3.69 9c0-.6.1-1.17.28-1.71V4.96H.96A9 9 0 0 0 0 9c0 1.45.35 2.82.96 4.04l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59A9 9 0 0 0 9 0 9 9 0 0 0 .96 4.96l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>'
+_STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
+
+
+def _static_asset_url(filename: str) -> str:
+    path = _STATIC_DIR / filename
+    try:
+        version = int(path.stat().st_mtime)
+    except FileNotFoundError:
+        return f"/static/{filename}"
+    return f"/static/{filename}?v={version}"
 
 
 def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "") -> str:
@@ -64,15 +75,15 @@ def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "") ->
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="no-referrer">
     <title>{title} - Longhouse</title>
-    <link rel="icon" href="/static/favicon.ico" />
-    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png" />
-    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
+    <link rel="icon" href="{_static_asset_url('favicon.ico')}" />
+    <link rel="icon" type="image/png" sizes="32x32" href="{_static_asset_url('favicon-32.png')}" />
+    <link rel="icon" type="image/png" sizes="16x16" href="{_static_asset_url('favicon-16.png')}" />
+    <link rel="apple-touch-icon" sizes="180x180" href="{_static_asset_url('apple-touch-icon.png')}" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="https://api.fontshare.com/v2/css?f[]=general-sans@500,600,700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">{extra_style_tag}
+    <link rel="stylesheet" href="{_static_asset_url('style.css')}">{extra_style_tag}
   </head>
   <body>
     {nav_html}
@@ -135,9 +146,10 @@ def home(request: Request, error: str | None = None, return_to: str | None = Non
     if error:
         error_html = f'<div class="alert alert-error">{html.escape(error)}</div>'
 
+    logo_url = _static_asset_url("logo.svg")
     body = f"""
     <div class="hero-center">
-      <img src="/static/logo.svg" alt="Longhouse" class="hero-logo">
+      <img src="{logo_url}" alt="Longhouse" class="hero-logo" width="36" height="36">
       <h1>Longhouse</h1>
       <p class="subtitle">Welcome back.</p>
     </div>
@@ -182,9 +194,10 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
     if error:
         error_html = f'<div class="alert alert-error">{html.escape(error)}</div>'
 
+    logo_url = _static_asset_url("logo.svg")
     body = f"""
     <div class="hero-center">
-      <img src="/static/logo.svg" alt="Longhouse" class="hero-logo">
+      <img src="{logo_url}" alt="Longhouse" class="hero-logo" width="36" height="36">
       <h1>Get Hosted</h1>
       <p class="subtitle">Always-on Longhouse instance &mdash; $5/mo.</p>
     </div>

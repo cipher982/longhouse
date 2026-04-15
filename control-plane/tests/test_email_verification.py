@@ -86,6 +86,14 @@ def _login_cookie(user: User) -> dict[str, str]:
 
 
 class TestSignup:
+    def test_signup_page_busts_static_asset_cache_and_pins_logo_size(self, client):
+        resp = client.get("/signup")
+
+        assert resp.status_code == 200
+        assert '/static/style.css?v=' in resp.text
+        assert '/static/logo.svg?v=' in resp.text
+        assert 'class="hero-logo" width="36" height="36"' in resp.text
+
     @patch("control_plane.routers.auth._send_verification")
     def test_signup_creates_unverified_user(self, mock_send, client, db_session):
         resp = client.post(
