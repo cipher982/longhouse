@@ -1,0 +1,296 @@
+/**
+ * Pure utility functions for session display and URL state management.
+ */
+
+import React from "react";
+import { parseUTC } from "./dateUtils";
+import { type AgentSession } from "../services/api/agents";
+import { resolveSessionRuntimeState } from "./sessionRuntime";
+
+// ---------------------------------------------------------------------------
+// Time / date helpers
+// ---------------------------------------------------------------------------
+
+export function formatRelativeTime(dateStr: string, nowMs: number = Date.now()): string {
+  const date = parseUTC(dateStr);
+  const diffMs = nowMs - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins}m ago`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffDays < 30) return `${diffDays}d ago`;
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+export function getDateKey(dateStr: string, nowMs: number = Date.now()): string {
+  const date = parseUTC(dateStr);
+  const now = new Date(nowMs);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const sessionDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+  if (sessionDate.getTime() === today.getTime()) return "Today";
+  if (sessionDate.getTime() === yesterday.getTime()) return "Yesterday";
+  return sessionDate.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Session grouping
+// ---------------------------------------------------------------------------
+
+import { type TimelineSessionCard, getTimelineCardAnchor } from "../services/api/agents";
+
+export function groupThreadCardsByDay(
+  cards: TimelineSessionCard[],
+  nowMs: number,
+): Map<string, TimelineSessionCard[]> {
+  const groups = new Map<string, TimelineSessionCard[]>();
+
+  for (const card of cards) {
+    const key = getDateKey(getTimelineCardAnchor(card), nowMs);
+    const existing = groups.get(key) || [];
+    existing.push(card);
+    groups.set(key, existing);
+  }
+
+  return groups;
+}
+
+// ---------------------------------------------------------------------------
+// Navigation helpers
+// ---------------------------------------------------------------------------
+
+export function buildSessionDetailPath(
+  session: Pick<AgentSession, "id" | "provider" | "match_event_id">,
+  matchEventId?: number | null,
+): string {
+  const params = new URLSearchParams();
+  if (matchEventId != null) {
+    params.set("event_id", String(matchEventId));
+  }
+  const search = params.toString();
+  return `/timeline/${session.id}${search ? `?${search}` : ""}`;
+}
+
+// ---------------------------------------------------------------------------
+// Label helpers
+// ---------------------------------------------------------------------------
+
+function isValidTitle(name: string | null | undefined): name is string {
+  if (!name) return false;
+  if (name.length < 3) return false;
+  if (name.startsWith("tmp")) return false;
+  // Skip git hashes and hex IDs (only hex chars 0-9a-f, 8+ chars)
+  // Uses [0-9a-f] not [a-z0-9] to avoid suppressing real names like "longhouse"
+  if (/^[0-9a-f]{8,}$/i.test(name)) return false;
+  return true;
+}
+
+/** Primary identifier: what repo/project/directory is this session for? */
+export function getProjectLabel(session: AgentSession): string {
+  if (isValidTitle(session.project)) return session.project;
+  if (session.cwd) {
+    const folder = session.cwd.split("/").pop();
+    if (folder && folder.length >= 2) return folder;
+  }
+  if (session.git_repo) {
+    const name = session.git_repo.replace(/\.git$/, "").split("/").pop();
+    if (name) return name;
+  }
+  return session.provider;
+}
+
+/** Secondary: what was done in this session? */
+export function getSessionTitle(session: AgentSession): string {
+  if (session.summary_title && session.summary_title !== "Untitled Session") {
+    return session.summary_title;
+  }
+  if (session.first_user_message) {
+    const snippet = session.first_user_message.trim().slice(0, 80);
+    if (snippet) return snippet;
+  }
+  if (isValidTitle(session.git_branch)) return session.git_branch!;
+  return "";
+}
+
+// ---------------------------------------------------------------------------
+// Search highlighting
+// ---------------------------------------------------------------------------
+
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function renderHighlightedText(text: string, query: string) {
+  const tokens = query.split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return text;
+  const pattern = tokens.map(escapeRegExp).join("|");
+  if (!pattern) return text;
+  const splitRegex = new RegExp(`(${pattern})`, "gi");
+  const matchRegex = new RegExp(`^(${pattern})$`, "i");
+
+  return text.split(splitRegex).map((part, idx) =>
+    matchRegex.test(part) ? (
+      <mark key={`${idx}-${part}`} className="search-highlight">
+        {part}
+      </mark>
+    ) : (
+      part
+    )
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Runtime display helpers
+// ---------------------------------------------------------------------------
+
+export function getRuntimeMetaLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string | null {
+  if (runtime.truthTier === "managed-local") {
+    return "Live on host";
+  }
+  if (runtime.lastLiveAt) {
+    if (runtime.truthTier === "stale" || runtime.confidence === "stale") {
+      return `Seen ${formatRelativeTime(runtime.lastLiveAt)}`;
+    }
+  }
+  return null;
+}
+
+export function toTitleCaseWords(value: string): string {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      if (word.length <= 3 && word === word.toUpperCase()) {
+        return word;
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+}
+
+export function compactRuntimeToolLabel(toolName: string | null): string | null {
+  const rawToolName = toolName?.trim();
+  if (!rawToolName) {
+    return null;
+  }
+
+  const canonicalSegment = rawToolName.split("__").pop() ?? rawToolName;
+  const withoutPrefixes = canonicalSegment
+    .replace(/^hatch_/, "")
+    .replace(/^tool_/, "")
+    .replace(/^mcp_/, "");
+  const normalized = withoutPrefixes.replace(/[-_.]+/g, " ").trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  const lower = normalized.toLowerCase();
+  if (lower === "codex") return "Codex";
+  if (lower === "claude") return "Claude";
+  if (lower === "gemini") return "Gemini";
+  if (lower === "default") return "Z.ai";
+  if (lower === "shell" || lower === "bash" || lower === "terminal") return "Shell";
+
+  return toTitleCaseWords(normalized);
+}
+
+export function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessionRuntimeState>): string {
+  const compactTool = compactRuntimeToolLabel(runtime.presenceTool);
+
+  if (runtime.presenceState === "running" && compactTool) {
+    return `Running ${compactTool}`;
+  }
+  if (runtime.presenceState === "blocked" && compactTool) {
+    return `Blocked on ${compactTool}`;
+  }
+
+  return runtime.displayPhase;
+}
+
+export function getTurnsColor(turns: number): string | undefined {
+  if (turns < 5) return undefined;
+  if (turns < 15) return "var(--color-brand-primary)";
+  if (turns < 30) return "var(--color-brand-accent)";
+  return "var(--color-intent-error)";
+}
+
+// ---------------------------------------------------------------------------
+// URL state helpers
+// ---------------------------------------------------------------------------
+
+const PAGE_SIZE = 50;
+const DEFAULT_DAYS_BACK = 14;
+const DEFAULT_SORT_ORDER = "relevant" as const;
+
+export type SortOrder = "relevant" | "recent";
+
+export interface SessionsUrlState {
+  project: string;
+  provider: string;
+  environment: string;
+  hideAutonomous: boolean;
+  daysBack: number;
+  searchQuery: string;
+  aiSearch: boolean;
+  sortOrder: SortOrder;
+  limit: number;
+}
+
+export function parsePositiveIntParam(
+  rawValue: string | null,
+  fallback: number,
+  min: number = 1,
+  max: number = Number.POSITIVE_INFINITY,
+): number {
+  if (rawValue == null || rawValue.trim() === "") return fallback;
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(parsed)));
+}
+
+export function readSessionsUrlState(searchParams: URLSearchParams): SessionsUrlState {
+  const mode = searchParams.get("mode");
+  const aiSearch =
+    mode === "hybrid" ||
+    mode === "semantic" ||
+    mode === "smart" ||
+    searchParams.get("semantic") === "1";
+
+  return {
+    project: searchParams.get("project") || "",
+    provider: searchParams.get("provider") || "",
+    environment: searchParams.get("environment") || "",
+    hideAutonomous: searchParams.get("hide_autonomous") !== "false",
+    daysBack: parsePositiveIntParam(searchParams.get("days_back"), DEFAULT_DAYS_BACK),
+    searchQuery: searchParams.get("query") || "",
+    aiSearch,
+    sortOrder: searchParams.get("sort") === "recent" ? "recent" : DEFAULT_SORT_ORDER,
+    limit: parsePositiveIntParam(searchParams.get("limit"), PAGE_SIZE, PAGE_SIZE, 100),
+  };
+}
+
+export function buildSessionsSearchParams(state: SessionsUrlState): URLSearchParams {
+  const params = new URLSearchParams();
+
+  if (state.project) params.set("project", state.project);
+  if (state.provider) params.set("provider", state.provider);
+  if (state.environment) params.set("environment", state.environment);
+  if (state.daysBack !== DEFAULT_DAYS_BACK) params.set("days_back", String(state.daysBack));
+  if (state.searchQuery) params.set("query", state.searchQuery);
+  if (state.aiSearch) params.set("mode", "hybrid");
+  if (state.searchQuery && state.sortOrder !== DEFAULT_SORT_ORDER) params.set("sort", state.sortOrder);
+  if (!state.hideAutonomous) params.set("hide_autonomous", "false");
+  if (state.limit !== PAGE_SIZE) params.set("limit", String(state.limit));
+
+  return params;
+}
