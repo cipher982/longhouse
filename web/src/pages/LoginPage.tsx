@@ -3,10 +3,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { useAuth, useAuthMethods } from '../lib/auth';
 import { sanitizeReturnTo } from '../lib/loginRedirect';
+import { loginWithPassword, loginWithDevAccount } from '../lib/authApi';
 import config from '../lib/config';
 
 // ---------------------------------------------------------------------------
-// Internal helpers (mirrors logic previously in auth.tsx LoginOverlay)
+// Internal helpers
 // ---------------------------------------------------------------------------
 
 function buildHostedLoginRedirectUrl(
@@ -22,35 +23,6 @@ function buildHostedLoginRedirectUrl(
     return url.toString();
   } catch {
     return baseUrl;
-  }
-}
-
-async function loginWithPassword(password: string): Promise<{ ok: boolean; error?: string }> {
-  const response = await fetch(`${config.apiBaseUrl}/auth/password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ password }),
-  });
-  if (response.ok) return { ok: true };
-  if (response.status === 400) return { ok: false, error: 'Password auth not configured' };
-  if (response.status === 429) {
-    const retryAfter = response.headers.get('Retry-After');
-    const suffix = retryAfter ? ` Try again in ${retryAfter}s.` : ' Try again later.';
-    return { ok: false, error: `Too many attempts.${suffix}` };
-  }
-  return { ok: false, error: 'Invalid password' };
-}
-
-async function loginWithDevAccount(): Promise<void> {
-  const response = await fetch(`${config.apiBaseUrl}/auth/dev-login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(error || 'Dev login failed');
   }
 }
 

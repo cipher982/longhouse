@@ -115,6 +115,7 @@ struct LoginView: View {
 
     @ViewBuilder
     private func authControls(for methods: AuthMethods) -> some View {
+        // SSO takes the top slot when available.
         if methods.sso {
             Button(action: { startHostedSignIn(methods) }) {
                 HStack(spacing: 10) {
@@ -139,15 +140,54 @@ struct LoginView: View {
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.45))
                 .multilineTextAlignment(.center)
-        } else {
-            if methods.google {
-                Button(action: signInWithGoogle) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "g.circle.fill")
-                            .font(.system(size: 20))
-                        Text("Sign in with Google")
-                            .font(.system(size: 16, weight: .medium))
-                    }
+        }
+
+        // Google is shown on non-SSO servers. On SSO servers it is usually absent,
+        // but render it if the server explicitly advertises it.
+        if methods.google && !methods.sso {
+            Button(action: signInWithGoogle) {
+                HStack(spacing: 10) {
+                    Image(systemName: "g.circle.fill")
+                        .font(.system(size: 20))
+                    Text("Sign in with Google")
+                        .font(.system(size: 16, weight: .medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(.white.opacity(0.08))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                )
+            }
+        }
+
+        // Password is always shown when advertised, regardless of SSO.
+        if methods.password {
+            if methods.sso || methods.google {
+                Divider()
+                    .background(.white.opacity(0.15))
+            }
+
+            SecureField("Password", text: $password)
+                .textContentType(.password)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(.white.opacity(0.08))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+                )
+
+            Button(action: signInWithPassword) {
+                Text("Sign in")
+                    .font(.system(size: 16, weight: .medium))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .background(.white.opacity(0.08))
@@ -157,47 +197,16 @@ struct LoginView: View {
                         RoundedRectangle(cornerRadius: 12)
                             .strokeBorder(.white.opacity(0.15), lineWidth: 1)
                     )
-                }
             }
+            .disabled(password.isEmpty)
+            .opacity(password.isEmpty ? 0.6 : 1)
+        }
 
-            if methods.password {
-                SecureField("Password", text: $password)
-                    .textContentType(.password)
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .background(.white.opacity(0.08))
-                    .foregroundStyle(.white)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12)
-                            .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-                    )
-
-                Button(action: signInWithPassword) {
-                    Text("Sign in")
-                        .font(.system(size: 16, weight: .medium))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 14)
-                        .background(.white.opacity(0.08))
-                        .foregroundStyle(.white)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .strokeBorder(.white.opacity(0.15), lineWidth: 1)
-                        )
-                }
-                .disabled(password.isEmpty)
-                .opacity(password.isEmpty ? 0.6 : 1)
-            }
-
-            if !methods.google && !methods.password {
-                Text("This Longhouse server does not advertise a supported sign-in method.")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.45))
-                    .multilineTextAlignment(.center)
-            }
+        if !methods.sso && !methods.google && !methods.password {
+            Text("This Longhouse server does not advertise a supported sign-in method.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.45))
+                .multilineTextAlignment(.center)
         }
     }
 
