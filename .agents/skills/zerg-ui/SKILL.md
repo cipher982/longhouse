@@ -20,6 +20,7 @@ make ui-capture                           # Timeline + demo data
 make ui-capture PAGE=chat                 # Chat page
 make ui-capture SCENE=empty               # Empty state
 make ui-capture SCENE=onboarding-modal    # With modal visible
+make ui-capture SCENE=timeline-card-stress VIEWPORT=mobile  # Mobile card layout fixture
 make ui-capture ALL=1                     # All pages
 ```
 
@@ -51,6 +52,7 @@ Read(file_path="artifacts/ui-capture/<timestamp>/timeline-a11y.yml")
 | `empty` | No data, empty state UI — calls `DELETE /api/agents/demo` to remove demo sessions (requires AUTH_DISABLED=1) |
 | `onboarding-modal` | Shows first-time setup modal |
 | `missing-api-key` | API key required modal visible |
+| `timeline-card-stress` | Fixture-backed timeline API responses for card layout QA without relying on live demo DB shape |
 
 ## Visual Regression (CI)
 ```bash

@@ -298,7 +298,7 @@ ship: ## Push current HEAD, then wait for exact-SHA push workflows + live deploy
 # Tools
 # ---------------------------------------------------------------------------
 ui-capture: ## Capture local dev UI debug bundle
-	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,)
+	@bunx tsx scripts/ui-capture.ts $(PAGE) $(if $(SCENE),--scene=$(SCENE),) $(if $(VIEWPORT),--viewport=$(VIEWPORT),) $(if $(OUTPUT),--output=$(OUTPUT),) $(if $(ALL),--all,) $(if $(NO_TRACE),--no-trace,)
 
 menubar-harness: ## macOS menu bar harness (MODE=test|fixtures|live|smoke|full|window|menubar)
 	@./scripts/qa/menubar-harness.sh $(or $(MODE),test)

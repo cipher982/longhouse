@@ -539,6 +539,16 @@ function SessionCard({
   const startedOriginLabel = normalizeSessionOriginLabel(thread.started_origin_label);
   const showHeadOriginLabel =
     !compatibilityMode && !!headOriginLabel && headOriginLabel !== homeLabel;
+  const showStartedOriginLabel =
+    !compatibilityMode &&
+    thread.continuation_count > 1 &&
+    !!startedOriginLabel &&
+    startedOriginLabel !== headOriginLabel;
+  const showContinuationCount = !compatibilityMode && thread.continuation_count > 1;
+  const showIdentitySecondary =
+    showHeadOriginLabel || showStartedOriginLabel || showContinuationCount;
+  const showManagementPill = !interaction.isManagedLocalSession;
+  const showStatusRow = runtime.hasSignal || showManagementPill || !!cardCapabilityLabel;
 
   const showKeywordSnippet = !isSemanticResult && !!highlightQuery && !!detailSession.match_snippet;
   const showSemanticSnippet = isSemanticResult && !!detailSession.match_snippet;
@@ -628,69 +638,80 @@ function SessionCard({
           </div>
         </div>
 
-        <div className="session-card-meta">
-          <span className="session-card-provider-badge">
-            <ProviderIcon provider={session.provider} />
-            <span className="provider-name" style={{ color: getProviderColor(session.provider) }}>{session.provider}</span>
-          </span>
-          {session.git_branch && (
-            <span className="session-card-branch-badge">
-              <span className="branch-icon">&#x2387;</span>
-              {session.git_branch}
-            </span>
-          )}
-          {homeLabel && (
-            <span className="environment-badge">
-              {homeLabel}
-            </span>
-          )}
-          {showHeadOriginLabel && (
-            <span className="environment-badge environment-badge--secondary">Head: {headOriginLabel}</span>
-          )}
-          {!compatibilityMode &&
-            thread.continuation_count > 1 &&
-            startedOriginLabel &&
-            startedOriginLabel !== headOriginLabel && (
-            <span className="environment-badge environment-badge--secondary">Started: {startedOriginLabel}</span>
-          )}
-          {!compatibilityMode && thread.continuation_count > 1 && (
-            <span className="environment-badge environment-badge--secondary">
-              {thread.continuation_count} continuations
-            </span>
-          )}
-          {runtime.hasSignal && (
-            <div className={`session-card-runtime session-card-runtime--${runtime.tone}`}>
-              <PresenceBadge
-                state={runtime.presenceState}
-                tool={runtime.presenceTool}
-                compact
-                heuristicActive={runtime.heuristicActive}
-                showUnknown={runtime.truthTier === "stale"}
-              />
-              <span className="session-card-runtime-phase">{runtime.displayPhase}</span>
-              {runtimeMetaLabel && (
-                <span className="session-card-runtime-meta">{runtimeMetaLabel}</span>
+        <div className="session-card-context">
+          <div className="session-card-identity">
+            <div className="session-card-identity-primary">
+              <span className="session-card-provider-badge">
+                <ProviderIcon provider={session.provider} />
+                <span className="provider-name" style={{ color: getProviderColor(session.provider) }}>{session.provider}</span>
+              </span>
+              {session.git_branch && (
+                <span className="session-card-branch-badge">
+                  <span className="branch-icon">&#x2387;</span>
+                  {session.git_branch}
+                </span>
+              )}
+              {homeLabel && (
+                <span className="environment-badge">
+                  {homeLabel}
+                </span>
               )}
             </div>
+
+            {showIdentitySecondary && (
+              <div className="session-card-identity-secondary">
+                {showHeadOriginLabel && (
+                  <span className="environment-badge environment-badge--secondary">Head: {headOriginLabel}</span>
+                )}
+                {showStartedOriginLabel && (
+                  <span className="environment-badge environment-badge--secondary">Started: {startedOriginLabel}</span>
+                )}
+                {showContinuationCount && (
+                  <span className="environment-badge environment-badge--secondary">
+                    {thread.continuation_count} continuations
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {showStatusRow && (
+            <div className="session-card-status">
+              {runtime.hasSignal && (
+                <div className={`session-card-runtime session-card-runtime--${runtime.tone}`}>
+                  <PresenceBadge
+                    state={runtime.presenceState}
+                    tool={runtime.presenceTool}
+                    compact
+                    heuristicActive={runtime.heuristicActive}
+                    showUnknown={runtime.truthTier === "stale"}
+                  />
+                  <span className="session-card-runtime-phase">{runtime.displayPhase}</span>
+                  {runtimeMetaLabel && (
+                    <span className="session-card-runtime-meta">{runtimeMetaLabel}</span>
+                  )}
+                </div>
+              )}
+              {showManagementPill ? (
+                <span
+                  className={`session-card-management-pill session-card-management-pill--${interaction.managementVariant}`}
+                  data-testid="session-card-management"
+                  title={interaction.managementDescription}
+                >
+                  {interaction.managementLabel}
+                </span>
+              ) : null}
+              {cardCapabilityLabel ? (
+                <span
+                  className={`session-card-capability-pill session-card-capability-pill--${interaction.capabilityVariant}`}
+                  data-testid="session-card-capability"
+                  title={interaction.capabilityDescription ?? undefined}
+                >
+                  {cardCapabilityLabel}
+                </span>
+              ) : null}
+            </div>
           )}
-          {!interaction.isManagedLocalSession ? (
-            <span
-              className={`session-card-management-pill session-card-management-pill--${interaction.managementVariant}`}
-              data-testid="session-card-management"
-              title={interaction.managementDescription}
-            >
-              {interaction.managementLabel}
-            </span>
-          ) : null}
-          {cardCapabilityLabel ? (
-            <span
-              className={`session-card-capability-pill session-card-capability-pill--${interaction.capabilityVariant}`}
-              data-testid="session-card-capability"
-              title={interaction.capabilityDescription ?? undefined}
-            >
-              {cardCapabilityLabel}
-            </span>
-          ) : null}
         </div>
 
         <div className="session-card-body">
