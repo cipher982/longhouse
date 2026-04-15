@@ -1,5 +1,3 @@
 """Service package exports."""
 
-__all__ = [
-    # placeholder to allow package discovery
-]
+__all__: list[str] = []

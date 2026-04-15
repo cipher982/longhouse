@@ -12,10 +12,7 @@ Self-host free on the machine where work should live, or use hosted beta later w
 
 ## Demo
 
-<!-- Video: Replace this section with a Loom/YouTube embed once the walkthrough is recorded.
-     Target: 60-90 second tour covering install -> search/detail -> wall/message -> continue. -->
-
-Video walkthrough coming soon. In the meantime, the first run is simple:
+No walkthrough video is published yet. The first run is simple:
 
 ```bash
 curl -fsSL https://get.longhouse.ai/install.sh | bash

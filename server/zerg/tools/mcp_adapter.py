@@ -1,25 +1,7 @@
-"""MCP (Model Context Protocol) adapter for the Zerg tool registry.
+"""MCP adapter for the tool registry.
 
-This module provides integration between MCP servers and our internal tool registry,
-allowing fiches to use both built-in tools and MCP-provided tools seamlessly.
-
-This module started life as a **proof-of-concept** with a few hard-coded
-presets.  It has now been promoted to a *production-ready* component that
-supports **dynamic** MCP server registration while still exposing the same
-convenience presets (now moved to `zerg.tools.mcp_presets`).
-
-Key changes compared to the PoC version:
-
-1.  ❌  No more hard-coded presets in the adapter itself.  Presets live in
-    `mcp_presets.py` and can be modified without touching any logic.
-2.  ✅  New `MCPManager` singleton caches one adapter per (url, auth_token)
-    so we never double-register tools when multiple fiches share the same MCP
-    server.
-3.  ✅  Public helpers `load_mcp_tools()` (async) and
-    `load_mcp_tools_sync()` (sync) make it trivial to load tools from within
-    both asynchronous and synchronous code paths.
-4.  ✅  Dual transport support: HTTP (default) and stdio (subprocess-based).
-
+Loads MCP tools into the runtime registry, validates tool inputs against MCP
+schemas, and supports both HTTP and stdio transports.
 """
 
 import asyncio
@@ -464,7 +446,10 @@ class MCPManager:
                         auth_token = crypto.decrypt(auth_token)
                     except Exception as e:
                         logger.error(f"Failed to decrypt auth token: {e}")
-                        raise MCPAuthenticationError(normalized_config["name"], "Failed to decrypt authentication token")
+                        raise MCPAuthenticationError(
+                            normalized_config["name"],
+                            "Failed to decrypt authentication token",
+                        )
 
                 cfg = MCPServerConfig(
                     name=normalized_config["name"],

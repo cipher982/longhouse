@@ -1,10 +1,5 @@
-"""Agents store service for session and event CRUD operations.
+"""Public exports for the agents service package."""
 
-Provides a clean interface for ingesting and querying AI coding sessions
-from any provider (Claude Code, Codex, Gemini, Cursor, Oikos).
-"""
-
-# Re-export all public symbols for backward compatibility
 from .helpers import _infer_continuation_kind_from_ingest
 from .helpers import _infer_continuation_kind_from_session
 from .helpers import _infer_execution_home_from_ingest

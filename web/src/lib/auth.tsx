@@ -220,7 +220,7 @@ export function useCurrentUserQuery() {
   });
 }
 
-// Global Google Sign-In SDK type augmentation (used by LoginPage and googleCodeClient)
+// Global Google Sign-In SDK type augmentation (used by LoginPage)
 declare global {
   interface Window {
     google?: {
