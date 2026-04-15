@@ -15,9 +15,9 @@ test.describe('Automations - Core', () => {
     // Header nav should be visible
     await expect(page.locator('.header-nav')).toBeVisible({ timeout: 15000 });
 
-    // Timeline and Chat tabs should be visible (streamlined nav)
+    // Timeline and Machines tabs should be visible (streamlined nav)
     await expect(page.locator('.nav-tab:has-text("Timeline")')).toBeVisible();
-    await expect(page.locator('.nav-tab:has-text("Chat")')).toBeVisible();
+    await expect(page.locator('.nav-tab:has-text("Machines")')).toBeVisible();
   });
 
   test('create automation button is present', async ({ page }) => {
