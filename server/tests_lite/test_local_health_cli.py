@@ -569,7 +569,8 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# local-health omits CLI-only update cache state
+# local-health keeps a compatibility update_info payload without using stale
+# CLI-only update cache as truth for the machine bundle.
 # ---------------------------------------------------------------------------
 
 
@@ -597,20 +598,30 @@ def _write_update_cache(
     return path
 
 
-def test_collect_local_health_omits_update_info_even_when_cli_update_cache_exists(monkeypatch, tmp_path: Path):
+def test_collect_local_health_disables_update_info_even_when_cli_update_cache_exists(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr("zerg.cli.update_manager.current_installed_version", lambda: "0.1.11")
     _write_engine_status(tmp_path, age_seconds=5)
     _write_update_cache(tmp_path, update_available=True, installed="0.1.8", latest="0.1.9")
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
-    assert "update_info" not in snapshot
+    assert snapshot["update_info"] == {
+        "installed_version": "0.1.11",
+        "latest_version": None,
+        "update_available": False,
+        "upgrade_command": None,
+        "checked_at": None,
+        "supported": False,
+        "reason": "bundle_versioning_not_implemented",
+    }
 
 
-def test_update_info_not_present_in_json_cli_output(monkeypatch, tmp_path: Path):
+def test_update_info_present_in_json_cli_output_as_disabled_compat_payload(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    monkeypatch.setattr("zerg.cli.update_manager.current_installed_version", lambda: "0.1.11")
     _write_engine_status(tmp_path / ".longhouse", age_seconds=5)
 
     _write_update_cache(tmp_path / ".longhouse", update_available=True)
@@ -620,4 +631,12 @@ def test_update_info_not_present_in_json_cli_output(monkeypatch, tmp_path: Path)
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert "update_info" not in payload
+    assert payload["update_info"] == {
+        "installed_version": "0.1.11",
+        "latest_version": None,
+        "update_available": False,
+        "upgrade_command": None,
+        "checked_at": None,
+        "supported": False,
+        "reason": "bundle_versioning_not_implemented",
+    }

@@ -496,6 +496,33 @@ def _collect_service(base_dir: Path) -> dict[str, Any]:
     return get_service_info(str(base_dir))
 
 
+def _collect_update_info() -> dict[str, Any]:
+    """Return a compatibility update payload without claiming bundle coherence.
+
+    local-health no longer reports PyPI-based "update available" state because
+    that only reflects the CLI package, not the full CLI+engine+app bundle.
+    Keep the key present so older JSON consumers do not break while making the
+    unsupported state explicit.
+    """
+    installed_version: str | None = None
+    try:
+        from zerg.cli.update_manager import current_installed_version
+
+        installed_version = current_installed_version()
+    except Exception:
+        installed_version = None
+
+    return {
+        "installed_version": installed_version,
+        "latest_version": None,
+        "update_available": False,
+        "upgrade_command": None,
+        "checked_at": None,
+        "supported": False,
+        "reason": "bundle_versioning_not_implemented",
+    }
+
+
 def _collect_activity_summary(base_dir: Path, *, now: datetime) -> dict[str, Any]:
     db_path = get_agent_db_path(base_dir)
     summary = {
@@ -877,6 +904,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "outbox": outbox,
         "activity_summary": activity_summary,
         "launch_readiness": launch_readiness,
+        "update_info": _collect_update_info(),
         "thresholds": {
             "engine_fresh_seconds": ENGINE_FRESH_SECONDS,
             "engine_stale_seconds": ENGINE_STALE_SECONDS,
