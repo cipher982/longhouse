@@ -121,7 +121,7 @@ function GoogleSignInButton({ clientId, onToken, onError }: GoogleButtonProps) {
 export default function LoginPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { isAuthenticated, isLoading: authLoading, login } = useAuth();
+  const { isAuthenticated, isLoading: authLoading, login, refreshAuth } = useAuth();
   const { data: authMethods } = useAuthMethods();
 
   const returnTo = sanitizeReturnTo(searchParams.get('return_to'));
@@ -173,6 +173,7 @@ export default function LoginPage() {
     try {
       const result = await loginWithPassword(password);
       if (result.ok) {
+        await refreshAuth();
         finishLogin();
       } else {
         setPasswordError(result.error || 'Invalid password');
@@ -188,6 +189,7 @@ export default function LoginPage() {
     setIsDevLoginLoading(true);
     try {
       await loginWithDevAccount();
+      await refreshAuth();
       finishLogin();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Dev login failed');
