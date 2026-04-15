@@ -194,10 +194,6 @@ public struct MenuBarPanelView: View {
                     )
 
                     subtleChip(title: "Updated \(snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate))")
-
-                    if let updateBadge = snapshot.updateBadgeLabel {
-                        subtleChip(title: updateBadge, tint: .blue)
-                    }
                 }
 
                 Text(snapshot.missionSummaryLabel(relativeTo: presentationDate))
@@ -497,13 +493,6 @@ public struct MenuBarPanelView: View {
 
     private var healthyToolsMenu: some View {
         Menu {
-            if snapshot.updateInfo?.updateAvailable == true {
-                Button("Upgrade") {
-                    feedback = actionSink.handle(.upgradeNow, snapshot: snapshot)
-                }
-                .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.upgradeNow)
-            }
-
             Button("Doctor") {
                 feedback = actionSink.handle(.runDoctor, snapshot: snapshot)
             }

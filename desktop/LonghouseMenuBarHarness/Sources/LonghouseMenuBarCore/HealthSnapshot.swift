@@ -38,14 +38,6 @@ public enum HarnessSeverity: String, Codable, CaseIterable, Sendable {
     }
 }
 
-public struct UpdateInfoSnapshot: Codable, Equatable, Sendable {
-    public let installedVersion: String
-    public let latestVersion: String?
-    public let updateAvailable: Bool
-    public let upgradeCommand: String
-    public let checkedAt: String?
-}
-
 public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let schemaVersion: Int?
     public let collectedAt: String?
@@ -59,7 +51,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let outbox: OutboxSnapshot?
     public let activitySummary: ActivitySummarySnapshot?
     public let launchReadiness: LaunchReadinessSnapshot?
-    public let updateInfo: UpdateInfoSnapshot?
 
     public init(
         schemaVersion: Int?,
@@ -73,8 +64,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         engineStatus: EngineStatusSnapshot?,
         outbox: OutboxSnapshot?,
         activitySummary: ActivitySummarySnapshot?,
-        launchReadiness: LaunchReadinessSnapshot?,
-        updateInfo: UpdateInfoSnapshot? = nil
+        launchReadiness: LaunchReadinessSnapshot?
     ) {
         self.schemaVersion = schemaVersion
         self.collectedAt = collectedAt
@@ -88,7 +78,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.outbox = outbox
         self.activitySummary = activitySummary
         self.launchReadiness = launchReadiness
-        self.updateInfo = updateInfo
     }
 
     public var parsedSeverity: HarnessSeverity {
@@ -425,13 +414,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             .filter { !$0.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
-    public var updateBadgeLabel: String? {
-        guard updateInfo?.updateAvailable == true else {
-            return nil
-        }
-        return "Update ready"
-    }
-
     public var diskFreeLabel: String {
         guard let bytes = engineStatus?.payload?.diskFreeBytes else {
             return "-"
@@ -526,17 +508,6 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return String(shortHost)
         }
         return host
-    }
-
-    public var installedVersionLabel: String {
-        updateInfo?.installedVersion ?? "-"
-    }
-
-    public var installedVersionDetailLabel: String {
-        if updateInfo?.updateAvailable == true, let latest = updateInfo?.latestVersion {
-            return "Upd \(latest)"
-        }
-        return "Current"
     }
 
     public var machineNameLabel: String {
