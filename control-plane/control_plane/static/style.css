@@ -102,33 +102,33 @@ code { font-family: var(--font-mono); }
 .container {
   max-width: 560px;
   margin: 0 auto;
-  padding: 3rem 1.5rem;
+  padding: 2rem 1.5rem;
 }
 
 .hero-center {
   text-align: center;
-  padding: 4rem 0 2rem;
+  padding: 1.5rem 0 1rem;
 }
 
 .hero-logo {
-  width: 64px;
-  height: 64px;
-  margin-bottom: var(--space-4);
+  width: 36px;
+  height: 36px;
+  margin-bottom: var(--space-2);
 }
 
 .hero-center h1 {
   font-family: var(--font-display);
-  font-size: 2.25rem;
+  font-size: 1.5rem;
   font-weight: 700;
   letter-spacing: -0.03em;
   color: var(--color-text-primary);
-  margin: 0 0 0.5rem 0;
+  margin: 0 0 0.25rem 0;
 }
 
 .subtitle {
   color: var(--color-text-muted);
-  font-size: 0.95rem;
-  margin-bottom: 2rem;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
 }
 
 
@@ -195,8 +195,8 @@ h2 {
   background: var(--color-surface-card);
   border: 1px solid var(--color-border-primary);
   border-radius: var(--radius-lg);
-  padding: 1.75rem;
-  margin-bottom: 1.25rem;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
   box-shadow: var(--shadow-card);
   transition: border-color var(--duration-fast) var(--easing);
 }
@@ -255,7 +255,7 @@ input::placeholder {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  padding: 0.65rem 1.5rem;
+  padding: 0.6rem 1.5rem;
   border-radius: var(--radius-md);
   text-decoration: none;
   font-family: var(--font-base);
@@ -338,6 +338,24 @@ button[type="submit"] { margin-top: 1rem; }
   color: var(--color-brand-primary);
   font-size: 0.8rem;
   text-align: center;
+}
+
+.alert-warning {
+  background: rgba(234, 179, 8, 0.08);
+  border: 1px solid rgba(234, 179, 8, 0.25);
+  color: #d4a520;
+  font-size: 0.875rem;
+  margin-bottom: 1rem;
+}
+
+.btn-inline-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #d4a520;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: inherit;
 }
 
 
@@ -427,7 +445,7 @@ td {
   display: flex;
   align-items: center;
   gap: 1rem;
-  margin: 1rem 0;
+  margin: 0.75rem 0;
 }
 
 .divider-line {
@@ -438,7 +456,7 @@ td {
 
 .divider-text {
   color: var(--color-text-muted);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
@@ -607,20 +625,20 @@ td {
 
 @media (max-width: 640px) {
   .container {
-    padding: 2rem 1rem;
+    padding: 1.5rem 1rem;
   }
 
   .hero-center {
-    padding: 2.5rem 0 1.5rem;
+    padding: 1rem 0 0.75rem;
   }
 
   .hero-center h1 {
-    font-size: 1.75rem;
+    font-size: 1.25rem;
   }
 
   .hero-logo {
-    width: 52px;
-    height: 52px;
+    width: 28px;
+    height: 28px;
   }
 
   .card {

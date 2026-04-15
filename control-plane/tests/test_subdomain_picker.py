@@ -390,11 +390,13 @@ class TestSetSubdomainEndpoint:
 
 
 class TestDashboardSubdomainRedirect:
-    def test_unpaid_no_pending_redirects_to_picker(self, client, db_session):
+    def test_unpaid_no_pending_auto_derives_subdomain(self, client, db_session):
+        # No pending_subdomain: dashboard auto-derives from email and shows get-started page
         user = _make_user(db_session, email="nopending@t.com", verified=True)
         resp = client.get("/dashboard", cookies=_auth(user))
-        assert resp.status_code == 302
-        assert "choose-subdomain" in resp.headers["location"]
+        assert resp.status_code == 200
+        # Auto-derived from email prefix "nopending"
+        assert b"nopending" in resp.content
 
     def test_unpaid_with_pending_shows_dashboard(self, client, db_session):
         user = _make_user(db_session, email="haspending@t.com", verified=True, pending="mypick")
@@ -410,11 +412,13 @@ class TestDashboardSubdomainRedirect:
 
 
 class TestDashboardCheckout:
-    def test_requires_pending_subdomain(self, client, db_session):
+    def test_auto_derives_subdomain_on_checkout(self, client, db_session):
+        # No pending_subdomain: checkout auto-derives from email and proceeds to Stripe
         user = _make_user(db_session, email="checkout@t.com", verified=True)
         resp = client.post("/dashboard/checkout", cookies=_auth(user))
-        assert resp.status_code == 303
-        assert resp.headers["location"] == "/onboarding/choose-subdomain"
+        # Should NOT redirect to choose-subdomain; proceeds to Stripe (503 since not configured)
+        location = resp.headers.get("location", "")
+        assert "choose-subdomain" not in location
 
     def test_checkout_binds_requested_subdomain_in_metadata(self, client, db_session):
         user = _make_user(db_session, email="bound@t.com", verified=True, pending="picked-on-dashboard")

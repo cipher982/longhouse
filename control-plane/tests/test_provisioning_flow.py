@@ -1587,15 +1587,16 @@ class TestBillingCheckout:
         resp = client.post("/billing/checkout")
         assert resp.status_code in (302, 401, 403)
 
-    def test_checkout_requires_pending_subdomain(self, client, db_session):
+    def test_checkout_without_subdomain_uses_fallback(self, client, db_session):
+        # billing/checkout no longer requires pending_subdomain — proceeds with empty metadata
         user = _make_user(db_session, email="verified@test.com", verified=True)
         client.cookies.update(_login_cookie(user))
 
         with patch.object(settings, "stripe_secret_key", "sk_test"):
             resp = client.post("/billing/checkout")
 
-        assert resp.status_code == 409
-        assert "choose a subdomain" in resp.json()["detail"].lower()
+        # Should fail with 503 (Stripe price not configured), not 409 subdomain error
+        assert resp.status_code == 503
 
     def test_checkout_without_stripe_config(self, client, db_session):
         user = _make_user(db_session, email="verified@test.com", verified=True)

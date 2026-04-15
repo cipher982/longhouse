@@ -94,7 +94,8 @@ class TestSignup:
             follow_redirects=False,
         )
         assert resp.status_code == 303
-        assert "/verify-email" in resp.headers["location"]
+        # Goes straight to dashboard — no email verification wall
+        assert "/dashboard" in resp.headers["location"]
 
         user = db_session.query(User).filter(User.email == "new@example.com").first()
         assert user is not None
@@ -168,13 +169,14 @@ class TestVerifyToken:
 
 
 class TestCheckoutGating:
-    def test_unverified_user_blocked_from_dashboard_checkout(self, client, db_session):
+    def test_unverified_user_blocked_from_billing_checkout_api(self, client, db_session):
+        # The /billing/checkout JSON API still requires verified email
         user = _create_user(db_session, verified=False)
         client.cookies.update(_login_cookie(user))
 
-        resp = client.post("/dashboard/checkout", follow_redirects=False)
-        assert resp.status_code == 302
-        assert "/verify-email" in resp.headers["location"]
+        resp = client.post("/billing/checkout")
+        assert resp.status_code == 403
+        assert "not verified" in resp.json()["detail"].lower()
 
     def test_verified_user_can_reach_checkout(self, client, db_session):
         """Verified user hits the Stripe path (which will fail since Stripe isn't configured, but that's OK)."""
@@ -238,13 +240,14 @@ class TestResendVerification:
 
 
 class TestDashboardGating:
-    def test_unverified_user_redirected_to_verify(self, client, db_session):
+    def test_unverified_user_sees_dashboard_with_banner(self, client, db_session):
+        # Unverified users now land on the dashboard with a soft verification banner
         user = _create_user(db_session, verified=False)
         client.cookies.update(_login_cookie(user))
 
         resp = client.get("/dashboard", follow_redirects=False)
-        assert resp.status_code == 302
-        assert "/verify-email" in resp.headers["location"]
+        assert resp.status_code == 200
+        assert b"verify" in resp.content.lower()
 
     def test_verified_user_sees_dashboard(self, client, db_session):
         user = _create_user(db_session, verified=True)

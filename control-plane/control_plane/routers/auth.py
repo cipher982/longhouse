@@ -471,12 +471,11 @@ def email_signup(
     db.refresh(user)
     logger.info(f"Created new user via email signup: {email}")
 
-    # Send verification email
+    # Send verification email (non-blocking — user goes straight to dashboard)
     _send_verification(user)
 
-    # Log the user in but redirect to verify-email page (not dashboard)
     session_token = _issue_session_token(user)
-    response = RedirectResponse(f"https://control.{settings.root_domain}/verify-email", status_code=303)
+    response = RedirectResponse(f"https://control.{settings.root_domain}/dashboard", status_code=303)
     _set_session(response, session_token)
     return response
 

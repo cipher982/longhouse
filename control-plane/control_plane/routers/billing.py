@@ -54,9 +54,6 @@ def _create_checkout_session(user: User, db: Session, *, cancel_url: str):
             detail="Already subscribed. Use /billing/portal to manage.",
         )
 
-    if not user.pending_subdomain:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Choose a subdomain before checkout")
-
     stripe = _get_stripe()
 
     if not settings.stripe_price_id:

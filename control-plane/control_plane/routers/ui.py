@@ -579,11 +579,17 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     if not user:
         return RedirectResponse("/", status_code=302)
 
-    # Unverified email+password users must verify first
-    if not user.email_verified:
-        return RedirectResponse("/verify-email", status_code=302)
-
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
+
+    unverified_banner = ""
+    if not user.email_verified:
+        unverified_banner = f"""
+        <div class="alert alert-warning">
+          Please verify your email (<strong>{html.escape(user.email)}</strong>) to enable billing and account recovery.
+          <form method="post" action="/auth/resend-verification" style="display:inline;margin-left:0.5rem;">
+            <button type="submit" class="btn-inline-link">Resend email</button>
+          </form>
+        </div>"""
 
     if instance and instance.status not in ("deprovisioned", "failed"):
         instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
@@ -594,7 +600,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             if user.stripe_customer_id else ""
         )
 
-        body = f"""
+        body = f"""{unverified_banner}
         <h1>Your Instance</h1>
         <div class="card">
           <a href="{instance_url}" target="_blank" class="instance-url">{instance.subdomain}.{settings.root_domain}</a>
@@ -617,12 +623,15 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     elif user.subscription_status == "active":
         return RedirectResponse("/provisioning", status_code=302)
     else:
+        # Auto-derive a subdomain suggestion if user hasn't chosen one yet
         if not user.pending_subdomain:
-            return RedirectResponse("/onboarding/choose-subdomain", status_code=302)
+            raw_prefix = user.email.split("@")[0].lower()
+            user.pending_subdomain = _re.sub(r"[^a-z0-9-]", "-", raw_prefix).strip("-")[:20] or "user"
+            db.commit()
 
         domain = settings.root_domain
         chosen_url = f"{html.escape(user.pending_subdomain)}.{html.escape(domain)}"
-        body = f"""
+        body = f"""{unverified_banner}
         <h1>Get Started</h1>
         <p class="subtitle">Launch your own always-on Longhouse instance.</p>
         <div class="card">
@@ -630,7 +639,7 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
             <div class="meta-label">Your instance URL</div>
             <div class="actions mt-1">
               <span class="url-badge">{chosen_url}</span>
-              <a href="/onboarding/choose-subdomain" class="text-xs text-muted">Change</a>
+              <a href="/onboarding/choose-subdomain" class="text-xs text-muted">Customize</a>
             </div>
           </div>
           <h2 class="mt-3">Hosted &mdash; $5/mo</h2>
@@ -678,10 +687,12 @@ def dashboard_checkout(request: Request, db: Session = Depends(get_db)):
     user = _get_user_from_cookie(request, db)
     if not user:
         return RedirectResponse("/", status_code=302)
-    if not user.email_verified:
-        return RedirectResponse("/verify-email", status_code=302)
+
+    # Auto-derive subdomain if not set
     if not user.pending_subdomain:
-        return RedirectResponse("/onboarding/choose-subdomain", status_code=303)
+        raw_prefix = user.email.split("@")[0].lower()
+        user.pending_subdomain = _re.sub(r"[^a-z0-9-]", "-", raw_prefix).strip("-")[:20] or "user"
+        db.commit()
 
     from control_plane.routers.billing import _create_checkout_session
 
