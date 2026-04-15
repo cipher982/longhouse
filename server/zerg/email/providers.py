@@ -12,7 +12,6 @@ is sufficient.
 
 from __future__ import annotations
 
-import asyncio
 import re
 from datetime import datetime
 from datetime import timezone
@@ -84,79 +83,6 @@ class GmailProvider:  # noqa: D101 – obvious from context
         # Instance is a singleton registered in `_REGISTRY` so we can safely
         # store mutable state here.
         self._token_cache = {}
-
-    # ------------------------------------------------------------------
-    # Watch renewal helpers --------------------------------------------
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _renew_watch_stub():  # noqa: D401 – tiny helper for dev/CI
-        """Return new watch metadata identical to *watch* stub.
-
-        The real implementation will call the Gmail *watch* API.  Until we
-        wire that up, tests patch this helper for deterministic timestamps.
-        """
-
-        from datetime import datetime
-        from datetime import timedelta
-        from datetime import timezone
-
-        now = datetime.now(tz=timezone.utc)
-        return {
-            "history_id": int(now.timestamp()),
-            "watch_expiry": int((now + timedelta(days=7)).timestamp() * 1000),
-        }
-
-    async def _maybe_renew_watch(self, trg, session):  # noqa: D401 – small helper
-        """Renew Gmail watch if expiry within next 24 h.
-
-        Called from :meth:`process_trigger` **before** History diff so we keep
-        the baseline up to date.  Only runs when the trigger has valid
-        ``watch_expiry`` metadata – brand-new triggers are initialised
-        elsewhere.
-        """
-
-        from datetime import datetime
-        from datetime import timezone
-
-        from zerg.metrics import gmail_api_error_total  # noqa: WPS433
-        from zerg.metrics import gmail_watch_renew_total  # noqa: WPS433
-
-        expiry_ts = (trg.config or {}).get("watch_expiry")  # milliseconds
-
-        if expiry_ts is None:
-            return  # no data yet – will be set by initialise helper
-
-        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-
-        # Renew if expires within 24 h
-        if expiry_ts - now_ms > 24 * 60 * 60 * 1000:
-            return
-
-        logger.info("renew-watch", trigger_id=trg.id)
-
-        try:
-            new_meta = await asyncio.to_thread(self._renew_watch_stub)
-        except Exception as exc:  # pragma: no cover – unexpected stub failure
-            logger.error("renew-watch-failed", trigger_id=trg.id, error=str(exc))
-            gmail_api_error_total.inc()
-            return
-
-        cfg = trg.config or {}
-        cfg.update(new_meta)
-        trg.config = cfg  # type: ignore[assignment]
-
-        try:
-            from sqlalchemy.orm.attributes import flag_modified  # type: ignore
-
-            flag_modified(trg, "config")
-        except ImportError:
-            pass
-
-        session.add(trg)
-        session.commit()
-
-        gmail_watch_renew_total.inc()
 
     @staticmethod
     def _decode_header_value(value: str | None) -> str | None:

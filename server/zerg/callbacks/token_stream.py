@@ -1,6 +1,6 @@
 """WebSocket token callback utilities.
 
-This module provides an ``AsyncCallbackHandler`` implementation that streams
+This module provides an ``AsyncTokenCallback`` implementation that streams
 individual **assistant tokens** over the existing topic-based WebSocket layer.
 
 The handler is *stateless* apart from a reference to the global
@@ -18,7 +18,7 @@ from typing import Any
 from typing import Optional
 
 # Native callback base class (LangChain-free)
-from zerg.callbacks.base import AsyncCallbackHandler
+from zerg.callbacks.base import AsyncTokenCallback
 from zerg.generated.ws_messages import Envelope
 from zerg.generated.ws_messages import StreamChunkData
 from zerg.websocket.manager import topic_manager
@@ -46,7 +46,7 @@ current_user_id_var: contextvars.ContextVar[Optional[int]] = contextvars.Context
 # ---------------------------------------------------------------------------
 
 
-class WsTokenCallback(AsyncCallbackHandler):
+class WsTokenCallback(AsyncTokenCallback):
     """LangChain callback that forwards every new LLM token over WebSocket."""
 
     def __init__(self, **kwargs: Any) -> None:
