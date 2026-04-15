@@ -53,7 +53,7 @@ struct PanelChrome<Content: View>: View {
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            PanelMaterialBackground()
+            PanelMaterialBackground(cornerRadius: MenuBarPanelLayout.chromeCornerRadius)
 
             LinearGradient(
                 colors: [accent.opacity(0.04), Color.clear],
@@ -80,15 +80,27 @@ struct PanelChrome<Content: View>: View {
 }
 
 struct PanelMaterialBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .popover
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
+    let cornerRadius: CGFloat
+
+    func makeNSView(context: Context) -> NSView {
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = cornerRadius
+            return glass
+        } else {
+            let view = NSVisualEffectView()
+            view.material = .popover
+            view.blendingMode = .behindWindow
+            view.state = .active
+            return view
+        }
     }
 
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if #available(macOS 26.0, *) {
+            (nsView as? NSGlassEffectView)?.cornerRadius = cornerRadius
+        }
+    }
 }
 
 struct PanelSection<Content: View>: View {
