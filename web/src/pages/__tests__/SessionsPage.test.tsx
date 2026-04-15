@@ -328,7 +328,6 @@ describe("SessionsPage", () => {
 
     expect(await screen.findByPlaceholderText("Search sessions...")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Machines" })).toBeInTheDocument();
   });
 
   it("prefetches the session workspace queries when a session card gets hover intent", async () => {
@@ -589,9 +588,7 @@ describe("SessionsPage", () => {
     expect(screen.queryByText("Welcome to Longhouse")).not.toBeInTheDocument();
   });
 
-  it("opens the machines modal when a runner is available", async () => {
-    const user = userEvent.setup();
-
+  it("does not show a redundant Machines button in the timeline header", async () => {
     mockUseRunners.mockReturnValue({
       data: [makeRunner()],
       isLoading: false,
@@ -600,32 +597,9 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
-    await user.click(await screen.findByRole("button", { name: "Machines" }));
-
-    expect(await screen.findByTestId("runners-modal")).toBeInTheDocument();
-    expect(screen.getByTestId("runner-card-1")).toBeInTheDocument();
-  });
-
-  it("navigates to the selected runner from the machines modal", async () => {
-    const user = userEvent.setup();
-    const navigateMock = vi.fn();
-    vi.spyOn(reactRouterDom, "useNavigate").mockReturnValue(navigateMock);
-
-    mockUseRunners.mockReturnValue({
-      data: [
-        makeRunner({ id: 1, name: "cube" }),
-        makeRunner({ id: 2, name: "mac-mini" }),
-      ],
-      isLoading: false,
-      error: null,
-    });
-
-    renderSessionsPage("/timeline");
-
-    await user.click(await screen.findByRole("button", { name: "Machines" }));
-    await user.click(await screen.findByTestId("runner-card-1"));
-
-    expect(navigateMock).toHaveBeenCalledWith("/runners/1");
+    await screen.findByPlaceholderText("Search sessions...");
+    // Machines is a nav item — no redundant header button
+    expect(screen.queryByTestId("timeline-runner-action")).not.toBeInTheDocument();
   });
 
   it("treats demo sessions as preview data instead of the primary onboarding path", async () => {

@@ -35,7 +35,6 @@ import {
   Spinner,
   Input,
 } from "../components/ui";
-import RunnersModal from "../components/RunnersModal";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { RecallPanel } from "../components/RecallPanel";
 import { SessionCard } from "../components/sessions/SessionCard";
@@ -212,8 +211,6 @@ export default function SessionsPage() {
   const queryClient = useQueryClient();
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
   const lastTimelineScrollAtRef = useRef(0);
-  const [showRunnersModal, setShowRunnersModal] = useState(false);
-
   // Fetch dynamic filter options
   const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack, popoverOpen);
   const projectOptions = filtersData?.projects || [];
@@ -370,14 +367,6 @@ export default function SessionsPage() {
           {compatibilityMode ? `${threadCards.length} results` : `${threadCards.length} tasks`}
         </span>
       )}
-      <Button
-        variant="secondary"
-        size="sm"
-        onClick={() => setShowRunnersModal(true)}
-        data-testid="timeline-runner-action"
-      >
-        Machines
-      </Button>
     </div>
   );
 
@@ -539,7 +528,7 @@ export default function SessionsPage() {
                 <Button
                   variant="secondary"
                   size="md"
-                  onClick={() => setShowRunnersModal(true)}
+                  onClick={() => navigate("/runners")}
                   data-testid="timeline-empty-runner-action"
                 >
                   Machines
@@ -577,7 +566,6 @@ export default function SessionsPage() {
               {demoLoading && " Demo sessions are loading in the background."}
             </p>
           </div>
-          <RunnersModal isOpen={showRunnersModal} onClose={() => setShowRunnersModal(false)} />
         </div>
       </PageShell>
     );
@@ -828,7 +816,6 @@ export default function SessionsPage() {
           </div>
         )}
       </div>
-      <RunnersModal isOpen={showRunnersModal} onClose={() => setShowRunnersModal(false)} />
     </PageShell>
   );
 }
