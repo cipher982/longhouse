@@ -95,6 +95,7 @@ Then read the component README you are touching: `server/README.md`, `control-pl
 ```bash
 make dev
 make stop
+make ui-capture PAGE=timeline SCENE=timeline-card-stress VIEWPORT=mobile
 make dogfood-refresh
 make dogfood-check
 make test
@@ -107,6 +108,8 @@ make test-ci
 make test-full
 make qa-live
 ```
+
+For timeline/mobile UI work, read `.agents/skills/zerg-ui/SKILL.md` first and prefer the fixture-backed `ui-capture` loop before asking for manual live review.
 
 Do not assume `make dev` is already running.
 

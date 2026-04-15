@@ -507,6 +507,10 @@
   .session-card-content {
     position: relative;
     z-index: 2;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-height: 100%;
   }
 
   .session-card-content--passthrough {
@@ -578,12 +582,42 @@
     min-width: 0;
   }
 
-  /* Meta row: provider + branch + badges — all muted, small */
-  .session-card-meta {
+  .session-card-context {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .session-card-identity,
+  .session-card-status {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     flex-wrap: wrap;
+  }
+
+  .session-card-identity {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .session-card-identity-primary,
+  .session-card-identity-secondary {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .session-card-identity-secondary {
+    gap: var(--space-1);
+  }
+
+  .session-card-status {
+    align-items: flex-start;
+    min-width: 0;
   }
 
   .session-card-provider-badge {
@@ -617,6 +651,7 @@
     padding: 2px 6px;
     border-radius: var(--radius-full);
     text-transform: lowercase;
+    white-space: nowrap;
     background: var(--surface-glass-2);
     color: var(--color-text-muted);
     border: 1px solid var(--border-glass-1);
@@ -662,6 +697,8 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
+    flex: 1;
+    min-height: 0;
   }
 
   .session-card-runtime {
@@ -669,6 +706,8 @@
     align-items: center;
     gap: var(--space-2);
     align-self: flex-start;
+    max-width: 100%;
+    min-width: 0;
     min-height: 22px;
     padding: 4px 8px;
     border-radius: var(--radius-full);
@@ -717,6 +756,10 @@
     font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
     letter-spacing: 0.01em;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .session-card-runtime-meta {
@@ -724,6 +767,9 @@
     line-height: 1;
     color: var(--color-text-muted);
     white-space: nowrap;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .session-card-capability-pill {
@@ -734,6 +780,7 @@
     border-radius: var(--radius-full);
     text-transform: uppercase;
     letter-spacing: 0.03em;
+    white-space: nowrap;
     background: var(--surface-glass-2);
     color: var(--color-text-muted);
     border: 1px solid var(--border-glass-1);
@@ -757,6 +804,7 @@
     line-height: 1;
     padding: 2px 6px;
     border-radius: var(--radius-full);
+    white-space: nowrap;
     background: var(--surface-glass-2);
     color: var(--color-text-muted);
     border: 1px solid var(--border-glass-1);
@@ -774,6 +822,10 @@
     font-weight: var(--font-weight-medium);
     color: var(--color-text-secondary);
     line-height: var(--font-line-height-snug);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   .branch-icon {
@@ -919,9 +971,60 @@
   }
 
   @media (max-width: 560px) {
+    .session-card {
+      padding: var(--space-3);
+      gap: 0;
+    }
+
+    .session-card-content {
+      gap: 10px;
+    }
+
+    .session-card-header {
+      align-items: flex-start;
+    }
+
+    .session-card-header-right--with-archive {
+      padding-right: 24px;
+    }
+
+    .session-card-archive-btn {
+      top: var(--space-3);
+      right: var(--space-3);
+    }
+
+    .session-card-project {
+      font-size: var(--font-size-sm);
+    }
+
+    .session-card-identity-primary,
+    .session-card-identity-secondary,
+    .session-card-status {
+      row-gap: 6px;
+    }
+
+    .session-card-branch-badge {
+      max-width: min(140px, 100%);
+    }
+
+    .session-card-runtime {
+      max-width: 100%;
+    }
+
+    .session-card-runtime-meta {
+      display: none;
+    }
+
+    .session-card-runtime-phase {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .session-card-footer {
       grid-template-columns: 1fr;
       align-items: start;
+      gap: var(--space-2);
     }
 
     .session-card-actions {

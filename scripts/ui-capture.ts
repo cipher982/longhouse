@@ -10,11 +10,12 @@
  * - Manifest.json with metadata
  *
  * Usage:
- *   bunx tsx scripts/ui-capture.ts [page] [--scene=X] [--output=X] [--all] [--no-trace]
+ *   bunx tsx scripts/ui-capture.ts [page] [--scene=X] [--viewport=X] [--output=X] [--all] [--no-trace]
  *
  * Examples:
  *   bunx tsx scripts/ui-capture.ts timeline
  *   bunx tsx scripts/ui-capture.ts --scene=empty
+ *   bunx tsx scripts/ui-capture.ts timeline --scene=timeline-card-stress --viewport=mobile
  *   bunx tsx scripts/ui-capture.ts --all
  */
 
@@ -22,12 +23,51 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import { execSync } from "child_process";
 import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
+import { buildTimelineCardStressFixture } from "./ui-fixtures/timelineCardStress";
 
 const PAGES = ["timeline", "chat", "dashboard", "settings"] as const;
 type PageName = (typeof PAGES)[number];
 
-const SCENES = ["empty", "demo", "onboarding-modal", "missing-api-key"] as const;
+const SCENES = [
+  "empty",
+  "demo",
+  "onboarding-modal",
+  "missing-api-key",
+  "timeline-card-stress",
+] as const;
 type SceneName = (typeof SCENES)[number];
+
+const VIEWPORT_PRESETS = {
+  desktop: {
+    width: 1280,
+    height: 720,
+    isMobile: false,
+    hasTouch: false,
+    deviceScaleFactor: 1,
+  },
+  mobile: {
+    width: 390,
+    height: 844,
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 3,
+  },
+  "mobile-small": {
+    width: 375,
+    height: 667,
+    isMobile: true,
+    hasTouch: true,
+    deviceScaleFactor: 2,
+  },
+} as const;
+type ViewportPresetName = keyof typeof VIEWPORT_PRESETS;
+type ViewportConfig = {
+  width: number;
+  height: number;
+  isMobile: boolean;
+  hasTouch: boolean;
+  deviceScaleFactor: number;
+};
 
 interface Options {
   page: PageName;
@@ -37,6 +77,8 @@ interface Options {
   backendUrl: string;
   trace: boolean;
   all: boolean;
+  viewportName: string;
+  viewport: ViewportConfig;
 }
 
 type A11yFormat = "json" | "yaml" | "none";
@@ -68,11 +110,13 @@ function parseArgs(): Options {
   const sceneArg = args
     .find((a) => a.startsWith("--scene="))
     ?.split("=")[1] as SceneName | undefined;
+  const viewportArg = args.find((a) => a.startsWith("--viewport="))?.split("=")[1];
   const outputArg = args.find((a) => a.startsWith("--output="))?.split("=")[1];
   const noTrace = args.includes("--no-trace");
   const all = args.includes("--all");
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const parsedViewport = parseViewport(viewportArg);
 
   return {
     page: (pageArg as PageName) || "timeline",
@@ -82,7 +126,41 @@ function parseArgs(): Options {
     backendUrl: process.env.BACKEND_URL || "http://localhost:47300",
     trace: !noTrace,
     all,
+    viewportName: viewportArg || "desktop",
+    viewport: parsedViewport,
   };
+}
+
+function parseViewport(value: string | undefined): ViewportConfig {
+  if (!value || value === "desktop") {
+    return { ...VIEWPORT_PRESETS.desktop };
+  }
+
+  if (value in VIEWPORT_PRESETS) {
+    return { ...VIEWPORT_PRESETS[value as ViewportPresetName] };
+  }
+
+  const match = /^(\d+)x(\d+)$/.exec(value);
+  if (!match) {
+    throw new Error(
+      `Unsupported viewport "${value}". Use one of ${Object.keys(VIEWPORT_PRESETS).join(", ")} or WIDTHxHEIGHT.`,
+    );
+  }
+
+  const width = Number.parseInt(match[1], 10);
+  const height = Number.parseInt(match[2], 10);
+
+  return {
+    width,
+    height,
+    isMobile: width <= 768,
+    hasTouch: width <= 768,
+    deviceScaleFactor: width <= 768 ? 3 : 1,
+  };
+}
+
+function sceneUsesMockApi(scene: SceneName): boolean {
+  return scene === "timeline-card-stress";
 }
 
 async function checkDevRunning(backendUrl: string): Promise<boolean> {
@@ -95,6 +173,10 @@ async function checkDevRunning(backendUrl: string): Promise<boolean> {
 }
 
 async function seedScene(scene: SceneName, backendUrl: string): Promise<void> {
+  if (sceneUsesMockApi(scene)) {
+    return;
+  }
+
   switch (scene) {
     case "empty":
       // Clear all sessions for true empty state
@@ -149,21 +231,90 @@ async function seedScene(scene: SceneName, backendUrl: string): Promise<void> {
   }
 }
 
-async function captureBundle(
+async function installSceneMocks(
   context: BrowserContext,
+  scene: SceneName,
+  baseUrl: string,
+): Promise<void> {
+  if (scene !== "timeline-card-stress") {
+    return;
+  }
+
+  const fixture = buildTimelineCardStressFixture();
+  const appOrigin = new URL(baseUrl).origin;
+
+  await context.route(`${appOrigin}/api/**`, async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+
+    if (pathname === "/api/timeline/sessions") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(fixture.sessions),
+      });
+      return;
+    }
+
+    if (pathname === "/api/timeline/filters") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(fixture.filters),
+      });
+      return;
+    }
+
+    if (pathname === "/api/runners/" || pathname === "/api/runners") {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(fixture.runners),
+      });
+      return;
+    }
+
+    if (pathname === "/api/timeline/sessions/stream") {
+      await route.fulfill({
+        status: 204,
+        body: "",
+      });
+      return;
+    }
+
+    await route.fallback();
+  });
+}
+
+async function installScenePageOverrides(page: Page, scene: SceneName): Promise<void> {
+  if (!sceneUsesMockApi(scene)) {
+    return;
+  }
+
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "EventSource", {
+      configurable: true,
+      value: undefined,
+    });
+  });
+}
+
+async function captureBundle(
+  _context: BrowserContext,
   page: Page,
   pageName: PageName,
   outputDir: string,
-  baseUrl: string
+  baseUrl: string,
+  scene: SceneName,
 ): Promise<CaptureResult> {
   const url = `${baseUrl}/${pageName}`;
   console.log(`  Navigating to ${url}...`);
 
+  await installScenePageOverrides(page, scene);
   await page.goto(url);
 
-  // Wait for page stability - try data-page-ready first, then networkidle
+  // Wait for page stability - prefer shared readiness flags.
   try {
-    await page.waitForSelector("[data-page-ready]", { timeout: 5000 });
+    await page.waitForSelector("[data-screenshot-ready='true'], [data-ready='true']", { timeout: 5000 });
   } catch {
     await page.waitForLoadState("networkidle", { timeout: 10000 });
   }
@@ -267,11 +418,16 @@ async function main() {
     console.log("\nLaunching browser...");
     browser = await chromium.launch();
     context = await browser.newContext({
-      viewport: { width: 1280, height: 720 },
+      viewport: { width: opts.viewport.width, height: opts.viewport.height },
+      isMobile: opts.viewport.isMobile,
+      hasTouch: opts.viewport.hasTouch,
+      deviceScaleFactor: opts.viewport.deviceScaleFactor,
       reducedMotion: "reduce",
       timezoneId: "America/Los_Angeles",
       locale: "en-US",
     });
+
+    await installSceneMocks(context, opts.scene, opts.baseUrl);
 
     // Start tracing if enabled
     if (opts.trace) {
@@ -307,7 +463,8 @@ async function main() {
           page,
           pageName,
           outputDir,
-          opts.baseUrl
+          opts.baseUrl,
+          opts.scene,
         );
       } catch (error) {
         const { message, detail } = formatError(error);
@@ -359,7 +516,8 @@ async function main() {
       config: {
         baseUrl: opts.baseUrl,
         backendUrl: opts.backendUrl,
-        viewport: { width: 1280, height: 720 },
+        viewport_name: opts.viewportName,
+        viewport: opts.viewport,
       },
     };
 
