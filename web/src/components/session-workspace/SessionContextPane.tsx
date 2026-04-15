@@ -105,10 +105,17 @@ export function SessionContextPane({
     shouldShowNotice ||
     interaction.managedLaunchSuggestion;
 
+  const durationStr = formatDuration(session.started_at, session.ended_at);
+  const statsLine = [
+    `${turnCount} turns`,
+    `${session.tool_calls} tools`,
+    durationStr,
+  ].join(" \u00b7 ");
+
   return (
     <div className="session-context-pane">
+      {/* Zone 1 — Identity + live status */}
       <div className="session-pane-section session-pane-section--hero">
-        <div className="session-pane-eyebrow">{statusEyebrow}</div>
         <div className="session-context-title">{title}</div>
         <div className="session-context-subtitle">
           <span className="session-context-provider">
@@ -118,26 +125,13 @@ export function SessionContextPane({
             />
             {formatProviderLabel(session.provider)}
           </span>
-          {homeLabel ? <span>{homeLabel}</span> : null}
-        </div>
-        <div className="session-context-badges">
-          <Badge
-            variant={interaction.capabilityVariant}
-            title={interaction.capabilityDescription ?? undefined}
-          >
-            {interaction.capabilityLabel}
-          </Badge>
-          <Badge
-            variant={interaction.managementVariant}
-            data-testid="session-management-badge"
-            title={interaction.managementDescription}
-          >
-            {interaction.managementLabel}
-          </Badge>
-          <Badge variant="neutral">{turnCount} turns</Badge>
-          <Badge variant="neutral">{session.tool_calls} tools</Badge>
+          {homeLabel ? (
+            <span className="session-context-subtitle__sep">{homeLabel}</span>
+          ) : null}
           {session.environment && session.environment !== "production" ? (
-            <Badge variant="warning">{session.environment}</Badge>
+            <Badge variant="warning" data-testid="session-env-badge">
+              {session.environment}
+            </Badge>
           ) : null}
         </div>
         <SessionRuntimeStrip
@@ -147,11 +141,8 @@ export function SessionContextPane({
           variant="block"
           testId="session-sidebar-runtime"
         />
-        <div
-          className="session-context-managed-copy"
-          data-testid="session-management-summary"
-        >
-          {statusSummary}
+        <div className="session-context-stats" data-testid="session-stats-line">
+          {statsLine}
         </div>
       </div>
 
@@ -173,23 +164,18 @@ export function SessionContextPane({
         </div>
       ) : null}
 
+      {/* Zone 2 — Actions */}
       {showControlSection ? (
-        <div className="session-pane-section">
-          <div className="session-pane-section-title">Control</div>
+        <div className="session-pane-section session-pane-section--actions">
           {interaction.canChatFromBrowser && onPrimaryAction ? (
-            <div className="session-context-primary-action">
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                onClick={onPrimaryAction}
-              >
-                Focus composer
-              </Button>
-              <div className="session-context-primary-action-copy">
-                Send the next prompt from the dock below.
-              </div>
-            </div>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={onPrimaryAction}
+            >
+              Focus composer
+            </Button>
           ) : null}
           {attachCommand ? (
             <details
@@ -238,37 +224,56 @@ export function SessionContextPane({
               </div>
             </div>
           ) : null}
+          {interaction.isManagedLocalSession ? (
+            <LoopModeSelector
+              currentMode={session.loop_mode}
+              caption={loopModeCaption}
+              pending={loopModePending}
+              onChange={onLoopModeChange}
+            />
+          ) : null}
         </div>
-      ) : null}
-
-      <div className="session-pane-section">
-        <div className="session-pane-section-title">Details</div>
-        <div className="session-context-meta">
-          <MetaRow label="Started" value={formatFullDate(session.started_at)} />
-          <MetaRow
-            label="Duration"
-            value={formatDuration(session.started_at, session.ended_at)}
+      ) : interaction.isManagedLocalSession ? (
+        <div className="session-pane-section session-pane-section--actions">
+          <LoopModeSelector
+            currentMode={session.loop_mode}
+            caption={loopModeCaption}
+            pending={loopModePending}
+            onChange={onLoopModeChange}
           />
-          {session.git_branch ? (
-            <MetaRow label="Branch" value={session.git_branch} />
-          ) : null}
-          {session.cwd ? (
-            <MetaRow label="Workspace" value={truncatePath(session.cwd, 60)} />
-          ) : null}
-          {session.project ? (
-            <MetaRow label="Project" value={session.project} />
-          ) : null}
         </div>
-      </div>
-
-      {interaction.isManagedLocalSession ? (
-        <LoopModeSelector
-          currentMode={session.loop_mode}
-          caption={loopModeCaption}
-          pending={loopModePending}
-          onChange={onLoopModeChange}
-        />
       ) : null}
+
+      {/* Zone 3 — Metadata (collapsed) */}
+      <details className="session-pane-disclosure">
+        <summary className="session-pane-disclosure__summary">
+          <span className="session-pane-disclosure__title">Details</span>
+          <span className="session-pane-disclosure__meta">
+            {session.git_branch || session.project || ""}
+          </span>
+        </summary>
+        <div className="session-pane-disclosure__body">
+          <div className="session-context-meta">
+            <MetaRow
+              label="Started"
+              value={formatFullDate(session.started_at)}
+            />
+            <MetaRow label="Duration" value={durationStr} />
+            {session.git_branch ? (
+              <MetaRow label="Branch" value={session.git_branch} />
+            ) : null}
+            {session.cwd ? (
+              <MetaRow
+                label="Workspace"
+                value={truncatePath(session.cwd, 60)}
+              />
+            ) : null}
+            {session.project ? (
+              <MetaRow label="Project" value={session.project} />
+            ) : null}
+          </div>
+        </div>
+      </details>
 
       {session.summary ? (
         <details className="session-pane-disclosure">
