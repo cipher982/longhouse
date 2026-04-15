@@ -147,6 +147,7 @@ def _collect_local_config(base_dir: Path) -> dict[str, Any]:
         "config_generation": machine_state.config_generation if machine_state else None,
         "stored_url": machine_state.runtime_url if machine_state else None,
         "machine_name": machine_state.machine_name if machine_state else None,
+        "runner_enabled": machine_state.runner_enabled if machine_state else None,
     }
 
 
@@ -284,6 +285,7 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
     machine_name = str(config.get("machine_name") or "").strip() or None
     state_exists = bool(config.get("state_exists"))
     state_error = str(config.get("state_error") or "").strip() or None
+    runner_expected = bool(config.get("runner_enabled"))
     runner_name = str(runner.get("runner_name") or "").strip() or None
     runner_urls = [str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()]
     can_reconcile_from_state = _can_reconcile_launch_from_state(
@@ -308,11 +310,11 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         reasons.append("machine_state_missing_machine_name")
         _with_action(actions, _repair_command(can_reconcile_from_state=False))
 
-    if can_reconcile_from_state and stored_url and runner_urls and stored_url not in runner_urls:
+    if runner_expected and can_reconcile_from_state and stored_url and runner_urls and stored_url not in runner_urls:
         reasons.append("config_url_runner_url_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if can_reconcile_from_state and machine_name and runner_name and machine_name != runner_name:
+    if runner_expected and can_reconcile_from_state and machine_name and runner_name and machine_name != runner_name:
         reasons.append("machine_name_runner_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
@@ -320,7 +322,7 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         reasons.append("service_machine_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if can_reconcile_from_state and runner_name and service_machine_name and runner_name != service_machine_name:
+    if runner_expected and can_reconcile_from_state and runner_name and service_machine_name and runner_name != service_machine_name:
         reasons.append("service_runner_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
@@ -346,6 +348,7 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         "state_exists": state_exists,
         "state_error": state_error,
         "config_generation": config.get("config_generation"),
+        "runner_expected": runner_expected,
         "service_machine_name": service_machine_name,
         "runner": runner,
     }
