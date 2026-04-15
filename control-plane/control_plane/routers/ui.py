@@ -37,69 +37,7 @@ router = APIRouter(tags=["ui"])
 # Shared layout
 # ---------------------------------------------------------------------------
 
-_STYLES = """
-*,*::before,*::after { box-sizing: border-box; }
-body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-       margin: 0; color: #fafafa; background: #030305; line-height: 1.6; }
-.container { max-width: 560px; margin: 0 auto; padding: 3rem 1.5rem; }
-h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 0.5rem 0; letter-spacing: -0.02em; }
-h2 { font-size: 1.25rem; font-weight: 600; margin: 0 0 1rem 0; color: #fafafa; }
-p { color: #b4b4bc; margin: 0.5rem 0; }
-a { color: #818cf8; }
-a:hover { color: #a5b4fc; }
-strong { color: #fafafa; }
-.card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
-        border-radius: 16px; padding: 1.75rem; margin-bottom: 1.25rem;
-        backdrop-filter: blur(8px); }
-.card:hover { border-color: rgba(255,255,255,0.12); }
-.btn { display: inline-block; padding: 0.65rem 1.5rem; border-radius: 8px; text-decoration: none;
-       font-weight: 500; cursor: pointer; border: none; font-size: 0.95rem;
-       transition: all 0.15s ease; line-height: 1.4; }
-.btn-primary { background: #6366f1; color: #fff; border: 1px solid rgba(129,140,248,0.5); }
-.btn-primary:hover { background: #4f46e5; box-shadow: 0 0 24px rgba(99,102,241,0.4); }
-.btn-secondary { background: rgba(255,255,255,0.07); color: #fafafa;
-                 border: 1px solid rgba(255,255,255,0.1); }
-.btn-secondary:hover { background: rgba(255,255,255,0.1); border-color: rgba(129,140,248,0.4); }
-.btn-danger { background: rgba(239,68,68,0.15); color: #fca5a5;
-              border: 1px solid rgba(239,68,68,0.3); }
-.btn-danger:hover { background: rgba(239,68,68,0.25); }
-label { display: block; margin-top: 0.75rem; font-size: 0.875rem; color: #b4b4bc; font-weight: 500; }
-input { width: 100%; padding: 0.6rem 0.75rem; margin-top: 0.35rem; border: 1px solid rgba(255,255,255,0.1);
-        border-radius: 8px; box-sizing: border-box; background: rgba(255,255,255,0.05);
-        color: #fafafa; font-size: 0.95rem; outline: none; transition: border-color 0.15s; }
-input:focus { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }
-button { margin-top: 1rem; }
-table { border-collapse: collapse; width: 100%; margin-top: 0.75rem; }
-th { text-align: left; padding: 0.6rem; border-bottom: 1px solid rgba(255,255,255,0.1);
-     font-size: 0.8rem; color: #9898a3; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-td { text-align: left; padding: 0.6rem; border-bottom: 1px solid rgba(255,255,255,0.05);
-     font-size: 0.9rem; color: #b4b4bc; }
-small { color: #9898a3; }
-.status-active { color: #22c55e; font-weight: 600; }
-.status-provisioning { color: #f59e0b; font-weight: 600; }
-.status-canceled { color: #ef4444; font-weight: 600; }
-.status-failed { color: #ef4444; font-weight: 600; }
-.spinner { display: inline-block; width: 28px; height: 28px; border: 3px solid rgba(255,255,255,0.1);
-           border-top-color: #6366f1; border-radius: 50%; animation: spin 0.8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.nav { background: rgba(3,3,5,0.85); backdrop-filter: blur(12px);
-       border-bottom: 1px solid rgba(255,255,255,0.06); padding: 0.75rem 2rem;
-       display: flex; justify-content: space-between; align-items: center; }
-.nav a { color: #fafafa; text-decoration: none; font-weight: 500; font-size: 0.95rem; }
-.nav a:hover { color: #818cf8; }
-.subtitle { color: #9898a3; font-size: 0.95rem; margin-bottom: 2rem; }
-.hero-center { text-align: center; padding: 4rem 0 2rem; }
-.hero-center h1 { font-size: 2rem; }
-.instance-url { display: block; font-family: 'JetBrains Mono', 'Fira Code', monospace;
-                font-size: 0.95rem; color: #818cf8; margin: 0.25rem 0; }
-.meta-row { display: flex; gap: 2rem; margin: 1rem 0; }
-.meta-item { display: flex; flex-direction: column; gap: 0.15rem; }
-.meta-label { font-size: 0.75rem; color: #9898a3; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
-.meta-value { font-size: 0.95rem; color: #fafafa; }
-.actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
-.google-btn { display: inline-flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1.75rem; }
-.google-btn svg { flex-shrink: 0; }
-"""
+_STYLES = ""  # All styles now served via /static/style.css
 
 
 _GOOGLE_ICON = '<svg width="18" height="18" viewBox="0 0 18 18"><path fill="#4285F4" d="M17.64 9.2a10.3 10.3 0 0 0-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92a8.78 8.78 0 0 0 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.83.86-3.04.86-2.34 0-4.32-1.58-5.03-3.71H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.71A5.41 5.41 0 0 1 3.69 9c0-.6.1-1.17.28-1.71V4.96H.96A9 9 0 0 0 0 9c0 1.45.35 2.82.96 4.04l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.59A9 9 0 0 0 9 0 9 9 0 0 0 .96 4.96l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>'
@@ -108,12 +46,12 @@ _GOOGLE_ICON = '<svg width="18" height="18" viewBox="0 0 18 18"><path fill="#428
 def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "") -> str:
     nav_html = ""
     if nav:
-        nav_html = f"""
+        nav_html = """
     <div class="nav">
       <a href="/dashboard"><strong>Longhouse</strong></a>
-      <div style="display:flex;gap:1.25rem;align-items:center;">
+      <div class="nav-links">
         <a href="/dashboard">Dashboard</a>
-        <a href="#" onclick="fetch('/auth/logout',{{method:'POST'}}).then(()=>location.href='/')" style="color:#9898a3;">Logout</a>
+        <a href="#" onclick="fetch('/auth/logout',{method:'POST'}).then(()=>location.href='/')" class="nav-muted">Logout</a>
       </div>
     </div>"""
 
@@ -127,8 +65,10 @@ def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "") ->
     <meta name="referrer" content="no-referrer">
     <title>{title} - Longhouse</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>{_STYLES}</style>{extra_style_tag}
+    <link href="https://api.fontshare.com/v2/css?f[]=general-sans@500,600,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">{extra_style_tag}
   </head>
   <body>
     {nav_html}
@@ -189,35 +129,35 @@ def home(request: Request, error: str | None = None, return_to: str | None = Non
 
     error_html = ""
     if error:
-        error_html = f'''<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#fca5a5;font-size:0.9rem;">{html.escape(error)}</div>'''
+        error_html = f'<div class="alert alert-error">{html.escape(error)}</div>'
 
     body = f"""
     <div class="hero-center">
       <h1>Longhouse</h1>
       <p class="subtitle">Sign in to manage your hosted instance.</p>
     </div>
-    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+    <div class="card max-w-form">
       {error_html}
       <form method="post" action="{html.escape(login_action)}">
         <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
         <label>Password <input type="password" name="password" required minlength="8" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;"></label>
-        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Sign In</button>
+        <button type="submit" class="btn btn-primary w-full">Sign In</button>
       </form>
-      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
+      <p class="text-center mt-2 text-sm text-muted">
         Don\'t have an account? <a href="{html.escape(signup_url)}">Create one</a>
       </p>
-      <div style="background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:0.6rem;margin-top:0.75rem;color:#a5b4fc;font-size:0.8rem;text-align:center;">
+      <div class="alert alert-info mt-2">
         New here? We recommend signing up with Google below.
       </div>
     </div>
-    <div style="max-width:400px;margin:0 auto;">
-      <div style="display:flex;align-items:center;gap:1rem;margin:1rem 0;">
-        <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
-        <span style="color:#9898a3;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.05em;">or</span>
-        <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
+    <div class="max-w-form">
+      <div class="divider">
+        <div class="divider-line"></div>
+        <span class="divider-text">or</span>
+        <div class="divider-line"></div>
       </div>
-      <a href="{html.escape(google_login_url)}" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;">{_GOOGLE_ICON} Continue with Google</a>
-      <p style="text-align:center;margin-top:2rem;"><a href="https://longhouse.ai" style="color:#9898a3;font-size:0.875rem;">&larr; Back to longhouse.ai</a></p>
+      <a href="{html.escape(google_login_url)}" class="btn btn-secondary google-btn w-full">{_GOOGLE_ICON} Continue with Google</a>
+      <p class="text-center mt-6"><a href="https://longhouse.ai" class="text-muted text-sm">&larr; Back to longhouse.ai</a></p>
     </div>
     """
     return _page("Home", body, nav=False)
@@ -234,37 +174,37 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
 
     error_html = ""
     if error:
-        error_html = f'''<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#fca5a5;font-size:0.9rem;">{html.escape(error)}</div>'''
+        error_html = f'<div class="alert alert-error">{html.escape(error)}</div>'
 
     body = f"""
     <div class="hero-center">
       <h1>Create Account</h1>
       <p class="subtitle">Get started with Longhouse.</p>
     </div>
-    <div style="max-width:400px;margin:0 auto 1.25rem;">
-      <a href="{html.escape(google_signup_url)}" class="btn btn-secondary google-btn" style="width:100%;text-align:center;justify-content:center;padding:0.85rem 1.75rem;font-size:1rem;">{_GOOGLE_ICON} Sign up with Google</a>
+    <div class="max-w-form">
+      <a href="{html.escape(google_signup_url)}" class="btn btn-secondary google-btn w-full">{_GOOGLE_ICON} Sign up with Google</a>
     </div>
-    <div style="max-width:400px;margin:0 auto;">
-      <div style="display:flex;align-items:center;gap:1rem;margin:1rem 0;">
-        <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
-        <span style="color:#9898a3;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.05em;">or</span>
-        <div style="flex:1;height:1px;background:rgba(255,255,255,0.1);"></div>
+    <div class="max-w-form">
+      <div class="divider">
+        <div class="divider-line"></div>
+        <span class="divider-text">or</span>
+        <div class="divider-line"></div>
       </div>
     </div>
-    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+    <div class="card max-w-form">
       {error_html}
       <form method="post" action="/auth/signup">
         <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
         <label>Password <input type="password" name="password" required minlength="8" placeholder="Min. 8 characters"></label>
         <label>Confirm password <input type="password" name="password_confirm" required minlength="8" placeholder="Repeat password"></label>
-        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Create Account</button>
+        <button type="submit" class="btn btn-primary w-full">Create Account</button>
       </form>
-      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
+      <p class="text-center mt-2 text-sm text-muted">
         Already have an account? <a href="{html.escape(signin_url)}">Sign in</a>
       </p>
     </div>
-    <div style="max-width:400px;margin:0 auto;">
-      <p style="text-align:center;margin-top:2rem;"><a href="https://longhouse.ai" style="color:#9898a3;font-size:0.875rem;">&larr; Back to longhouse.ai</a></p>
+    <div class="max-w-form">
+      <p class="text-center mt-6"><a href="https://longhouse.ai" class="text-muted text-sm">&larr; Back to longhouse.ai</a></p>
     </div>
     """
     return _page("Sign Up", body, nav=False)
@@ -287,24 +227,24 @@ def verify_email_page(
 
     notice_html = ""
     if error:
-        notice_html = f'''<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#fca5a5;font-size:0.9rem;">{html.escape(error)}</div>'''
+        notice_html = f'<div class="alert alert-error">{html.escape(error)}</div>'
     elif resent:
-        notice_html = '''<div style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#86efac;font-size:0.9rem;">Verification email resent! Check your inbox.</div>'''
+        notice_html = '<div class="alert alert-success">Verification email resent! Check your inbox.</div>'
 
     body = f"""
     <div class="hero-center">
       <h1>Check Your Email</h1>
       <p class="subtitle">We sent a verification link to <strong>{html.escape(user.email)}</strong></p>
     </div>
-    <div class="card" style="max-width:440px;margin:0 auto;">
+    <div class="card max-w-form-lg">
       {notice_html}
       <p>Click the link in the email to verify your account and get started.</p>
-      <p style="margin-top:1rem;color:#9898a3;font-size:0.875rem;">Didn't receive it? Check your spam folder or resend below.</p>
-      <form method="post" action="/auth/resend-verification" style="margin-top:1rem;">
-        <button type="submit" class="btn btn-secondary" style="width:100%;text-align:center;">Resend Verification Email</button>
+      <p class="mt-3 text-muted text-sm">Didn't receive it? Check your spam folder or resend below.</p>
+      <form method="post" action="/auth/resend-verification" class="mt-3">
+        <button type="submit" class="btn btn-secondary w-full">Resend Verification Email</button>
       </form>
-      <p style="text-align:center;margin-top:1.5rem;">
-        <a href="/auth/logout?return_to=/" style="color:#9898a3;font-size:0.875rem;">Sign in with a different account</a>
+      <p class="text-center mt-4">
+        <a href="/auth/logout?return_to=/" class="text-muted text-sm">Sign in with a different account</a>
       </p>
     </div>
     """
@@ -316,40 +256,7 @@ def verify_email_page(
 # Subdomain picker
 # ---------------------------------------------------------------------------
 
-_SUBDOMAIN_PICKER_EXTRA_STYLES = """
-.slug-row { display: flex; align-items: stretch; border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 10px; overflow: hidden; background: rgba(255,255,255,0.05);
-            transition: border-color 0.2s, box-shadow 0.2s; }
-.slug-row:focus-within { border-color: #6366f1; box-shadow: 0 0 0 2px rgba(99,102,241,0.2); }
-.slug-row.valid { border-color: rgba(34,197,94,0.6); box-shadow: 0 0 0 2px rgba(34,197,94,0.15); }
-.slug-row.invalid { border-color: rgba(239,68,68,0.5); box-shadow: 0 0 0 2px rgba(239,68,68,0.12); }
-.slug-input { flex: 1; padding: 0.75rem 0.9rem; background: transparent; border: none;
-              color: #fafafa; font-size: 1rem; font-family: 'JetBrains Mono','Fira Code',monospace;
-              outline: none; min-width: 0; letter-spacing: 0.01em; }
-.slug-suffix { display: flex; align-items: center; padding: 0 0.9rem;
-               background: rgba(255,255,255,0.04); border-left: 1px solid rgba(255,255,255,0.08);
-               color: #9898a3; font-size: 0.95rem; font-family: 'JetBrains Mono','Fira Code',monospace;
-               white-space: nowrap; user-select: none; }
-.check-badge { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.65rem;
-               font-size: 0.875rem; min-height: 1.4rem; transition: opacity 0.15s; }
-.check-badge.hidden { opacity: 0; }
-.check-badge.ok { color: #22c55e; }
-.check-badge.err { color: #f87171; }
-.check-badge.loading { color: #9898a3; }
-.preview-block { background: rgba(99,102,241,0.08); border: 1px solid rgba(99,102,241,0.2);
-                 border-radius: 10px; padding: 1rem 1.25rem; margin: 1.25rem 0;
-                 display: none; }
-.preview-block.visible { display: block; }
-.preview-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em;
-                 color: #9898a3; font-weight: 600; margin-bottom: 0.3rem; }
-.preview-url { font-family: 'JetBrains Mono','Fira Code',monospace; font-size: 1rem;
-               color: #a5b4fc; word-break: break-all; }
-.hint-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1rem; }
-.hint-chip { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
-             border-radius: 6px; padding: 0.2rem 0.6rem; font-size: 0.8rem; color: #9898a3;
-             cursor: pointer; transition: all 0.12s; font-family: 'JetBrains Mono','Fira Code',monospace; }
-.hint-chip:hover { background: rgba(99,102,241,0.12); border-color: rgba(99,102,241,0.3); color: #a5b4fc; }
-"""
+_SUBDOMAIN_PICKER_EXTRA_STYLES = ""  # All styles now in /static/style.css
 
 
 @router.get("/onboarding/choose-subdomain", response_class=HTMLResponse)
@@ -373,7 +280,6 @@ def choose_subdomain_page(request: Request, error: str | None = Query(default=No
     hints_html = ""
     if sanitized and len(sanitized) >= 3:
         hints = [sanitized]
-        # Add a few numeric variants
         for i in (1, 42):
             candidate = f"{sanitized[:15]}{i}"
             if candidate != sanitized:
@@ -382,20 +288,20 @@ def choose_subdomain_page(request: Request, error: str | None = Query(default=No
             f'<span class="hint-chip" onclick="fillSlug(\'{html.escape(h)}\')">{html.escape(h)}</span>'
             for h in hints
         )
-        hints_html = f'<div style="margin-top:0.5rem;"><div style="font-size:0.75rem;color:#9898a3;margin-bottom:0.4rem;">Suggestions</div><div class="hint-row">{chips}</div></div>'
+        hints_html = f'<div class="mt-1"><div class="meta-label" style="margin-bottom:0.4rem;">Suggestions</div><div class="hint-row">{chips}</div></div>'
 
     prefill = html.escape(user.pending_subdomain or sanitized or "")
 
     error_html = ""
     if error:
-        error_html = f'<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:0.65rem 0.9rem;margin-bottom:1rem;color:#fca5a5;font-size:0.875rem;">{html.escape(error)}</div>'
+        error_html = f'<div class="alert alert-error">{html.escape(error)}</div>'
 
     body = f"""
-    <div class="hero-center" style="padding:2.5rem 0 1.5rem;">
+    <div class="hero-center">
       <h1>Choose your URL</h1>
       <p class="subtitle">This is the address where you'll access your Longhouse.</p>
     </div>
-    <div class="card" style="max-width:480px;margin:0 auto 1.25rem;">
+    <div class="card max-w-form-lg">
       {error_html}
       <form id="slug-form" method="post" action="/onboarding/set-subdomain">
         <input type="hidden" name="csrf_token" value="{html.escape(csrf)}">
@@ -416,12 +322,11 @@ def choose_subdomain_page(request: Request, error: str | None = Query(default=No
 
         {hints_html}
 
-        <button type="submit" id="submit-btn" class="btn btn-primary"
-                style="width:100%;margin-top:1.5rem;padding:0.8rem;font-size:1rem;" disabled>
+        <button type="submit" id="submit-btn" class="btn btn-primary w-full mt-4" disabled>
           Continue to Payment &rarr;
         </button>
       </form>
-      <p style="text-align:center;margin-top:1rem;font-size:0.8rem;color:#9898a3;">
+      <p class="text-center mt-3 text-xs text-muted">
         You can&#8217;t change this after subscribing.
       </p>
     </div>
@@ -584,8 +489,7 @@ def forgot_password_page(request: Request, sent: str | None = None, db: Session 
     notice_html = ""
     if sent:
         notice_html = (
-            '<div style="background:rgba(34,197,94,0.15);border:1px solid rgba(34,197,94,0.3);'
-            'border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#86efac;font-size:0.9rem;">'
+            '<div class="alert alert-success">'
             "If an account exists with that email, we've sent a password reset link. Check your inbox."
             "</div>"
         )
@@ -595,13 +499,13 @@ def forgot_password_page(request: Request, sent: str | None = None, db: Session 
       <h1>Forgot Password</h1>
       <p class="subtitle">Enter your email and we'll send you a reset link.</p>
     </div>
-    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+    <div class="card max-w-form">
       {notice_html}
       <form method="post" action="/auth/reset-password-request">
         <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
-        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Send Reset Link</button>
+        <button type="submit" class="btn btn-primary w-full">Send Reset Link</button>
       </form>
-      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
+      <p class="text-center mt-2 text-sm text-muted">
         Remember your password? <a href="/">Sign in</a>
       </p>
     </div>
@@ -615,11 +519,7 @@ def reset_password_page(
 ):
     error_html = ""
     if error:
-        error_html = (
-            '<div style="background:rgba(239,68,68,0.15);border:1px solid rgba(239,68,68,0.3);'
-            'border-radius:8px;padding:0.75rem;margin-bottom:1rem;color:#fca5a5;font-size:0.9rem;">'
-            f"{html.escape(error)}</div>"
-        )
+        error_html = f'<div class="alert alert-error">{html.escape(error)}</div>'
 
     if not token and not error:
         return RedirectResponse("/forgot-password", status_code=302)
@@ -629,10 +529,10 @@ def reset_password_page(
         <div class="hero-center">
           <h1>Reset Password</h1>
         </div>
-        <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+        <div class="card max-w-form">
           {error_html}
-          <p style="text-align:center;margin-top:0.75rem;">
-            <a href="/forgot-password" class="btn btn-primary" style="text-align:center;">Request New Reset Link</a>
+          <p class="text-center mt-2">
+            <a href="/forgot-password" class="btn btn-primary">Request New Reset Link</a>
           </p>
         </div>
         """
@@ -644,15 +544,15 @@ def reset_password_page(
       <h1>Reset Password</h1>
       <p class="subtitle">Choose a new password for your account.</p>
     </div>
-    <div class="card" style="max-width:400px;margin:0 auto 1.25rem;">
+    <div class="card max-w-form">
       {error_html}
       <form method="post" action="/auth/reset-password">
         <input type="hidden" name="token" value="{token_escaped}">
         <label>New password <input type="password" name="password" required minlength="8" placeholder="Min. 8 characters"></label>
         <label>Confirm new password <input type="password" name="password_confirm" required minlength="8" placeholder="Repeat password"></label>
-        <button type="submit" class="btn btn-primary" style="width:100%;text-align:center;">Reset Password</button>
+        <button type="submit" class="btn btn-primary w-full">Reset Password</button>
       </form>
-      <p style="text-align:center;margin-top:0.75rem;font-size:0.875rem;color:#9898a3;">
+      <p class="text-center mt-2 text-sm text-muted">
         <a href="/">Back to sign in</a>
       </p>
     </div>
@@ -678,7 +578,6 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
 
     if instance and instance.status not in ("deprovisioned", "failed"):
-        # Has instance — show it
         instance_url = f"https://{instance.subdomain}.{settings.root_domain}"
         status_class = f"status-{instance.status}" if instance.status in ("active", "provisioning", "canceled") else ""
 
@@ -708,10 +607,8 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         </div>
         """
     elif user.subscription_status == "active":
-        # Paid but not yet provisioned — redirect to provisioning status
         return RedirectResponse("/provisioning", status_code=302)
     else:
-        # No subscription — require subdomain choice before checkout
         if not user.pending_subdomain:
             return RedirectResponse("/onboarding/choose-subdomain", status_code=302)
 
@@ -721,21 +618,21 @@ def dashboard(request: Request, db: Session = Depends(get_db)):
         <h1>Get Started</h1>
         <p class="subtitle">Launch your own always-on Longhouse instance.</p>
         <div class="card">
-          <div style="margin-bottom:1.25rem;">
-            <div style="font-size:0.75rem;color:#9898a3;text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-bottom:0.35rem;">Your instance URL</div>
-            <div style="display:flex;align-items:center;gap:0.6rem;">
-              <span style="font-family:'JetBrains Mono','Fira Code',monospace;font-size:1rem;color:#818cf8;background:rgba(99,102,241,0.1);border:1px solid rgba(99,102,241,0.25);border-radius:8px;padding:0.45rem 0.85rem;">{chosen_url}</span>
-              <a href="/onboarding/choose-subdomain" style="font-size:0.8rem;color:#9898a3;white-space:nowrap;">Change</a>
+          <div class="mt-1">
+            <div class="meta-label">Your instance URL</div>
+            <div class="actions mt-1">
+              <span class="url-badge">{chosen_url}</span>
+              <a href="/onboarding/choose-subdomain" class="text-xs text-muted">Change</a>
             </div>
           </div>
-          <h2 style="margin-bottom:0.35rem;">Hosted &mdash; $5/mo</h2>
+          <h2 class="mt-3">Hosted &mdash; $5/mo</h2>
           <p>Always-on instance, automatic updates, access from any device.</p>
           <form method="post" action="/dashboard/checkout">
-            <button type="submit" class="btn btn-primary" style="margin-top:1rem;">Subscribe &amp; Launch Instance</button>
+            <button type="submit" class="btn btn-primary mt-3">Subscribe &amp; Launch Instance</button>
           </form>
         </div>
-        <p style="text-align:center;margin-top:1.5rem;">
-          <a href="https://longhouse.ai" style="color:#9898a3;font-size:0.875rem;">Or self-host free forever &rarr;</a>
+        <p class="text-center mt-4">
+          <a href="https://longhouse.ai" class="text-muted text-sm">Or self-host free forever &rarr;</a>
         </p>
         """
 
@@ -821,11 +718,10 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
     instance = db.query(Instance).filter(Instance.user_id == user.id).first()
 
     if not instance:
-        # Not provisioned yet — webhook might still be processing
         body = """
-        <div class="card" style="text-align: center; padding: 3rem;">
+        <div class="card text-center pad-hero">
           <div class="spinner"></div>
-          <h2 style="margin-top: 1.25rem;">Setting up your instance</h2>
+          <h2 class="mt-3">Setting up your instance</h2>
           <p>Waiting for payment confirmation...</p>
           <p><small>This page refreshes automatically.</small></p>
         </div>
@@ -834,15 +730,14 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
         return _page("Provisioning", body)
 
     if instance.status == "active":
-        # Already ready — redirect through the hosted browser handoff
         return RedirectResponse("/dashboard/open-instance", status_code=302)
 
     if instance.status == "failed":
         body = """
-        <div class="card" style="text-align: center; padding: 3rem;">
+        <div class="card text-center pad-hero">
           <h2>Something went wrong</h2>
           <p>Your instance failed to provision. We've been notified.</p>
-          <div class="actions" style="justify-content:center;margin-top:1.5rem;">
+          <div class="actions" style="justify-content:center">
             <a href="mailto:hello@longhouse.ai?subject=Provisioning%20failure" class="btn btn-primary">Contact Support</a>
             <a href="/dashboard" class="btn btn-secondary">Back</a>
           </div>
@@ -856,11 +751,11 @@ def provisioning_status(request: Request, db: Session = Depends(get_db)):
     instance_host = f"{instance.subdomain}.{settings.root_domain}"
 
     body = f"""
-    <div class="card" style="text-align: center; padding: 3rem;">
+    <div class="card text-center pad-hero">
       <div class="spinner" id="spinner"></div>
-      <h2 style="margin-top: 1.25rem;" id="status-text">Starting your instance</h2>
-      <p><code style="color:#818cf8;font-size:0.9rem;">{instance_host}</code></p>
-      <p id="sub-text" style="color:#94a3b8;font-size:0.85rem;margin-top:0.5rem;">
+      <h2 class="mt-3" id="status-text">Starting your instance</h2>
+      <p><code class="url-badge">{instance_host}</code></p>
+      <p id="sub-text" class="text-muted text-sm mt-1">
         Setting up SSL certificate and waiting for services to start...
       </p>
     </div>

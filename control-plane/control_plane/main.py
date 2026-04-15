@@ -10,7 +10,10 @@ import boto3
 import httpx
 from sqlalchemy import text
 
+from pathlib import Path
+
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
@@ -199,6 +202,9 @@ def _recover_stale_deploys():
     finally:
         db.close()
 
+
+_static_dir = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 app.include_router(health.router)
 app.include_router(ui.router)
