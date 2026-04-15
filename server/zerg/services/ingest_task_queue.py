@@ -33,8 +33,11 @@ from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
+from sqlalchemy import and_
 from sqlalchemy import case
+from sqlalchemy import or_
 
+from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTask
 from zerg.services.write_serializer import get_write_serializer
 
@@ -44,6 +47,7 @@ WORKER_POLL_SECONDS = 2.0
 HOT_WORKER_POLL_SECONDS = 0.5
 CLAIM_LIMIT = 1
 STALE_RUNNING_MINUTES = 30
+STALE_PENDING_SWEEP_BATCH = 1000
 TASK_TIMEOUT_SECONDS: dict[str, float] = {
     "summary": 180.0,
     "embedding": 30.0,
@@ -162,6 +166,49 @@ def reset_stale_running_tasks(db) -> int:
         logger.info("Recovered %d stale running ingest tasks", count)
     db.commit()
     return count
+
+
+def close_current_pending_tasks(db, *, limit: int = STALE_PENDING_SWEEP_BATCH) -> int:
+    """Close pending summary/embed tasks whose sessions are already current."""
+    now = datetime.now(timezone.utc)
+    current_tasks = (
+        db.query(SessionTask)
+        .join(AgentSession, AgentSession.id == SessionTask.session_id)
+        .filter(SessionTask.status == "pending")
+        .filter(
+            or_(
+                and_(
+                    SessionTask.task_type == "summary",
+                    AgentSession.transcript_revision > 0,
+                    AgentSession.summary_revision >= AgentSession.transcript_revision,
+                ),
+                and_(
+                    SessionTask.task_type == "embedding",
+                    or_(
+                        and_(
+                            AgentSession.transcript_revision > 0,
+                            AgentSession.embedding_revision >= AgentSession.transcript_revision,
+                        ),
+                        AgentSession.needs_embedding == 0,
+                    ),
+                ),
+            )
+        )
+        .order_by(SessionTask.updated_at, SessionTask.created_at, SessionTask.id)
+        .limit(limit)
+        .all()
+    )
+    if not current_tasks:
+        return 0
+
+    for task in current_tasks:
+        task.status = "done"
+        task.error = None
+        task.updated_at = now
+
+    db.commit()
+    logger.info("Closed %d stale pending ingest tasks that were already current", len(current_tasks))
+    return len(current_tasks)
 
 
 # ---------------------------------------------------------------------------

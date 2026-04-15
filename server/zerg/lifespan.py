@@ -212,12 +212,15 @@ async def lifespan(app: FastAPI):
                 from zerg.database import get_session_factory
                 from zerg.services.ingest_task_queue import HOT_INGEST_TASK_TYPES
                 from zerg.services.ingest_task_queue import HOT_WORKER_POLL_SECONDS
+                from zerg.services.ingest_task_queue import close_current_pending_tasks
                 from zerg.services.ingest_task_queue import reset_stale_running_tasks
                 from zerg.services.ingest_task_queue import run_ingest_task_worker
 
                 _itq_db = get_session_factory()()
                 try:
                     reset_stale_running_tasks(_itq_db)
+                    while close_current_pending_tasks(_itq_db):
+                        pass
                 finally:
                     _itq_db.close()
                 asyncio.create_task(
