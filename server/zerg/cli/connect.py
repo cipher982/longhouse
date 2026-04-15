@@ -10,16 +10,20 @@ import subprocess
 import webbrowser
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 import typer
 
+from zerg.cli.config_file import get_config_path
+from zerg.cli.config_file import load_config
 from zerg.services.desktop_app import default_install_desktop_app
 from zerg.services.desktop_app import get_desktop_app_service_info
 from zerg.services.desktop_app import uninstall_desktop_app_service
 from zerg.services.local_runtime_installer import reconcile_local_runtime
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.machine_state import clear_machine_runtime_url
+from zerg.services.machine_state import load_machine_state
 from zerg.services.machine_state import write_machine_state
 from zerg.services.shipper import clear_token
 from zerg.services.shipper import get_service_info
@@ -828,6 +832,49 @@ def _handle_uninstall() -> None:
         typer.secho(f"[OK] {menubar_result['message']}", fg=typer.colors.GREEN)
 
 
+def _check_and_sync_url_drift(install_url: str, config_dir: Path | None) -> None:
+    """Check for URL drift between config.toml and machine-state.json and warn if found.
+
+    If config.toml has a different host:port than machine-state.runtime_url,
+    log a warning to alert the user to the mismatch.
+
+    This helps diagnose silent connection issues where config was manually edited
+    but machine-state wasn't updated accordingly.
+    """
+    try:
+        # Load config.toml
+        config_path = get_config_path(claude_dir=config_dir)
+        if not config_path.exists():
+            return  # No config file, nothing to drift
+
+        config = load_config(config_path=config_path)
+        config_url = f"{config.server.host}:{config.server.port}"
+
+        # Load machine-state.json
+        machine_state = load_machine_state(config_dir)
+        if not machine_state or not machine_state.runtime_url:
+            return  # No machine state yet, nothing to drift
+
+        # Extract host:port from install_url and machine_state.runtime_url for comparison
+        parsed_install = urlparse(install_url)
+        install_netloc = parsed_install.netloc  # "host:port" or just "host"
+
+        parsed_machine = urlparse(machine_state.runtime_url)
+        machine_netloc = parsed_machine.netloc
+
+        # Check if config.toml differs from what we're installing
+        # We compare to config_url (what's in config.toml) against install_url
+        if config_url != install_netloc and machine_netloc != install_netloc:
+            # Drift detected: config says one thing, but we're installing against a different URL
+            typer.secho(
+                f"  ⚠  Config drift: ~/.longhouse/config.toml specifies {config_url}, " f"but installing against {install_netloc}",
+                fg=typer.colors.YELLOW,
+            )
+    except Exception as e:
+        # Non-critical — don't fail install on drift detection errors
+        logging.getLogger(__name__).debug(f"URL drift check failed: {e}")
+
+
 def _handle_install(
     url: str,
     token: str | None,
@@ -853,6 +900,10 @@ def _handle_install(
     typer.echo(f"  URL: {url}")
     if menubar:
         typer.echo("  Desktop App: enabled")
+
+    # Check for URL drift before install
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
+    _check_and_sync_url_drift(url, config_dir)
 
     try:
         reconcile_result = reconcile_local_runtime(

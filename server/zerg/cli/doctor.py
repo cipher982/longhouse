@@ -539,6 +539,28 @@ def _check_config() -> list[CheckResult]:
                 )
             )
 
+    # URL drift check: config.toml vs machine-state.json
+    from urllib.parse import urlparse
+
+    from zerg.services.machine_state import load_machine_state
+
+    config_netloc = f"{config.server.host}:{config.server.port}"
+    machine_state = load_machine_state()
+    if machine_state and machine_state.runtime_url:
+        try:
+            parsed_machine = urlparse(machine_state.runtime_url)
+            machine_netloc = parsed_machine.netloc
+            if config_netloc != machine_netloc:
+                results.append(
+                    CheckResult(
+                        WARN,
+                        f"URL drift: config says {config_netloc}, machine-state has {machine_netloc}",
+                        "Run: longhouse connect --install to sync, or edit config.toml to match",
+                    )
+                )
+        except Exception:
+            pass  # Non-critical
+
     return results
 
 
