@@ -97,6 +97,10 @@ class AgentSession(AgentsBase):
     summary_event_count = Column(Integer, server_default=text("0"))
     # ID of last AgentEvent included in summary (efficient cursor)
     last_summarized_event_id = Column(Integer, nullable=True)
+    # Monotonic transcript generation for replay-safe downstream work.
+    transcript_revision = Column(Integer, nullable=False, server_default=text("0"))
+    summary_revision = Column(Integer, nullable=False, server_default=text("0"))
+    embedding_revision = Column(Integer, nullable=False, server_default=text("0"))
 
     # Metadata
     created_at = Column(DateTime(timezone=True), server_default=func.now())

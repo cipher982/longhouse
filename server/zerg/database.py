@@ -547,10 +547,53 @@ def _migrate_agents_columns(engine: Engine) -> None:
             if "summary_event_count" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN summary_event_count INTEGER DEFAULT 0"))
                 conn.execute(text("UPDATE sessions SET summary_event_count = 0 WHERE summary_event_count IS NULL"))
-            if "reflected_at" not in columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN reflected_at DATETIME"))
             if "last_summarized_event_id" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN last_summarized_event_id INTEGER"))
+            if "transcript_revision" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN transcript_revision INTEGER DEFAULT 0 NOT NULL"))
+                conn.execute(
+                    text(
+                        """
+                        UPDATE sessions
+                        SET transcript_revision = CASE
+                            WHEN COALESCE(user_messages, 0) + COALESCE(assistant_messages, 0) + COALESCE(tool_calls, 0) > 0 THEN 1
+                            ELSE 0
+                        END
+                        """
+                    )
+                )
+            if "summary_revision" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN summary_revision INTEGER DEFAULT 0 NOT NULL"))
+                conn.execute(
+                    text(
+                        """
+                        UPDATE sessions
+                        SET summary_revision = CASE
+                            WHEN COALESCE(summary, '') <> ''
+                                 OR COALESCE(summary_title, '') <> ''
+                                 OR last_summarized_event_id IS NOT NULL
+                                 OR COALESCE(summary_event_count, 0) > 0
+                                THEN COALESCE(transcript_revision, 0)
+                            ELSE 0
+                        END
+                        """
+                    )
+                )
+            if "embedding_revision" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN embedding_revision INTEGER DEFAULT 0 NOT NULL"))
+                conn.execute(
+                    text(
+                        """
+                        UPDATE sessions
+                        SET embedding_revision = CASE
+                            WHEN COALESCE(needs_embedding, 1) = 0 THEN COALESCE(transcript_revision, 0)
+                            ELSE 0
+                        END
+                        """
+                    )
+                )
+            if "reflected_at" not in columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN reflected_at DATETIME"))
             if "user_state" not in columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN user_state VARCHAR(20) DEFAULT 'active' NOT NULL"))
                 conn.execute(text("UPDATE sessions SET user_state = 'active' WHERE user_state IS NULL"))

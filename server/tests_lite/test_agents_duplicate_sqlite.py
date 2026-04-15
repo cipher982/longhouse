@@ -466,6 +466,8 @@ def test_duplicate_replay_without_source_line_delta_does_not_requeue_post_ingest
         session_id = first.session_id
         assert first.events_inserted == 1
         assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id), SessionTask.status == "pending").count() == 2
+        initial_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
+        assert initial_session.transcript_revision == 1
 
         db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).update(
             {"status": "done"},
@@ -508,5 +510,6 @@ def test_duplicate_replay_without_source_line_delta_does_not_requeue_post_ingest
 
         stored = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         assert stored.needs_embedding == 0
+        assert stored.transcript_revision == 1
         assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id)).count() == 2
         assert db.query(SessionTask).filter(SessionTask.session_id == str(session_id), SessionTask.status == "pending").count() == 0

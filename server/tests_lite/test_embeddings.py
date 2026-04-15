@@ -254,6 +254,7 @@ async def test_embed_session_routes_write_phase_through_serializer(monkeypatch, 
                 project="zerg",
                 started_at=datetime.now(timezone.utc),
                 needs_embedding=1,
+                transcript_revision=4,
             )
         )
         db.add(
@@ -277,7 +278,7 @@ async def test_embed_session_routes_write_phase_through_serializer(monkeypatch, 
         session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         events = db.query(AgentEvent).filter(AgentEvent.session_id == session_id).order_by(AgentEvent.timestamp).all()
 
-        count = await embed_session(session_id, session, events, config, db)
+        count = await embed_session(session_id, session, events, config, db, transcript_revision=4)
         assert count == 2
         assert labels == ["embeddings"]
 
@@ -292,3 +293,4 @@ async def test_embed_session_routes_write_phase_through_serializer(monkeypatch, 
 
         refreshed_session = db.query(AgentSession).filter(AgentSession.id == session_id).one()
         assert refreshed_session.needs_embedding == 0
+        assert refreshed_session.embedding_revision == 4

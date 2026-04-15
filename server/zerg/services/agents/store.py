@@ -1482,6 +1482,7 @@ class AgentsStore:
 
         session_obj = self.db.query(AgentSession).filter(AgentSession.id == session_id).first()
         if session_obj and events_inserted > 0 and transcript_changed:
+            session_obj.transcript_revision = int(getattr(session_obj, "transcript_revision", 0) or 0) + 1
             session_obj.needs_embedding = 1
             if latest_inserted_timestamp is not None:
                 current = _normalize_utc_naive(session_obj.last_activity_at)
