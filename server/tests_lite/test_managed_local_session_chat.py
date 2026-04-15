@@ -216,7 +216,7 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
             lock_release_calls.append(kwargs)
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", fake_schedule_lock_release)
+        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", fake_schedule_lock_release)
 
         try:
             response = client.post(
@@ -276,7 +276,7 @@ def test_managed_local_codex_dispatch_returns_json_ack(monkeypatch, tmp_path):
             return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
+        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
 
         try:
             response = client.post(
@@ -459,7 +459,7 @@ def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path)
             return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
+        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
 
         try:
             first = client.post(
@@ -502,7 +502,7 @@ def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(monkeypatch
             return SimpleNamespace(ok=True, exit_code=0, error=None, verified_turn_started=True)
 
         monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
-        monkeypatch.setattr("zerg.routers.session_chat._schedule_managed_local_lock_release", lambda **_kwargs: None)
+        monkeypatch.setattr("zerg.services.session_chat_impl._schedule_managed_local_lock_release", lambda **_kwargs: None)
 
         try:
             response = client.post(
