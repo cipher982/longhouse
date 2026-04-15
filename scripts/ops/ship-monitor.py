@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -27,6 +28,9 @@ DEPLOY_AND_VERIFY = "Deploy and Verify"
 DEPLOY_CONTROL_PLANE = "Deploy Control Plane"
 DEPLOY_AND_VERIFY_JOB = "Deploy demo + canary + hosted live QA"
 DEPLOY_CONTROL_PLANE_JOB = "Deploy Control Plane"
+CANARY_SURFACE = "Canary"
+DEFAULT_CANARY_CONTAINER_NAME = "longhouse-david010"
+DEFAULT_CANARY_HEALTH_URL = "https://david010.longhouse.ai/api/health"
 
 
 class NoRunsError(RuntimeError):
@@ -88,8 +92,16 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def run(cmd: list[str], cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+def run(
+    cmd: list[str],
+    cwd: Path | None = None,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
+    proc = subprocess.run(cmd, cwd=cwd, text=True, capture_output=True, env=merged_env)
     if check and proc.returncode != 0:
         raise RuntimeError(proc.stderr.strip() or proc.stdout.strip() or "command failed")
     return proc
@@ -351,7 +363,14 @@ def parse_deploy_status(output: str) -> dict[str, SurfaceInfo]:
 
 
 def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> tuple[dict[str, SurfaceInfo], list[str], str]:
-    proc = run([str(root / "scripts" / "ops" / "deploy-status.sh")], cwd=root)
+    proc = run(
+        [str(root / "scripts" / "ops" / "deploy-status.sh")],
+        cwd=root,
+        env={
+            "CANARY_CONTAINER_NAME": os.environ.get("CANARY_CONTAINER_NAME") or DEFAULT_CANARY_CONTAINER_NAME,
+            "CANARY_HEALTH_URL": os.environ.get("CANARY_HEALTH_URL") or DEFAULT_CANARY_HEALTH_URL,
+        },
+    )
     raw = proc.stdout
     surfaces = parse_deploy_status(raw)
     short_sha = sha[:10]
@@ -385,7 +404,7 @@ def verify_live_state(root: Path, repo: str, sha: str, runs: list[RunInfo]) -> t
         for run in runs
     ):
         require_surface("Demo runtime", RUNTIME_HEALTH)
-        require_surface("Canary (david010)", RUNTIME_HEALTH)
+        require_surface(CANARY_SURFACE, RUNTIME_HEALTH)
 
     if any(
         run.workflowName == DEPLOY_CONTROL_PLANE and deploy_job_succeeded(run, DEPLOY_CONTROL_PLANE_JOB)
