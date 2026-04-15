@@ -158,11 +158,14 @@ async function waitForRunnerOnline(
 async function openMachinesFromTimeline(
   page: Page,
 ): Promise<void> {
-  const runnerAction = page.getByTestId("timeline-empty-runner-action");
-  await expect(runnerAction).toBeVisible();
-  await runnerAction.click();
-  await page.waitForURL("**/runners", { timeout: 15_000 });
-  await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
+  // Try the header button first, fall back to the empty-state button
+  const headerBtn = page.getByTestId("timeline-runner-action");
+  const emptyBtn = page.getByTestId("timeline-empty-runner-action");
+  const btn = (await headerBtn.isVisible()) ? headerBtn : emptyBtn;
+  await expect(btn).toBeVisible();
+  await btn.click();
+  // Machines now opens as a drawer — wait for the overlay
+  await expect(page.getByTestId("runners-modal")).toBeVisible({ timeout: 10_000 });
 }
 
 test.describe("Session activation surfaces", () => {
@@ -170,28 +173,20 @@ test.describe("Session activation surfaces", () => {
     await resetDatabase(request);
   });
 
-  test("empty timeline routes users into machine setup when no launch host exists", async ({
+  test("empty timeline opens machines drawer when no launch host exists", async ({
     page,
   }) => {
     await page.goto("/timeline");
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
     const runnerAction = page.getByTestId("timeline-empty-runner-action");
-    const actionLabel = (await runnerAction.textContent())?.trim();
-
-    expect(["Connect Machine", "Open Machines"]).toContain(actionLabel);
+    await expect(runnerAction).toBeVisible();
+    expect((await runnerAction.textContent())?.trim()).toBe("Machines");
     await runnerAction.click();
 
-    if (actionLabel === "Connect Machine") {
-      const modal = page.getByTestId("add-runner-modal");
-      await expect(modal).toBeVisible();
-      await expect(page.getByTestId("add-runner-command")).toContainText("/api/runners/install.sh");
-      return;
-    }
-
-    await page.waitForURL("**/runners", { timeout: 15_000 });
-    await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
-    await expect(page.getByRole("heading", { name: "Machines" })).toBeVisible();
+    // Machines opens as a right-side drawer
+    const drawer = page.getByTestId("runners-modal");
+    await expect(drawer).toBeVisible({ timeout: 10_000 });
   });
 
   test("timeline runner action opens the machines page when a ready runner exists", async ({
