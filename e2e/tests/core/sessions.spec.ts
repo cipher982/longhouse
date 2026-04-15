@@ -784,8 +784,8 @@ test.describe("Filter Chips and Popover", () => {
 
     await expect(page.locator("#filter-panel")).toBeVisible();
 
-    // Click the page title (far from the popover and filter button)
-    await page.locator(".ui-section-header__title").click();
+    // Click the main content area (far from the popover and filter button)
+    await page.locator("#app-container").click({ position: { x: 100, y: 400 } });
 
     await expect(page.locator("#filter-panel")).toHaveCount(0);
   });
