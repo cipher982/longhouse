@@ -106,11 +106,7 @@ struct SessionsWidget: Widget {
         StaticConfiguration(kind: kind, provider: SessionProvider()) { entry in
             SessionsWidgetView(entry: entry)
                 .containerBackground(for: .widget) {
-                    if #available(iOS 26.0, *) {
-                        Color.clear.glassEffect(.regular)
-                    } else {
-                        Color(.systemFill).opacity(0.6)
-                    }
+                    Color(.systemFill).opacity(0.6)
                 }
         }
         .configurationDisplayName("Sessions")
