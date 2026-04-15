@@ -2,15 +2,31 @@ import { config } from "../../lib/config";
 import { fetchWithRefresh } from "../../lib/auth-refresh";
 import { logger } from "../../lib/logger";
 
+export const DEMO_READ_ONLY_MESSAGE =
+  "This is a demo. You can browse sessions, but changes and live control are disabled.";
+
+export function isDemoReadOnlyBody(body: unknown): body is { error?: string; demo?: boolean } {
+  return Boolean(
+    body
+      && typeof body === "object"
+      && "demo" in body
+      && (body as { demo?: unknown }).demo === true,
+  );
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly url: string;
   readonly body: unknown;
 
   constructor({ url, status, body }: { url: string; status: number; body: unknown }) {
-    let detailMessage = `Request to ${url} failed with status ${status}`;
-    if (body && typeof body === 'object' && 'detail' in body) {
-      detailMessage = `${detailMessage}: ${body.detail}`;
+    let detailMessage = `Request failed (${status})`;
+    if (isDemoReadOnlyBody(body)) {
+      detailMessage = DEMO_READ_ONLY_MESSAGE;
+    } else if (body && typeof body === "object" && "detail" in body && typeof body.detail === "string") {
+      detailMessage = body.detail;
+    } else if (body && typeof body === "object" && "error" in body && typeof body.error === "string") {
+      detailMessage = body.error;
     }
 
     super(detailMessage);

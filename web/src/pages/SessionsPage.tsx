@@ -32,6 +32,7 @@ import {
   type TimelineSessionCard,
   seedDemoSessions,
 } from "../services/api/agents";
+import { DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import {
   Button,
   Badge,
@@ -1162,6 +1163,10 @@ export default function SessionsPage() {
 
   // Archive a session — optimistic remove, confirmed by inline card UI
   const handleSessionArchive = useCallback(async (thread: TimelineSessionCard) => {
+    if (config.demoMode) {
+      toast(DEMO_READ_ONLY_MESSAGE);
+      return;
+    }
     const sessionId = thread.detail.id;
     queryClient.setQueriesData<{ sessions: TimelineSessionCard[]; total: number }>(
       { queryKey: ["agent-sessions"] },

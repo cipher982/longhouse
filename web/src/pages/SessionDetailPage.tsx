@@ -22,8 +22,10 @@ import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
 import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
+import { config } from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
 import { setSessionAction } from "../services/api/agents";
+import { DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
 import "../styles/session-workspace.css";
 
@@ -93,6 +95,10 @@ function SessionDetailWorkspaceRoute({
   const handleArchiveConfirm = useCallback(async () => {
     if (!session) return;
     setConfirmingArchive(false);
+    if (config.demoMode) {
+      toast(DEMO_READ_ONLY_MESSAGE);
+      return;
+    }
     try {
       await setSessionAction(session.id, "archive");
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
@@ -224,7 +230,13 @@ function SessionDetailWorkspaceRoute({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => setConfirmingArchive(true)}
+                  onClick={() => {
+                    if (config.demoMode) {
+                      toast(DEMO_READ_ONLY_MESSAGE);
+                      return;
+                    }
+                    setConfirmingArchive(true);
+                  }}
                   title="Archive session"
                   aria-label="Archive session"
                 >

@@ -1,5 +1,6 @@
 import { Badge, Button } from "../ui";
 import type { AgentSession, SessionLoopMode } from "../../services/api/agents";
+import { config } from "../../lib/config";
 import { normalizeExecutionVenueLabel } from "../../lib/sessionExecutionHome";
 import { resolveSessionRuntimeState } from "../../lib/sessionRuntime";
 import {
@@ -74,7 +75,9 @@ export function SessionContextPane({
   const attachCommand = interaction.hostReattachAvailable ? sessionControl?.attach_command?.trim() || null : null;
   const attachRunnerLabel = sessionControl?.source_runner_name?.trim() || "this machine";
   const loopModeCaption =
-    !interaction.isManagedLocalSession
+    config.demoMode
+      ? "Preview only in the demo. Changes and live control are disabled."
+      : !interaction.isManagedLocalSession
       ? "Stored session preference for what the assistant may do after each completed turn."
       : canDriveManagedLocalFromBrowser
         ? "Loop Mode changes review posture only. Keep driving the live session from Longhouse below or by reattaching on the host machine."
