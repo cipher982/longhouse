@@ -64,6 +64,10 @@ def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "") ->
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="referrer" content="no-referrer">
     <title>{title} - Longhouse</title>
+    <link rel="icon" href="/static/favicon.ico" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -133,6 +137,7 @@ def home(request: Request, error: str | None = None, return_to: str | None = Non
 
     body = f"""
     <div class="hero-center">
+      <img src="/static/logo.svg" alt="Longhouse" class="hero-logo">
       <h1>Longhouse</h1>
       <p class="subtitle">Sign in to manage your hosted instance.</p>
     </div>
@@ -152,6 +157,9 @@ def home(request: Request, error: str | None = None, return_to: str | None = Non
         <button type="submit" class="btn btn-secondary w-full">Sign In with Email</button>
       </form>
       <p class="text-center mt-2 text-sm text-muted">
+        <a href="/forgot-password">Forgot password?</a>
+      </p>
+      <p class="text-center mt-1 text-sm text-muted">
         Don\'t have an account? <a href="{html.escape(signup_url)}">Create one</a>
       </p>
     </div>
@@ -177,6 +185,7 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
 
     body = f"""
     <div class="hero-center">
+      <img src="/static/logo.svg" alt="Longhouse" class="hero-logo">
       <h1>Create Account</h1>
       <p class="subtitle">Get started with Longhouse.</p>
     </div>

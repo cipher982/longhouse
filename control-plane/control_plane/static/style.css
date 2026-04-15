@@ -110,6 +110,12 @@ code { font-family: var(--font-mono); }
   padding: 4rem 0 2rem;
 }
 
+.hero-logo {
+  width: 64px;
+  height: 64px;
+  margin-bottom: var(--space-4);
+}
+
 .hero-center h1 {
   font-family: var(--font-display);
   font-size: 2.25rem;
@@ -593,3 +599,64 @@ td {
 }
 
 .pad-hero { padding: 3rem; }
+
+
+/* =============================================================================
+   Responsive
+   ============================================================================= */
+
+@media (max-width: 640px) {
+  .container {
+    padding: 2rem 1rem;
+  }
+
+  .hero-center {
+    padding: 2.5rem 0 1.5rem;
+  }
+
+  .hero-center h1 {
+    font-size: 1.75rem;
+  }
+
+  .hero-logo {
+    width: 52px;
+    height: 52px;
+  }
+
+  .card {
+    padding: 1.25rem;
+    border-radius: var(--radius-md);
+  }
+
+  .max-w-form,
+  .max-w-form-lg {
+    max-width: 100%;
+  }
+
+  .btn {
+    padding: 0.6rem 1.25rem;
+    font-size: 0.9rem;
+  }
+
+  .meta-row {
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .nav {
+    padding: 0.65rem 1rem;
+  }
+
+  .nav-links {
+    gap: 0.75rem;
+  }
+
+  .pad-hero {
+    padding: 2rem 1rem;
+  }
+
+  .slug-suffix {
+    font-size: 0.85rem;
+    padding: 0 0.6rem;
+  }
+}
