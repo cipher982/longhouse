@@ -25,7 +25,4 @@ class AsyncTokenCallback:
         pass
 
 
-# Alias for backwards compatibility
-AsyncCallbackHandler = AsyncTokenCallback
-
-__all__ = ["AsyncTokenCallback", "AsyncCallbackHandler"]
+__all__ = ["AsyncTokenCallback"]
