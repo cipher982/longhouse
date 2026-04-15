@@ -30,7 +30,7 @@ def _settings(**overrides):
 def _request(method: str, path: str, *, settings_overrides: dict | None = None, base_url: str = "http://testserver", **kwargs):
     env = {
         "DATABASE_URL": "sqlite:///test.db",
-        "FERNET_SECRET": "test-fernet-secret",
+        "FERNET_SECRET": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "AUTH_DISABLED": "1",
         "JWT_SECRET": "test-jwt-secret-1234",
         "INTERNAL_API_SECRET": "test-internal-secret-1234",
@@ -150,7 +150,7 @@ def test_create_enroll_token_uses_request_base_url_when_public_url_missing(tmp_p
 
     env = {
         "DATABASE_URL": f"sqlite:///{db_path}",
-        "FERNET_SECRET": "test-fernet-secret",
+        "FERNET_SECRET": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "AUTH_DISABLED": "1",
         "JWT_SECRET": "test-jwt-secret-1234",
         "INTERNAL_API_SECRET": "test-internal-secret-1234",
@@ -201,7 +201,7 @@ def test_create_enroll_token_prefers_forwarded_https_when_public_url_missing(tmp
 
     env = {
         "DATABASE_URL": f"sqlite:///{db_path}",
-        "FERNET_SECRET": "test-fernet-secret",
+        "FERNET_SECRET": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "AUTH_DISABLED": "1",
         "JWT_SECRET": "test-jwt-secret-1234",
         "INTERNAL_API_SECRET": "test-internal-secret-1234",
@@ -252,7 +252,7 @@ def test_register_runner_reenroll_returns_existing_capabilities(tmp_path):
 
     env = {
         "DATABASE_URL": f"sqlite:///{db_path}",
-        "FERNET_SECRET": "test-fernet-secret",
+        "FERNET_SECRET": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "AUTH_DISABLED": "1",
         "JWT_SECRET": "test-jwt-secret-1234",
         "INTERNAL_API_SECRET": "test-internal-secret-1234",
@@ -307,7 +307,7 @@ def test_register_runner_respects_requested_capabilities(tmp_path):
 
     env = {
         "DATABASE_URL": f"sqlite:///{db_path}",
-        "FERNET_SECRET": "test-fernet-secret",
+        "FERNET_SECRET": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "AUTH_DISABLED": "1",
         "JWT_SECRET": "test-jwt-secret-1234",
         "INTERNAL_API_SECRET": "test-internal-secret-1234",
@@ -358,7 +358,7 @@ def test_register_runner_persists_requested_availability_policy(tmp_path):
 
     env = {
         "DATABASE_URL": f"sqlite:///{db_path}",
-        "FERNET_SECRET": "test-fernet-secret",
+        "FERNET_SECRET": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
         "AUTH_DISABLED": "1",
         "JWT_SECRET": "test-jwt-secret-1234",
         "INTERNAL_API_SECRET": "test-internal-secret-1234",

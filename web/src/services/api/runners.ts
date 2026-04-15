@@ -54,6 +54,12 @@ export async function revokeRunner(runnerId: number): Promise<{ success: boolean
   });
 }
 
+export async function deleteRunner(runnerId: number): Promise<void> {
+  return request<void>(`/runners/${runnerId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function rotateRunnerSecret(runnerId: number): Promise<RotateSecretResponse> {
   return request<RotateSecretResponse>(`/runners/${runnerId}/rotate-secret`, {
     method: "POST",

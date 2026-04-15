@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   useCreateEnrollToken,
+  useDeleteRunner,
   useRunner,
   useRunnerDoctor,
   useRunnerJobs,
@@ -302,6 +303,7 @@ export default function RunnerDetailPage() {
   } = useRunnerJobs(runnerId, { limit: 6, refetchInterval: 15_000 });
   const runnerMetadata = normalizeRunnerMetadata(runner?.runner_metadata);
   const updateRunnerMutation = useUpdateRunner();
+  const deleteRunnerMutation = useDeleteRunner();
   const revokeRunnerMutation = useRevokeRunner();
   const rotateSecretMutation = useRotateRunnerSecret();
   const doctorMutation = useRunnerDoctor();
@@ -397,6 +399,29 @@ export default function RunnerDetailPage() {
     } catch (err) {
       console.error("Failed to revoke runner:", err);
       setActionError("Failed to revoke runner. Please try again.");
+    }
+  };
+
+  const handleDelete = async () => {
+    const confirmed = await confirm({
+      title: `Forget machine "${runner?.name}"?`,
+      message:
+        "This permanently removes the machine from Longhouse. Existing sessions stay, but this machine's runner jobs and health incidents are deleted.",
+      confirmLabel: "Forget Machine",
+      cancelLabel: "Keep",
+      variant: "danger",
+    });
+    if (!confirmed) {
+      return;
+    }
+
+    setActionError(null);
+    try {
+      await deleteRunnerMutation.mutateAsync(runnerId);
+      navigate("/runners");
+    } catch (err) {
+      console.error("Failed to delete runner:", err);
+      setActionError("Failed to forget this machine. Please try again.");
     }
   };
 
@@ -497,6 +522,8 @@ export default function RunnerDetailPage() {
       </PageShell>
     );
   }
+
+  const canForgetRunner = runner.status !== "online";
 
   return (
     <PageShell size="wide" className="runner-detail-container">
@@ -926,64 +953,88 @@ export default function RunnerDetailPage() {
             )}
           </section>
 
-          {runner.status !== "revoked" && (
+          {(runner.status !== "revoked" || canForgetRunner) && (
             <section className="detail-section danger-section">
               <h2 className="ui-section-title">Danger Zone</h2>
 
-              <div className="danger-item">
-                <div className="danger-item-header">
-                  <div className="danger-item-info">
-                    <h3>Rotate Secret</h3>
-                    <p className="danger-description">
-                      Generate a new secret, invalidating the old one. The runner will be disconnected.
-                    </p>
-                  </div>
-                  <Button
-                    variant="tertiary"
-                    className="runner-warning-button"
-                    onClick={handleRotateSecret}
-                    disabled={rotateSecretMutation.isPending || !!rotatedSecret}
-                    title={rotatedSecret ? "Acknowledge the current secret first" : undefined}
-                  >
-                    {rotateSecretMutation.isPending ? "Rotating..." : "Rotate Secret"}
-                  </Button>
-                </div>
-
-                {rotatedSecret && (
-                  <div className="rotated-secret-display">
-                    <p className="secret-warning">
-                      Save this secret now - it won't be shown again!
-                    </p>
-                    <div className="secret-value-container">
-                      <code className="secret-value">{rotatedSecret}</code>
-                      <Button variant="success" size="sm" onClick={handleCopySecret}>
-                        {secretCopied ? "Copied!" : "Copy"}
+              {runner.status !== "revoked" && (
+                <>
+                  <div className="danger-item">
+                    <div className="danger-item-header">
+                      <div className="danger-item-info">
+                        <h3>Rotate Secret</h3>
+                        <p className="danger-description">
+                          Generate a new secret, invalidating the old one. The runner will be disconnected.
+                        </p>
+                      </div>
+                      <Button
+                        variant="tertiary"
+                        className="runner-warning-button"
+                        onClick={handleRotateSecret}
+                        disabled={rotateSecretMutation.isPending || !!rotatedSecret}
+                        title={rotatedSecret ? "Acknowledge the current secret first" : undefined}
+                      >
+                        {rotateSecretMutation.isPending ? "Rotating..." : "Rotate Secret"}
                       </Button>
                     </div>
-                    <Button variant="ghost" size="sm" onClick={() => setRotatedSecret(null)}>
-                      I've saved the secret
+
+                    {rotatedSecret && (
+                      <div className="rotated-secret-display">
+                        <p className="secret-warning">
+                          Save this secret now - it won't be shown again!
+                        </p>
+                        <div className="secret-value-container">
+                          <code className="secret-value">{rotatedSecret}</code>
+                          <Button variant="success" size="sm" onClick={handleCopySecret}>
+                            {secretCopied ? "Copied!" : "Copy"}
+                          </Button>
+                        </div>
+                        <Button variant="ghost" size="sm" onClick={() => setRotatedSecret(null)}>
+                          I've saved the secret
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="danger-item">
+                    <div className="danger-item-header">
+                      <div className="danger-item-info">
+                        <h3>Revoke Runner</h3>
+                        <p className="danger-description">
+                          Revoked runners cannot reconnect. This action cannot be undone.
+                        </p>
+                      </div>
+                      <Button
+                        variant="danger"
+                        onClick={handleRevoke}
+                        disabled={revokeRunnerMutation.isPending}
+                      >
+                        {revokeRunnerMutation.isPending ? "Revoking..." : "Revoke Runner"}
+                      </Button>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {canForgetRunner && (
+                <div className="danger-item">
+                  <div className="danger-item-header">
+                    <div className="danger-item-info">
+                      <h3>Forget Machine</h3>
+                      <p className="danger-description">
+                        Permanently remove this stale machine from Longhouse. Existing sessions stay, but runner jobs and health incidents for this machine are deleted.
+                      </p>
+                    </div>
+                    <Button
+                      variant="danger"
+                      onClick={handleDelete}
+                      disabled={deleteRunnerMutation.isPending}
+                    >
+                      {deleteRunnerMutation.isPending ? "Forgetting..." : "Forget Machine"}
                     </Button>
                   </div>
-                )}
-              </div>
-
-              <div className="danger-item">
-                <div className="danger-item-header">
-                  <div className="danger-item-info">
-                    <h3>Revoke Runner</h3>
-                    <p className="danger-description">
-                      Revoked runners cannot reconnect. This action cannot be undone.
-                    </p>
-                  </div>
-                  <Button
-                    variant="danger"
-                    onClick={handleRevoke}
-                    disabled={revokeRunnerMutation.isPending}
-                  >
-                    {revokeRunnerMutation.isPending ? "Revoking..." : "Revoke Runner"}
-                  </Button>
                 </div>
-              </div>
+              )}
             </section>
           )}
         </div>
