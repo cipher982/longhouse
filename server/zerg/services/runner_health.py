@@ -11,6 +11,7 @@ from typing import Any
 from zerg.config import get_settings
 from zerg.models.models import Runner
 from zerg.schemas.runner_schemas import RunnerResponse
+from zerg.services.runner_heartbeat_cache import get_runner_heartbeat
 from zerg.utils.time import utc_now_naive
 
 DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000
@@ -174,11 +175,8 @@ def assess_runner_health(
     heartbeat_interval_ms = _heartbeat_interval_ms(metadata)
     stale_after_seconds = _stale_after_seconds(heartbeat_interval_ms)
 
-    # Prefer in-memory heartbeat cache (updated every 30s without DB writes).
-    from zerg.routers.runners import runner_heartbeat_cache
-
     runner_id = getattr(runner, "id", None)
-    effective_last_seen = (runner_heartbeat_cache.get(runner_id) if runner_id else None) or runner.last_seen_at
+    effective_last_seen = get_runner_heartbeat(runner_id) or runner.last_seen_at
 
     last_seen_age_seconds: int | None = None
     is_stale = False

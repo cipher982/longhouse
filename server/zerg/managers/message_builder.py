@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 from typing import List
 from typing import Optional
+from typing import Protocol
 from typing import Sequence
 
 from zerg.config import get_settings
@@ -35,13 +36,19 @@ from zerg.types.messages import ToolMessage
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from zerg.managers.runtime_runner import RuntimeView
     from zerg.models.models import Fiche as FicheModel
     from zerg.skills.integration import SkillIntegration
 
 logger = logging.getLogger(__name__)
 
 _TIMESTAMP_PREFIX_RE = re.compile(r"^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\]\s*")
+
+
+class RuntimeAgent(Protocol):
+    """Minimal runtime agent shape required by MessageArrayBuilder."""
+
+    id: int
+    owner_id: int
 
 
 def _strip_timestamp_prefix(text: str) -> str:
@@ -96,7 +103,7 @@ class MessageArrayBuilder:
         messages = result.messages
     """
 
-    def __init__(self, db: Session, agent: RuntimeView) -> None:
+    def __init__(self, db: Session, agent: RuntimeAgent) -> None:
         self._db = db
         self._agent = agent
         self._messages: List[BaseMessage] = []

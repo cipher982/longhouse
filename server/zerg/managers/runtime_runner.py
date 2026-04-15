@@ -19,20 +19,13 @@ from zerg.connectors.context import set_credential_resolver
 from zerg.connectors.resolver import CredentialResolver
 from zerg.crud import get_fiche
 from zerg.crud import get_unprocessed_messages
+from zerg.managers.runtime_interrupt import RunnerInterrupted
 from zerg.models.models import Fiche as AutomationProfile
 from zerg.models.models import Thread as ThreadModel
 from zerg.models.models import ThreadMessage as ThreadMessageModel
 from zerg.services.thread_service import ThreadService
 
 logger = logging.getLogger(__name__)
-
-
-class RunnerInterrupted(Exception):
-    """Raised when agent execution is interrupted (waiting for external input)."""
-
-    def __init__(self, interrupt_value: dict):
-        self.interrupt_value = interrupt_value
-        super().__init__(f"Runner interrupted: {interrupt_value}")
 
 
 @dataclass(frozen=True)
