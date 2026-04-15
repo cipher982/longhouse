@@ -136,27 +136,26 @@ def home(request: Request, error: str | None = None, return_to: str | None = Non
       <h1>Longhouse</h1>
       <p class="subtitle">Sign in to manage your hosted instance.</p>
     </div>
-    <div class="card max-w-form">
-      {error_html}
-      <form method="post" action="{html.escape(login_action)}">
-        <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
-        <label>Password <input type="password" name="password" required minlength="8" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;"></label>
-        <button type="submit" class="btn btn-primary w-full">Sign In</button>
-      </form>
-      <p class="text-center mt-2 text-sm text-muted">
-        Don\'t have an account? <a href="{html.escape(signup_url)}">Create one</a>
-      </p>
-      <div class="alert alert-info mt-2">
-        New here? We recommend signing up with Google below.
-      </div>
-    </div>
     <div class="max-w-form">
+      {error_html}
+      <a href="{html.escape(google_login_url)}" class="btn btn-primary google-btn w-full">{_GOOGLE_ICON} Continue with Google</a>
       <div class="divider">
         <div class="divider-line"></div>
         <span class="divider-text">or</span>
         <div class="divider-line"></div>
       </div>
-      <a href="{html.escape(google_login_url)}" class="btn btn-secondary google-btn w-full">{_GOOGLE_ICON} Continue with Google</a>
+    </div>
+    <div class="card max-w-form">
+      <form method="post" action="{html.escape(login_action)}">
+        <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
+        <label>Password <input type="password" name="password" required minlength="8" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;"></label>
+        <button type="submit" class="btn btn-secondary w-full">Sign In with Email</button>
+      </form>
+      <p class="text-center mt-2 text-sm text-muted">
+        Don\'t have an account? <a href="{html.escape(signup_url)}">Create one</a>
+      </p>
+    </div>
+    <div class="max-w-form">
       <p class="text-center mt-6"><a href="https://longhouse.ai" class="text-muted text-sm">&larr; Back to longhouse.ai</a></p>
     </div>
     """
@@ -182,7 +181,7 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
       <p class="subtitle">Get started with Longhouse.</p>
     </div>
     <div class="max-w-form">
-      <a href="{html.escape(google_signup_url)}" class="btn btn-secondary google-btn w-full">{_GOOGLE_ICON} Sign up with Google</a>
+      <a href="{html.escape(google_signup_url)}" class="btn btn-primary google-btn w-full">{_GOOGLE_ICON} Sign up with Google</a>
     </div>
     <div class="max-w-form">
       <div class="divider">
@@ -197,7 +196,7 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
         <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
         <label>Password <input type="password" name="password" required minlength="8" placeholder="Min. 8 characters"></label>
         <label>Confirm password <input type="password" name="password_confirm" required minlength="8" placeholder="Repeat password"></label>
-        <button type="submit" class="btn btn-primary w-full">Create Account</button>
+        <button type="submit" class="btn btn-secondary w-full">Create Account with Email</button>
       </form>
       <p class="text-center mt-2 text-sm text-muted">
         Already have an account? <a href="{html.escape(signin_url)}">Sign in</a>
