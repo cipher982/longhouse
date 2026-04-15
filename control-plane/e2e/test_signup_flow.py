@@ -39,8 +39,8 @@ def test_signup_form_is_accessible(page: Page, base_url: str) -> None:
     assert "coming soon" not in page_text.lower(), "Signup form has a 'coming soon' gate"
 
 
-def test_signup_redirects_to_verify_email(page: Page, base_url: str, email_capture: EmailCapture) -> None:
-    """Successful signup redirects to /verify-email."""
+def test_signup_redirects_to_dashboard(page: Page, base_url: str, email_capture: EmailCapture) -> None:
+    """Successful signup goes straight to /dashboard — no email verification wall."""
     email_capture.clear()
     email = "signup-flow-test@example.com"
 
@@ -53,11 +53,11 @@ def test_signup_redirects_to_verify_email(page: Page, base_url: str, email_captu
         password_inputs.nth(1).fill("SecurePass123")
 
     page.click("button[type='submit']")
-    page.wait_for_url(re.compile(r"/verify-email"), timeout=5000)
+    page.wait_for_url(re.compile(r"/dashboard"), timeout=5000)
 
 
-def test_full_signup_verify_dashboard(page: Page, base_url: str, email_capture: EmailCapture) -> None:
-    """Full happy path: signup → click verification link → land on dashboard."""
+def test_full_signup_dashboard(page: Page, base_url: str, email_capture: EmailCapture) -> None:
+    """Full happy path: signup → land on dashboard immediately (no verify-email wall)."""
     email_capture.clear()
     email = "full-flow-test@example.com"
 
@@ -71,24 +71,12 @@ def test_full_signup_verify_dashboard(page: Page, base_url: str, email_capture: 
         password_inputs.nth(1).fill("SecurePass123")
 
     page.click("button[type='submit']")
-    page.wait_for_url(re.compile(r"/verify-email"), timeout=5000)
+    # Should go straight to dashboard — no verify-email wall
+    page.wait_for_url(re.compile(r"/dashboard"), timeout=5000)
 
-    # 2. Get verification URL from captured email
-    verify_url = email_capture.get_verify_url(email)
-    assert verify_url is not None, f"No verification email captured for {email}"
-
-    # Strip the host from the URL if it has a different domain (test env uses localhost)
-    # The token is in the query string; build the local URL
-    if "/auth/verify" in verify_url:
-        token_part = verify_url.split("/auth/verify")[1]
-        local_verify_url = f"{base_url}/auth/verify{token_part}"
-    else:
-        local_verify_url = verify_url
-
-    # 3. Click verification link → should land on dashboard or subdomain picker
-    page.goto(local_verify_url)
-    page.wait_for_url(re.compile(r"/dashboard|/onboarding/"), timeout=5000)
-
-    # 4. Dashboard must render without a 500
+    # 2. Dashboard must render without a 500
     expect(page.locator("body")).to_be_visible()
     expect(page.locator("body")).not_to_contain_text("Internal Server Error")
+
+    # 3. Soft verification banner should be visible
+    expect(page.locator(".alert-warning")).to_be_visible()

@@ -19,13 +19,13 @@ def test_unauthenticated_dashboard_redirects_to_login(page: Page, base_url: str)
     page.wait_for_url(re.compile(r"^http://127\.\d+\.\d+\.\d+:\d+/$"), timeout=5000)
 
 
-def test_unverified_user_dashboard_redirects_to_verify(
+def test_unverified_user_sees_dashboard_with_verification_banner(
     page: Page,
     base_url: str,
     db_session,  # type: ignore[no-untyped-def]
     context: BrowserContext,
 ) -> None:
-    """Logged-in but unverified user → /dashboard redirects to /verify-email."""
+    """Logged-in but unverified user → /dashboard shows with a soft verification banner."""
     email = "unverified-gate@example.com"
     user = create_user(db_session, email=email, password="Pass12345", verified=False)
 
@@ -40,7 +40,10 @@ def test_unverified_user_dashboard_redirects_to_verify(
     ])
 
     page.goto(f"{base_url}/dashboard")
-    page.wait_for_url(re.compile(r"/verify-email"), timeout=5000)
+    # Should stay on /dashboard (not redirected to /verify-email)
+    page.wait_for_url(re.compile(r"/dashboard"), timeout=5000)
+    # Verification banner should be visible
+    expect(page.locator(".alert-warning")).to_be_visible()
 
 
 def test_verified_user_can_reach_dashboard(

@@ -572,14 +572,12 @@ describe("SessionsPage", () => {
 
     renderSessionsPage("/timeline");
 
-    expect(await screen.findByText("Import sessions you already have")).toBeInTheDocument();
-    expect(screen.getByText(/Longhouse gets useful once it can see real Claude Code, Codex, or Gemini work/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "See import steps" })).toBeInTheDocument();
+    expect(await screen.findByText("Connect your first machine")).toBeInTheDocument();
+    expect(screen.getByText(/Run one command on the machine where you use Claude Code/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "See setup steps" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Connect Machine" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Load demo sessions instead" })).toBeInTheDocument();
     expect(screen.getByText("longhouse connect --install")).toBeInTheDocument();
     expect(screen.getByText("longhouse ship")).toBeInTheDocument();
-    expect(screen.getByText("longhouse claude")).toBeInTheDocument();
     expect(screen.queryByText("Welcome to Longhouse")).not.toBeInTheDocument();
   });
 

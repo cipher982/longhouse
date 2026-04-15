@@ -38,6 +38,9 @@ Use these nouns consistently. Do not say just "the daemon" without clarifying wh
 - **Runner**: optional WebSocket command executor for remote execution on user-owned machines.
 - **CLI / Package Layer**: the current delivery and orchestration layer. PyPI `longhouse` installs the CLI plus Runtime Host entrypoint and manages Machine Agent/Desktop App installation. Treat this as first-class for agents and power users, but not the desired human product boundary.
 
+### Things we built
+- website landing page, website admin control plane, website 'main app you do everything', macos menu bar, ios app with widget, rust daemon to ship sessions
+
 ## Install Topology
 
 The Machine Agent runs where work happens. The Runtime Host runs where durability should live.
