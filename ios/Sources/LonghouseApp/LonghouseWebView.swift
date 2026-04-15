@@ -5,11 +5,11 @@ struct LonghouseWebView: UIViewRepresentable {
     let serverURL: String
     /// Path to load on initial mount (e.g. /timeline or /timeline/abc-123).
     let initialPath: String
-    /// Called when the web app redirects to /login — native shell takes over auth.
-    let onLoginRedirect: (URL) -> Void
+    /// Called when the shell needs to take over auth instead of rendering a web login page.
+    let onAuthRedirect: (URL) -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(serverURL: serverURL, onLoginRedirect: onLoginRedirect)
+        Coordinator(serverURL: serverURL, onAuthRedirect: onAuthRedirect)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -47,11 +47,11 @@ struct LonghouseWebView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
         let serverURL: String
-        let onLoginRedirect: (URL) -> Void
+        let onAuthRedirect: (URL) -> Void
 
-        init(serverURL: String, onLoginRedirect: @escaping (URL) -> Void) {
+        init(serverURL: String, onAuthRedirect: @escaping (URL) -> Void) {
             self.serverURL = serverURL
-            self.onLoginRedirect = onLoginRedirect
+            self.onAuthRedirect = onAuthRedirect
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -71,30 +71,21 @@ struct LonghouseWebView: UIViewRepresentable {
                 return
             }
 
-            // Intercept /login navigations — cancel the WebView load and hand off
-            // to the native shell's login flow. This prevents the desktop web login
-            // UI from rendering inside the app when a session expires.
-            // Match /login exactly (with or without query string) to avoid
-            // accidentally intercepting unrelated paths like /login-help.
-            if let serverHost = URL(string: serverURL)?.host,
-               url.host == serverHost,
-               url.path == "/login" {
-                decisionHandler(.cancel)
-                onLoginRedirect(url)
+            if navigationAction.targetFrame?.isMainFrame == false {
+                decisionHandler(.allow)
                 return
             }
 
-            // Open external links in Safari rather than inside the WebView.
-            if let serverHost = URL(string: serverURL)?.host,
-               let targetHost = url.host,
-               targetHost != serverHost,
-               navigationAction.navigationType == .linkActivated {
+            switch LonghouseWebNavigation.decision(for: url, serverURL: serverURL) {
+            case .allow:
+                decisionHandler(.allow)
+            case .nativeAuth:
+                decisionHandler(.cancel)
+                onAuthRedirect(url)
+            case .externalBrowser:
                 UIApplication.shared.open(url)
                 decisionHandler(.cancel)
-                return
             }
-
-            decisionHandler(.allow)
         }
     }
 }
