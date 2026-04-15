@@ -17,96 +17,17 @@ import {
   Spinner
 } from "../components/ui";
 import { parseUTC } from "../lib/dateUtils";
+import type {
+  AdminUserDetailResponse as ApiAdminUserDetailResponse,
+  AdminUserRow as ApiAdminUserRow,
+  AdminUsersResponse as ApiAdminUsersResponse,
+  OpsSummary,
+  OpsTopAutomation,
+} from "../services/api/types";
 
-// Types for admin user usage data
-interface UserPeriodUsage {
-  tokens: number;
-  cost_usd: number;
-  runs: number;
-}
-
-interface AdminUserUsage {
-  today: UserPeriodUsage;
-  seven_days: UserPeriodUsage;
-  thirty_days: UserPeriodUsage;
-}
-
-interface AdminUserRow {
-  id: number;
-  email: string;
-  display_name: string | null;
-  role: string;
-  is_active: boolean;
-  created_at: string | null;
-  is_demo?: boolean;
-  usage: AdminUserUsage;
-}
-
-interface AdminUsersResponse {
-  users: AdminUserRow[];
-  total: number;
-  limit: number;
-  offset: number;
-}
-
-interface DailyBreakdown {
-  date: string;
-  tokens: number;
-  cost_usd: number;
-  runs: number;
-}
-
-interface TopAutomationUsage {
-  automation_id: number;
-  name: string;
-  tokens: number;
-  cost_usd: number;
-  runs: number;
-}
-
-interface AdminUserDetailResponse {
-  user: AdminUserRow;
-  period: string;
-  summary: UserPeriodUsage;
-  daily_breakdown: DailyBreakdown[];
-  top_automations: TopAutomationUsage[];
-}
-
-// Types for ops data - matching actual backend contract
-interface OpsSummary {
-  window: "today" | "7d" | "30d";
-  window_label: string;
-  runs: number;
-  cost_usd: number | null;
-  budget_user: {
-    limit_cents: number;
-    used_usd: number;
-    percent: number | null;
-  };
-  budget_global: {
-    limit_cents: number;
-    used_usd: number;
-    percent: number | null;
-  };
-  active_users_24h: number;
-  automations_total: number;
-  automations_scheduled: number;
-  latency_ms: {
-    p50: number;
-    p95: number;
-  };
-  errors_last_hour: number;
-  top_automations: OpsTopAutomation[];
-}
-
-interface OpsTopAutomation {
-  automation_id: number;
-  name: string;
-  owner_email: string;
-  runs: number;
-  cost_usd: number | null;
-  p95_ms: number;
-}
+type AdminUserRow = ApiAdminUserRow & { is_demo?: boolean };
+type AdminUsersResponse = Omit<ApiAdminUsersResponse, "users"> & { users: AdminUserRow[] };
+type AdminUserDetailResponse = Omit<ApiAdminUserDetailResponse, "user"> & { user: AdminUserRow };
 
 // API functions (top agents are included in summary)
 async function fetchOpsSummary(window: "today" | "7d" | "30d"): Promise<OpsSummary> {

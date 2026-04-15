@@ -1,25 +1,12 @@
 import { request } from "./base";
+import type { EmailKeyStatus, EmailStatusResponse } from "./types";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-export interface EmailKeyStatus {
-  key: string;
-  configured: boolean;
-  source: string | null; // "db" | "env" | null
-}
-
-export interface EmailStatus {
-  configured: boolean;
-  source: string | null;
-  keys: EmailKeyStatus[];
-  aws_ses_access_key_preview: string | null;
-  aws_ses_secret_access_key_preview: string | null;
-  aws_ses_region: string | null;
-  from_email: string | null;
-  notify_email: string | null;
-}
+export type { EmailKeyStatus };
+export type EmailStatus = EmailStatusResponse;
 
 export interface EmailConfigPayload {
   aws_ses_access_key_id?: string;

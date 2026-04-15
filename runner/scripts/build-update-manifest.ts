@@ -2,24 +2,7 @@ import { parseArgs } from 'node:util';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-
-type RunnerPlatformTarget = 'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64';
-
-type RunnerUpdateAsset = {
-  filename: string;
-  url: string;
-  sha256: string;
-  size_bytes: number;
-};
-
-type RunnerUpdateManifest = {
-  schema_version: number;
-  runner_version: string;
-  published_at: string;
-  expires_at: string;
-  notes_url: string;
-  assets: Partial<Record<RunnerPlatformTarget, RunnerUpdateAsset>>;
-};
+import type { RunnerPlatformTarget, RunnerUpdateAsset, RunnerUpdateManifest } from '../src/update-manifest';
 
 const KNOWN_ASSETS: Array<{ filename: string; target: RunnerPlatformTarget }> = [
   { filename: 'longhouse-runner-darwin-arm64', target: 'darwin-arm64' },
