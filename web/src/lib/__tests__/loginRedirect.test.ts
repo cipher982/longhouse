@@ -55,8 +55,7 @@ describe("sanitizeReturnTo", () => {
     expect(sanitizeReturnTo("%2F%2Fevil.com")).toBe(DEFAULT_RETURN_TO);
   });
 
-  it("strips host/scheme from a full same-origin URL constructed via new URL()", () => {
-    // new URL("/path", window.location.origin) → same origin, only path returned
+  it("preserves a nested path", () => {
     expect(sanitizeReturnTo("/sessions/abc-123")).toBe("/sessions/abc-123");
   });
 });
