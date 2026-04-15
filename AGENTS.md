@@ -187,6 +187,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 
 - `make dev` is interactive.
 - After local runtime changes (engine, hooks, `connect`, desktop app/menu bar), run `make dogfood-refresh` to reinstall the real local runtime from current repo source. DMG drag-install is release transport, not the daily dogfood loop.
+- CLI-only changes (`server/zerg/cli/`) don't need the full Rust rebuild — run `cd server && uv tool install -e .` directly (~5s vs ~60s for `make dogfood-refresh`).
 - Heavy local validation can saturate the laptop. Prefer GitHub ARC for `make test-ci`, `make test-e2e`, `make test-full`, long `cargo` builds, and heavy installer/menu bar paths unless local debugging is the point.
 - Local SQLite dev DB is `~/.longhouse/dev.db` unless `DATABASE_URL` overrides it.
 - `AGENTS.md` is canonical. `CLAUDE.md` is a symlink.
