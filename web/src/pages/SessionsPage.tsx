@@ -16,7 +16,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { config } from "../lib/config";
 import { useAgentSessions, useAgentFilters } from "../hooks/useAgentSessions";
-import { useRunners } from "../hooks/useRunners";
 import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useTimelineSessionStream } from "../hooks/useTimelineSessionStream";
 import { useReadinessFlag } from "../lib/readiness-contract";
@@ -31,13 +30,12 @@ import { DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import {
   Button,
   Badge,
-  SectionHeader,
   EmptyState,
   PageShell,
   Spinner,
   Input,
 } from "../components/ui";
-import AddRunnerModal from "../components/AddRunnerModal";
+import RunnersModal from "../components/RunnersModal";
 import { useDebouncedValue } from "../hooks/useDebouncedValue";
 import { RecallPanel } from "../components/RecallPanel";
 import { SessionCard } from "../components/sessions/SessionCard";
@@ -211,26 +209,10 @@ export default function SessionsPage() {
   const [popoverOpen, setPopoverOpen] = useState(false);
   const filterBtnRef = useRef<HTMLButtonElement>(null);
   const [recallOpen, setRecallOpen] = useState(false);
-  const [showAddRunnerModal, setShowAddRunnerModal] = useState(false);
   const queryClient = useQueryClient();
   const prefetchedSessionIdsRef = useRef<Set<string>>(new Set());
   const lastTimelineScrollAtRef = useRef(0);
-  const { data: runnersData } = useRunners();
-  const runners = runnersData ?? [];
-  const runnerActionLabel = runners.length > 0 ? "Open Machines" : "Connect Machine";
-  const handleRunnerAction = useCallback(() => {
-    if (runners.length === 0) {
-      setShowAddRunnerModal(true);
-      return;
-    }
-    navigate("/runners");
-  }, [navigate, runners.length]);
-  const addRunnerModal = showAddRunnerModal ? (
-    <AddRunnerModal
-      isOpen
-      onClose={() => setShowAddRunnerModal(false)}
-    />
-  ) : null;
+  const [showRunnersModal, setShowRunnersModal] = useState(false);
 
   // Fetch dynamic filter options
   const { data: filtersData, isLoading: filtersLoading } = useAgentFilters(daysBack, popoverOpen);
@@ -389,12 +371,12 @@ export default function SessionsPage() {
         </span>
       )}
       <Button
-        variant={runners.length === 0 ? "primary" : "secondary"}
+        variant="secondary"
         size="sm"
-        onClick={handleRunnerAction}
+        onClick={() => setShowRunnersModal(true)}
         data-testid="timeline-runner-action"
       >
-        {runnerActionLabel}
+        Machines
       </Button>
     </div>
   );
@@ -557,10 +539,10 @@ export default function SessionsPage() {
                 <Button
                   variant="secondary"
                   size="md"
-                  onClick={handleRunnerAction}
+                  onClick={() => setShowRunnersModal(true)}
                   data-testid="timeline-empty-runner-action"
                 >
-                  {runnerActionLabel}
+                  Machines
                 </Button>
                 {seedError && (
                   <Button
@@ -595,7 +577,7 @@ export default function SessionsPage() {
               {demoLoading && " Demo sessions are loading in the background."}
             </p>
           </div>
-          {addRunnerModal}
+          <RunnersModal isOpen={showRunnersModal} onClose={() => setShowRunnersModal(false)} />
         </div>
       </PageShell>
     );
@@ -604,11 +586,6 @@ export default function SessionsPage() {
   return (
     <PageShell size="wide" className="sessions-page-container" onScrollActivity={handleScrollActivity}>
       <div className="sessions-page">
-        <SectionHeader
-          title="Timeline"
-          actions={headerActions}
-        />
-
         {error && sessions.length > 0 && (
           <div className="sessions-stale-banner" role="status">
             <span>Unable to refresh — showing cached data.</span>
@@ -730,6 +707,7 @@ export default function SessionsPage() {
           )}
 
           <div className="sessions-toolbar-actions">
+            {headerActions}
             <Button variant="ghost" size="sm" onClick={handleClearFilters} disabled={!hasFilters}>
               Clear
             </Button>
@@ -850,7 +828,7 @@ export default function SessionsPage() {
           </div>
         )}
       </div>
-      {addRunnerModal}
+      <RunnersModal isOpen={showRunnersModal} onClose={() => setShowRunnersModal(false)} />
     </PageShell>
   );
 }

@@ -18,6 +18,7 @@ describe("getNavItems", () => {
     const { getNavItems } = await import("./navItems");
     expect(getNavItems(null)).toEqual([
       { label: "Timeline", href: "/timeline", testId: "global-timeline-tab" },
+      { label: "Machines", href: "/runners", testId: "global-runners-tab" },
     ]);
   });
 
@@ -25,6 +26,7 @@ describe("getNavItems", () => {
     const { getNavItems } = await import("./navItems");
     expect(getNavItems("ADMIN").map((item) => item.href)).toEqual([
       "/timeline",
+      "/runners",
       "/admin",
     ]);
   });
