@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from zerg.services.desktop_app import install_desktop_app_service
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.machine_state import MachineState
+from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state
 from zerg.services.machine_state import write_machine_state
 from zerg.services.runtime_artifacts import InstalledRuntimeBinary
@@ -52,6 +53,8 @@ def _install_local_runtime_artifacts(
     claude_dir: str | None,
     machine_name: str,
     menubar: bool,
+    machine_config_generation: str | None = None,
+    machine_state_hash: str | None = None,
 ) -> LocalRuntimeInstallResult:
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
     resolved_name = sanitize_machine_name(machine_name)
@@ -67,6 +70,8 @@ def _install_local_runtime_artifacts(
         token=token,
         claude_dir=claude_dir,
         machine_name=resolved_name,
+        machine_config_generation=machine_config_generation,
+        machine_state_hash=machine_state_hash,
     )
 
     try:
@@ -112,7 +117,7 @@ def install_local_runtime(
     resolved_name = sanitize_machine_name(machine_name)
     if resolved_name is None:
         raise ValueError(f"Invalid machine name: {machine_name!r}")
-    write_machine_state(
+    machine_state = write_machine_state(
         base_dir=config_dir,
         written_by=written_by,
         runtime_url=url,
@@ -126,6 +131,8 @@ def install_local_runtime(
         claude_dir=claude_dir,
         machine_name=resolved_name,
         menubar=menubar,
+        machine_config_generation=machine_state.config_generation,
+        machine_state_hash=machine_state_source_hash(machine_state),
     )
 
 
@@ -186,5 +193,7 @@ def reconcile_local_runtime(
         claude_dir=claude_dir,
         machine_name=machine_state.machine_name or resolved_name,
         menubar=bool(machine_state.desktop_app_enabled),
+        machine_config_generation=machine_state.config_generation,
+        machine_state_hash=machine_state_source_hash(machine_state),
     )
     return LocalRuntimeReconcileResult(machine_state=machine_state, install_result=install_result)

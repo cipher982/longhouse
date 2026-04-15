@@ -113,7 +113,13 @@ def _write_runner_env(tmp_path: Path, *, url: str, runner_name: str) -> Path:
     return env_path
 
 
-def _write_service_plist(tmp_path: Path, *, machine_name: str) -> Path:
+def _write_service_plist(
+    tmp_path: Path,
+    *,
+    machine_name: str,
+    config_generation: str | None = None,
+    state_hash: str | None = None,
+) -> Path:
     path = tmp_path / "com.longhouse.shipper.plist"
     payload = {
         "Label": "com.longhouse.shipper",
@@ -124,6 +130,13 @@ def _write_service_plist(tmp_path: Path, *, machine_name: str) -> Path:
             machine_name,
         ],
     }
+    if config_generation or state_hash:
+        env = {}
+        if config_generation:
+            env["LONGHOUSE_MACHINE_GENERATION"] = config_generation
+        if state_hash:
+            env["LONGHOUSE_MACHINE_STATE_HASH"] = state_hash
+        payload["EnvironmentVariables"] = env
     path.write_bytes(plistlib.dumps(payload))
     return path
 
@@ -261,6 +274,32 @@ def test_collect_local_health_ignores_runner_drift_when_runner_not_enabled(monke
     assert "config_url_runner_url_mismatch" not in snapshot["reasons"]
     assert "machine_name_runner_name_mismatch" not in snapshot["reasons"]
     assert snapshot["launch_readiness"]["runner_expected"] is False
+
+
+def test_collect_local_health_flags_service_generation_drift(monkeypatch, tmp_path: Path):
+    _write_local_config(tmp_path, url="https://demo.longhouse.test", machine_name="cinder")
+    service_file = _write_service_plist(
+        tmp_path,
+        machine_name="cinder",
+        config_generation="stale-generation",
+        state_hash="stale-hash",
+    )
+    _write_engine_status(tmp_path, age_seconds=5)
+    monkeypatch.setattr(
+        local_health_service,
+        "get_service_info",
+        lambda *args, **kwargs: _service_info("running", service_file=str(service_file)),
+    )
+    _disable_real_runner_env(monkeypatch, tmp_path)
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "broken"
+    assert snapshot["launch_readiness"]["state"] == "broken"
+    assert "service_generation_mismatch" in snapshot["reasons"]
+    assert "service_state_hash_mismatch" in snapshot["reasons"]
+    assert snapshot["launch_readiness"]["service_config_generation"] == "stale-generation"
+    assert snapshot["launch_readiness"]["service_state_hash"] == "stale-hash"
 
 
 def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: Path):

@@ -87,6 +87,8 @@ class ServiceConfig:
     log_dir: str | None = None
     compression: str = "zstd"
     machine_name: str | None = None
+    machine_config_generation: str | None = None
+    machine_state_hash: str | None = None
 
 
 def detect_platform() -> Platform:
@@ -221,6 +223,19 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
         args += ["--machine-name", config.machine_name]
 
     program_args = "\n".join(f"        <string>{saxutils.escape(str(arg))}</string>" for arg in args)
+    environment = {
+        "CLAUDE_CONFIG_DIR": str(claude_dir),
+        "LONGHOUSE_HOME": str(longhouse_home),
+        "LONGHOUSE_LOG_DIR": str(log_dir),
+    }
+    if config.machine_config_generation:
+        environment["LONGHOUSE_MACHINE_GENERATION"] = config.machine_config_generation
+    if config.machine_state_hash:
+        environment["LONGHOUSE_MACHINE_STATE_HASH"] = config.machine_state_hash
+    environment_xml = "\n".join(
+        f"        <key>{saxutils.escape(key)}</key>\n        <string>{saxutils.escape(value)}</string>"
+        for key, value in environment.items()
+    )
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -234,12 +249,7 @@ def _generate_launchd_plist(config: ServiceConfig) -> str:
     </array>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>CLAUDE_CONFIG_DIR</key>
-        <string>{claude_dir}</string>
-        <key>LONGHOUSE_HOME</key>
-        <string>{longhouse_home}</string>
-        <key>LONGHOUSE_LOG_DIR</key>
-        <string>{log_dir}</string>
+{environment_xml}
     </dict>
     <key>RunAtLoad</key>
     <true/>
@@ -278,6 +288,16 @@ def _generate_systemd_unit(config: ServiceConfig) -> str:
         f" --compression {config.compression}"
         f"{machine_name_arg}"
     )
+    environment_lines = [
+        f'Environment="CLAUDE_CONFIG_DIR={claude_dir}"',
+        f'Environment="LONGHOUSE_HOME={longhouse_home}"',
+        f'Environment="LONGHOUSE_LOG_DIR={log_dir}"',
+    ]
+    if config.machine_config_generation:
+        environment_lines.append(f'Environment="LONGHOUSE_MACHINE_GENERATION={config.machine_config_generation}"')
+    if config.machine_state_hash:
+        environment_lines.append(f'Environment="LONGHOUSE_MACHINE_STATE_HASH={config.machine_state_hash}"')
+    environment_block = "\n".join(environment_lines)
 
     return f"""[Unit]
 Description=Longhouse Engine - Session Sync
@@ -289,9 +309,7 @@ Type=simple
 ExecStart={exec_start}
 Restart=on-failure
 RestartSec=10
-Environment="CLAUDE_CONFIG_DIR={claude_dir}"
-Environment="LONGHOUSE_HOME={longhouse_home}"
-Environment="LONGHOUSE_LOG_DIR={log_dir}"
+{environment_block}
 
 [Install]
 WantedBy=default.target
@@ -308,6 +326,8 @@ def install_service(
     log_dir: str | None = None,
     compression: str = "zstd",
     machine_name: str | None = None,
+    machine_config_generation: str | None = None,
+    machine_state_hash: str | None = None,
     # Legacy params accepted but ignored (kept for backwards compat during transition)
     _poll_mode: bool = False,
     _interval: int = 30,
@@ -337,6 +357,8 @@ def install_service(
         log_dir=log_dir,
         compression=compression,
         machine_name=machine_name,
+        machine_config_generation=machine_config_generation,
+        machine_state_hash=machine_state_hash,
     )
 
     # Ensure log directory exists

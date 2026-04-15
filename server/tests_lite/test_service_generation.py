@@ -35,6 +35,8 @@ def _make_config(**kwargs) -> ServiceConfig:
         token="test-token",
         claude_dir="/tmp/claude",
         machine_name=None,
+        machine_config_generation=None,
+        machine_state_hash=None,
     )
     defaults.update(kwargs)
     return ServiceConfig(**defaults)
@@ -100,6 +102,18 @@ def test_plist_uses_longhouse_agent_log_dir():
     assert "/tmp/.longhouse/agent/logs/engine.stdout.log" in plist
 
 
+def test_plist_embeds_machine_state_metadata_when_present():
+    config = _make_config(
+        machine_config_generation="20260414-test",
+        machine_state_hash="abc123",
+    )
+    plist = _generate_launchd_plist(config)
+    assert "<key>LONGHOUSE_MACHINE_GENERATION</key>" in plist
+    assert "<string>20260414-test</string>" in plist
+    assert "<key>LONGHOUSE_MACHINE_STATE_HASH</key>" in plist
+    assert "<string>abc123</string>" in plist
+
+
 def test_plist_valid_xml_with_special_machine_name():
     """Plist is still valid XML even if sanitization is bypassed."""
     import xml.etree.ElementTree as ET
@@ -133,6 +147,16 @@ def test_systemd_uses_longhouse_agent_log_dir():
     config = _make_config(claude_dir="/tmp/.claude")
     unit = _generate_systemd_unit(config)
     assert 'Environment="LONGHOUSE_LOG_DIR=/tmp/.longhouse/agent/logs"' in unit
+
+
+def test_systemd_embeds_machine_state_metadata_when_present():
+    config = _make_config(
+        machine_config_generation="20260414-test",
+        machine_state_hash="abc123",
+    )
+    unit = _generate_systemd_unit(config)
+    assert 'Environment="LONGHOUSE_MACHINE_GENERATION=20260414-test"' in unit
+    assert 'Environment="LONGHOUSE_MACHINE_STATE_HASH=abc123"' in unit
 
 
 def test_systemd_no_machine_name_arg_when_none():
