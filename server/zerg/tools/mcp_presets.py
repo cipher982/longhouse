@@ -2,14 +2,14 @@
 
 Keeping the presets in a *dedicated* module allows product teams to update the
 default list (or downstream forks to customise it) **without** touching the
-core adapter logic.  All entries use the :pyclass:`zerg.tools.mcp_adapter.MCPServerConfig` dataclass.
+core adapter logic. All entries use the :pyclass:`zerg.tools.mcp_transport.MCPServerConfig` dataclass.
 """
 
 from __future__ import annotations
 
 from typing import Dict
 
-from zerg.tools.mcp_adapter import MCPServerConfig
+from zerg.tools.mcp_transport import MCPServerConfig
 
 # ---------------------------------------------------------------------------
 # Public mapping – **modify** as needed

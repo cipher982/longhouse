@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 import httpx
 import typer
 
-from zerg.cli.serve import _get_longhouse_home
+from zerg.services.longhouse_paths import resolve_longhouse_home
 
 PACKAGE_NAME = "longhouse"
 DEFAULT_CHANNEL = "stable"
@@ -90,6 +90,13 @@ def _update_cache_path() -> Path:
 
 def _update_lock_path() -> Path:
     return _get_longhouse_home() / "update-check.lock"
+
+
+def _get_longhouse_home() -> Path:
+    """Return Longhouse home, creating it if needed."""
+    longhouse_home = resolve_longhouse_home()
+    longhouse_home.mkdir(parents=True, exist_ok=True)
+    return longhouse_home
 
 
 def current_installed_version(package_name: str = PACKAGE_NAME) -> str:

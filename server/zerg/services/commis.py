@@ -300,7 +300,7 @@ async def _resume_oikos(run_id: int, tool_call_id: str | None, result_text: str,
     Handles serial chaining: if the continuation spawns another commis
     (RunnerInterrupted), we go back to WAITING instead of failing.
     """
-    from zerg.managers.runtime_runner import RunnerInterrupted
+    from zerg.managers.runtime_interrupt import RunnerInterrupted
     from zerg.managers.runtime_runner import RuntimeRunner
 
     try:

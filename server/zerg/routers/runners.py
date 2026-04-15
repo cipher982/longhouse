@@ -55,16 +55,13 @@ from zerg.services.runner_connection_manager import get_runner_connection_manage
 from zerg.services.runner_doctor import diagnose_runner
 from zerg.services.runner_health import build_runner_response
 from zerg.services.runner_health import normalize_runner_binary_tag
+from zerg.services.runner_heartbeat_cache import mark_runner_heartbeat
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import utc_now_naive
 
 logger = logging.getLogger(__name__)
-
-# In-memory runner heartbeat timestamps — avoids a DB write every 30s per runner.
-# Populated by WebSocket heartbeat messages; read by health checks.
-runner_heartbeat_cache: dict[str, object] = {}
 
 router = APIRouter(
     prefix="/runners",
@@ -96,6 +93,14 @@ async def _safe_close_runner_websocket(
             await websocket.close(code=code, reason=reason)
     except Exception as exc:
         logger.debug("Ignoring runner websocket close race: %s", exc)
+
+
+def _rollback_after_write_failure(db: Session, *, operation: str) -> None:
+    """Rollback helper for write-path failures that should not crash cleanup paths."""
+    try:
+        db.rollback()
+    except Exception as rollback_exc:
+        logger.warning("Rollback failed after %s: %s", operation, rollback_exc)
 
 
 async def _handle_exec_chunk(
@@ -138,10 +143,7 @@ async def _handle_exec_chunk(
         else:
             updated_job = _write_chunk(db)
     except Exception as exc:
-        try:
-            db.rollback()
-        except Exception:
-            pass
+        _rollback_after_write_failure(db, operation="exec_chunk persistence")
         logger.error("Failed to persist exec_chunk for runner %s, job %s: %s", runner_id, job_id, exc)
         return
 
@@ -206,10 +208,7 @@ async def _handle_exec_done(
         else:
             persisted = _persist_completion(db)
     except Exception as exc:
-        try:
-            db.rollback()
-        except Exception:
-            pass
+        _rollback_after_write_failure(db, operation="exec_done persistence")
         logger.error("Failed to persist exec_done from runner %s, job %s: %s", runner_id, job_id, exc)
         job_dispatcher.complete_job(
             job_id,
@@ -271,10 +270,7 @@ async def _handle_exec_error(
         else:
             persisted = _persist_error(db)
     except Exception as exc:
-        try:
-            db.rollback()
-        except Exception:
-            pass
+        _rollback_after_write_failure(db, operation="exec_error persistence")
         logger.error("Failed to persist exec_error from runner %s, job %s: %s", runner_id, job_id, exc)
         job_dispatcher.complete_job(
             job_id,
@@ -1128,7 +1124,7 @@ async def _runner_websocket_with_db(
                     # Track in memory only — no DB write per heartbeat.
                     # DB is updated on connect/disconnect; health checks
                     # use runner_heartbeat_cache for liveness.
-                    runner_heartbeat_cache[runner_id] = utc_now_naive()
+                    mark_runner_heartbeat(runner_id, seen_at=utc_now_naive())
 
                 elif message_type == "exec_chunk":
                     await _handle_exec_chunk(db, message, runner_id, owner_id)
@@ -1168,21 +1164,15 @@ async def _runner_websocket_with_db(
                         r.status = "offline"
 
                 try:
-                    # Rollback any dirty state from websocket message processing
-                    try:
-                        db.rollback()
-                    except Exception:
-                        pass
+                    # Roll back any dirty state from websocket message processing.
+                    _rollback_after_write_failure(db, operation="runner websocket cleanup")
                     ws = get_write_serializer()
                     await ws.execute_or_direct(_mark_offline, db, label="runner-offline")
                     logger.info(f"Runner {runner_id} marked offline")
                 except Exception as e:
                     logger.warning(f"Failed to mark runner {runner_id} offline during cleanup: {e}")
 
-        try:
-            await _safe_close_runner_websocket(websocket)
-        except Exception:
-            pass  # Already closed
+        await _safe_close_runner_websocket(websocket)
 
 
 @router.websocket("/ws")
@@ -1196,9 +1186,6 @@ async def runner_websocket(
     try:
         await _runner_websocket_with_db(websocket, db)
     finally:
-        try:
-            db.close()
-        except Exception:
-            pass
+        db.close()
         if commis_token is not None:
             reset_test_commis_id(commis_token)
