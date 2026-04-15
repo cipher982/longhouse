@@ -3,6 +3,19 @@ from types import SimpleNamespace
 from zerg.services import local_runtime_installer as installer
 
 
+def _stub_machine_state(**kwargs):
+    return SimpleNamespace(
+        schema_version=1,
+        config_generation="test-generation",
+        runtime_url=kwargs.get("runtime_url"),
+        machine_name=kwargs.get("machine_name"),
+        topology_intent=kwargs.get("topology_intent"),
+        desktop_app_enabled=kwargs.get("desktop_app_enabled"),
+        runner_enabled=kwargs.get("runner_enabled"),
+        desired_bundle_version=kwargs.get("desired_bundle_version"),
+    )
+
+
 def test_install_local_runtime_does_not_create_global_mcp_configs(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"
@@ -10,7 +23,11 @@ def test_install_local_runtime_does_not_create_global_mcp_configs(tmp_path, monk
     state_writes: list[dict[str, object]] = []
 
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(installer, "write_machine_state", lambda **kwargs: state_writes.append(kwargs))
+    monkeypatch.setattr(
+        installer,
+        "write_machine_state",
+        lambda **kwargs: state_writes.append(kwargs) or _stub_machine_state(**kwargs),
+    )
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
     monkeypatch.setattr(
@@ -69,7 +86,11 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
     state_writes: list[dict[str, object]] = []
 
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(installer, "write_machine_state", lambda **kwargs: state_writes.append(kwargs))
+    monkeypatch.setattr(
+        installer,
+        "write_machine_state",
+        lambda **kwargs: state_writes.append(kwargs) or _stub_machine_state(**kwargs),
+    )
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
     monkeypatch.setattr(
@@ -139,7 +160,11 @@ def test_install_local_runtime_keeps_service_install_when_hooks_warn(tmp_path, m
     state_writes: list[dict[str, object]] = []
 
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr(installer, "write_machine_state", lambda **kwargs: state_writes.append(kwargs))
+    monkeypatch.setattr(
+        installer,
+        "write_machine_state",
+        lambda **kwargs: state_writes.append(kwargs) or _stub_machine_state(**kwargs),
+    )
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
     monkeypatch.setattr(
@@ -236,14 +261,13 @@ def test_reconcile_local_runtime_uses_canonical_machine_state(tmp_path, monkeypa
     assert result.machine_state.machine_name == "test-box"
     assert result.machine_state.written_by == "machine-reconcile"
     assert result.install_result.machine_name == "test-box"
-    assert service_calls == [
-        {
-            "url": "https://example.com",
-            "token": "stored-token",
-            "claude_dir": str(claude_dir),
-            "machine_name": "test-box",
-        }
-    ]
+    assert len(service_calls) == 1
+    assert service_calls[0]["url"] == "https://example.com"
+    assert service_calls[0]["token"] == "stored-token"
+    assert service_calls[0]["claude_dir"] == str(claude_dir)
+    assert service_calls[0]["machine_name"] == "test-box"
+    assert service_calls[0]["machine_config_generation"] == result.machine_state.config_generation
+    assert service_calls[0]["machine_state_hash"] == installer.machine_state_source_hash(result.machine_state)
     assert hook_calls == [
         {
             "url": "https://example.com",

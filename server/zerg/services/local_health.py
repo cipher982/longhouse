@@ -23,6 +23,7 @@ from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
 from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state
 from zerg.services.shipper.service import get_service_info
 
@@ -148,6 +149,7 @@ def _collect_local_config(base_dir: Path) -> dict[str, Any]:
         "stored_url": machine_state.runtime_url if machine_state else None,
         "machine_name": machine_state.machine_name if machine_state else None,
         "runner_enabled": machine_state.runner_enabled if machine_state else None,
+        "state_hash": machine_state_source_hash(machine_state),
     }
 
 
@@ -258,6 +260,48 @@ def _extract_service_machine_name(service_file: str | None) -> str | None:
     return None
 
 
+def _extract_service_metadata(service_file: str | None) -> dict[str, str | None]:
+    raw = str(service_file or "").strip()
+    metadata = {
+        "config_generation": None,
+        "state_hash": None,
+    }
+    if not raw:
+        return metadata
+
+    path = Path(raw)
+    if not path.exists():
+        return metadata
+
+    try:
+        if path.suffix == ".plist":
+            payload = plistlib.loads(path.read_bytes())
+            env = payload.get("EnvironmentVariables") if isinstance(payload, dict) else None
+            if isinstance(env, dict):
+                metadata["config_generation"] = str(env.get("LONGHOUSE_MACHINE_GENERATION") or "").strip() or None
+                metadata["state_hash"] = str(env.get("LONGHOUSE_MACHINE_STATE_HASH") or "").strip() or None
+            return metadata
+
+        if path.suffix == ".service":
+            env: dict[str, str] = {}
+            for raw_line in path.read_text().splitlines():
+                line = raw_line.strip()
+                if not line.startswith("Environment="):
+                    continue
+                value = line.split("=", 1)[1].strip()
+                for token in shlex.split(value):
+                    if "=" not in token:
+                        continue
+                    key, env_value = token.split("=", 1)
+                    env[key] = env_value
+            metadata["config_generation"] = str(env.get("LONGHOUSE_MACHINE_GENERATION") or "").strip() or None
+            metadata["state_hash"] = str(env.get("LONGHOUSE_MACHINE_STATE_HASH") or "").strip() or None
+    except Exception:
+        return metadata
+
+    return metadata
+
+
 def _can_reconcile_launch_from_state(
     *,
     state_exists: bool,
@@ -278,16 +322,21 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
     config = _collect_local_config(base_dir)
     runner = _collect_runner_config()
     service_machine_name = _extract_service_machine_name(service.get("service_file"))
+    service_metadata = _extract_service_metadata(service.get("service_file"))
     reasons: list[str] = []
     actions: list[str] = []
 
     stored_url = str(config.get("stored_url") or "").strip() or None
     machine_name = str(config.get("machine_name") or "").strip() or None
+    config_generation = str(config.get("config_generation") or "").strip() or None
+    state_hash = str(config.get("state_hash") or "").strip() or None
     state_exists = bool(config.get("state_exists"))
     state_error = str(config.get("state_error") or "").strip() or None
     runner_expected = bool(config.get("runner_enabled"))
     runner_name = str(runner.get("runner_name") or "").strip() or None
     runner_urls = [str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()]
+    service_config_generation = str(service_metadata.get("config_generation") or "").strip() or None
+    service_state_hash = str(service_metadata.get("state_hash") or "").strip() or None
     can_reconcile_from_state = _can_reconcile_launch_from_state(
         state_exists=state_exists,
         state_error=state_error,
@@ -322,6 +371,14 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         reasons.append("service_machine_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
+    if can_reconcile_from_state and config_generation and service_config_generation and config_generation != service_config_generation:
+        reasons.append("service_generation_mismatch")
+        _with_action(actions, _repair_command(can_reconcile_from_state=True))
+
+    if can_reconcile_from_state and state_hash and service_state_hash and state_hash != service_state_hash:
+        reasons.append("service_state_hash_mismatch")
+        _with_action(actions, _repair_command(can_reconcile_from_state=True))
+
     if runner_expected and can_reconcile_from_state and runner_name and service_machine_name and runner_name != service_machine_name:
         reasons.append("service_runner_name_mismatch")
         _with_action(actions, _repair_command(can_reconcile_from_state=True))
@@ -347,9 +404,12 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
         "machine_name": machine_name,
         "state_exists": state_exists,
         "state_error": state_error,
-        "config_generation": config.get("config_generation"),
+        "config_generation": config_generation,
+        "state_hash": state_hash,
         "runner_expected": runner_expected,
         "service_machine_name": service_machine_name,
+        "service_config_generation": service_config_generation,
+        "service_state_hash": service_state_hash,
         "runner": runner,
     }
 
@@ -781,6 +841,8 @@ def _classify_health(
                 "config_url_runner_url_mismatch",
                 "machine_name_runner_name_mismatch",
                 "service_machine_name_mismatch",
+                "service_generation_mismatch",
+                "service_state_hash_mismatch",
                 "service_runner_name_mismatch",
             )
         ):
