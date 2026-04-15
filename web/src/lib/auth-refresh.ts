@@ -65,9 +65,15 @@ export async function fetchWithRefresh(
     return response;
   }
 
-  // Don't retry if the request was itself a refresh or login call.
+  // Don't retry auth endpoints — /auth/refresh would loop, /auth/logout is a
+  // deliberate sign-out. "/auth/login" no longer exists but is kept as a guard
+  // in case a server-side redirect ever produces that path.
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-  if (url.includes("/auth/refresh") || url.includes("/auth/login")) {
+  if (
+    url.includes("/auth/refresh") ||
+    url.includes("/auth/logout") ||
+    url.includes("/auth/login")
+  ) {
     return response;
   }
 
