@@ -701,6 +701,46 @@ def list_runners(
     )
 
 
+@router.delete(
+    "/{runner_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_class=Response,
+)
+def delete_runner(
+    runner_id: int = Path(..., gt=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Delete a stale runner permanently.
+
+    Use this for cleanup of offline or revoked runners. Connected runners must
+    be disconnected or revoked first so users do not accidentally remove a live
+    machine from Longhouse.
+    """
+    runner = runner_crud.get_runner(db=db, runner_id=runner_id)
+    if not runner or runner.owner_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Runner not found",
+        )
+
+    connection_manager = get_runner_connection_manager()
+    if connection_manager.is_online(runner.owner_id, runner.id):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot delete a connected runner. Wait for it to disconnect or revoke it first.",
+        )
+
+    deleted = runner_crud.delete_runner(db=db, runner_id=runner_id)
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete runner",
+        )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/{runner_id}", response_model=RunnerResponse)
 def get_runner(
     runner_id: int = Path(..., gt=0),

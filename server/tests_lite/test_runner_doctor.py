@@ -15,7 +15,7 @@ from zerg.models.models import User
 
 
 TEST_ENV = {
-    "FERNET_SECRET": "test-fernet-secret",
+    "FERNET_SECRET": "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
     "AUTH_DISABLED": "1",
     "JWT_SECRET": "test-jwt-secret-1234",
     "INTERNAL_API_SECRET": "test-internal-secret-1234",

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createEnrollToken,
+  deleteRunner,
   fetchRunner,
   fetchRunnerDoctor,
   fetchRunnerJobs,
@@ -79,6 +80,16 @@ export function useRevokeRunner() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: number) => revokeRunner(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runners"] });
+    },
+  });
+}
+
+export function useDeleteRunner() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: number) => deleteRunner(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["runners"] });
     },

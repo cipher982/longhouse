@@ -12,7 +12,7 @@ def test_validate_required_requires_pubsub_audience_when_gmail_topic_is_configur
     settings.demo_mode = False
     settings.auth_disabled = True
     settings.database_url = "sqlite:///tmp/test.db"
-    settings.fernet_secret = "test-fernet-secret"
+    settings.fernet_secret = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA="
     settings.gmail_pubsub_topic = "projects/demo/topics/gmail"
     settings.pubsub_audience = None
 

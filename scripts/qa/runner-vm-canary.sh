@@ -28,7 +28,7 @@ Environment:
   RUNNER_VM_GUEST_ARCH        Override amd64|arm64 guest arch
   RUNNER_VM_TMPDIR            Disk-backed temp dir on VM host
   KEEP_VM                     Keep VM after script exits (default: 0)
-  KEEP_RUNNER                 Skip runner revoke on cleanup (default: 0)
+  KEEP_RUNNER                 Skip runner cleanup on exit (default: 0)
   RUNNER_READONLY_COMMAND     Initial connectivity command (default: hostname -s)
   RUNNER_FULL_COMMAND         Full-access bash command (default: bash -lc 'hostname -s')
 USAGE
@@ -244,6 +244,27 @@ verify_oikos_exec() {
   log "Oikos verified command on $VM_NAME: $command"
 }
 
+delete_runner_if_present() {
+  if [[ -z "${RUNNER_ID:-}" || "$KEEP_RUNNER" == "1" ]]; then
+    return 0
+  fi
+  local attempts=0
+  local http_code=""
+  while (( attempts < 10 )); do
+    http_code="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "${LONGHOUSE_URL%/}/api/runners/${RUNNER_ID}" -b "$COOKIE_JAR")"
+    if [[ "$http_code" == "204" ]]; then
+      log "Deleted disposable runner $VM_NAME (id=$RUNNER_ID)"
+      return 0
+    fi
+    if [[ "$http_code" != "409" ]]; then
+      break
+    fi
+    attempts=$((attempts + 1))
+    sleep 2
+  done
+  log "Warning: failed to delete runner $VM_NAME (id=$RUNNER_ID, http=$http_code)"
+}
+
 revoke_runner_if_present() {
   if [[ -z "${RUNNER_ID:-}" || "$KEEP_RUNNER" == "1" ]]; then
     return 0
@@ -259,10 +280,11 @@ revoke_runner_if_present() {
 
 cleanup() {
   local status=$?
-  revoke_runner_if_present || true
   if [[ "$KEEP_VM" != "1" ]]; then
     run_host_action destroy >/dev/null 2>&1 || log "Warning: failed to destroy VM $VM_NAME on $RUNNER_VM_HOST"
+    delete_runner_if_present || true
   else
+    revoke_runner_if_present || true
     log "Keeping VM $VM_NAME on $RUNNER_VM_HOST for debugging"
   fi
   rm -f "$COOKIE_JAR"
