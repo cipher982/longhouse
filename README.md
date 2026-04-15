@@ -467,8 +467,8 @@ Onboarding contract (CI). Do not edit unless the README steps change.
   "primary_route": "/timeline",
   "cta_buttons": [
     {
-      "label": "Connect Machine",
-      "selector": "button:has-text(\"Connect Machine\")"
+      "label": "Machines",
+      "selector": "button:has-text(\"Machines\")"
     }
   ]
 }
