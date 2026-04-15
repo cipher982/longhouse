@@ -36,6 +36,28 @@ interface ContractValidationReport {
   };
 }
 
+type OpenApiSchemaObject = Record<string, unknown>;
+
+interface OpenApiContent {
+  schema?: OpenApiSchemaObject;
+}
+
+interface OpenApiResponse {
+  content?: Record<string, OpenApiContent | undefined>;
+}
+
+interface OpenApiOperation {
+  responses?: Record<string, OpenApiResponse | undefined>;
+}
+
+interface OpenApiPathItem {
+  get?: OpenApiOperation;
+}
+
+interface OpenApiDocument {
+  paths?: Record<string, OpenApiPathItem | undefined>;
+}
+
 // Critical API endpoints that must have proper schemas
 const CRITICAL_ENDPOINTS = [
   '/api/ops/summary',
@@ -45,9 +67,17 @@ const CRITICAL_ENDPOINTS = [
   '/api/automations',
 ];
 
-function loadOpenApiSchema(schemaPath: string): any {
+function parseOpenApiDocument(json: string): OpenApiDocument {
+  const parsed: unknown = JSON.parse(json);
+  if (typeof parsed !== 'object' || parsed === null) {
+    throw new Error('OpenAPI schema must be a JSON object');
+  }
+  return parsed as OpenApiDocument;
+}
+
+function loadOpenApiSchema(schemaPath: string): OpenApiDocument {
   if (existsSync(schemaPath)) {
-    return JSON.parse(readFileSync(schemaPath, 'utf-8'));
+    return parseOpenApiDocument(readFileSync(schemaPath, 'utf-8'));
   }
 
   const backendDir = join(__dirname, '../../backend');
@@ -61,11 +91,11 @@ function loadOpenApiSchema(schemaPath: string): any {
     },
   );
 
-  return JSON.parse(schemaJson);
+  return parseOpenApiDocument(schemaJson);
 }
 
 class ContractValidator {
-  private openApiSchema: any;
+  private openApiSchema: OpenApiDocument;
   private apiBaseUrl: string;
 
   constructor(schemaPath: string, apiBaseUrl: string = 'http://localhost:47300') {
@@ -87,7 +117,7 @@ class ContractValidator {
       };
 
       try {
-        const pathItem = this.openApiSchema.paths[endpoint];
+        const pathItem = this.openApiSchema.paths?.[endpoint];
 
         if (!pathItem) {
           result.error = 'Endpoint not found in OpenAPI schema';
@@ -104,7 +134,7 @@ class ContractValidator {
         }
 
         // Check for 200 response
-        const successResponse = getMethod.responses['200'];
+        const successResponse = getMethod.responses?.['200'];
         if (!successResponse) {
           result.error = 'No 200 response defined';
           results.push(result);

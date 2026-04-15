@@ -44,7 +44,7 @@ export function useChatActions({ automationId, effectiveThreadId }: UseChatActio
         content,
         sent_at: new Date().toISOString(),
         processed: true,
-      } as unknown as ThreadMessage;
+      } satisfies ThreadMessage;
 
       queryClient.setQueryData<ThreadMessage[]>(["thread-messages", threadId], (old) =>
         old ? [...old, optimisticMessage] : [optimisticMessage]

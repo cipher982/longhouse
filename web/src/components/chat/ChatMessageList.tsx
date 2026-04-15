@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ComponentPropsWithoutRef } from "react";
 import clsx from "clsx";
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -18,12 +18,17 @@ interface ChatMessageListProps {
 }
 
 // Custom Code Block Component with Copy Button
-const CodeBlock = ({ inline, className, children, ...props }: any) => {
+type MarkdownCodeProps = ComponentPropsWithoutRef<"code"> & {
+  inline?: boolean;
+  node?: unknown;
+};
+
+const CodeBlock = ({ inline, className, children, node: _node, style, ...props }: MarkdownCodeProps) => {
   const [copied, setCopied] = useState(false);
   const match = /language-(\w+)/.exec(className || '');
 
-  if (inline) {
-    return <code className={className} {...props}>{children}</code>;
+  if (inline || !match) {
+    return <code className={className} style={style} {...props}>{children}</code>;
   }
 
   const codeString = String(children).replace(/\n$/, '');
@@ -47,8 +52,8 @@ const CodeBlock = ({ inline, className, children, ...props }: any) => {
         </button>
       </div>
       <SyntaxHighlighter
-        style={oneDark}
-        language={match ? match[1] : 'text'}
+        style={oneDark as Record<string, CSSProperties>}
+        language={match[1]}
         PreTag="div"
         customStyle={{ margin: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0 }}
         {...props}

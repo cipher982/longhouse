@@ -6,27 +6,11 @@ import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 
 import { findDefaultEnvfile, loadEnvfile } from './envfile';
+import type { RunnerPlatformTarget, RunnerUpdateAsset, RunnerUpdateManifest } from './update-manifest';
 import { DEFAULT_UPDATE_MANIFEST_URL, RUNNER_RELEASE_PUBLIC_KEY_PEM, RUNNER_VERSION } from './version';
 
 export type RunnerAutoUpdatePolicy = 'off' | 'notify' | 'apply';
-export type RunnerPlatformTarget = 'darwin-arm64' | 'darwin-x64' | 'linux-x64' | 'linux-arm64';
-
-export interface RunnerUpdateAsset {
-  filename: string;
-  url: string;
-  sha256: string;
-  size_bytes: number;
-}
-
-export interface RunnerUpdateManifest {
-  schema_version: number;
-  runner_version: string;
-  published_at: string;
-  expires_at: string;
-  minimum_current_version?: string | null;
-  notes_url?: string | null;
-  assets: Partial<Record<RunnerPlatformTarget, RunnerUpdateAsset>>;
-}
+export type { RunnerPlatformTarget, RunnerUpdateAsset, RunnerUpdateManifest } from './update-manifest';
 
 export interface RunnerUpdateState {
   previous_version?: string | null;
@@ -97,6 +81,7 @@ export type FetchLike = (...args: Parameters<typeof fetch>) => ReturnType<typeof
 
 const DEFAULT_UPDATE_CHECK_INTERVAL_SEC = 4 * 60 * 60;
 const DEFAULT_UPDATE_JITTER_SEC = 5 * 60;
+export const LEGACY_LAYOUT_REINSTALL_MESSAGE = 'This runner still uses the legacy install layout. Re-run the installer once';
 
 function isPermissionDenied(error: unknown): boolean {
   if (!(error instanceof Error)) {
@@ -394,7 +379,7 @@ function updateBlockedReason(
   homeDir?: string,
 ): string | null {
   if (!hasManagedInstallLayout(env, homeDir)) {
-    return 'This runner still uses the legacy install layout. Re-run the installer once before applying updates.';
+    return `${LEGACY_LAYOUT_REINSTALL_MESSAGE} before applying updates.`;
   }
 
   if (compareSemver(currentVersion, manifest.runner_version) >= 0) {
@@ -410,7 +395,7 @@ function updateBlockedReason(
 
 function ensureManagedInstallLayout(env: NodeJS.ProcessEnv, homeDir?: string): void {
   if (!hasManagedInstallLayout(env, homeDir)) {
-    throw new Error('This runner still uses the legacy install layout. Re-run the installer once before applying updates.');
+    throw new Error(`${LEGACY_LAYOUT_REINSTALL_MESSAGE} before applying updates.`);
   }
 }
 

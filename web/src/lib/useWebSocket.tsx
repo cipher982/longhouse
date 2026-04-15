@@ -142,7 +142,7 @@ export function useWebSocket(
     // No need to pass token as query param anymore
 
     // Add test commis ID for E2E testing
-    const commisId = (window as typeof window & { __TEST_COMMIS_ID__?: string }).__TEST_COMMIS_ID__;
+    const commisId = window.__TEST_COMMIS_ID__;
     if (commisId !== undefined) {
       url.searchParams.set("commis", String(commisId));
     }
@@ -383,13 +383,13 @@ export function useWebSocket(
   // This allows tests to directly call sendMessage to test queue bounds
   // Only active when __TEST_COMMIS_ID__ is set by Playwright fixtures
   useEffect(() => {
-    if (typeof window !== 'undefined' && (window as any).__TEST_COMMIS_ID__ !== undefined) {
-      (window as any).__testSendMessage = sendMessage;
+    if (typeof window !== 'undefined' && window.__TEST_COMMIS_ID__ !== undefined) {
+      window.__testSendMessage = sendMessage;
     }
     // Cleanup when component unmounts
     return () => {
       if (typeof window !== 'undefined') {
-        delete (window as any).__testSendMessage;
+        delete window.__testSendMessage;
       }
     };
   }, [sendMessage]);

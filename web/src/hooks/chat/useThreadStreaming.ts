@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { useWebSocket } from "../../lib/useWebSocket";
+import { useWebSocket, type WebSocketMessage } from "../../lib/useWebSocket";
 import { logger } from "../../lib/logger";
 
 interface StreamingState {
@@ -14,6 +14,75 @@ interface StreamingState {
 interface UseThreadStreamingParams {
   automationId: number | null;
   effectiveThreadId: number | null;
+}
+
+interface StreamStartEnvelope {
+  type: "stream_start";
+  data: { thread_id: number };
+}
+
+interface StreamChunkEnvelope {
+  type: "stream_chunk";
+  data: { thread_id: number; chunk_type: string; content?: string };
+}
+
+interface AssistantIdEnvelope {
+  type: "assistant_id";
+  data: { thread_id: number; message_id: number };
+}
+
+interface StreamEndEnvelope {
+  type: "stream_end";
+  data: { thread_id: number };
+}
+
+type ThreadStreamingEnvelope =
+  | StreamStartEnvelope
+  | StreamChunkEnvelope
+  | AssistantIdEnvelope
+  | StreamEndEnvelope;
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
+}
+
+function parseThreadStreamingEnvelope(envelope: WebSocketMessage): ThreadStreamingEnvelope | null {
+  const data = asRecord(envelope.data);
+  if (!data || typeof data.thread_id !== "number") {
+    return null;
+  }
+
+  switch (envelope.type) {
+    case "stream_start":
+      return { type: "stream_start", data: { thread_id: data.thread_id } };
+    case "stream_chunk":
+      if (typeof data.chunk_type !== "string") {
+        return null;
+      }
+      return {
+        type: "stream_chunk",
+        data: {
+          thread_id: data.thread_id,
+          chunk_type: data.chunk_type,
+          content: typeof data.content === "string" ? data.content : undefined,
+        },
+      };
+    case "assistant_id":
+      if (typeof data.message_id !== "number") {
+        return null;
+      }
+      return {
+        type: "assistant_id",
+        data: {
+          thread_id: data.thread_id,
+          message_id: data.message_id,
+        },
+      };
+    case "stream_end":
+      return { type: "stream_end", data: { thread_id: data.thread_id } };
+    default:
+      return null;
+  }
 }
 
 export function useThreadStreaming({ automationId, effectiveThreadId }: UseThreadStreamingParams) {
@@ -38,8 +107,13 @@ export function useThreadStreaming({ automationId, effectiveThreadId }: UseThrea
     return queries;
   }, [automationId, effectiveThreadId]);
 
-  const handleStreamingMessage = useCallback((envelope: any) => {
-    const { type, data } = envelope;
+  const handleStreamingMessage = useCallback((envelope: WebSocketMessage) => {
+    const parsed = parseThreadStreamingEnvelope(envelope);
+    if (!parsed) {
+      return;
+    }
+
+    const { type, data } = parsed;
 
     if (type === "stream_start") {
       const threadId = data.thread_id;
