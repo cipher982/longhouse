@@ -10,13 +10,20 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import {
+  Navigate,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 import { toast } from "react-hot-toast";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
 import { EventInspectorPane } from "../components/session-workspace/EventInspectorPane";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
+import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
 import { useDocumentVisible } from "../hooks/useDocumentVisible";
@@ -79,7 +86,9 @@ function SessionDetailWorkspaceRoute({
     navigate(returnTo);
   }, [navigate, returnTo]);
   const handleOpenBranchDock = useCallback(() => {
-    const panel = document.querySelector('[data-testid="session-continuation-panel"]');
+    const panel = document.querySelector(
+      '[data-testid="session-continuation-panel"]',
+    );
     if (!(panel instanceof HTMLElement)) return;
     panel.scrollIntoView({ behavior: "smooth", block: "end" });
     const textarea = panel.querySelector("textarea");
@@ -88,7 +97,8 @@ function SessionDetailWorkspaceRoute({
     }
   }, []);
 
-  const { effectiveLoopMode, loopModePending, handleLoopModeChange } = useLoopModeChange(session);
+  const { effectiveLoopMode, loopModePending, handleLoopModeChange } =
+    useLoopModeChange(session);
   const queryClient = useQueryClient();
   const [confirmingArchive, setConfirmingArchive] = useState(false);
 
@@ -102,7 +112,9 @@ function SessionDetailWorkspaceRoute({
     try {
       await setSessionAction(session.id, "archive");
       queryClient.invalidateQueries({ queryKey: ["agent-sessions"] });
-      queryClient.invalidateQueries({ queryKey: ["agent-session", session.id] });
+      queryClient.invalidateQueries({
+        queryKey: ["agent-session", session.id],
+      });
       handleBack();
     } catch {
       toast.error("Failed to archive session");
@@ -115,7 +127,6 @@ function SessionDetailWorkspaceRoute({
     ready: workspaceReady,
     screenshotReady: workspaceReady,
   });
-
 
   if (sessionLoading) {
     return (
@@ -155,7 +166,9 @@ function SessionDetailWorkspaceRoute({
       ? session.summary_title
       : session.project || session.git_branch || "Session";
   const displaySession =
-    effectiveLoopMode === session.loop_mode ? session : { ...session, loop_mode: effectiveLoopMode };
+    effectiveLoopMode === session.loop_mode
+      ? session
+      : { ...session, loop_mode: effectiveLoopMode };
 
   const branchSourceSession = currentThreadSession || session;
   const interaction = getSessionInteractionCapabilities({
@@ -169,9 +182,16 @@ function SessionDetailWorkspaceRoute({
     project: branchSourceSession.project,
     provider: branchSourceSession.provider,
   };
+  const runtimeHostLabel =
+    displaySession.control?.source_runner_name?.trim() ||
+    interaction.sourceOriginLabel ||
+    displaySession.home_label ||
+    "host";
 
   const inspectorSelection =
-    selectedSelection && selectedSelection.kind !== "message" ? selectedSelection : null;
+    selectedSelection && selectedSelection.kind !== "message"
+      ? selectedSelection
+      : null;
 
   return (
     <div className="session-workspace-route">
@@ -184,7 +204,9 @@ function SessionDetailWorkspaceRoute({
             threadSessions={threadSessions}
             isViewingHead={isViewingHead}
             onOpenSession={navigateToSession}
-            onOpenLatest={() => headThreadSession && navigateToSession(headThreadSession.id)}
+            onOpenLatest={() =>
+              headThreadSession && navigateToSession(headThreadSession.id)
+            }
             onPrimaryAction={handleOpenBranchDock}
             continuationNotice={interaction.notice}
             loopModePending={loopModePending}
@@ -212,17 +234,38 @@ function SessionDetailWorkspaceRoute({
                 <Button variant="ghost" size="sm" onClick={handleBack}>
                   &larr;
                 </Button>
-                <span className="session-workspace-header__name">{title}</span>
+                <div className="session-workspace-header__title-stack">
+                  <span className="session-workspace-header__name">
+                    {title}
+                  </span>
+                  <SessionRuntimeStrip
+                    session={displaySession}
+                    interaction={interaction}
+                    hostLabel={runtimeHostLabel}
+                    variant="inline"
+                    testId="session-detail-header-runtime"
+                  />
+                </div>
               </div>
             }
             headerRight={
               confirmingArchive ? (
                 <div className="session-detail-archive-confirm">
-                  <span className="session-detail-archive-confirm-label">Archive this session?</span>
-                  <Button variant="ghost" size="sm" onClick={() => setConfirmingArchive(false)}>
+                  <span className="session-detail-archive-confirm-label">
+                    Archive this session?
+                  </span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setConfirmingArchive(false)}
+                  >
                     Cancel
                   </Button>
-                  <Button variant="danger" size="sm" onClick={() => void handleArchiveConfirm()}>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    onClick={() => void handleArchiveConfirm()}
+                  >
                     Archive
                   </Button>
                 </div>
@@ -247,33 +290,40 @@ function SessionDetailWorkspaceRoute({
             }
             listRef={registerTimelineList}
             dock={
-              <SessionChat
-                key={`${sessionChatTarget.id}:${interaction.mode}`}
-                session={sessionChatTarget}
-                layout="dock"
-                dockHeaderStyle={
-                  interaction.mode === "head" ? "hidden" : "divider"
-                }
-                introEyebrow="Session control"
-                introTitle={interaction.title}
-                introDescription={interaction.description}
-                chatMode={interaction.mode === "managed_local" ? "managed_local" : undefined}
-                composerPlaceholder={interaction.placeholder}
-                composerDisabledReason={interaction.composerDisabledReason}
-                managedLaunchSuggestion={interaction.managedLaunchSuggestion}
-                submitLabel={interaction.submitLabel}
-                requireClickForFirstSend={
-                  interaction.mode === "branch" || interaction.mode === "promote"
-                }
-                keyboardHintText={interaction.keyboardHint}
-                onSessionChanged={(nextSessionId) => {
-                  if (!nextSessionId || nextSessionId === session.id) return;
-                  navigate(`/timeline/${nextSessionId}`, {
-                    replace: true,
-                    state: { from: returnTo },
-                  });
-                }}
-              />
+              <div
+                className="session-control-dock"
+                data-testid="session-control-dock"
+              >
+                <SessionRuntimeStrip
+                  session={displaySession}
+                  interaction={interaction}
+                  hostLabel={runtimeHostLabel}
+                  variant="dock"
+                  testId="session-control-strip"
+                />
+                <SessionChat
+                  key={`${sessionChatTarget.id}:${interaction.mode}`}
+                  session={sessionChatTarget}
+                  layout="dock"
+                  dockHeaderStyle="hidden"
+                  chatMode={
+                    interaction.mode === "managed_local"
+                      ? "managed_local"
+                      : undefined
+                  }
+                  composerPlaceholder={interaction.placeholder}
+                  composerDisabledReason={interaction.composerDisabledReason}
+                  managedLaunchSuggestion={null}
+                  submitLabel={interaction.submitLabel}
+                  onSessionChanged={(nextSessionId) => {
+                    if (!nextSessionId || nextSessionId === session.id) return;
+                    navigate(`/timeline/${nextSessionId}`, {
+                      replace: true,
+                      state: { from: returnTo },
+                    });
+                  }}
+                />
+              </div>
             }
           />
         }
@@ -303,7 +353,8 @@ export default function SessionDetailPage() {
   }, [searchParams]);
 
   const shouldAutoResume = searchParams.get("resume") === "1";
-  const returnTo = (location.state as { from?: string } | null)?.from ?? "/timeline";
+  const returnTo =
+    (location.state as { from?: string } | null)?.from ?? "/timeline";
 
   if (shouldAutoResume) {
     const next = new URLSearchParams(searchParams);
