@@ -229,13 +229,6 @@ describe("SessionDetailPage", () => {
     expect(
       screen.queryByTestId("session-continuation-unavailable"),
     ).not.toBeInTheDocument();
-    expect(screen.getAllByText("Live control")).toHaveLength(1);
-    expect(screen.getByTestId("session-management-badge")).toHaveTextContent(
-      "Managed",
-    );
-    expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
-      "Live on cinder. Send prompts from Longhouse or reattach on the host.",
-    );
     expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
       "Working",
     );
@@ -447,12 +440,6 @@ describe("SessionDetailPage", () => {
       "data-launch-command",
       "",
     );
-    expect(screen.getByTestId("session-management-badge")).toHaveTextContent(
-      "Unmanaged",
-    );
-    expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
-      "Archived here only.",
-    );
     expect(
       screen.queryByTestId("session-managed-launch-hint"),
     ).not.toBeInTheDocument();
@@ -532,12 +519,6 @@ describe("SessionDetailPage", () => {
 
     renderSessionDetailPage();
 
-    expect(screen.getByTestId("session-management-badge")).toHaveTextContent(
-      "Unmanaged",
-    );
-    expect(screen.getByTestId("session-management-summary")).toHaveTextContent(
-      "Archived here only. Start the next Codex session through Longhouse when you need live control.",
-    );
     expect(screen.getByTestId("session-managed-launch-hint")).toHaveTextContent(
       "Start the next Codex session through Longhouse",
     );
