@@ -85,6 +85,7 @@ on:
 env:
   PIP_INDEX_URL: https://pypi.org/simple
   PIP_EXTRA_INDEX_URL: ""
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/.cache/ms-playwright
 
 jobs:
   hosted-onboarding-core:
@@ -121,6 +122,14 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.2.20'
+
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: runner-onboarding-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            runner-onboarding-playwright-${{ runner.os }}-
 
       - name: Ensure make available
         run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
@@ -196,6 +205,14 @@ jobs:
         with:
           bun-version: '1.2.20'
 
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: runner-onboarding-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            runner-onboarding-playwright-${{ runner.os }}-
+
       - name: Ensure make available
         run: command -v make || (sudo apt-get update && sudo apt-get install -y make)
 
@@ -254,6 +271,14 @@ jobs:
         with:
           bun-version: '1.2.20'
 
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: runner-onboarding-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            runner-onboarding-playwright-${{ runner.os }}-
+
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y make
 
@@ -308,6 +333,14 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.2.20'
+
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: runner-onboarding-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            runner-onboarding-playwright-${{ runner.os }}-
 
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y make
@@ -366,6 +399,14 @@ jobs:
         with:
           bun-version: '1.2.20'
 
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: runner-onboarding-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            runner-onboarding-playwright-${{ runner.os }}-
+
       - name: Install build tools
         run: sudo apt-get update && sudo apt-get install -y make
 
@@ -422,6 +463,14 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.2.20'
+
+      - name: Restore Playwright browser cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
+          key: runner-onboarding-playwright-${{ runner.os }}-${{ hashFiles('bun.lock', 'e2e/package.json') }}
+          restore-keys: |
+            runner-onboarding-playwright-${{ runner.os }}-
 
       - name: Install Playwright browsers
         run: |
