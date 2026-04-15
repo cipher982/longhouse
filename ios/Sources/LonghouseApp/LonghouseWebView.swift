@@ -3,8 +3,10 @@ import WebKit
 
 struct LonghouseWebView: UIViewRepresentable {
     let serverURL: String
+    /// Path to load on initial mount (e.g. /timeline or /timeline/abc-123).
+    let initialPath: String
     /// Called when the web app redirects to /login — native shell takes over auth.
-    let onLoginRedirect: () -> Void
+    let onLoginRedirect: (URL) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(serverURL: serverURL, onLoginRedirect: onLoginRedirect)
@@ -23,7 +25,7 @@ struct LonghouseWebView: UIViewRepresentable {
         webView.backgroundColor = UIColor(red: 0.04, green: 0.04, blue: 0.06, alpha: 1)
         webView.scrollView.backgroundColor = webView.backgroundColor
 
-        if let url = URL(string: "\(serverURL)/timeline") {
+        if let url = URL(string: "\(serverURL)\(initialPath)") {
             webView.load(URLRequest(url: url))
         }
 
@@ -31,7 +33,7 @@ struct LonghouseWebView: UIViewRepresentable {
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
-        guard let url = URL(string: "\(serverURL)/timeline") else {
+        guard let url = URL(string: "\(serverURL)\(initialPath)") else {
             return
         }
 
@@ -45,9 +47,9 @@ struct LonghouseWebView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
         let serverURL: String
-        let onLoginRedirect: () -> Void
+        let onLoginRedirect: (URL) -> Void
 
-        init(serverURL: String, onLoginRedirect: @escaping () -> Void) {
+        init(serverURL: String, onLoginRedirect: @escaping (URL) -> Void) {
             self.serverURL = serverURL
             self.onLoginRedirect = onLoginRedirect
         }
@@ -78,7 +80,7 @@ struct LonghouseWebView: UIViewRepresentable {
                url.host == serverHost,
                url.path == "/login" {
                 decisionHandler(.cancel)
-                onLoginRedirect()
+                onLoginRedirect(url)
                 return
             }
 

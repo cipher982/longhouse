@@ -18,8 +18,11 @@ struct ContentView: View {
                     }
                 }
             } else if appState.isAuthenticated {
-                LonghouseWebView(serverURL: appState.serverURL) {
-                    Task { await appState.signOutAndReturnToLogin() }
+                LonghouseWebView(
+                    serverURL: appState.serverURL,
+                    initialPath: appState.postLoginPath
+                ) { interceptedURL in
+                    Task { await appState.signOutAndReturnToLogin(interceptedURL: interceptedURL) }
                 }
                 .ignoresSafeArea(.all, edges: .bottom)
                     .overlay(alignment: .topTrailing) {
