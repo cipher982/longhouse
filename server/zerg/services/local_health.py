@@ -257,6 +257,22 @@ def _extract_service_machine_name(service_file: str | None) -> str | None:
     return None
 
 
+def _can_reconcile_launch_from_state(
+    *,
+    state_exists: bool,
+    state_error: str | None,
+    stored_url: str | None,
+    machine_name: str | None,
+) -> bool:
+    return state_exists and not state_error and bool(stored_url) and bool(machine_name)
+
+
+def _repair_command(*, can_reconcile_from_state: bool) -> str:
+    if can_reconcile_from_state:
+        return "Run: longhouse machine reconcile"
+    return "Run: longhouse connect --install"
+
+
 def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dict[str, Any]:
     config = _collect_local_config(base_dir)
     runner = _collect_runner_config()
@@ -270,35 +286,43 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
     state_error = str(config.get("state_error") or "").strip() or None
     runner_name = str(runner.get("runner_name") or "").strip() or None
     runner_urls = [str(item).strip() for item in list(runner.get("runner_urls") or []) if str(item).strip()]
+    can_reconcile_from_state = _can_reconcile_launch_from_state(
+        state_exists=state_exists,
+        state_error=state_error,
+        stored_url=stored_url,
+        machine_name=machine_name,
+    )
 
     if state_error:
         reasons.append("machine_state_invalid")
-        _with_action(actions, "Run: longhouse connect --install")
+        _with_action(actions, _repair_command(can_reconcile_from_state=False))
     elif not state_exists and (service_machine_name or runner.get("exists")):
         reasons.append("machine_state_missing")
-        _with_action(actions, "Run: longhouse connect --install")
+        _with_action(actions, _repair_command(can_reconcile_from_state=False))
 
-    if stored_url and runner_urls and stored_url not in runner_urls:
+    if state_exists and not stored_url:
+        reasons.append("machine_state_missing_runtime_url")
+        _with_action(actions, _repair_command(can_reconcile_from_state=False))
+
+    if state_exists and not machine_name:
+        reasons.append("machine_state_missing_machine_name")
+        _with_action(actions, _repair_command(can_reconcile_from_state=False))
+
+    if can_reconcile_from_state and stored_url and runner_urls and stored_url not in runner_urls:
         reasons.append("config_url_runner_url_mismatch")
-        _with_action(
-            actions,
-            f"Run: longhouse connect --install --url {runner_urls[0]} --machine-name {runner_name or machine_name or 'this-machine'}",
-        )
+        _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if machine_name and runner_name and machine_name != runner_name:
+    if can_reconcile_from_state and machine_name and runner_name and machine_name != runner_name:
         reasons.append("machine_name_runner_name_mismatch")
-        _with_action(
-            actions,
-            f"Run: longhouse connect --install --url {stored_url or (runner_urls[0] if runner_urls else 'https://<your-longhouse>')} --machine-name {runner_name}",
-        )
+        _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if machine_name and service_machine_name and machine_name != service_machine_name:
+    if can_reconcile_from_state and machine_name and service_machine_name and machine_name != service_machine_name:
         reasons.append("service_machine_name_mismatch")
-        _with_action(actions, "Run: longhouse connect --install")
+        _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
-    if runner_name and service_machine_name and runner_name != service_machine_name:
+    if can_reconcile_from_state and runner_name and service_machine_name and runner_name != service_machine_name:
         reasons.append("service_runner_name_mismatch")
-        _with_action(actions, "Run: longhouse connect --install")
+        _with_action(actions, _repair_command(can_reconcile_from_state=True))
 
     configured = bool(state_exists or stored_url or machine_name or service_machine_name or runner.get("exists"))
 
@@ -622,6 +646,14 @@ def _classify_health(
     launch_state = str(launch_readiness.get("state") or "unconfigured")
     launch_reasons = [str(item) for item in list(launch_readiness.get("reasons") or [])]
     launch_actions = [str(item) for item in list(launch_readiness.get("suggested_actions") or [])]
+    repair_action = _repair_command(
+        can_reconcile_from_state=_can_reconcile_launch_from_state(
+            state_exists=bool(launch_readiness.get("state_exists")),
+            state_error=str(launch_readiness.get("state_error") or "").strip() or None,
+            stored_url=str(launch_readiness.get("stored_url") or "").strip() or None,
+            machine_name=str(launch_readiness.get("machine_name") or "").strip() or None,
+        )
+    )
 
     reasons.extend(launch_reasons)
     for action in launch_actions:
@@ -629,10 +661,10 @@ def _classify_health(
 
     if service_status == "not-installed":
         reasons.append("service_not_installed")
-        _with_action(actions, "Run: longhouse connect --install")
+        _with_action(actions, repair_action)
     elif service_status == "stopped":
         reasons.append("service_stopped")
-        _with_action(actions, "Run: longhouse connect --install")
+        _with_action(actions, repair_action)
 
     if engine_error:
         reasons.append("engine_status_unreadable")
@@ -642,7 +674,7 @@ def _classify_health(
         if service_status == "running":
             _with_action(actions, "Wait for the first local status update or inspect engine logs")
         else:
-            _with_action(actions, "Run: longhouse connect --install")
+            _with_action(actions, repair_action)
     elif engine_age is not None and engine_age > ENGINE_STALE_SECONDS:
         reasons.append("engine_status_stale")
         _with_action(actions, f"Inspect logs: {engine_log_path}")
@@ -741,6 +773,8 @@ def _classify_health(
             for reason in (
                 "machine_state_invalid",
                 "machine_state_missing",
+                "machine_state_missing_runtime_url",
+                "machine_state_missing_machine_name",
                 "config_url_runner_url_mismatch",
                 "machine_name_runner_name_mismatch",
                 "service_machine_name_mismatch",

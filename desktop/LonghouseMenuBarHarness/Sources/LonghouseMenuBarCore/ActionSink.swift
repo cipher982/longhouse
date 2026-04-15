@@ -351,7 +351,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 for: .repairInstall,
                 style: .info,
                 title: "Repair running",
-                detail: "Longhouse is reinstalling the local runtime and menu bar wiring in the background. Open Logs for progress or errors."
+                detail: "Longhouse is reconciling the local runtime from canonical machine state in the background. Open Logs for progress or errors."
             )
         }
 
@@ -368,7 +368,7 @@ public struct SpyHealthActionSink: HealthActionSink {
             for: .repairInstall,
             style: .failure,
             title: "Repair could not start",
-            detail: "Longhouse could not start `longhouse connect --install` or its built-in setup on this Mac."
+            detail: "Longhouse could not start `longhouse machine reconcile` or its built-in setup on this Mac."
         )
     }
 
@@ -396,7 +396,7 @@ public struct SpyHealthActionSink: HealthActionSink {
                 title: snapshot.isSetupRequired ? "Setup dry run recorded" : "Repair dry run recorded",
                 detail: snapshot.isSetupRequired
                     ? "The harness logged the built-in Longhouse setup command without changing your machine."
-                    : "The harness logged `longhouse connect --install --machine-name … --menubar` without changing your machine."
+                    : "The harness logged `longhouse machine reconcile` without changing your machine."
             )
         case .openLonghouse:
             return feedback(

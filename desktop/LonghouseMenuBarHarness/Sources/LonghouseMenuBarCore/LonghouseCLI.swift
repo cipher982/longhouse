@@ -51,14 +51,24 @@ enum LonghouseCLI {
 
     static func repairInstallInvocation(snapshot: HealthSnapshot) -> (launchPath: String, arguments: [String])? {
         repairInstallInvocation(
-            snapshot: snapshot,
             homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
             pathEnvironment: ProcessInfo.processInfo.environment["PATH"]
         )
     }
 
     static func repairInstallInvocation(
-        snapshot: HealthSnapshot,
+        homeDirectory: URL,
+        pathEnvironment: String?
+    ) -> (launchPath: String, arguments: [String])? {
+        repairInstallInvocation(
+            snapshot: nil,
+            homeDirectory: homeDirectory,
+            pathEnvironment: pathEnvironment
+        )
+    }
+
+    static func repairInstallInvocation(
+        snapshot: HealthSnapshot?,
         homeDirectory: URL,
         pathEnvironment: String?
     ) -> (launchPath: String, arguments: [String])? {
@@ -66,15 +76,12 @@ enum LonghouseCLI {
             return nil
         }
 
-        let machineName = preferredMachineName(snapshot: snapshot)
+        _ = snapshot
         return (
             executable.path,
             [
-                "connect",
-                "--install",
-                "--machine-name",
-                machineName,
-                "--menubar",
+                "machine",
+                "reconcile",
             ]
         )
     }
@@ -121,23 +128,6 @@ enum LonghouseCLI {
             .filter { seen.insert($0).inserted }
             .joined(separator: ":")
         return environment
-    }
-
-    private static func preferredMachineName(snapshot: HealthSnapshot) -> String {
-        let candidates = [
-            snapshot.launchReadiness?.machineName,
-            snapshot.launchReadiness?.serviceMachineName,
-            ProcessInfo.processInfo.hostName,
-        ]
-
-        for candidate in candidates {
-            let trimmed = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !trimmed.isEmpty {
-                return trimmed
-            }
-        }
-
-        return "this-mac"
     }
 
     private static func candidateURLs(homeDirectory: URL, pathEnvironment: String?) -> [URL] {

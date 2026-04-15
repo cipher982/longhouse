@@ -17,7 +17,7 @@ import typer
 from zerg.services.desktop_app import default_install_desktop_app
 from zerg.services.desktop_app import get_desktop_app_service_info
 from zerg.services.desktop_app import uninstall_desktop_app_service
-from zerg.services.local_runtime_installer import install_local_runtime
+from zerg.services.local_runtime_installer import reconcile_local_runtime
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.machine_state import clear_machine_runtime_url
 from zerg.services.machine_state import write_machine_state
@@ -320,7 +320,9 @@ def _resolve_configured_url(url: object | None, config_dir: Path | None) -> str:
         return stored_url
 
     typer.secho("No Longhouse URL configured.", fg=typer.colors.RED)
-    typer.echo("Run `longhouse onboard` for a local setup, `longhouse auth --url <url>` for a remote instance, or pass `--url` explicitly.")
+    typer.echo(
+        "Run `longhouse onboard` for a local setup, " "`longhouse auth --url <url>` for a remote instance, or pass `--url` explicitly."
+    )
     raise typer.Exit(code=1)
 
 
@@ -531,7 +533,8 @@ def connect(
     if install:
         if not token:
             typer.secho(
-                "No device token found. Installing the local runtime without auth; run 'longhouse auth' later to enable remote shipping.",
+                "No device token found. Installing the local runtime without auth; "
+                "run 'longhouse auth' later to enable remote shipping.",
                 fg=typer.colors.YELLOW,
             )
         _handle_install(
@@ -809,7 +812,7 @@ def _handle_status() -> None:
                 typer.secho(detail, fg=typer.colors.GREEN)
             elif runtime_mode == "broken-install":
                 typer.secho(
-                    "Desktop App runtime: install is missing, broken, or unsupported (run: longhouse connect --install)",
+                    "Desktop App runtime: install is missing, broken, or unsupported " "(run: longhouse connect --install)",
                     fg=typer.colors.YELLOW,
                 )
 
@@ -855,18 +858,23 @@ def _handle_install(
         typer.echo("  Desktop App: enabled")
 
     try:
-        install_result = install_local_runtime(
-            url=url,
+        reconcile_result = reconcile_local_runtime(
             token=token,
             claude_dir=claude_dir,
+            written_by="connect-install",
+            runtime_url=url,
             machine_name=resolved_name,
             menubar=menubar,
-            written_by="connect-install",
             topology_intent="connect-remote",
         )
     except RuntimeError as e:
         typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
         raise typer.Exit(code=1)
+    except ValueError as e:
+        typer.secho(f"[ERROR] {e}", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    install_result = reconcile_result.install_result
 
     typer.echo("")
     typer.secho(f"  Machine: {install_result.machine_name}", fg=typer.colors.CYAN)
@@ -876,7 +884,7 @@ def _handle_install(
         typer.secho(f"  [OK] Engine binary ready at {install_result.engine_runtime.path}", fg=typer.colors.GREEN)
     typer.secho(f"[OK] {install_result.service_result['message']}", fg=typer.colors.GREEN)
     typer.echo(f"  Machine Agent: {install_result.service_result.get('service', 'N/A')}")
-    typer.echo(f"  Config: {install_result.service_result.get('plist_path') or install_result.service_result.get('unit_path', 'N/A')}")
+    typer.echo("  Config: " f"{install_result.service_result.get('plist_path') or install_result.service_result.get('unit_path', 'N/A')}")
 
     typer.echo("")
     typer.echo("Installing CLI hooks (Claude Code + Codex)...")
@@ -892,9 +900,8 @@ def _handle_install(
         typer.echo(f"  Config: {install_result.desktop_app_result.get('plist_path', 'N/A')}")
         if install_result.desktop_app_result.get("app_path"):
             typer.echo(f"  App: {install_result.desktop_app_result['app_path']}")
-        typer.echo(
-            f"  Launch: {install_result.desktop_app_result.get('launch_path') or install_result.desktop_app_result.get('binary_path', 'N/A')}"
-        )
+        launch_path = install_result.desktop_app_result.get("launch_path") or install_result.desktop_app_result.get("binary_path", "N/A")
+        typer.echo("  Launch: " f"{launch_path}")
 
     # Verify PATH in a fresh shell
     _verify_and_warn_path()
