@@ -227,8 +227,28 @@ def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monk
     assert "Run: longhouse machine reconcile" in snapshot["suggested_actions"]
 
 
+def test_collect_local_health_flags_missing_shipper_state_without_suggesting_reconcile(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    service_file = _write_service_plist(tmp_path, machine_name="cinder")
+    monkeypatch.setattr(
+        local_health_service,
+        "get_service_info",
+        lambda *args, **kwargs: _service_info("stopped", service_file=str(service_file)),
+    )
+    _write_local_config(tmp_path, url="https://demo.longhouse.test", machine_name="cinder")
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "broken"
+    assert "shipper_state_missing" in snapshot["reasons"]
+    assert snapshot["headline"] == "Longhouse shipper state is missing"
+    assert f"Inspect or restore shipper state: {get_agent_db_path(tmp_path)}" in snapshot["suggested_actions"]
+    assert "Run: longhouse machine reconcile" not in snapshot["suggested_actions"]
+
+
 def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, tmp_path: Path):
     service_file = _write_service_plist(tmp_path, machine_name="cinder.local")
+    _write_shipper_db(tmp_path, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
     runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
     _write_local_config(
         tmp_path,
@@ -257,6 +277,7 @@ def test_collect_local_health_broken_when_launch_config_disagrees(monkeypatch, t
 
 def test_collect_local_health_ignores_runner_drift_when_runner_not_enabled(monkeypatch, tmp_path: Path):
     service_file = _write_service_plist(tmp_path, machine_name="cinder.local")
+    _write_shipper_db(tmp_path, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
     runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
     _write_local_config(tmp_path, url="http://127.0.0.1:8080", machine_name="cinder.local")
     _write_engine_status(tmp_path, age_seconds=5)
@@ -284,6 +305,7 @@ def test_collect_local_health_flags_service_generation_drift(monkeypatch, tmp_pa
         config_generation="stale-generation",
         state_hash="stale-hash",
     )
+    _write_shipper_db(tmp_path, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
     _write_engine_status(tmp_path, age_seconds=5)
     monkeypatch.setattr(
         local_health_service,
@@ -304,6 +326,7 @@ def test_collect_local_health_flags_service_generation_drift(monkeypatch, tmp_pa
 
 def test_collect_local_health_ignores_invalid_stored_url(monkeypatch, tmp_path: Path):
     service_file = _write_service_plist(tmp_path, machine_name="test-box")
+    _write_shipper_db(tmp_path, [("/tmp/claude-a.jsonl", "claude", "sess-1", None, "2026-04-14T00:00:00Z")])
     runner_env = _write_runner_env(tmp_path, url="https://demo.longhouse.test", runner_name="cinder")
     _write_local_config(
         tmp_path,
