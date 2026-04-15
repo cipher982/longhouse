@@ -445,7 +445,7 @@ describe("SessionsPage", () => {
     expect(management).toHaveTextContent("Unmanaged");
     expect(management).toHaveAttribute(
       "title",
-      "Longhouse imported this Codex session. Restart it with longhouse codex when you want Longhouse to keep it managed and steerable.",
+      "Longhouse imported this Codex session.",
     );
     expect(screen.queryByTestId("session-card-capability")).not.toBeInTheDocument();
   });
