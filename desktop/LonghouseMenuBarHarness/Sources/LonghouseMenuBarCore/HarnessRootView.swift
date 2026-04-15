@@ -25,6 +25,8 @@ public struct HarnessRootView: View {
                     snapshot: snapshot,
                     history: store.history,
                     presentationDate: store.presentationDate,
+                    feedback: store.feedback,
+                    setFeedback: store.setFeedback,
                     actionSink: actionSink,
                     isManualRefreshing: store.isManualRefreshActive
                 ) {

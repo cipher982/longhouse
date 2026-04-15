@@ -102,16 +102,18 @@ public struct MenuBarPanelView: View {
     private let snapshot: HealthSnapshot
     private let history: [SnapshotHistorySample]
     private let presentationDate: Date
+    private let feedback: HealthActionFeedback?
+    private let setFeedback: (HealthActionFeedback?) -> Void
     private let actionSink: any HealthActionSink
     private let isManualRefreshing: Bool
     private let refresh: () -> Void
-
-    @State private var feedback: HealthActionFeedback?
 
     public init(
         snapshot: HealthSnapshot,
         history: [SnapshotHistorySample],
         presentationDate: Date,
+        feedback: HealthActionFeedback?,
+        setFeedback: @escaping (HealthActionFeedback?) -> Void,
         actionSink: any HealthActionSink,
         isManualRefreshing: Bool,
         refresh: @escaping () -> Void
@@ -119,10 +121,11 @@ public struct MenuBarPanelView: View {
         self.snapshot = snapshot
         self.history = history
         self.presentationDate = presentationDate
+        self.feedback = feedback
+        self.setFeedback = setFeedback
         self.actionSink = actionSink
         self.isManualRefreshing = isManualRefreshing
         self.refresh = refresh
-        _feedback = State(initialValue: nil)
     }
 
     public var body: some View {
@@ -338,7 +341,7 @@ public struct MenuBarPanelView: View {
 
     private var recentActivityEntries: [ActivityFeedEntry] {
         snapshot.recentTouches.map { touch in
-            return ActivityFeedEntry(
+            ActivityFeedEntry(
                 provider: (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 title: snapshot.recentTouchTitle(touch),
                 age: snapshot.recentTouchAgeLabel(touch, relativeTo: presentationDate)
@@ -494,17 +497,17 @@ public struct MenuBarPanelView: View {
     private var healthyToolsMenu: some View {
         Menu {
             Button("Doctor") {
-                feedback = actionSink.handle(.runDoctor, snapshot: snapshot)
+                setFeedback(actionSink.handle(.runDoctor, snapshot: snapshot))
             }
             .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.doctor)
 
             Button("Logs") {
-                feedback = actionSink.handle(.openLogs, snapshot: snapshot)
+                setFeedback(actionSink.handle(.openLogs, snapshot: snapshot))
             }
             .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.openLogs)
 
             Button("Copy JSON") {
-                feedback = actionSink.handle(.copyDiagnostics, snapshot: snapshot)
+                setFeedback(actionSink.handle(.copyDiagnostics, snapshot: snapshot))
             }
             .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Button.copyDiagnostics)
 
@@ -604,7 +607,7 @@ public struct MenuBarPanelView: View {
     }
 
     private func perform(_ action: HarnessAction) {
-        feedback = actionSink.handle(action, snapshot: snapshot)
+        setFeedback(actionSink.handle(action, snapshot: snapshot))
         if action == .refresh {
             refresh()
         }

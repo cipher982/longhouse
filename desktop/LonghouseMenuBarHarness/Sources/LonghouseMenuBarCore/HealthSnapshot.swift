@@ -121,6 +121,18 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         }
     }
 
+    public var needsMenuBarAttention: Bool {
+        if isInstallLocationBlocked || isSetupRequired {
+            return true
+        }
+        switch parsedSeverity {
+        case .yellow, .red:
+            return true
+        case .green, .gray:
+            return false
+        }
+    }
+
     public var lastShipLabel: String {
         engineStatus?.payload?.lastShipAt ?? "No shipments yet"
     }

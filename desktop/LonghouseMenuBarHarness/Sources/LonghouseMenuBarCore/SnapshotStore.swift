@@ -17,6 +17,7 @@ public final class SnapshotStore: ObservableObject {
     @Published public private(set) var isInitialLoading: Bool
     @Published public private(set) var isManualRefreshActive: Bool
     @Published public private(set) var presentationDate: Date
+    @Published public private(set) var feedback: HealthActionFeedback?
 
     private let source: any HealthSnapshotSource
     private var refreshTask: Task<Void, Never>?
@@ -33,6 +34,7 @@ public final class SnapshotStore: ObservableObject {
         self.isInitialLoading = false
         self.isManualRefreshActive = false
         self.presentationDate = Date()
+        self.feedback = nil
         if source is CLIHealthSnapshotSource {
             refresh(reason: .initial)
         } else {
@@ -91,6 +93,14 @@ public final class SnapshotStore: ObservableObject {
 
         presentationTimer?.invalidate()
         presentationTimer = nil
+    }
+
+    public func setFeedback(_ feedback: HealthActionFeedback?) {
+        self.feedback = feedback
+    }
+
+    public func clearFeedback() {
+        feedback = nil
     }
 
     private func startRefresh(reason: SnapshotRefreshReason) {
