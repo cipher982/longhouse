@@ -207,6 +207,47 @@ def _resolve_agent_db_path(config: ServiceConfig) -> Path:
     return get_agent_db_path()
 
 
+def _resolve_legacy_agent_db_path(config: ServiceConfig) -> Path:
+    return _resolve_claude_dir(config.claude_dir) / "longhouse-shipper.db"
+
+
+def _stop_existing_service_for_install(platform: Platform) -> None:
+    """Best-effort stop of existing services before mutating shipper state."""
+    if platform == Platform.MACOS:
+        for plist_path in (_get_launchd_plist_path(), _get_legacy_engine_plist_path()):
+            if plist_path.exists():
+                subprocess.run(["launchctl", "unload", str(plist_path)], capture_output=True, check=False)
+        return
+
+    if platform == Platform.LINUX:
+        subprocess.run(["systemctl", "--user", "stop", SYSTEMD_UNIT], capture_output=True, check=False)
+        subprocess.run(["systemctl", "--user", "stop", "longhouse-engine"], capture_output=True, check=False)
+
+
+def _migrate_legacy_shipper_state_if_needed(platform: Platform, config: ServiceConfig) -> Path | None:
+    """Move legacy shipper DB files from provider-owned state into Longhouse home."""
+    target_db_path = _resolve_agent_db_path(config)
+    legacy_db_path = _resolve_legacy_agent_db_path(config)
+
+    if target_db_path.exists() or not legacy_db_path.exists():
+        return None
+
+    _stop_existing_service_for_install(platform)
+    target_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    for suffix in ("", "-wal", "-shm"):
+        legacy_path = Path(f"{legacy_db_path}{suffix}")
+        if not legacy_path.exists():
+            continue
+        destination_path = Path(f"{target_db_path}{suffix}")
+        if destination_path.exists():
+            continue
+        shutil.move(str(legacy_path), str(destination_path))
+
+    logger.info("Migrated legacy shipper state from %s to %s", legacy_db_path, target_db_path)
+    return legacy_db_path
+
+
 def _has_existing_service_install(platform: Platform) -> bool:
     if platform == Platform.MACOS:
         return _get_launchd_plist_path().exists() or _get_legacy_engine_plist_path().exists()
@@ -392,6 +433,7 @@ def install_service(
         machine_state_hash=machine_state_hash,
     )
 
+    _migrate_legacy_shipper_state_if_needed(platform, config)
     _assert_reinstall_preserves_shipper_state(platform, config)
 
     # Ensure log directory exists
