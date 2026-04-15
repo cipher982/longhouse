@@ -60,7 +60,7 @@ async function loginWithDevAccount(): Promise<void> {
 
 interface GoogleButtonProps {
   clientId: string;
-  onToken: (idToken: string) => void;
+  onToken: (idToken: string) => Promise<void>;
   onError: (msg: string) => void;
 }
 
@@ -78,15 +78,19 @@ function GoogleSignInButton({ clientId, onToken, onError }: GoogleButtonProps) {
       if (window.google?.accounts?.id) {
         window.google.accounts.id.initialize({
           client_id: clientId,
-          callback: async (response: { credential: string }) => {
+          callback: (response: { credential: string }) => {
             setIsLoading(true);
-            try {
-              onToken(response.credential);
-            } catch (error) {
-              onError(error instanceof Error ? error.message : 'Login failed');
-            } finally {
-              setIsLoading(false);
-            }
+            // onToken is async — run it as a detached task so the GSI callback
+            // returns synchronously (GSI doesn't await the callback return value).
+            void (async () => {
+              try {
+                await onToken(response.credential);
+              } catch (error) {
+                onError(error instanceof Error ? error.message : 'Login failed');
+              } finally {
+                setIsLoading(false);
+              }
+            })();
           },
         });
         const buttonDiv = document.getElementById('google-signin-button');
@@ -135,8 +139,9 @@ export default function LoginPage() {
     }
   }, [authLoading, isAuthenticated, navigate, returnTo]);
 
-  // SSO-only: redirect to control plane immediately
+  // SSO-only: redirect to control plane immediately (only when not already authenticated)
   useEffect(() => {
+    if (authLoading || isAuthenticated) return;
     const hostedLoginUrl = buildHostedLoginRedirectUrl(
       authMethods?.sso_login_url || authMethods?.sso_url,
       returnTo,
@@ -145,7 +150,7 @@ export default function LoginPage() {
       setSsoRedirecting(true);
       window.location.href = hostedLoginUrl;
     }
-  }, [authMethods, returnTo]);
+  }, [authMethods, authLoading, isAuthenticated, returnTo]);
 
   const finishLogin = () => {
     navigate(returnTo, { replace: true });
@@ -191,7 +196,10 @@ export default function LoginPage() {
     }
   };
 
-  if (ssoRedirecting || (authLoading && !authMethods)) {
+  // Hold the loading screen until we know auth state and have methods.
+  // Prevents flash of login form for already-authenticated users, and prevents
+  // SSO auto-redirect racing ahead of the authenticated redirect.
+  if (ssoRedirecting || authLoading || isAuthenticated) {
     return (
       <div style={{
         position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,

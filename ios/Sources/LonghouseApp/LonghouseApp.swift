@@ -283,20 +283,25 @@ final class AppState: ObservableObject {
     }
 
     private func signOutLocallyAndRemotely() async {
-        if let url = URL(string: "\(serverURL)/api/auth/logout") {
-            await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
-
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.timeoutInterval = 5
-            _ = try? await URLSession.shared.data(for: request)
-        }
-
+        // Clear local state immediately — don't wait on the network call.
+        // The server-side logout is best-effort; a stale session cookie there
+        // doesn't affect the user if local state is already cleared.
         GIDSignIn.sharedInstance.signOut()
         await clearLocalSession()
         authError = nil
         isValidating = false
         WidgetCenter.shared.reloadAllTimelines()
+
+        // Fire-and-forget the server logout in the background.
+        if let url = URL(string: "\(serverURL)/api/auth/logout") {
+            Task {
+                await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.timeoutInterval = 5
+                _ = try? await URLSession.shared.data(for: request)
+            }
+        }
     }
 
     private func clearLocalSession() async {
