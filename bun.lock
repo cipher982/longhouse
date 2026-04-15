@@ -56,12 +56,8 @@
       "name": "zerg-frontend-web",
       "version": "0.1.0",
       "dependencies": {
-        "@openai/agents": "^0.1.1",
         "@tanstack/react-query": "^5.62.7",
         "clsx": "^2.1.1",
-        "dompurify": "^3.3.0",
-        "idb": "^8.0.0",
-        "marked": "^17.0.1",
         "react": "19.2.1",
         "react-dom": "19.2.1",
         "react-hot-toast": "^2.6.0",
@@ -75,7 +71,6 @@
         "@testing-library/jest-dom": "^6.4.0",
         "@testing-library/react": "^16.0.0",
         "@testing-library/user-event": "^14.5.2",
-        "@types/dompurify": "^3.2.0",
         "@types/node": "^22.5.1",
         "@types/react": "^19.2.7",
         "@types/react-dom": "^19.2.3",
@@ -803,14 +798,6 @@
 
     "@oclif/plugin-warn-if-update-available": ["@oclif/plugin-warn-if-update-available@3.1.53", "", { "dependencies": { "@oclif/core": "^4", "ansis": "^3.17.0", "debug": "^4.4.3", "http-call": "^5.2.2", "lodash": "^4.17.21", "registry-auth-token": "^5.1.0" } }, "sha512-ALxKMNFFJQJV1Z2OMVTV+q7EbKHhnTAPcTgkgHeXCNdW5nFExoXuwusZLS4Zv2o83j9UoDx1R/CSX7QZVgEHTA=="],
 
-    "@openai/agents": ["@openai/agents@0.1.11", "", { "dependencies": { "@openai/agents-core": "0.1.11", "@openai/agents-openai": "0.1.11", "@openai/agents-realtime": "0.1.11", "debug": "^4.4.0", "openai": "^5.20.2" }, "peerDependencies": { "zod": "^3.25.40" } }, "sha512-jnaFt54iP71vYDXvpG3EGX2kVRYIU2xBdCT3uFqdXm4KqFAP9JQFNGiKKBEeE5rbXARpqAQpKH+5HfoANndpcQ=="],
-
-    "@openai/agents-core": ["@openai/agents-core@0.1.11", "", { "dependencies": { "debug": "^4.4.0", "openai": "^5.20.2" }, "optionalDependencies": { "@modelcontextprotocol/sdk": "^1.17.2" }, "peerDependencies": { "zod": "^3.25.40" }, "optionalPeers": ["zod"] }, "sha512-ye8VIAO2wPIg1zClldIj8We/1R55VmdgnMyn0g4YGbp6RD5Wpv9yfH5kPNWxmHvw8ji+XehyggGoklY4FGQoBQ=="],
-
-    "@openai/agents-openai": ["@openai/agents-openai@0.1.11", "", { "dependencies": { "@openai/agents-core": "0.1.11", "debug": "^4.4.0", "openai": "^5.20.2" }, "peerDependencies": { "zod": "^3.25.40" } }, "sha512-TYYbY7o1cNxtOIO4F1a20qkqDT1Iwr9ZEi0MO2sEaeioK8rGB/Ux54iFvsA3IblUYyK+5fD25vr4vXFasvg2Kg=="],
-
-    "@openai/agents-realtime": ["@openai/agents-realtime@0.1.11", "", { "dependencies": { "@openai/agents-core": "0.1.11", "@types/ws": "^8.18.1", "debug": "^4.4.0", "ws": "^8.18.1" }, "peerDependencies": { "zod": "^3.25.40" } }, "sha512-8jaNuYU1acra28i7bYrZIPubI6s2ziY2ZudqAVK2ad+giopXcrNSiJTuZ2S3z+ESnIejwMiYLfnY2Le8W0SJ7A=="],
-
     "@openapi-contrib/openapi-schema-to-json-schema": ["@openapi-contrib/openapi-schema-to-json-schema@3.2.0", "", { "dependencies": { "fast-deep-equal": "^3.1.3" } }, "sha512-Gj6C0JwCr8arj0sYuslWXUBSP/KnUlEGnPW4qxlXvAl543oaNQgMgIgkQUA6vs5BCCvwTEiL8m/wdWzfl4UvSw=="],
 
     "@pkgjs/parseargs": ["@pkgjs/parseargs@0.11.0", "", {}, "sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg=="],
@@ -1244,8 +1231,6 @@
     "@types/d3-zoom": ["@types/d3-zoom@3.0.8", "", { "dependencies": { "@types/d3-interpolate": "*", "@types/d3-selection": "*" } }, "sha512-iqMC4/YlFCSlO8+2Ii1GGGliCAY4XdeG748w5vQUbevlbDu0zSjH/+jojorQVBK/se0j6DUFNPBGSqD3YWYnDw=="],
 
     "@types/debug": ["@types/debug@4.1.12", "", { "dependencies": { "@types/ms": "*" } }, "sha512-vIChWdVG3LG1SMxEvI/AK+FWJthlrqlTu7fbrlywTkkaONwk/UAGaULXRlf8vkzFBLVm0zkMdCquhL5aOjhXPQ=="],
-
-    "@types/dompurify": ["@types/dompurify@3.2.0", "", { "dependencies": { "dompurify": "*" } }, "sha512-Fgg31wv9QbLDA0SpTOXO3MaxySc4DKGLi8sna4/Utjo4r3ZRPdCt4UQee8BWr+Q5z21yifghREPJGYaEOEIACg=="],
 
     "@types/es-aggregate-error": ["@types/es-aggregate-error@1.0.6", "", { "dependencies": { "@types/node": "*" } }, "sha512-qJ7LIFp06h1QE1aVxbVd+zJP2wdaugYXYfd6JxsyRMrYHaxb6itXPogW2tz+ylUJ1n1b+JF1PHyYCfYHm0dvUg=="],
 
@@ -2161,8 +2146,6 @@
 
     "icss-utils": ["icss-utils@5.1.0", "", { "peerDependencies": { "postcss": "^8.1.0" } }, "sha512-soFhflCVWLfRNOPU3iv5Z9VUdT44xFRbzjLsEzSr5AQmgqPMTHdU3PMT1Cf1ssx8fLNJDA1juftYl+PUcv3MqA=="],
 
-    "idb": ["idb@8.0.3", "", {}, "sha512-LtwtVyVYO5BqRvcsKuB2iUMnHwPVByPCXFXOpuU96IZPPoPN6xjOGxZQ74pgSVVLQWtUOYgyeL4GE98BY5D3wg=="],
-
     "ieee754": ["ieee754@1.2.1", "", {}, "sha512-dcyqhDvX1C46lXZcVqCpK+FtMRQVdIMN6/Df5js2zouUsqG7I6sFxitIC+7KYK29KdXOLHdu9zL4sFnoVQnqaA=="],
 
     "ignore": ["ignore@7.0.5", "", {}, "sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg=="],
@@ -2455,7 +2438,7 @@
 
     "markdown-table": ["markdown-table@3.0.4", "", {}, "sha512-wiYz4+JrLyb/DqW2hkFJxP7Vd7JuTDm77fvbM8VfEQdmSMqcImWeeRbHwZjBjIFki/VaMK2BhFi7oUUZeM5bqw=="],
 
-    "marked": ["marked@17.0.1", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-boeBdiS0ghpWcSwoNm/jJBwdpFaMnZWRzjA6SkUMYb40SVaN1x7mmfGKp0jvexGcx+7y2La5zRZsYFZI6Qpypg=="],
+    "marked": ["marked@4.3.0", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-PRsaiG84bK+AMvxziE/lCFss8juXjNaWzVbN5tXAm4XjeaS9NAHhop+PjQxz2A9h8Q4M/xGmzP8vqNwy6JeK0A=="],
 
     "math-intrinsics": ["math-intrinsics@1.1.0", "", {}, "sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g=="],
 
@@ -3504,8 +3487,6 @@
     "@asyncapi/nunjucks-filters/markdown-it": ["markdown-it@12.3.2", "", { "dependencies": { "argparse": "^2.0.1", "entities": "~2.1.0", "linkify-it": "^3.0.1", "mdurl": "^1.0.1", "uc.micro": "^1.0.5" }, "bin": { "markdown-it": "bin/markdown-it.js" } }, "sha512-TchMembfxfNVpHkbtriWltGWc+m3xszaRD0CZup7GFFhzIgQqxIfn3eGj1yZpfuflzPvfkt611B2Q/Bsk1YnGg=="],
 
     "@asyncapi/parser/node-fetch": ["node-fetch@2.6.7", "", { "dependencies": { "whatwg-url": "^5.0.0" }, "peerDependencies": { "encoding": "^0.1.0" }, "optionalPeers": ["encoding"] }, "sha512-ZjMPFEfVx5j+y2yF35Kzx5sF7kDzxuDj6ziH4FFbOp87zKDZNx8yExJIb05OGF4Nlt9IHFIMBkRl41VdvcNdbQ=="],
-
-    "@asyncapi/react-component/marked": ["marked@4.3.0", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-PRsaiG84bK+AMvxziE/lCFss8juXjNaWzVbN5tXAm4XjeaS9NAHhop+PjQxz2A9h8Q4M/xGmzP8vqNwy6JeK0A=="],
 
     "@asyncapi/react-component/openapi-sampler": ["openapi-sampler@1.6.2", "", { "dependencies": { "@types/json-schema": "^7.0.7", "fast-xml-parser": "^4.5.0", "json-pointer": "0.6.2" } }, "sha512-NyKGiFKfSWAZr4srD/5WDhInOWDhfml32h/FKUqLpEwKJt0kG0LGUU0MdyNkKrVGuJnw6DuPWq/sHCwAMpiRxg=="],
 
