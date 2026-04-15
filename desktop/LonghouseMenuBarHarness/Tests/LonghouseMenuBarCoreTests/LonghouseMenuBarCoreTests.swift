@@ -533,6 +533,49 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.recentTouches.first?.provider == "claude")
         #expect(snapshot.recentTouches.first?.workspaceLabel == "zerg")
         #expect(snapshot.recentTouches.first?.lastUpdated == "2026-04-11T10:00:00Z")
+        #expect(snapshot.recentTouchTitle(snapshot.recentTouches[0]) == "zerg · Claude")
+        #expect(snapshot.recentTouchTitle(snapshot.recentTouches[1]) == "crims · Codex")
+    }
+
+    @Test
+    func recentTouchTitleFallsBackToProviderWhenWorkspaceMissing() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: nil,
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: ActivitySummarySnapshot(
+                path: nil,
+                exists: true,
+                error: nil,
+                sessionsToday: 1,
+                sessionsRecent: 1,
+                providerCountsToday: ["claude": 1],
+                providerCountsRecent: ["claude": 1],
+                sessionRecencyBands: nil,
+                recentTouches: [
+                    ActivityTouchSnapshot(
+                        provider: "claude",
+                        lastUpdated: "2026-04-11T10:00:00Z",
+                        workspaceLabel: nil,
+                        branch: nil,
+                        isSubagent: false
+                    )
+                ],
+                latestActivityAt: "2026-04-11T10:00:00Z",
+                recentWindowMinutes: 15
+            ),
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.recentTouches.count == 1)
+        #expect(snapshot.recentTouchTitle(snapshot.recentTouches[0]) == "Claude")
     }
 
     private func makeFakeHomeDirectory() throws -> URL {

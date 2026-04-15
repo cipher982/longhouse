@@ -378,6 +378,20 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return Self.providerDisplayName(provider)
     }
 
+    public func recentTouchTitle(_ touch: ActivityTouchSnapshot) -> String {
+        let workspace = (touch.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let providerLabel = recentTouchProviderLabel(touch)
+
+        if !workspace.isEmpty {
+            if providerLabel == "Unknown" {
+                return workspace
+            }
+            return "\(workspace) · \(providerLabel)"
+        }
+
+        return providerLabel
+    }
+
     public var providerCountsToday: [(provider: String, count: Int)] {
         sortedProviderCounts(activitySummary?.providerCountsToday)
     }
