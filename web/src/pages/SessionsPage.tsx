@@ -461,6 +461,7 @@ export default function SessionsPage() {
   // Demo seeding state
   const [demoLoading, setDemoLoading] = useState(false);
   const [seedError, setSeedError] = useState<string | null>(null);
+  const autoSeededRef = useRef(false);
 
   const handleSeedDemo = useCallback(async () => {
     setDemoLoading(true);
@@ -482,6 +483,15 @@ export default function SessionsPage() {
 
   const hasFilters = !!(project || provider || environment || daysBack !== DEFAULT_DAYS_BACK || searchQuery);
   const showGuidedEmptyState = sessions.length === 0 && !hasFilters;
+
+  // Auto-seed demo sessions on first empty load so new users see a populated
+  // timeline immediately rather than a blank screen.
+  useEffect(() => {
+    if (!isLoading && !autoSeededRef.current && showGuidedEmptyState && !config.demoMode) {
+      autoSeededRef.current = true;
+      handleSeedDemo();
+    }
+  }, [isLoading, showGuidedEmptyState, handleSeedDemo]);
 
   // Count active non-default filters (for badge)
   const activeFilterCount = [
@@ -532,16 +542,22 @@ export default function SessionsPage() {
       <PageShell size="wide" className="sessions-page-container" onScrollActivity={handleScrollActivity}>
         <div className="sessions-hero-empty">
           <EmptyState
-            title="Import sessions you already have"
-            description="Longhouse gets useful once it can see real Claude Code, Codex, or Gemini work you already did. Use demo sessions only when you want a safe preview."
+            icon={demoLoading ? <Spinner size="lg" /> : undefined}
+            title={demoLoading ? "Loading example sessions..." : "Connect your first machine"}
+            description={
+              demoLoading
+                ? "Seeding a few demo sessions so you can see what Longhouse looks like with real data."
+                : "Run one command on the machine where you use Claude Code, Codex, or Gemini and your sessions will start appearing here."
+            }
             action={
+              demoLoading ? undefined : (
               <div className="sessions-guided-actions">
                 <Button
                   variant="primary"
                   size="md"
                   onClick={() => navigate("/docs/quickstart")}
                 >
-                  See import steps
+                  See setup steps
                 </Button>
                 <Button
                   variant="secondary"
@@ -551,37 +567,41 @@ export default function SessionsPage() {
                 >
                   {runnerActionLabel}
                 </Button>
-                <Button
-                  variant="secondary"
-                  size="md"
-                  onClick={handleSeedDemo}
-                  disabled={demoLoading}
-                >
-                  {demoLoading ? "Loading..." : "Load demo sessions instead"}
-                </Button>
+                {seedError && (
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    onClick={handleSeedDemo}
+                    disabled={demoLoading}
+                  >
+                    Retry demo sessions
+                  </Button>
+                )}
                 {seedError && (
                   <p style={{ color: "var(--color-intent-error)", marginTop: "0.5rem", fontSize: "0.875rem" }}>
                     {seedError}
                   </p>
                 )}
               </div>
-            }
+            )}
           />
-          <div className="sessions-guided-steps">
-            <p className="sessions-guided-steps-label">Fastest path to first value:</p>
-            <ol className="sessions-guided-steps-list">
-              <li><code>longhouse connect --install</code> &mdash; keep background import running</li>
-              <li><code>longhouse ship</code> &mdash; pull existing sessions into the timeline now</li>
-              <li>Search one session or open raw detail</li>
-              <li>Later, start a managed session with <code>longhouse claude</code> or <code>longhouse codex</code> when you want control after launch</li>
-            </ol>
-            <p className="sessions-guided-cli-hint">
-              Don&apos;t have a CLI yet? Longhouse supports{" "}
-              <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
-              <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
-              <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
-            </p>
-          </div>
+          {!demoLoading && (
+            <div className="sessions-guided-steps">
+              <p className="sessions-guided-steps-label">Run this on your machine:</p>
+              <ol className="sessions-guided-steps-list">
+                <li><code>curl -fsSL https://longhouse.ai/install.sh | sh</code> &mdash; install the CLI</li>
+                <li><code>longhouse connect --install</code> &mdash; link this machine and start background import</li>
+                <li><code>longhouse ship</code> &mdash; pull your existing sessions in now</li>
+              </ol>
+              <p className="sessions-guided-cli-hint">
+                Works with{" "}
+                <a href="https://docs.anthropic.com/en/docs/claude-code/overview" target="_blank" rel="noopener noreferrer">Claude Code</a>,{" "}
+                <a href="https://github.com/openai/codex" target="_blank" rel="noopener noreferrer">Codex CLI</a>, and{" "}
+                <a href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener noreferrer">Gemini CLI</a>.
+                Demo sessions are loading in the background.
+              </p>
+            </div>
+          )}
           {addRunnerModal}
         </div>
       </PageShell>
