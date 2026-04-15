@@ -468,7 +468,7 @@ test.describe("Sessions Page", () => {
     await expect(card).toHaveAttribute("data-thread-id", rootId);
     await expect(card).toHaveAttribute("data-session-id", matchedId);
     await expect(card.locator(".session-card-snippet")).toContainText(token);
-    await expect(card).toContainText("Running pytest");
+    await expect(card).toContainText("Running Pytest");
     await expect(card).not.toContainText(
       "Newest writable head is just housekeeping without the search token",
     );
@@ -593,7 +593,7 @@ test.describe("Sessions Page", () => {
       .locator('[data-testid="session-card"]', { hasText: `running-state-${suffix}` })
       .first();
     await expect(runningCard).toBeVisible();
-    await expect(runningCard).toContainText("Running bash");
+    await expect(runningCard).toContainText("Running Shell");
     await expect(runningCard).toHaveAttribute("data-runtime-tone", "running");
     await expect(runningCard).toHaveClass(/session-card--live/);
     await expect(runningCard).toHaveClass(/session-card--running/);
@@ -692,7 +692,7 @@ test.describe("Sessions Page", () => {
       },
     ]);
 
-    await expect(olderCard).toContainText("Running bash", { timeout: 15000 });
+    await expect(olderCard).toContainText("Running Shell", { timeout: 15000 });
     await expect(olderCard).toHaveAttribute("data-runtime-tone", "running");
     await expect(olderCard).toHaveClass(/session-card--live/);
     await expect(cards.first()).toHaveAttribute("data-session-id", recentId);
