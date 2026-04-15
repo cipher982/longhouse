@@ -43,6 +43,11 @@ import {
 } from "../lib/usePerformance";
 import config from "../lib/config";
 
+type RoutingConfig = {
+  demoMode: boolean;
+  singleTenant: boolean;
+};
+
 // Loading fallback for lazy-loaded pages
 function PageLoader() {
   return (
@@ -106,10 +111,7 @@ function LegacyForumRedirect() {
   return <Navigate to={resolveLegacyForumRedirect(location.search)} replace />;
 }
 
-export default function App() {
-  // Performance monitoring
-  usePerformanceMonitoring("App", { includeBundleSizeWarning: true });
-
+export function buildAppRoutes({ demoMode, singleTenant }: RoutingConfig) {
   // Public reference pages — shared by demo and normal modes
   const publicInfoRoutes = [
     {
@@ -227,10 +229,10 @@ export default function App() {
           path: "/landing",
           element: <LandingAliasRedirect />,
         },
-      ];
+  ];
 
-  const routes = useRoutes(
-    config.demoMode
+  return (
+    demoMode
       ? demoRoutes
       : [
           ...marketingRoutes,
@@ -420,7 +422,16 @@ export default function App() {
             path: "*",
             element: <Navigate to="/" replace />,
           },
-        ],
+        ]
+  );
+}
+
+export default function App() {
+  // Performance monitoring
+  usePerformanceMonitoring("App", { includeBundleSizeWarning: true });
+
+  const routes = useRoutes(
+    buildAppRoutes({ demoMode: config.demoMode, singleTenant: config.singleTenant }),
   );
 
   return routes;
