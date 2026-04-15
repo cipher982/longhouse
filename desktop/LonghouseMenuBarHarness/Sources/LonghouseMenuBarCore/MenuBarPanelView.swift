@@ -3,18 +3,18 @@ import SwiftUI
 public enum MenuBarPanelLayout {
     public static let panelWidth: CGFloat = 376
     public static let defaultWindowHeight: CGFloat = 560
-    public static let chromeCornerRadius: CGFloat = 20
-    public static let sectionCornerRadius: CGFloat = 14
-    public static let chromeHorizontalPadding: CGFloat = 16
-    public static let chromeBottomPadding: CGFloat = 16
-    public static let chromeTopRailInset: CGFloat = 12
-    public static let chromeTopContentInset: CGFloat = 28
-    public static let accentHorizontalInset: CGFloat = 18
-    public static let accentHeight: CGFloat = 3
-    public static let rootSpacing: CGFloat = 14
-    public static let sectionSpacing: CGFloat = 12
-    public static let sectionHeaderSpacing: CGFloat = 10
-    public static let sectionInsets = EdgeInsets(top: 12, leading: 12, bottom: 12, trailing: 12)
+    public static let chromeCornerRadius: CGFloat = 13
+    public static let sectionCornerRadius: CGFloat = 9
+    public static let chromeHorizontalPadding: CGFloat = 14
+    public static let chromeBottomPadding: CGFloat = 14
+    public static let chromeTopRailInset: CGFloat = 11
+    public static let chromeTopContentInset: CGFloat = 26
+    public static let accentHorizontalInset: CGFloat = 16
+    public static let accentHeight: CGFloat = 2
+    public static let rootSpacing: CGFloat = 12
+    public static let sectionSpacing: CGFloat = 10
+    public static let sectionHeaderSpacing: CGFloat = 9
+    public static let sectionInsets = EdgeInsets(top: 10, leading: 11, bottom: 10, trailing: 11)
 }
 
 public struct MenuBarLoadingView: View {
@@ -558,17 +558,10 @@ public struct MenuBarPanelView: View {
 
     private func accessoryGlyph(systemImage: String) -> some View {
         Image(systemName: systemImage)
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(Color.primary)
-            .frame(width: 28, height: 28)
-            .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(Color.white.opacity(0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .stroke(Color.white.opacity(0.06), lineWidth: 1)
-            )
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Color.secondary)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
     }
 
     private var pipelineColor: Color {
