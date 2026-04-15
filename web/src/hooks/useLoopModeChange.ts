@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
+import { config } from "../lib/config";
 import { setSessionLoopMode, type SessionLoopMode } from "../services/api/agents";
+import { DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import type { AgentSession, AgentSessionThreadResponse, AgentSessionWorkspaceResponse } from "../services/api";
 
 /**
@@ -17,6 +19,10 @@ export function useLoopModeChange(session: AgentSession | null) {
 
   const handleLoopModeChange = async (nextMode: SessionLoopMode) => {
     if (!session || loopModePending || nextMode === effectiveLoopMode) {
+      return;
+    }
+    if (config.demoMode) {
+      toast(DEMO_READ_ONLY_MESSAGE);
       return;
     }
     setLoopModeOverride(nextMode);
