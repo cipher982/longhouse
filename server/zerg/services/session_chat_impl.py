@@ -1,0 +1,861 @@
+"""Private implementation helpers for the session_chat router.
+
+Contains all managed-local launch, stream, lock, and dispatch logic that
+is too large to live inline in the router endpoints.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from datetime import timezone
+from typing import AsyncIterator
+from uuid import UUID
+
+from fastapi import HTTPException
+from fastapi import Request
+from fastapi import status
+from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+import zerg.services.live_session_dispatch as live_session_dispatch
+from zerg.models.agents import AgentEvent
+from zerg.models.device_token import DeviceToken
+from zerg.models.user import User
+from zerg.services.agents_store import AgentsStore
+from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
+from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAILED
+from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_COMPLETE
+from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_FAILED
+from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_PENDING
+from zerg.services.managed_local_control import await_managed_local_turn_terminal
+from zerg.services.managed_local_control import get_managed_local_control_status_for_phase
+from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
+from zerg.services.managed_local_control import get_managed_local_presence_updated_at
+from zerg.services.managed_local_event_polling import MANAGED_LOCAL_EVENT_TIMEOUT_SECS
+from zerg.services.managed_local_event_polling import MANAGED_LOCAL_POLL_INTERVAL_SECS
+from zerg.services.managed_local_event_polling import await_managed_local_events_task
+from zerg.services.managed_local_event_polling import await_managed_local_terminal_task
+from zerg.services.managed_local_event_polling import await_managed_local_turn_events
+from zerg.services.managed_local_event_polling import fetch_managed_local_events_between_ids
+from zerg.services.managed_local_event_polling import fetch_managed_local_events_since
+from zerg.services.managed_local_event_polling import get_managed_local_latest_event_id
+from zerg.services.managed_local_event_polling import get_managed_local_turn_snapshot_best_effort
+from zerg.services.managed_local_event_polling import hydrate_managed_local_turn_events_from_ledger
+from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
+from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
+from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT
+from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
+from zerg.services.managed_local_turns import create_managed_local_turn
+from zerg.services.managed_local_turns import mark_managed_local_turn_failed
+from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
+from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
+from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
+from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
+from zerg.services.session_capabilities import build_session_capabilities
+from zerg.services.session_continuity import session_lock_manager
+from zerg.session_execution_home import ManagedSessionTransport
+from zerg.session_execution_home import SessionExecutionHome
+from zerg.session_loop_mode import SessionLoopMode
+
+logger = logging.getLogger(__name__)
+
+_CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
+MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS = 300.0
+MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 10.0
+MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS = 0.5
+_MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
+    [
+        "Message was sent to the managed local session, but Longhouse ",
+        "did not observe a completed turn yet.",
+    ]
+)
+_MANAGED_LOCAL_SYNC_PENDING_NOTE = "".join(
+    [
+        "Managed-local turn completed, but the transcript is still syncing ",
+        "to Longhouse.",
+    ]
+)
+
+
+# ---------------------------------------------------------------------------
+# SSE Event Types
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class SSEEvent:
+    """Server-sent event."""
+
+    event: str
+    data: str
+
+    def encode(self) -> str:
+        """Encode as SSE format."""
+        return f"event: {self.event}\ndata: {self.data}\n\n"
+
+
+# ---------------------------------------------------------------------------
+# Response models (shared between impl and router)
+# ---------------------------------------------------------------------------
+
+
+class SessionLockInfo(BaseModel):
+    """Information about a session lock."""
+
+    locked: bool
+    holder: str | None = None
+    time_remaining_seconds: float | None = None
+    fork_available: bool = False
+
+
+class ManagedLocalSessionLaunchResponse(BaseModel):
+    """Response after successfully starting a managed local session."""
+
+    session_id: str
+    provider: str
+    provider_session_id: str
+    execution_home: SessionExecutionHome
+    managed_transport: ManagedSessionTransport
+    loop_mode: SessionLoopMode
+    source_runner_id: int | None = None
+    source_runner_name: str
+    managed_session_name: str
+    attach_command: str
+
+
+# ---------------------------------------------------------------------------
+# Private helpers
+# ---------------------------------------------------------------------------
+
+
+def _resolve_agents_owner_id(db: Session, device_token: DeviceToken | None) -> int:
+    owner_id = getattr(device_token, "owner_id", None)
+    if owner_id is not None:
+        owner = db.query(User.id).filter(User.id == int(owner_id)).first()
+        if owner is not None:
+            return int(owner[0])
+        logger.warning("Device token owner_id=%s is stale; falling back to single-tenant owner", owner_id)
+
+    owner = db.query(User.id).order_by(User.id.asc()).first()
+    if owner is None:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="No Longhouse user is configured")
+    return int(owner[0])
+
+
+def _managed_local_launch_response(result) -> ManagedLocalSessionLaunchResponse:
+    session = result.session
+    capabilities = build_session_capabilities(session)
+    if capabilities.execution_home != SessionExecutionHome.MANAGED_LOCAL:
+        raise RuntimeError("Managed local launch response requires a managed_local session")
+    if capabilities.managed_transport is None:
+        raise RuntimeError("Managed local launch response is missing managed transport metadata")
+    return ManagedLocalSessionLaunchResponse(
+        session_id=str(session.id),
+        provider=session.provider or "claude",
+        provider_session_id=session.provider_session_id or str(session.id),
+        execution_home=capabilities.execution_home,
+        managed_transport=capabilities.managed_transport,
+        loop_mode=SessionLoopMode(session.loop_mode or SessionLoopMode.MANUAL.value),
+        source_runner_id=getattr(session, "source_runner_id", None),
+        source_runner_name=session.source_runner_name or "",
+        managed_session_name=session.managed_session_name or "",
+        attach_command=result.attach_command,
+    )
+
+
+def _session_chat_streaming_response(stream: AsyncIterator[str]) -> StreamingResponse:
+    return StreamingResponse(
+        stream,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _load_session_for_continuation(db: Session, session_id: str):
+    try:
+        source_session_uuid = UUID(session_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid session id: {session_id}",
+        ) from exc
+
+    source_session = AgentsStore(db).get_session(source_session_uuid)
+    if not source_session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+    return source_session
+
+
+def _assert_live_session_send_available(source_session) -> None:
+    capabilities = build_session_capabilities(source_session)
+    if capabilities.live_control_available:
+        return
+    if capabilities.host_reattach_available:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This live session needs host attach before Longhouse can continue it.",
+        )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="This session does not have a live Longhouse control channel.",
+    )
+
+
+def _parse_current_session_header(request: Request) -> UUID | None:
+    raw = str(request.headers.get(_CURRENT_SESSION_HEADER, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        return UUID(raw)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{_CURRENT_SESSION_HEADER} must be a valid UUID",
+        ) from exc
+
+
+def _authorize_live_send(
+    *,
+    request: Request,
+    device_token: DeviceToken | None,
+    auth_disabled: bool,
+) -> None:
+    # Accept an optional current-session hint for consistency with other machine
+    # surfaces, but live send authorization itself only needs a valid device token.
+    _parse_current_session_header(request)
+
+    if device_token is None and not auth_disabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Machine live send requires a device token",
+        )
+
+
+async def _build_managed_local_chat_response(
+    *,
+    source_session,
+    owner_id: int,
+    message: str,
+    request_id: str,
+    lock_scope_id: str,
+    db: Session,
+) -> JSONResponse:
+    """Dispatch text to a managed-local session and return a fast ack.
+
+    The response appears in the timeline via the normal engine shipping path +
+    the session workspace SSE stream (Step 1).  No inline streaming, no
+    polling, no force-ship.
+    """
+    return await _dispatch_managed_local_text(
+        source_session=source_session,
+        owner_id=owner_id,
+        message=message,
+        request_id=request_id,
+        lock_scope_id=lock_scope_id,
+        db=db,
+    )
+
+
+async def _release_managed_local_lock_after_terminal(
+    *,
+    lock_scope_id: str,
+    request_id: str,
+    session_id: UUID,
+    db_bind,
+    after_runtime_event_id: int,
+    after_presence_updated_at: datetime | None,
+) -> None:
+    try:
+        terminal_result = await await_managed_local_turn_terminal(
+            db_bind=db_bind,
+            session_id=session_id,
+            after_runtime_event_id=after_runtime_event_id,
+            after_presence_updated_at=after_presence_updated_at,
+            timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
+        )
+    except Exception:
+        logger.warning(
+            "[%s] Managed-local lock watcher crashed for %s",
+            request_id,
+            session_id,
+            exc_info=True,
+        )
+        return
+
+    if terminal_result is None:
+        logger.warning(
+            "[%s] Managed-local lock watcher timed out for %s; leaving TTL lock in place",
+            request_id,
+            session_id,
+        )
+        return
+
+    released = await session_lock_manager.release(lock_scope_id, request_id)
+    logger.info(
+        "[%s] Managed-local session reached terminal phase %s; lock release=%s",
+        request_id,
+        terminal_result.phase,
+        released,
+    )
+
+
+def _schedule_managed_local_lock_release(
+    *,
+    lock_scope_id: str,
+    request_id: str,
+    session_id: UUID,
+    db_bind,
+    after_runtime_event_id: int,
+    after_presence_updated_at: datetime | None,
+) -> None:
+    task = asyncio.create_task(
+        _release_managed_local_lock_after_terminal(
+            lock_scope_id=lock_scope_id,
+            request_id=request_id,
+            session_id=session_id,
+            db_bind=db_bind,
+            after_runtime_event_id=after_runtime_event_id,
+            after_presence_updated_at=after_presence_updated_at,
+        )
+    )
+
+    def _log_task_failure(done: asyncio.Task[None]) -> None:
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            logger.debug("[%s] Managed-local lock watcher cancelled for %s", request_id, session_id)
+        except Exception:
+            logger.exception("[%s] Managed-local lock watcher failed for %s", request_id, session_id)
+
+    task.add_done_callback(_log_task_failure)
+
+
+def _managed_local_send_failure_code(send_result) -> str:
+    if bool(getattr(send_result, "verified_turn_started", False)):
+        return MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
+    if bool(getattr(send_result, "ok", False)):
+        return MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
+    if int(getattr(send_result, "exit_code", 1) or 1) == 0:
+        return MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
+    return MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
+
+
+async def _dispatch_managed_local_text(
+    *,
+    source_session,
+    owner_id: int,
+    message: str,
+    request_id: str,
+    lock_scope_id: str,
+    db: Session,
+) -> JSONResponse:
+    """Send text to a managed-local session and return acceptance status."""
+    t0 = time.monotonic()
+    if not build_session_capabilities(source_session).live_control_available:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Managed local session is missing live runner metadata",
+        )
+
+    baseline_event_id = int(AgentsStore(db).get_latest_event_id(source_session.id) or 0)
+    baseline_hook_runtime_event_id = get_managed_local_latest_hook_runtime_event_id(
+        db=db,
+        session_id=source_session.id,
+    )
+    baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
+    t_baseline = time.monotonic()
+    run_best_effort_managed_local_turn_write(
+        db_bind=db.get_bind(),
+        label="create",
+        fn=lambda turn_db: create_managed_local_turn(
+            turn_db,
+            session_id=source_session.id,
+            request_id=request_id,
+            baseline_event_id=baseline_event_id,
+            baseline_runtime_event_id=baseline_hook_runtime_event_id,
+            expected_user_text=message,
+        ),
+    )
+    t_turn_created = time.monotonic()
+    send_result = await live_session_dispatch.send_text_to_live_session(
+        db=db,
+        owner_id=owner_id,
+        session=source_session,
+        text=message,
+        commis_id=request_id,
+        timeout_secs=15,
+        verify_turn_started=True,
+        verification_timeout_secs=15.0,
+    )
+    t_sent = time.monotonic()
+
+    if not send_result.ok or not bool(getattr(send_result, "verified_turn_started", False)):
+        error_code = _managed_local_send_failure_code(send_result)
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="send_failed",
+            fn=lambda turn_db: mark_managed_local_turn_failed(
+                turn_db,
+                session_id=source_session.id,
+                request_id=request_id,
+                error_code=error_code,
+            ),
+        )
+        error_message = str(send_result.error or "Managed local session did not acknowledge the prompt after send")
+        logger.warning(
+            "[%s] Managed-local send-live failed for %s: error_code=%s verified=%s exit_code=%s error=%s",
+            request_id,
+            source_session.id,
+            error_code,
+            bool(getattr(send_result, "verified_turn_started", False)),
+            getattr(send_result, "exit_code", None),
+            error_message,
+        )
+        await session_lock_manager.release(lock_scope_id, request_id)
+        logger.info(f"[{request_id}] Managed local chat dispatch failed, lock released")
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "accepted": False,
+                "error": error_message,
+                "error_code": error_code,
+                "session_id": str(source_session.id),
+                "request_id": request_id,
+            },
+        )
+
+    run_best_effort_managed_local_turn_write(
+        db_bind=db.get_bind(),
+        label="send_accepted",
+        fn=lambda turn_db: mark_managed_local_turn_send_accepted(
+            turn_db,
+            session_id=source_session.id,
+            request_id=request_id,
+        ),
+    )
+
+    _schedule_managed_local_lock_release(
+        lock_scope_id=lock_scope_id,
+        request_id=request_id,
+        session_id=source_session.id,
+        db_bind=db.get_bind(),
+        after_runtime_event_id=baseline_hook_runtime_event_id,
+        after_presence_updated_at=baseline_presence_updated_at,
+    )
+
+    dispatch_ms = round((t_sent - t0) * 1000, 1)
+    logger.info(
+        "[%s] managed-local dispatch: baseline=%.0fms turn_create=%.0fms send=%.0fms total=%.0fms",
+        request_id,
+        (t_baseline - t0) * 1000,
+        (t_turn_created - t_baseline) * 1000,
+        (t_sent - t_turn_created) * 1000,
+        dispatch_ms,
+    )
+
+    return JSONResponse(
+        content={
+            "accepted": True,
+            "session_id": str(source_session.id),
+            "request_id": request_id,
+            "dispatch_ms": dispatch_ms,
+        },
+    )
+
+
+def _lock_scope_id_for_session(db: Session, session_id: str) -> str:
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError:
+        return session_id
+    session = AgentsStore(db).get_session(session_uuid)
+    if session is None:
+        return session_id
+    return str(session.thread_root_session_id or session.id)
+
+
+async def _acquire_session_lock_or_raise(*, source_session, request_id: str) -> str:
+    lock_scope_id = str(source_session.thread_root_session_id or source_session.id)
+    lock = await session_lock_manager.acquire(
+        session_id=lock_scope_id,
+        holder=request_id,
+        ttl_seconds=300,
+    )
+
+    if lock:
+        return lock_scope_id
+
+    existing_lock = await session_lock_manager.get_lock_info(lock_scope_id)
+    lock_info = SessionLockInfo(
+        locked=True,
+        holder=existing_lock.holder if existing_lock else None,
+        time_remaining_seconds=existing_lock.time_remaining if existing_lock else None,
+        fork_available=True,
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "Session is currently in use",
+            "code": "SESSION_LOCKED",
+            "lock_info": lock_info.model_dump(),
+        },
+    )
+
+
+# Aliases for moved functions (kept as private names for internal callers)
+_fetch_managed_local_events_since = fetch_managed_local_events_since
+_fetch_managed_local_events_between_ids = fetch_managed_local_events_between_ids
+_get_managed_local_turn_snapshot_best_effort = get_managed_local_turn_snapshot_best_effort
+_hydrate_managed_local_turn_events_from_ledger = hydrate_managed_local_turn_events_from_ledger
+_get_managed_local_latest_event_id = get_managed_local_latest_event_id
+_managed_local_events_include_expected_turn = managed_local_events_include_expected_turn
+_await_managed_local_turn_events = await_managed_local_turn_events
+_await_managed_local_events_task = await_managed_local_events_task
+_await_managed_local_terminal_task = await_managed_local_terminal_task
+
+
+async def _stream_managed_local_output(
+    *,
+    source_session,
+    owner_id: int,
+    message: str,
+    request_id: str,
+    db: Session | None = None,
+) -> AsyncIterator[str]:
+    if db is None:
+        raise RuntimeError("Managed local chat requires a database session")
+    capabilities = build_session_capabilities(source_session)
+    if not capabilities.live_control_available:
+        raise RuntimeError("Managed local session is missing live runner metadata")
+
+    yield SSEEvent(
+        event="system",
+        data=json.dumps(
+            {
+                "type": "session_started",
+                "session_id": str(source_session.id),
+                "source_session_id": str(source_session.id),
+                "thread_root_session_id": str(source_session.thread_root_session_id or source_session.id),
+                "continued_from_session_id": (
+                    str(source_session.continued_from_session_id) if source_session.continued_from_session_id else None
+                ),
+                "created_branch": False,
+                "provider_session_id": source_session.provider_session_id,
+                "execution_home": capabilities.execution_home.value,
+                "origin_label": source_session.origin_label,
+                "runner_name": source_session.source_runner_name,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+    ).encode()
+
+    baseline_event_id = int(AgentsStore(db).get_latest_event_id(source_session.id) or 0)
+    baseline_hook_runtime_event_id = get_managed_local_latest_hook_runtime_event_id(
+        db=db,
+        session_id=source_session.id,
+    )
+    baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
+    run_best_effort_managed_local_turn_write(
+        db_bind=db.get_bind(),
+        label="create",
+        fn=lambda turn_db: create_managed_local_turn(
+            turn_db,
+            session_id=source_session.id,
+            request_id=request_id,
+            baseline_event_id=baseline_event_id,
+            baseline_runtime_event_id=baseline_hook_runtime_event_id,
+            expected_user_text=message,
+        ),
+    )
+    send_result = await live_session_dispatch.send_text_to_live_session(
+        db=db,
+        owner_id=owner_id,
+        session=source_session,
+        text=message,
+        commis_id=request_id,
+        timeout_secs=15,
+    )
+
+    if not send_result.ok:
+        error_code = _managed_local_send_failure_code(send_result)
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="send_failed",
+            fn=lambda turn_db: mark_managed_local_turn_failed(
+                turn_db,
+                session_id=source_session.id,
+                request_id=request_id,
+                error_code=error_code,
+            ),
+        )
+        error_message = str(send_result.error or "Failed to send text to managed local session")
+        logger.warning(
+            "[%s] Managed-local stream send failed for %s: error_code=%s verified=%s exit_code=%s error=%s",
+            request_id,
+            source_session.id,
+            error_code,
+            bool(getattr(send_result, "verified_turn_started", False)),
+            getattr(send_result, "exit_code", None),
+            error_message,
+        )
+        yield SSEEvent(
+            event="error",
+            data=json.dumps({"error": error_message}),
+        ).encode()
+        yield SSEEvent(
+            event="done",
+            data=json.dumps(
+                {
+                    "session_id": str(source_session.id),
+                    "source_session_id": str(source_session.id),
+                    "shipped_session_id": None,
+                    "created_branch": False,
+                    "control_status": MANAGED_LOCAL_CONTROL_STATUS_FAILED,
+                    "sync_status": MANAGED_LOCAL_SYNC_STATUS_FAILED,
+                    "exit_code": 1,
+                    "total_text_length": 0,
+                    "persisted_events": 0,
+                    "persistence_error": error_message,
+                    "sync_note": None,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
+        ).encode()
+        return
+    run_best_effort_managed_local_turn_write(
+        db_bind=db.get_bind(),
+        label="send_accepted",
+        fn=lambda turn_db: mark_managed_local_turn_send_accepted(
+            turn_db,
+            session_id=source_session.id,
+            request_id=request_id,
+        ),
+    )
+
+    terminal_task = asyncio.create_task(
+        await_managed_local_turn_terminal(
+            db_bind=db.get_bind(),
+            session_id=source_session.id,
+            after_runtime_event_id=baseline_hook_runtime_event_id,
+            after_presence_updated_at=baseline_presence_updated_at,
+            timeout_secs=MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
+            poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
+        )
+    )
+    events_task = asyncio.create_task(
+        _await_managed_local_turn_events(
+            db_bind=db.get_bind(),
+            session_id=source_session.id,
+            after_event_id=baseline_event_id,
+            expected_user_message=message,
+        )
+    )
+
+    terminal_result = None
+    new_events: list[AgentEvent] = []
+
+    try:
+        # Wait for terminal phase or events — daemon handles shipping for all providers.
+        done, _pending = await asyncio.wait(
+            {terminal_task, events_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if events_task in done:
+            new_events = events_task.result() or []
+        if terminal_task in done:
+            terminal_result = terminal_task.result()
+
+        if new_events and terminal_result is None:
+            terminal_result = await _await_managed_local_terminal_task(
+                terminal_task,
+                timeout_secs=MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS,
+            )
+
+        if not new_events:
+            if terminal_task in done:
+                terminal_result = terminal_task.result()
+            elif not terminal_task.done():
+                terminal_result = await terminal_task
+
+        if not new_events and terminal_result is not None:
+            new_events = await _await_managed_local_events_task(
+                events_task,
+                timeout_secs=MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS,
+            )
+
+        if not new_events and terminal_result is None:
+            if not events_task.done():
+                new_events = await events_task
+            else:
+                new_events = events_task.result() or []
+    finally:
+        if terminal_result is None and terminal_task.done():
+            try:
+                terminal_result = terminal_task.result()
+            except Exception:
+                terminal_result = None
+        for task in (terminal_task, events_task):
+            if task.done():
+                continue
+            task.cancel()
+        await asyncio.gather(terminal_task, events_task, return_exceptions=True)
+
+    if terminal_result is not None:
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="terminal",
+            fn=lambda turn_db: mark_managed_local_turn_terminal(
+                turn_db,
+                session_id=source_session.id,
+                request_id=request_id,
+                phase=terminal_result.phase,
+                terminal_at=terminal_result.occurred_at,
+                terminal_runtime_event_id=terminal_result.runtime_event_id,
+            ),
+        )
+    if new_events:
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="durable",
+            fn=lambda turn_db: maybe_mark_managed_local_turn_durable(
+                turn_db,
+                session_id=source_session.id,
+            ),
+        )
+    turn_snapshot = _get_managed_local_turn_snapshot_best_effort(
+        db_bind=db.get_bind(),
+        session_id=source_session.id,
+        request_id=request_id,
+    )
+    if not new_events:
+        ledger_snapshot, ledger_events = _hydrate_managed_local_turn_events_from_ledger(
+            db_bind=db.get_bind(),
+            session_id=source_session.id,
+            request_id=request_id,
+            expected_user_message=message,
+        )
+        if ledger_snapshot is not None:
+            turn_snapshot = ledger_snapshot
+        if ledger_events:
+            new_events = ledger_events
+
+    if not new_events and terminal_result is None and not (turn_snapshot and turn_snapshot.terminal_at is not None):
+        run_best_effort_managed_local_turn_write(
+            db_bind=db.get_bind(),
+            label="turn_timeout",
+            fn=lambda turn_db: mark_managed_local_turn_failed(
+                turn_db,
+                session_id=source_session.id,
+                request_id=request_id,
+                error_code=MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT,
+            ),
+        )
+        persistence_error = _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE
+        yield SSEEvent(
+            event="error",
+            data=json.dumps({"error": persistence_error}),
+        ).encode()
+        yield SSEEvent(
+            event="done",
+            data=json.dumps(
+                {
+                    "session_id": str(source_session.id),
+                    "source_session_id": str(source_session.id),
+                    "shipped_session_id": None,
+                    "created_branch": False,
+                    "control_status": MANAGED_LOCAL_CONTROL_STATUS_FAILED,
+                    "sync_status": MANAGED_LOCAL_SYNC_STATUS_FAILED,
+                    "exit_code": 0,
+                    "total_text_length": 0,
+                    "persisted_events": 0,
+                    "persistence_error": persistence_error,
+                    "sync_note": None,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
+        ).encode()
+        return
+
+    if turn_snapshot is not None and turn_snapshot.terminal_at is not None:
+        control_status = get_managed_local_control_status_for_phase(turn_snapshot.terminal_phase)
+    elif terminal_result is None:
+        control_status = MANAGED_LOCAL_CONTROL_STATUS_COMPLETED
+    else:
+        control_status = terminal_result.control_status
+
+    turn_reached_terminal = (turn_snapshot is not None and turn_snapshot.terminal_at is not None) or terminal_result is not None
+    if not new_events and turn_reached_terminal:
+        yield SSEEvent(
+            event="done",
+            data=json.dumps(
+                {
+                    "session_id": str(source_session.id),
+                    "source_session_id": str(source_session.id),
+                    "shipped_session_id": str(source_session.id),
+                    "created_branch": False,
+                    "control_status": control_status,
+                    "sync_status": MANAGED_LOCAL_SYNC_STATUS_PENDING,
+                    "exit_code": 0,
+                    "total_text_length": 0,
+                    "persisted_events": 0,
+                    "persistence_error": None,
+                    "sync_note": _MANAGED_LOCAL_SYNC_PENDING_NOTE,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+            ),
+        ).encode()
+        return
+
+    assistant_text = ""
+    for event in new_events:
+        if event.tool_name:
+            yield SSEEvent(
+                event="tool_use",
+                data=json.dumps(
+                    {
+                        "name": event.tool_name,
+                        "id": event.tool_call_id or str(event.id),
+                    }
+                ),
+            ).encode()
+        if event.role == "assistant" and event.content_text:
+            assistant_text += event.content_text
+            yield SSEEvent(
+                event="assistant_delta",
+                data=json.dumps({"text": event.content_text, "accumulated": assistant_text}),
+            ).encode()
+
+    yield SSEEvent(
+        event="done",
+        data=json.dumps(
+            {
+                "session_id": str(source_session.id),
+                "source_session_id": str(source_session.id),
+                "shipped_session_id": str(source_session.id),
+                "created_branch": False,
+                "control_status": control_status,
+                "sync_status": MANAGED_LOCAL_SYNC_STATUS_COMPLETE,
+                "exit_code": 0,
+                "total_text_length": len(assistant_text),
+                "persisted_events": len(new_events),
+                "persistence_error": None,
+                "sync_note": None,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ),
+    ).encode()
