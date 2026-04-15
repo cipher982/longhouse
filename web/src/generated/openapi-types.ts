@@ -1243,7 +1243,15 @@ export interface paths {
         get: operations["get_runner_runners__runner_id__get"];
         put?: never;
         post?: never;
-        delete?: never;
+        /**
+         * Delete Runner
+         * @description Delete a stale runner permanently.
+         *
+         *     Use this for cleanup of offline or revoked runners. Connected runners must
+         *     be disconnected or revoked first so users do not accidentally remove a live
+         *     machine from Longhouse.
+         */
+        delete: operations["delete_runner_runners__runner_id__delete"];
         options?: never;
         head?: never;
         /**
@@ -10336,6 +10344,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["RunnerResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_runner_runners__runner_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                runner_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
