@@ -223,17 +223,10 @@ final class AppState: ObservableObject {
     }
 
     /// Called by the WebView delegate when the web app redirects to /login.
-    /// Extracts the return_to path from the intercepted URL (if any), stores it
-    /// so the WebView can restore context after re-auth, then runs full sign-out.
+    /// Stores a safe tenant return_to path when available, then hands auth back
+    /// to the native shell instead of rendering a web login surface in WKWebView.
     func signOutAndReturnToLogin(interceptedURL: URL? = nil) async {
-        if let url = interceptedURL,
-           let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-           let returnTo = components.queryItems?.first(where: { $0.name == "return_to" })?.value,
-           returnTo.hasPrefix("/"), !returnTo.hasPrefix("//") {
-            postLoginPath = returnTo
-        } else {
-            postLoginPath = "/timeline"
-        }
+        postLoginPath = LonghouseWebNavigation.postLoginPath(from: interceptedURL, serverURL: serverURL)
         await signOutLocallyAndRemotely()
     }
 
