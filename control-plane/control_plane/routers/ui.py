@@ -54,7 +54,7 @@ def _static_asset_url(filename: str) -> str:
     return f"/static/{filename}?v={version}"
 
 
-def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "") -> str:
+def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "", body_class: str = "") -> str:
     nav_html = ""
     if nav:
         nav_html = """
@@ -67,6 +67,7 @@ def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "") ->
     </div>"""
 
     extra_style_tag = f"\n    <style>{extra_styles}</style>" if extra_styles else ""
+    body_attr = f' class="{html.escape(body_class)}"' if body_class else ""
 
     return f"""<!doctype html>
 <html lang="en">
@@ -85,7 +86,7 @@ def _page(title: str, body: str, *, nav: bool = True, extra_styles: str = "") ->
     <link href="https://api.fontshare.com/v2/css?f[]=general-sans@500,600,700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{_static_asset_url('style.css')}">{extra_style_tag}
   </head>
-  <body>
+  <body{body_attr}>
     {nav_html}
     <div class="container">
       {body}
@@ -178,7 +179,7 @@ def home(request: Request, error: str | None = None, return_to: str | None = Non
       <p class="text-center mt-6"><a href="https://longhouse.ai" class="text-muted text-sm">&larr; Back to longhouse.ai</a></p>
     </div>
     """
-    return _page("Sign In", body, nav=False)
+    return _page("Sign In", body, nav=False, body_class="page-auth")
 
 
 @router.get("/signup", response_class=HTMLResponse)
@@ -225,7 +226,7 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
       <p class="text-center mt-6"><a href="https://longhouse.ai" class="text-muted text-sm">&larr; Back to longhouse.ai</a></p>
     </div>
     """
-    return _page("Sign Up", body, nav=False)
+    return _page("Sign Up", body, nav=False, body_class="page-auth")
 
 
 # ---------------------------------------------------------------------------
@@ -266,7 +267,7 @@ def verify_email_page(
       </p>
     </div>
     """
-    return _page("Verify Email", body, nav=False)
+    return _page("Verify Email", body, nav=False, body_class="page-auth")
 
 
 
@@ -528,7 +529,7 @@ def forgot_password_page(request: Request, sent: str | None = None, db: Session 
       </p>
     </div>
     """
-    return _page("Forgot Password", body, nav=False)
+    return _page("Forgot Password", body, nav=False, body_class="page-auth")
 
 
 @router.get("/reset-password", response_class=HTMLResponse)
@@ -554,7 +555,7 @@ def reset_password_page(
           </p>
         </div>
         """
-        return _page("Reset Password", body, nav=False)
+        return _page("Reset Password", body, nav=False, body_class="page-auth")
 
     token_escaped = html.escape(token)
     body = f"""
@@ -575,7 +576,7 @@ def reset_password_page(
       </p>
     </div>
     """
-    return _page("Reset Password", body, nav=False)
+    return _page("Reset Password", body, nav=False, body_class="page-auth")
 
 
 # ---------------------------------------------------------------------------

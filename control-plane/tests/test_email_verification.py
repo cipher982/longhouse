@@ -90,6 +90,7 @@ class TestSignup:
         resp = client.get("/signup")
 
         assert resp.status_code == 200
+        assert '<body class="page-auth">' in resp.text
         assert '/static/style.css?v=' in resp.text
         assert '/static/logo.svg?v=' in resp.text
         assert 'class="hero-logo" width="36" height="36"' in resp.text
