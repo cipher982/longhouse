@@ -17,8 +17,8 @@ export function PricingSection() {
     document.getElementById("landing-install")?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const handleRequestHosted = () => {
-    window.location.href = "https://control.longhouse.ai";
+  const handleGetHosted = () => {
+    window.location.href = "https://control.longhouse.ai/signup";
   };
 
   const tiers: PricingTier[] = [
@@ -38,18 +38,18 @@ export function PricingSection() {
       highlighted: true,
     },
     {
-      label: "Convenience path",
-      name: "Hosted Later",
-      callout: "By request",
+      label: "We run it for you",
+      name: "Hosted",
+      callout: "$5 / month",
       description: "Same session model, with us running the always-on Runtime Host for you.",
       features: [
         "Same archive and control loop as self-hosted",
-        "Useful when you already want durability but do not want to run the box",
-        "A narrow beta while the launch story stays self-host first",
-        "Migrate from self-hosted when you want us to run the always-on machine",
+        "Skip running the box — we keep it up",
+        "Your own subdomain on longhouse.ai",
+        "Migrate from self-hosted any time",
       ],
-      ctaText: "Request Hosted Beta",
-      ctaAction: handleRequestHosted,
+      ctaText: "Get Hosted · $5/mo",
+      ctaAction: handleGetHosted,
     },
   ];
 
@@ -57,10 +57,9 @@ export function PricingSection() {
     <section id="pricing" className="landing-pricing">
       <div className="landing-section-inner">
         <p className="landing-section-label">Deployment</p>
-        <h2 className="landing-section-title">Self-host first. Hosted later when you want convenience.</h2>
+        <h2 className="landing-section-title">Two ways in.</h2>
         <p className="landing-section-subtitle">
-          Hosted is the same product with us running the always-on box. It is not the thing that unlocks
-          the core loop.
+          Run it yourself for free, or pay $5/month and we run it for you. Same product either way.
         </p>
 
         <div className="landing-pricing-grid">

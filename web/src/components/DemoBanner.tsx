@@ -1,6 +1,6 @@
 /**
  * Sticky banner shown at the top of the page in demo mode.
- * Informs visitors they're viewing a read-only demo.
+ * Informs visitors they're viewing a shared read-only demo.
  */
 export default function DemoBanner() {
   return (
@@ -17,9 +17,9 @@ export default function DemoBanner() {
         fontWeight: 500,
       }}
     >
-      You're viewing a live demo &mdash;{' '}
+      You're viewing a shared read-only demo &mdash;{' '}
       <a
-        href="https://longhouse.ai/pricing"
+        href="https://longhouse.ai/#landing-install"
         style={{ color: '#120B09', textDecoration: 'underline', fontWeight: 600 }}
       >
         Sign up for free

@@ -30,8 +30,8 @@ export function FooterCTA() {
             </Button>
           </div>
           <p className="landing-footer-subnote">
-            Hosted is the convenience layer later, not the first step.{" "}
-            <a href="https://control.longhouse.ai">Request beta access</a>.
+            Or skip running the box —{" "}
+            <a href="https://control.longhouse.ai/signup">get hosted for $5/mo</a>.
           </p>
         </div>
 

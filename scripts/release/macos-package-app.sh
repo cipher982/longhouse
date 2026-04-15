@@ -231,6 +231,8 @@ cat > "${CONTENTS_DIR}/Info.plist" <<EOF
   <string>${MIN_MACOS}</string>
   <key>LSUIElement</key>
   ${LSUIELEMENT_XML}
+  <key>LSMultipleInstancesProhibited</key>
+  <true/>
   <key>NSHighResolutionCapable</key>
   <true/>
   <key>NSPrincipalClass</key>
