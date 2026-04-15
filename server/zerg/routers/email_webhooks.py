@@ -170,7 +170,7 @@ async def gmail_webhook(
 
     try:
         connector_id = int(x_goog_channel_token)
-    except Exception:
+    except ValueError:
         raise HTTPException(status_code=400, detail="Invalid X-Goog-Channel-Token")
 
     # Dedupe by message number at connector level
@@ -194,10 +194,7 @@ async def gmail_webhook(
     if msg_no_int is not None:
         cfg["last_msg_no"] = msg_no_int
         conn.config = cfg  # type: ignore[assignment]
-        try:
-            flag_modified(conn, "config")
-        except Exception:
-            pass
+        flag_modified(conn, "config")
         db.add(conn)
         db.commit()
 

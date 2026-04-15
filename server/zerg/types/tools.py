@@ -99,8 +99,12 @@ def _generate_schema_from_function(func: Callable) -> dict[str, Any]:
     hints = {}
     try:
         hints = get_type_hints(func)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug(
+            "Falling back to signature-only schema for %s due to type hint resolution error: %s",
+            func.__name__,
+            exc,
+        )
 
     properties = {}
     required = []

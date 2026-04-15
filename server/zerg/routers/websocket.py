@@ -148,8 +148,8 @@ async def websocket_endpoint(
                 message_type="error", topic="system", data=ErrorData(error="Internal server error").model_dump()
             )
             await websocket.send_json(error_envelope.model_dump())
-        except Exception:
-            pass
+        except Exception as send_error:
+            logger.debug("Could not send websocket error envelope to %s: %s", client_id, send_error)
     finally:
         await topic_manager.disconnect(client_id)
         if commis_token is not None:

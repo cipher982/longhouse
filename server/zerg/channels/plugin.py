@@ -6,6 +6,7 @@ This is the core contract for channel integrations.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC
 from abc import abstractmethod
 from contextlib import asynccontextmanager
@@ -30,6 +31,8 @@ MessageHandler = Callable[[ChannelMessageEvent], None]
 TypingHandler = Callable[[ChannelTypingEvent], None]
 PresenceHandler = Callable[[ChannelPresence], None]
 StatusHandler = Callable[[ChannelStatus], None]
+
+logger = logging.getLogger(__name__)
 
 
 class ChannelPlugin(ABC):
@@ -285,8 +288,8 @@ class ChannelPlugin(ABC):
             try:
                 handler(event)
             except Exception:
-                # Don't let handler errors crash the channel
-                pass
+                # Keep handler failures isolated, but do not hide them.
+                logger.exception("Channel message handler failed for %s", self.meta.get("id", "unknown"))
 
     def _emit_typing(self, event: ChannelTypingEvent) -> None:
         """Emit a typing event to all registered handlers."""
@@ -294,7 +297,7 @@ class ChannelPlugin(ABC):
             try:
                 handler(event)
             except Exception:
-                pass
+                logger.exception("Channel typing handler failed for %s", self.meta.get("id", "unknown"))
 
     def _emit_status(self, status: ChannelStatus) -> None:
         """Emit a status change to all registered handlers."""
@@ -302,7 +305,7 @@ class ChannelPlugin(ABC):
             try:
                 handler(status)
             except Exception:
-                pass
+                logger.exception("Channel status handler failed for %s", self.meta.get("id", "unknown"))
 
     # --- Validation ---
 

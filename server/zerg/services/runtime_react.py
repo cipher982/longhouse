@@ -24,7 +24,7 @@ from datetime import datetime
 from datetime import timezone
 from typing import TYPE_CHECKING
 
-from zerg.managers.runtime_runner import RunnerInterrupted
+from zerg.managers.runtime_interrupt import RunnerInterrupted
 from zerg.services.dispatch_contract import _apply_dispatch_contract
 from zerg.services.dispatch_contract import _classify_dispatch_lane
 from zerg.services.openai_client import OpenAIChat
@@ -226,8 +226,8 @@ async def _call_llm(
                     duration_ms=duration_ms,
                     error=str(exc),
                 )
-            except Exception:
-                pass
+            except Exception as audit_error:
+                logger.warning("Failed to log errored LLM response for audit_id=%s: %s", audit_id, audit_error)
         raise
     finally:
         heartbeat_cancelled.set()
@@ -253,8 +253,8 @@ async def _call_llm(
             reasoning_tokens=(usage_meta.get("output_token_details", {}).get("reasoning") if usage_meta else None),
             duration_ms=duration_ms,
         )
-    except Exception:
-        pass
+    except Exception as audit_error:
+        logger.warning("Failed to log successful LLM response for audit_id=%s: %s", audit_id, audit_error)
 
     if isinstance(result, AIMessage):
         usage_meta = getattr(result, "usage_metadata", None)

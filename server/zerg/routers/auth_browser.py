@@ -315,10 +315,7 @@ async def google_sign_in(response: Response, body: dict[str, str], db: Session =
                 )
 
         if not settings.testing and not is_admin:
-            try:
-                total = count_users(db)
-            except Exception:
-                total = 0
+            total = count_users(db)
             if settings.max_users and total >= settings.max_users:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
