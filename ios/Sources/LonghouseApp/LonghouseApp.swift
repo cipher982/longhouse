@@ -283,19 +283,23 @@ final class AppState: ObservableObject {
     }
 
     private func signOutLocallyAndRemotely() async {
+        // Sync cookies to the shared store NOW, before clearing the WebKit store.
+        // The fire-and-forget logout POST uses URLSession.shared which reads from
+        // the shared store — if we clear first, the refresh cookie is gone and the
+        // server cannot revoke the session.
+        await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
+
         // Clear local state immediately — don't wait on the network call.
-        // The server-side logout is best-effort; a stale session cookie there
-        // doesn't affect the user if local state is already cleared.
         GIDSignIn.sharedInstance.signOut()
         await clearLocalSession()
         authError = nil
         isValidating = false
         WidgetCenter.shared.reloadAllTimelines()
 
-        // Fire-and-forget the server logout in the background.
+        // Fire-and-forget the server logout. Cookies are already in URLSession.shared
+        // from the sync above, so the refresh cookie will be present in the request.
         if let url = URL(string: "\(serverURL)/api/auth/logout") {
             Task {
-                await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
                 var request = URLRequest(url: url)
                 request.httpMethod = "POST"
                 request.timeoutInterval = 5
