@@ -21,8 +21,12 @@ pub enum ShipResult {
     RateLimited,
     /// Server error (5xx). Should spool for later.
     ServerError(u16, String),
-    /// Client error (4xx, not 429). Bad payload — skip, don't spool.
-    ClientError(u16, String),
+    /// Request was rejected because the payload itself is invalid.
+    PayloadRejected(u16, String),
+    /// Payload is valid but too large for the current server/proxy limits.
+    PayloadTooLarge(String),
+    /// Auth/config/wrong-host style client error. Should stay replayable.
+    RetryableClientError(u16, String),
     /// Connection error (DNS, timeout, refused). Should spool for later.
     ConnectError(String),
 }
@@ -125,11 +129,19 @@ impl ShipperClient {
                         }
                         401 | 403 => {
                             let body = response.text().await.unwrap_or_default();
-                            return ShipResult::ClientError(status, body);
+                            return ShipResult::RetryableClientError(status, body);
+                        }
+                        400 | 422 => {
+                            let body = response.text().await.unwrap_or_default();
+                            return ShipResult::PayloadRejected(status, body);
+                        }
+                        413 => {
+                            let body = response.text().await.unwrap_or_default();
+                            return ShipResult::PayloadTooLarge(body);
                         }
                         400..=499 => {
                             let body = response.text().await.unwrap_or_default();
-                            return ShipResult::ClientError(status, body);
+                            return ShipResult::RetryableClientError(status, body);
                         }
                         500..=599 => {
                             let body = response.text().await.unwrap_or_default();
@@ -137,7 +149,7 @@ impl ShipperClient {
                         }
                         _ => {
                             let body = response.text().await.unwrap_or_default();
-                            return ShipResult::ClientError(status, body);
+                            return ShipResult::RetryableClientError(status, body);
                         }
                     }
                 }
@@ -183,6 +195,18 @@ impl ShipperClient {
 mod tests {
     use rand::Rng;
 
+    use super::ShipResult;
+
+    fn classify_status(status: u16, body: &str) -> ShipResult {
+        match status {
+            400 | 422 => ShipResult::PayloadRejected(status, body.to_string()),
+            413 => ShipResult::PayloadTooLarge(body.to_string()),
+            401 | 403 | 400..=499 => ShipResult::RetryableClientError(status, body.to_string()),
+            500..=599 => ShipResult::ServerError(status, body.to_string()),
+            _ => ShipResult::RetryableClientError(status, body.to_string()),
+        }
+    }
+
     #[test]
     fn test_429_jitter_in_range() {
         // Verify the jitter formula produces values in [0.5 * base, base] and <= 30s
@@ -207,5 +231,29 @@ mod tests {
         let jitter_factor = 0.5 + rng.gen::<f64>() * 0.5;
         let wait = (large_base * jitter_factor).min(30.0);
         assert_eq!(wait, 30.0, "Large base_wait should be capped at 30s");
+    }
+
+    #[test]
+    fn test_classify_payload_rejections_vs_retryable_client_errors() {
+        assert!(matches!(
+            classify_status(400, "invalid json"),
+            ShipResult::PayloadRejected(400, _)
+        ));
+        assert!(matches!(
+            classify_status(422, "invalid payload"),
+            ShipResult::PayloadRejected(422, _)
+        ));
+        assert!(matches!(
+            classify_status(413, "too large"),
+            ShipResult::PayloadTooLarge(_)
+        ));
+        assert!(matches!(
+            classify_status(401, "bad token"),
+            ShipResult::RetryableClientError(401, _)
+        ));
+        assert!(matches!(
+            classify_status(405, "method not allowed"),
+            ShipResult::RetryableClientError(405, _)
+        ));
     }
 }

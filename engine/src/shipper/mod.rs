@@ -118,10 +118,10 @@ pub fn prepare_file(
 
 /// Ship a prepared item via HTTP. On success, update both offsets.
 /// On transient failure, advance queued_offset and enqueue to spool.
-/// On client error (4xx), skip (advance offsets to avoid re-processing).
+/// On payload rejection, retain the rejected range as a dead letter.
 ///
 /// Returns a structured outcome so callers can distinguish shipped, spooled,
-/// and skipped-client-error paths without duplicating transport logic.
+/// and dead-lettered paths without duplicating transport logic.
 #[cfg(test)]
 #[allow(dead_code)]
 pub async fn ship_and_record(
@@ -161,13 +161,19 @@ pub async fn ship_and_record(
                 events: item.event_count,
             })
         }
-        ShipResult::RateLimited | ShipResult::ServerError(_, _) | ShipResult::ConnectError(_) => {
+        ShipResult::RateLimited
+        | ShipResult::ServerError(_, _)
+        | ShipResult::ConnectError(_)
+        | ShipResult::RetryableClientError(_, _) => {
             let err_msg = match &result {
                 ShipResult::RateLimited => "rate limited".to_string(),
                 ShipResult::ServerError(code, body) => {
                     format!("{}:{}", code, truncate_http_body(body))
                 }
                 ShipResult::ConnectError(e) => e.clone(),
+                ShipResult::RetryableClientError(code, body) => {
+                    format!("{}:{}", code, truncate_http_body(body))
+                }
                 _ => unreachable!(),
             };
 
@@ -214,54 +220,63 @@ pub async fn ship_and_record(
             let is_connect_error = matches!(result, ShipResult::ConnectError(_));
             Ok(ShipAndRecordOutcome::Spooled { is_connect_error })
         }
-        ShipResult::ClientError(code, body) => {
+        ShipResult::PayloadTooLarge(body) => {
+            tracing::warn!(
+                "Payload too large shipping {}: {}",
+                item.path_str,
+                truncate_http_body(&body)
+            );
+            let spool = Spool::new(conn);
+            let enqueued = spool.enqueue(
+                &item.provider,
+                &item.path_str,
+                item.offset,
+                item.new_offset,
+                Some(&item.session_id),
+            )?;
+            if enqueued {
+                file_state.set_queued_offset(
+                    &item.path_str,
+                    item.new_offset,
+                    &item.provider,
+                    &item.session_id,
+                    &item.session_id,
+                )?;
+            } else {
+                tracing::warn!(
+                    "Spool at capacity — 413 payload for {} will be retried on next startup",
+                    item.path_str
+                );
+            }
+            Ok(ShipAndRecordOutcome::Spooled {
+                is_connect_error: false,
+            })
+        }
+        ShipResult::PayloadRejected(code, body) => {
             tracing::error!(
-                "Client error shipping {}: {} {}",
+                "Payload rejected shipping {}: {} {}",
                 item.path_str,
                 code,
                 truncate_http_body(&body)
             );
-            if code == 413 {
-                // 413 = payload too large. The data is valid but the payload
-                // exceeds a proxy/server limit. Spool for retry — a future
-                // version with byte-based batching will split it into smaller
-                // chunks. Do NOT advance offsets (that loses data).
-                let spool = Spool::new(conn);
-                let enqueued = spool.enqueue(
-                    &item.provider,
-                    &item.path_str,
-                    item.offset,
-                    item.new_offset,
-                    Some(&item.session_id),
-                )?;
-                if enqueued {
-                    file_state.set_queued_offset(
-                        &item.path_str,
-                        item.new_offset,
-                        &item.provider,
-                        &item.session_id,
-                        &item.session_id,
-                    )?;
-                } else {
-                    tracing::warn!(
-                        "Spool at capacity — 413 payload for {} will be retried on next startup",
-                        item.path_str
-                    );
-                }
-                Ok(ShipAndRecordOutcome::Spooled {
-                    is_connect_error: false,
-                })
-            } else {
-                // Other 4xx (400, 401, 403, 422) — skip to avoid infinite re-processing
-                file_state.set_offset(
-                    &item.path_str,
-                    item.new_offset,
-                    &item.session_id,
-                    &item.session_id,
-                    &item.provider,
-                )?;
-                Ok(ShipAndRecordOutcome::SkippedClientError { status_code: code })
-            }
+            let spool = Spool::new(conn);
+            let error = format!("payload rejected {}:{}", code, truncate_http_body(&body));
+            spool.record_dead(
+                &item.provider,
+                &item.path_str,
+                item.offset,
+                item.new_offset,
+                Some(&item.session_id),
+                &error,
+            )?;
+            file_state.set_offset(
+                &item.path_str,
+                item.new_offset,
+                &item.session_id,
+                &item.session_id,
+                &item.provider,
+            )?;
+            Ok(ShipAndRecordOutcome::DeadLettered { status_code: code })
         }
     }
 }
@@ -903,13 +918,19 @@ async fn attempt_ship(
             );
             AttemptedShip::Shipped(item)
         }
-        ShipResult::RateLimited | ShipResult::ServerError(_, _) | ShipResult::ConnectError(_) => {
+        ShipResult::RateLimited
+        | ShipResult::ServerError(_, _)
+        | ShipResult::ConnectError(_)
+        | ShipResult::RetryableClientError(_, _) => {
             let error = match &result {
                 ShipResult::RateLimited => "rate limited".to_string(),
                 ShipResult::ServerError(code, body) => {
                     format!("{}:{}", code, truncate_http_body(body))
                 }
                 ShipResult::ConnectError(error) => error.clone(),
+                ShipResult::RetryableClientError(code, body) => {
+                    format!("{}:{}", code, truncate_http_body(body))
+                }
                 _ => unreachable!(),
             };
             let should_log = tracker.map_or(true, |t| t.record_error());
@@ -932,14 +953,22 @@ async fn attempt_ship(
                 is_connect_error: matches!(result, ShipResult::ConnectError(_)),
             }
         }
-        ShipResult::ClientError(status_code, body) => {
+        ShipResult::PayloadTooLarge(body) => {
+            tracing::warn!(
+                "Payload too large shipping {}: {}",
+                item.path_str,
+                truncate_http_body(&body)
+            );
+            AttemptedShip::PayloadTooLarge { item }
+        }
+        ShipResult::PayloadRejected(status_code, body) => {
             tracing::error!(
-                "Client error shipping {}: {} {}",
+                "Payload rejected shipping {}: {} {}",
                 item.path_str,
                 status_code,
                 truncate_http_body(&body)
             );
-            AttemptedShip::ClientError {
+            AttemptedShip::PayloadRejected {
                 item,
                 status_code,
                 body,
@@ -1043,37 +1072,49 @@ pub async fn ship_prepared_file(
                     outcome.had_connect_error = is_connect_error;
                     return Ok(outcome);
                 }
-                AttemptedShip::ClientError {
+                AttemptedShip::PayloadTooLarge { item } => {
+                    let enqueued = spool.enqueue(
+                        &item.provider,
+                        &item.path_str,
+                        item.offset,
+                        prepared.new_offset,
+                        Some(&item.session_id),
+                    )?;
+                    if enqueued {
+                        file_state.set_queued_offset(
+                            &item.path_str,
+                            prepared.new_offset,
+                            &item.provider,
+                            &item.session_id,
+                            &item.session_id,
+                        )?;
+                    } else {
+                        tracing::warn!(
+                            "Spool at capacity — 413 payload for {} will be retried on next startup",
+                            item.path_str
+                        );
+                    }
+                    outcome.fully_processed = false;
+                    return Ok(outcome);
+                }
+                AttemptedShip::PayloadRejected {
                     item,
                     status_code,
-                    body: _,
+                    body,
                 } => {
-                    if status_code == 413 {
-                        let enqueued = spool.enqueue(
-                            &item.provider,
-                            &item.path_str,
-                            item.offset,
-                            prepared.new_offset,
-                            Some(&item.session_id),
-                        )?;
-                        if enqueued {
-                            file_state.set_queued_offset(
-                                &item.path_str,
-                                prepared.new_offset,
-                                &item.provider,
-                                &item.session_id,
-                                &item.session_id,
-                            )?;
-                        } else {
-                            tracing::warn!(
-                                "Spool at capacity — 413 payload for {} will be retried on next startup",
-                                item.path_str
-                            );
-                        }
-                        outcome.fully_processed = false;
-                        return Ok(outcome);
-                    }
-
+                    let error = format!(
+                        "payload rejected {}:{}",
+                        status_code,
+                        truncate_http_body(&body)
+                    );
+                    spool.record_dead(
+                        &item.provider,
+                        &item.path_str,
+                        item.offset,
+                        item.new_offset,
+                        Some(&item.session_id),
+                        &error,
+                    )?;
                     file_state.set_offset(
                         &item.path_str,
                         item.new_offset,
@@ -1081,6 +1122,7 @@ pub async fn ship_prepared_file(
                         &item.session_id,
                         &item.provider,
                     )?;
+                    outcome.dead_lettered += 1;
                 }
             },
         }
@@ -1366,23 +1408,25 @@ async fn replay_spool_entries(
                         outcome.failed += 1;
                         continue 'entry_loop;
                     }
-                    AttemptedShip::ClientError {
+                    AttemptedShip::PayloadTooLarge { item: _ } => {
+                        spool.mark_failed_with_max(
+                            entry.id,
+                            "413 payload too large during replay",
+                            u32::MAX,
+                        )?;
+                        outcome.failed += 1;
+                        continue 'entry_loop;
+                    }
+                    AttemptedShip::PayloadRejected {
                         item,
                         status_code,
                         body,
                     } => {
-                        if status_code == 413 {
-                            spool.mark_failed_with_max(
-                                entry.id,
-                                "413 payload too large during replay",
-                                u32::MAX,
-                            )?;
-                            outcome.failed += 1;
-                            continue 'entry_loop;
-                        }
-
-                        let error =
-                            format!("client error {}:{}", status_code, truncate_http_body(&body));
+                        let error = format!(
+                            "payload rejected {}:{}",
+                            status_code,
+                            truncate_http_body(&body)
+                        );
                         spool.record_dead(
                             &item.provider,
                             &item.path_str,
@@ -2466,6 +2510,108 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_replay_retryable_client_error_stays_pending() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("replay-retryable-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path, claude_session_lines()).unwrap();
+
+        let spool = Spool::new(&conn);
+        let file_state = FileState::new(&conn);
+        let path_str = path.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        file_state
+            .set_queued_offset(
+                &path_str,
+                file_len,
+                "claude",
+                "replay-retryable-1111-2222-3333-444455556666",
+                "replay-retryable-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                file_len,
+                Some("replay-retryable-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+
+        let (url, _captured, handle) =
+            spawn_http_sequence_server(&[("401 Unauthorized", "{\"detail\":\"bad token\"}")]);
+        let client = make_test_client(&url);
+
+        let (ok, failed) =
+            replay_spool_batch_with_batch_bytes(&conn, &client, CompressionAlgo::Gzip, 10, 10_000)
+                .await
+                .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(ok, 0);
+        assert_eq!(failed, 1);
+        assert_eq!(spool.pending_count().unwrap(), 1);
+        assert_eq!(spool.dead_count().unwrap(), 0);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), 0);
+        assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), file_len);
+    }
+
+    #[tokio::test]
+    async fn test_replay_payload_rejection_dead_letters_range() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("replay-payload-rejected-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path, claude_session_lines()).unwrap();
+
+        let spool = Spool::new(&conn);
+        let file_state = FileState::new(&conn);
+        let path_str = path.to_string_lossy().to_string();
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        file_state
+            .set_queued_offset(
+                &path_str,
+                file_len,
+                "claude",
+                "replay-payload-rejected-1111-2222-3333-444455556666",
+                "replay-payload-rejected-1111-2222-3333-444455556666",
+            )
+            .unwrap();
+        spool
+            .enqueue(
+                "claude",
+                &path_str,
+                0,
+                file_len,
+                Some("replay-payload-rejected-1111-2222-3333-444455556666"),
+            )
+            .unwrap();
+
+        let (url, _captured, handle) = spawn_http_sequence_server(&[(
+            "422 Unprocessable Entity",
+            "{\"detail\":\"Invalid payload: missing field\"}",
+        )]);
+        let client = make_test_client(&url);
+
+        let (ok, failed) =
+            replay_spool_batch_with_batch_bytes(&conn, &client, CompressionAlgo::Gzip, 10, 10_000)
+                .await
+                .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!(ok, 1);
+        assert_eq!(failed, 0);
+        assert_eq!(spool.pending_count().unwrap(), 0);
+        assert_eq!(spool.dead_count().unwrap(), 1);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), file_len);
+        assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), file_len);
+    }
+
+    #[tokio::test]
     async fn test_replay_spool_for_path_processes_only_target_file() {
         let (_tmp, conn) = make_db();
         let dir = tempfile::tempdir().unwrap();
@@ -2809,6 +2955,80 @@ mod tests {
             .unwrap();
         assert_eq!(status, "dead");
         assert_eq!(spool.total_size().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_ship_prepared_file_retryable_client_error_spools_batch() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("retryable-client-error-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path, claude_session_lines()).unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None)
+                .unwrap()
+                .expect("file should prepare");
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        let path_str = path.to_string_lossy().to_string();
+
+        let (url, _captured, handle) =
+            spawn_http_sequence_server(&[("401 Unauthorized", "{\"detail\":\"bad token\"}")]);
+        let client = make_test_client(&url);
+
+        let outcome = ship_prepared_file(prepared, &client, &conn, None)
+            .await
+            .unwrap();
+        handle.join().unwrap();
+
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        assert_eq!(outcome.dead_lettered, 0);
+        assert_eq!(outcome.events_shipped, 0);
+        assert!(!outcome.fully_processed);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), 0);
+        assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), file_len);
+        assert_eq!(spool.pending_count().unwrap(), 1);
+        assert_eq!(spool.dead_count().unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_ship_prepared_file_payload_rejection_dead_letters_batch() {
+        let (_tmp, conn) = make_db();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir
+            .path()
+            .join("payload-rejected-1111-2222-3333-444455556666.jsonl");
+        std::fs::write(&path, claude_session_lines()).unwrap();
+
+        let prepared =
+            prepare_file_batches(&path, "claude", CompressionAlgo::Gzip, &conn, 10_000, None)
+                .unwrap()
+                .expect("file should prepare");
+        let file_len = std::fs::metadata(&path).unwrap().len();
+        let path_str = path.to_string_lossy().to_string();
+
+        let (url, _captured, handle) = spawn_http_sequence_server(&[(
+            "422 Unprocessable Entity",
+            "{\"detail\":\"Invalid payload: missing field\"}",
+        )]);
+        let client = make_test_client(&url);
+
+        let outcome = ship_prepared_file(prepared, &client, &conn, None)
+            .await
+            .unwrap();
+        handle.join().unwrap();
+
+        let file_state = FileState::new(&conn);
+        let spool = Spool::new(&conn);
+        assert_eq!(outcome.dead_lettered, 1);
+        assert_eq!(outcome.events_shipped, 0);
+        assert!(outcome.fully_processed);
+        assert_eq!(file_state.get_offset(&path_str).unwrap(), file_len);
+        assert_eq!(file_state.get_queued_offset(&path_str).unwrap(), file_len);
+        assert_eq!(spool.pending_count().unwrap(), 0);
+        assert_eq!(spool.dead_count().unwrap(), 1);
     }
 
     // ---------------------------------------------------------------

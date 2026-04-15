@@ -163,7 +163,10 @@ pub(crate) enum AttemptedShip {
         error: String,
         is_connect_error: bool,
     },
-    ClientError {
+    PayloadTooLarge {
+        item: ShipItem,
+    },
+    PayloadRejected {
         item: ShipItem,
         status_code: u16,
         body: String,
@@ -175,5 +178,5 @@ pub(crate) enum AttemptedShip {
 pub enum ShipAndRecordOutcome {
     Shipped { events: usize },
     Spooled { is_connect_error: bool },
-    SkippedClientError { status_code: u16 },
+    DeadLettered { status_code: u16 },
 }
