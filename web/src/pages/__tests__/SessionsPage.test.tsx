@@ -908,6 +908,7 @@ describe("SessionsPage", () => {
     renderSessionsPage();
 
     expect(await screen.findByText("Running Shell")).toBeInTheDocument();
+    expect(screen.queryByText("Working")).not.toBeInTheDocument();
     expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
@@ -1040,8 +1041,9 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    expect(await screen.findByText("Needs you")).toBeInTheDocument();
-    expect(screen.getByText("Live on host")).toBeInTheDocument();
+    expect(await screen.findByText("Waiting for you")).toBeInTheDocument();
+    expect(screen.getByText(/Reply needed/)).toBeInTheDocument();
+    expect(screen.getByText(/Live on laptop/)).toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--needs-user");
@@ -1082,8 +1084,9 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    expect(await screen.findByText("Blocked on Shell")).toBeInTheDocument();
-    expect(screen.getByText("Live on host")).toBeInTheDocument();
+    expect(await screen.findByText("Waiting for you")).toBeInTheDocument();
+    expect(screen.getByText(/Approval needed .* Shell/)).toBeInTheDocument();
+    expect(screen.getByText(/Live on laptop/)).toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
     expect(card).toHaveClass("session-card--blocked");
@@ -1100,11 +1103,16 @@ describe("SessionsPage", () => {
             ended_at: null,
             status: "working",
             confidence: "live",
+            runtime_source: "managed_local_transport",
             presence_state: "thinking",
             presence_updated_at: "2026-03-21T12:04:00Z",
             last_live_at: "2026-03-21T12:04:00Z",
             timeline_anchor_at: "2026-03-21T12:04:00Z",
             display_phase: "Thinking",
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+            }),
           }),
         ],
         total: 1,
@@ -1117,7 +1125,9 @@ describe("SessionsPage", () => {
 
     const { container } = renderSessionsPage();
 
-    expect(await screen.findByText("Thinking")).toBeInTheDocument();
+    expect(await screen.findByText("Working")).toBeInTheDocument();
+    expect(await screen.findByText(/Thinking/)).toBeInTheDocument();
+    expect(screen.getByText(/Live on laptop/)).toBeInTheDocument();
     expect(screen.queryByText("Fresh signal")).not.toBeInTheDocument();
 
     const card = container.querySelector(".session-card");
@@ -1188,7 +1198,8 @@ describe("SessionsPage", () => {
 
     renderSessionsPage();
 
-    expect(await screen.findByText("Running Codex")).toBeInTheDocument();
+    expect(await screen.findByText("Working")).toBeInTheDocument();
+    expect(screen.getByText(/Running Codex/)).toBeInTheDocument();
     expect(screen.queryByText("Running mcp__hatch__hatch_codex")).not.toBeInTheDocument();
   });
 

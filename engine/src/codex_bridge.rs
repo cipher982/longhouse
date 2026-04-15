@@ -147,12 +147,43 @@ struct BridgeContext {
     runtime: BridgeRuntimeSink,
     current_exe: PathBuf,
     last_progress_emit: Option<Instant>,
+    runtime_tracker: CodexRuntimeTracker,
 }
 
 #[derive(Debug, Clone)]
 struct ResolvedBridgePaths {
     state_file: PathBuf,
     log_file: PathBuf,
+}
+
+#[derive(Debug, Default)]
+struct CodexRuntimeTracker {
+    active_turn_id: Option<String>,
+    attention_state: Option<CodexAttentionState>,
+    active_items: BTreeMap<String, ActiveCodexItem>,
+    next_item_sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CodexAttentionState {
+    Approval { tool_name: Option<String> },
+    UserInput,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ActiveCodexItem {
+    item_type: String,
+    tool_name: Option<String>,
+    sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BridgeRuntimeUpdate {
+    Phase {
+        phase: &'static str,
+        tool_name: Option<String>,
+    },
+    Progress,
 }
 
 /// IPC command sent from `send` to the running daemon via Unix socket.
@@ -479,6 +510,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         },
         current_exe,
         last_progress_emit: None,
+        runtime_tracker: CodexRuntimeTracker::default(),
     };
     // Mark ready so the CLI can read ws_url and launch the TUI.
     // idle is posted once the TUI creates a thread (thread/started notification).
@@ -1173,38 +1205,11 @@ async fn handle_server_request(
         .context("server request missing id")?;
     let params = value.get("params").cloned().unwrap_or(Value::Null);
 
-    match method {
-        "item/commandExecution/requestApproval"
-        | "item/fileChange/requestApproval"
-        | "item/permissions/requestApproval" => {
-            context
-                .runtime
-                .post_phase(
-                    "blocked",
-                    format!(
-                        "bridge:blocked:{}:{}",
-                        context.state.session_id,
-                        Uuid::new_v4()
-                    ),
-                    Some("approval".to_string()),
-                )
-                .await;
-        }
-        "item/tool/requestUserInput" | "mcpServer/elicitation/request" => {
-            context
-                .runtime
-                .post_phase(
-                    "needs_user",
-                    format!(
-                        "bridge:needs-user:{}:{}",
-                        context.state.session_id,
-                        Uuid::new_v4()
-                    ),
-                    None,
-                )
-                .await;
-        }
-        _ => {}
+    if let Some(update) = context
+        .runtime_tracker
+        .handle_server_request(method, &params)
+    {
+        emit_runtime_updates(context, vec![update]).await;
     }
 
     let result = match method {
@@ -1244,7 +1249,7 @@ async fn handle_server_request(
 
 async fn process_notification(
     value: &Value,
-    config: &BridgeRunConfig,
+    _config: &BridgeRunConfig,
     context: &mut BridgeContext,
 ) -> Result<()> {
     let Some(method) = value.get("method").and_then(Value::as_str) else {
@@ -1282,87 +1287,39 @@ async fn process_notification(
                         }
                     }
 
-                    context
-                        .runtime
-                        .post_phase(
-                            "idle",
-                            format!("bridge:launch:{}", context.state.session_id),
-                            None,
-                        )
-                        .await;
+                    emit_runtime_updates(
+                        context,
+                        vec![context.runtime_tracker.current_phase_update()],
+                    )
+                    .await;
                     eprintln!("[codex-bridge] TUI thread captured: {id}");
                 }
             }
         }
-        "turn/started" => {
-            context.state.active_turn_id = extract_string(&params, &["turn", "id"]);
-            context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
-            write_state_file(&context.state_file, &context.state)?;
-            context
-                .runtime
-                .post_phase(
-                    "thinking",
-                    format!(
-                        "bridge:thinking:{}:{}",
-                        context.state.session_id,
-                        context
-                            .state
-                            .active_turn_id
-                            .clone()
-                            .unwrap_or_else(|| Uuid::new_v4().to_string())
-                    ),
-                    None,
-                )
-                .await;
-        }
-        "item/agentMessage/delta" => {
-            if should_emit_progress(context.last_progress_emit, DEFAULT_PROGRESS_THROTTLE_MS) {
-                context.last_progress_emit = Some(Instant::now());
-                context
-                    .runtime
-                    .post_progress(format!(
-                        "bridge:progress:{}:{}",
-                        context.state.session_id,
-                        Uuid::new_v4()
-                    ))
-                    .await;
+        "turn/started" | "item/started" | "item/completed" | "thread/status/changed" => {
+            if method == "turn/started" {
+                context.state.active_turn_id = extract_string(&params, &["turn", "id"]);
+                context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
+                write_state_file(&context.state_file, &context.state)?;
             }
+            let updates = context.runtime_tracker.handle_notification(method, &params);
+            emit_runtime_updates(context, updates).await;
+        }
+        "item/agentMessage/delta"
+        | "item/commandExecution/outputDelta"
+        | "command/exec/outputDelta"
+        | "item/fileChange/outputDelta"
+        | "item/mcpToolCall/progress" => {
+            let updates = context.runtime_tracker.handle_notification(method, &params);
+            emit_runtime_updates(context, updates).await;
         }
         "turn/completed" => {
             context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
             context.state.active_turn_id = None;
             write_state_file(&context.state_file, &context.state)?;
-            context
-                .runtime
-                .post_phase(
-                    "idle",
-                    format!(
-                        "bridge:idle:{}:{}",
-                        context.state.session_id,
-                        Uuid::new_v4()
-                    ),
-                    None,
-                )
-                .await;
+            let updates = context.runtime_tracker.handle_notification(method, &params);
+            emit_runtime_updates(context, updates).await;
             // Daemon handles shipping — no per-turn ship needed.
-        }
-        "thread/status/changed" => {
-            if let Some(status_type) = extract_string(&params, &["thread", "status", "type"]) {
-                if status_type == "idle" {
-                    context
-                        .runtime
-                        .post_phase(
-                            "idle",
-                            format!(
-                                "bridge:thread-idle:{}:{}",
-                                context.state.session_id,
-                                Uuid::new_v4()
-                            ),
-                            None,
-                        )
-                        .await;
-                }
-            }
         }
         "hook/completed" => {
             if let Some(summary) = params.get("summary") {
@@ -1374,6 +1331,247 @@ async fn process_notification(
         _ => {}
     }
     Ok(())
+}
+
+impl CodexRuntimeTracker {
+    fn handle_server_request(
+        &mut self,
+        method: &str,
+        _params: &Value,
+    ) -> Option<BridgeRuntimeUpdate> {
+        self.attention_state = match method {
+            "item/commandExecution/requestApproval" | "execCommandApproval" => {
+                Some(CodexAttentionState::Approval {
+                    tool_name: Some("shell".to_string()),
+                })
+            }
+            "item/fileChange/requestApproval" | "applyPatchApproval" => {
+                Some(CodexAttentionState::Approval {
+                    tool_name: Some("edit".to_string()),
+                })
+            }
+            "item/permissions/requestApproval" => {
+                Some(CodexAttentionState::Approval { tool_name: None })
+            }
+            "item/tool/requestUserInput" | "mcpServer/elicitation/request" => {
+                Some(CodexAttentionState::UserInput)
+            }
+            _ => return None,
+        };
+        Some(self.current_phase_update())
+    }
+
+    fn handle_notification(&mut self, method: &str, params: &Value) -> Vec<BridgeRuntimeUpdate> {
+        match method {
+            "turn/started" => {
+                self.active_turn_id = extract_string(params, &["turn", "id"]);
+                self.attention_state = None;
+                self.active_items.clear();
+                vec![self.current_phase_update()]
+            }
+            "turn/completed" => {
+                self.active_turn_id = None;
+                self.attention_state = None;
+                self.active_items.clear();
+                vec![self.current_phase_update()]
+            }
+            "item/started" => self
+                .track_started_item(params)
+                .map(|update| vec![update])
+                .unwrap_or_default(),
+            "item/completed" => self
+                .track_completed_item(params)
+                .map(|update| vec![update])
+                .unwrap_or_default(),
+            "thread/status/changed" => self
+                .track_thread_status(params)
+                .map(|update| vec![update])
+                .unwrap_or_default(),
+            "item/agentMessage/delta"
+            | "item/commandExecution/outputDelta"
+            | "command/exec/outputDelta"
+            | "item/fileChange/outputDelta"
+            | "item/mcpToolCall/progress" => vec![BridgeRuntimeUpdate::Progress],
+            _ => Vec::new(),
+        }
+    }
+
+    fn track_started_item(&mut self, params: &Value) -> Option<BridgeRuntimeUpdate> {
+        let item = params.get("item")?;
+        let item_id = item.get("id").and_then(Value::as_str)?.to_string();
+        let item_type = item.get("type").and_then(Value::as_str)?.to_string();
+        if !item_supports_runtime_tracking(item_type.as_str(), item) {
+            return None;
+        }
+        let tool_name = tracked_item_tool_name(item_type.as_str(), item);
+        self.next_item_sequence += 1;
+        self.active_items.insert(
+            item_id,
+            ActiveCodexItem {
+                item_type,
+                tool_name,
+                sequence: self.next_item_sequence,
+            },
+        );
+        self.attention_state = None;
+        Some(self.current_phase_update())
+    }
+
+    fn track_completed_item(&mut self, params: &Value) -> Option<BridgeRuntimeUpdate> {
+        let item = params.get("item")?;
+        let item_id = item.get("id").and_then(Value::as_str)?;
+        if self.active_items.remove(item_id).is_none() {
+            return None;
+        }
+        Some(self.current_phase_update())
+    }
+
+    fn track_thread_status(&mut self, params: &Value) -> Option<BridgeRuntimeUpdate> {
+        match extract_thread_status_type(params)?.as_str() {
+            "idle" => {
+                self.active_turn_id = None;
+                self.attention_state = None;
+                self.active_items.clear();
+                Some(self.current_phase_update())
+            }
+            "active" => {
+                let flags = extract_thread_active_flags(params);
+                if flags.iter().any(|flag| flag == "waitingOnApproval") {
+                    let existing_tool = match self.attention_state.as_ref() {
+                        Some(CodexAttentionState::Approval { tool_name }) => tool_name.clone(),
+                        _ => None,
+                    };
+                    self.attention_state = Some(CodexAttentionState::Approval {
+                        tool_name: self.primary_running_tool().or(existing_tool),
+                    });
+                } else if flags.iter().any(|flag| flag == "waitingOnUserInput") {
+                    self.attention_state = Some(CodexAttentionState::UserInput);
+                } else {
+                    self.attention_state = None;
+                }
+                Some(self.current_phase_update())
+            }
+            _ => None,
+        }
+    }
+
+    fn current_phase_update(&self) -> BridgeRuntimeUpdate {
+        if let Some(attention_state) = self.attention_state.as_ref() {
+            return match attention_state {
+                CodexAttentionState::Approval { tool_name } => BridgeRuntimeUpdate::Phase {
+                    phase: "blocked",
+                    tool_name: tool_name.clone(),
+                },
+                CodexAttentionState::UserInput => BridgeRuntimeUpdate::Phase {
+                    phase: "needs_user",
+                    tool_name: None,
+                },
+            };
+        }
+        if let Some(tool_name) = self.primary_running_tool() {
+            return BridgeRuntimeUpdate::Phase {
+                phase: "running",
+                tool_name: Some(tool_name),
+            };
+        }
+        if self.active_turn_id.is_some() {
+            return BridgeRuntimeUpdate::Phase {
+                phase: "thinking",
+                tool_name: None,
+            };
+        }
+        BridgeRuntimeUpdate::Phase {
+            phase: "idle",
+            tool_name: None,
+        }
+    }
+
+    fn primary_running_tool(&self) -> Option<String> {
+        self.active_items
+            .values()
+            .max_by_key(|item| item.sequence)
+            .and_then(|item| item.tool_name.clone())
+    }
+}
+
+fn item_supports_runtime_tracking(item_type: &str, item: &Value) -> bool {
+    match item_type {
+        "commandExecution"
+        | "fileChange"
+        | "mcpToolCall"
+        | "dynamicToolCall"
+        | "collabAgentToolCall" => item
+            .get("status")
+            .and_then(Value::as_str)
+            .is_some_and(|status| status == "inProgress"),
+        _ => false,
+    }
+}
+
+fn tracked_item_tool_name(item_type: &str, item: &Value) -> Option<String> {
+    match item_type {
+        "commandExecution" => Some("shell".to_string()),
+        "fileChange" => Some("edit".to_string()),
+        "mcpToolCall" | "dynamicToolCall" | "collabAgentToolCall" => {
+            extract_string(item, &["tool"])
+        }
+        _ => None,
+    }
+}
+
+fn extract_thread_status_type(params: &Value) -> Option<String> {
+    extract_string(params, &["status", "type"])
+        .or_else(|| extract_string(params, &["thread", "status", "type"]))
+}
+
+fn extract_thread_active_flags(params: &Value) -> Vec<String> {
+    let status = params
+        .get("status")
+        .or_else(|| params.get("thread").and_then(|thread| thread.get("status")));
+    status
+        .and_then(|value| value.get("activeFlags"))
+        .and_then(Value::as_array)
+        .map(|flags| {
+            flags
+                .iter()
+                .filter_map(|value| value.as_str().map(ToString::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn emit_runtime_updates(context: &mut BridgeContext, updates: Vec<BridgeRuntimeUpdate>) {
+    for update in updates {
+        match update {
+            BridgeRuntimeUpdate::Phase { phase, tool_name } => {
+                context
+                    .runtime
+                    .post_phase(
+                        phase,
+                        format!(
+                            "bridge:{phase}:{}:{}",
+                            context.state.session_id,
+                            Uuid::new_v4()
+                        ),
+                        tool_name,
+                    )
+                    .await;
+            }
+            BridgeRuntimeUpdate::Progress => {
+                if should_emit_progress(context.last_progress_emit, DEFAULT_PROGRESS_THROTTLE_MS) {
+                    context.last_progress_emit = Some(Instant::now());
+                    context
+                        .runtime
+                        .post_progress(format!(
+                            "bridge:progress:{}:{}",
+                            context.state.session_id,
+                            Uuid::new_v4()
+                        ))
+                        .await;
+                }
+            }
+        }
+    }
 }
 
 impl BridgeRuntimeSink {
@@ -1530,6 +1728,21 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn assert_phase_update(
+        update: BridgeRuntimeUpdate,
+        expected_phase: &'static str,
+        expected_tool: Option<&str>,
+    ) {
+        assert_eq!(
+            update,
+            BridgeRuntimeUpdate::Phase {
+                phase: expected_phase,
+                tool_name: expected_tool.map(ToString::to_string),
+            }
+        );
+    }
 
     #[test]
     fn resolve_bridge_paths_defaults_under_claude_dir() {
@@ -1591,6 +1804,234 @@ mod tests {
         assert_eq!(sock, Path::new("/tmp/codex-bridge/session-42.sock"));
     }
 
+    #[test]
+    fn codex_runtime_tracker_derives_running_and_thinking_from_item_lifecycle() {
+        let mut tracker = CodexRuntimeTracker::default();
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "turn/started",
+                    &json!({
+                        "turn": {"id": "turn-1", "status": "inProgress"}
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "thinking",
+            None,
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "item/started",
+                    &json!({
+                        "item": {
+                            "id": "cmd-1",
+                            "type": "commandExecution",
+                            "status": "inProgress",
+                            "command": "pwd"
+                        }
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "running",
+            Some("shell"),
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "item/started",
+                    &json!({
+                        "item": {
+                            "id": "mcp-1",
+                            "type": "mcpToolCall",
+                            "status": "inProgress",
+                            "tool": "smart_home_get_state"
+                        }
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "running",
+            Some("smart_home_get_state"),
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "item/completed",
+                    &json!({
+                        "item": {
+                            "id": "mcp-1",
+                            "type": "mcpToolCall",
+                            "status": "completed",
+                            "tool": "smart_home_get_state"
+                        }
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "running",
+            Some("shell"),
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "item/completed",
+                    &json!({
+                        "item": {
+                            "id": "cmd-1",
+                            "type": "commandExecution",
+                            "status": "completed",
+                            "command": "pwd"
+                        }
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "thinking",
+            None,
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "turn/completed",
+                    &json!({
+                        "turn": {"id": "turn-1", "status": "completed"}
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "idle",
+            None,
+        );
+    }
+
+    #[test]
+    fn codex_runtime_tracker_uses_waiting_flags_and_request_types() {
+        let mut tracker = CodexRuntimeTracker::default();
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "turn/started",
+                    &json!({
+                        "turn": {"id": "turn-1", "status": "inProgress"}
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "thinking",
+            None,
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_server_request(
+                    "item/commandExecution/requestApproval",
+                    &json!({"command": "git status"}),
+                )
+                .unwrap(),
+            "blocked",
+            Some("shell"),
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "thread/status/changed",
+                    &json!({
+                        "status": {
+                            "type": "active",
+                            "activeFlags": ["waitingOnApproval"]
+                        }
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "blocked",
+            Some("shell"),
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "thread/status/changed",
+                    &json!({
+                        "status": {
+                            "type": "active",
+                            "activeFlags": ["waitingOnUserInput"]
+                        }
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "needs_user",
+            None,
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "thread/status/changed",
+                    &json!({
+                        "status": {
+                            "type": "active",
+                            "activeFlags": []
+                        }
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "thinking",
+            None,
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_server_request(
+                    "item/fileChange/requestApproval",
+                    &json!({"reason": "Need extra write access"}),
+                )
+                .unwrap(),
+            "blocked",
+            Some("edit"),
+        );
+
+        assert_phase_update(
+            tracker
+                .handle_notification(
+                    "thread/status/changed",
+                    &json!({
+                        "status": {
+                            "type": "idle"
+                        }
+                    }),
+                )
+                .into_iter()
+                .next()
+                .unwrap(),
+            "idle",
+            None,
+        );
+    }
+
     #[tokio::test]
     async fn send_request_with_runtime_handles_interleaved_requests_and_notifications() {
         let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
@@ -1634,6 +2075,7 @@ mod tests {
             },
             current_exe: PathBuf::from("/bin/echo"),
             last_progress_emit: None,
+            runtime_tracker: CodexRuntimeTracker::default(),
         };
         let config = BridgeRunConfig {
             session_id: "session-123".to_string(),

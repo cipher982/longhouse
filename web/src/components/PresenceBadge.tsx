@@ -11,8 +11,10 @@ export type PresenceStateInput = PresenceState | (string & {});
 export interface PresenceBadgeProps {
   state: PresenceStateInput | null;
   tool?: string | null;
-  /** compact=true renders only the animated dot, no text label */
+  /** compact=true renders only the dot, no text label */
   compact?: boolean;
+  /** animateCompact=true preserves live motion in dense surfaces like the detail header */
+  animateCompact?: boolean;
   className?: string;
   /**
    * heuristicActive=true — when state is null, show a dim pulsing green dot
@@ -74,7 +76,7 @@ ensureStyles();
 
 function getToolLabel(tool: string): { prefix: string; label: string } {
   const t = tool.toLowerCase();
-  if (t === "bash") return { prefix: "$", label: "bash" };
+  if (t === "bash" || t === "shell" || t === "terminal") return { prefix: "$", label: t };
   if (t === "read") return { prefix: "\u2193", label: "reading" };
   if (t === "write" || t === "edit") return { prefix: "\u270e", label: "writing" };
   if (t === "webfetch" || t === "websearch" || t.includes("fetch") || t.includes("search"))
@@ -106,9 +108,10 @@ interface DotProps {
   state: PresenceState;
   size: number;
   compact?: boolean;
+  animateCompact?: boolean;
 }
 
-function Dot({ state, size, compact = false }: DotProps) {
+function Dot({ state, size, compact = false, animateCompact = false }: DotProps) {
   const base: React.CSSProperties = {
     display: "inline-block",
     width: size,
@@ -123,7 +126,10 @@ function Dot({ state, size, compact = false }: DotProps) {
         style={{
           ...base,
           background: compact ? "#fb923c" : "radial-gradient(circle, #fb923c 30%, #f97316 100%)",
-          animation: compact ? undefined : "presence-pulse 1.4s ease-in-out infinite",
+          animation:
+            !compact || animateCompact
+              ? "presence-pulse 1.4s ease-in-out infinite"
+              : undefined,
           opacity: compact ? 0.88 : 1,
           // CSS custom property for glow color used in keyframes
           ["--presence-glow" as string]: "rgba(251, 146, 60, 0.6)",
@@ -138,7 +144,10 @@ function Dot({ state, size, compact = false }: DotProps) {
         style={{
           ...base,
           background: compact ? "#38bdf8" : "radial-gradient(circle, #38bdf8 30%, #0ea5e9 100%)",
-          animation: compact ? undefined : "presence-run-blink 0.9s ease-in-out infinite",
+          animation:
+            !compact || animateCompact
+              ? "presence-run-blink 0.9s ease-in-out infinite"
+              : undefined,
           boxShadow: compact ? undefined : "0 0 6px 2px rgba(56, 189, 248, 0.5)",
           opacity: compact ? 0.88 : 1,
         }}
@@ -215,7 +224,15 @@ function TypingDots() {
 // Main component
 // ---------------------------------------------------------------------------
 
-export function PresenceBadge({ state, tool, compact = false, className, heuristicActive = false, showUnknown = false }: PresenceBadgeProps) {
+export function PresenceBadge({
+  state,
+  tool,
+  compact = false,
+  animateCompact = false,
+  className,
+  heuristicActive = false,
+  showUnknown = false,
+}: PresenceBadgeProps) {
   const normalizedState = normalizePresenceState(state);
   const hasUnknownState = state != null && normalizedState == null;
 
@@ -321,7 +338,12 @@ export function PresenceBadge({ state, tool, compact = false, className, heurist
         title={compactTitle}
         style={{ display: "inline-flex", alignItems: "center" }}
       >
-        <Dot state={normalizedState} size={dotSize} compact />
+        <Dot
+          state={normalizedState}
+          size={dotSize}
+          compact
+          animateCompact={animateCompact}
+        />
       </span>
     );
   }

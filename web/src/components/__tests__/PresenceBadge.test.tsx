@@ -16,6 +16,20 @@ describe("PresenceBadge styles", () => {
     expect(document.querySelectorAll("#presence-badge-keyframes")).toHaveLength(1);
   });
 
+  it("keeps compact execution badges animated in dense layouts", () => {
+    render(
+      <>
+        <PresenceBadge state="thinking" compact animateCompact />
+        <PresenceBadge state="running" tool="shell" compact animateCompact />
+      </>,
+    );
+
+    const thinkingIndicator = screen.getByTitle("thinking").firstElementChild as HTMLElement;
+    const runningIndicator = screen.getByTitle("Running: shell").firstElementChild as HTMLElement;
+    expect(thinkingIndicator.style.animation).toContain("presence-pulse");
+    expect(runningIndicator.style.animation).toContain("presence-run-blink");
+  });
+
   it("keeps compact needs-user badges steady instead of pulsing like execution", () => {
     render(<PresenceBadge state="needs_user" compact />);
 

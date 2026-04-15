@@ -14,6 +14,7 @@ import {
   formatRelativeTime,
   getRuntimeMetaLabel,
   getCardRuntimePhaseLabel,
+  getRuntimeDisplayCopy,
   getProjectLabel,
   getSessionTitle,
   renderHighlightedText,
@@ -107,11 +108,32 @@ export function SessionCard({
   const toolCount = session.tool_calls;
   const runtime = resolveSessionRuntimeState(session);
   const runtimeMetaLabel = getRuntimeMetaLabel(runtime);
-  const runtimePhaseLabel = getCardRuntimePhaseLabel(runtime);
+  const runtimeDisplay = getRuntimeDisplayCopy(runtime, {
+    managedLocal: interaction.isManagedLocalSession,
+  });
+  const runtimePhaseLabel = interaction.isManagedLocalSession
+    ? runtimeDisplay.headline
+    : getCardRuntimePhaseLabel(runtime);
 
   const projectLabel = getProjectLabel(session);
   const title = getSessionTitle(session);
   const homeLabel = normalizeExecutionVenueLabel(session.home_label);
+  const runtimeHostLabel =
+    session.control?.source_runner_name?.trim() ||
+    homeLabel ||
+    interaction.sourceOriginLabel ||
+    "host";
+  const cardRuntimeMetaParts = interaction.isManagedLocalSession
+    ? [
+        runtimeDisplay.detail,
+        interaction.liveControlAvailable
+          ? `Live on ${runtimeHostLabel}`
+          : `Continue on ${runtimeHostLabel}`,
+        runtimeMetaLabel && runtimeMetaLabel !== "Live on host"
+          ? runtimeMetaLabel
+          : null,
+      ].filter(Boolean)
+    : [runtimeMetaLabel].filter(Boolean);
   const headOriginLabel = normalizeSessionOriginLabel(thread.head_origin_label);
   const startedOriginLabel = normalizeSessionOriginLabel(thread.started_origin_label);
   const showHeadOriginLabel =
@@ -268,8 +290,10 @@ export function SessionCard({
                     showUnknown={runtime.truthTier === "stale"}
                   />
                   <span className="session-card-runtime-phase">{runtimePhaseLabel}</span>
-                  {runtimeMetaLabel && (
-                    <span className="session-card-runtime-meta">{runtimeMetaLabel}</span>
+                  {cardRuntimeMetaParts.length > 0 && (
+                    <span className="session-card-runtime-meta">
+                      {cardRuntimeMetaParts.join(" • ")}
+                    </span>
                   )}
                 </div>
               )}

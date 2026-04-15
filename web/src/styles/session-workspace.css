@@ -219,6 +219,7 @@
   .session-runtime-strip--tone-running {
     border-color: rgba(212, 184, 122, 0.28);
     background: rgba(40, 24, 16, 0.72);
+    animation: session-runtime-strip-pulse 2.4s ease-in-out infinite;
   }
 
   .session-runtime-strip--tone-needs-user {
@@ -238,10 +239,24 @@
     min-width: 0;
   }
 
-  .session-runtime-strip__phase {
+  .session-runtime-strip__copy {
+    min-width: 0;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .session-runtime-strip__headline {
     font-size: var(--font-size-sm);
     font-weight: var(--font-weight-semibold);
     color: var(--color-text-primary);
+    min-width: 0;
+  }
+
+  .session-runtime-strip__detail {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
     min-width: 0;
   }
 
@@ -249,6 +264,15 @@
     font-size: var(--font-size-xs);
     color: var(--color-text-muted);
     min-width: 0;
+  }
+
+  @keyframes session-runtime-strip-pulse {
+    0%, 100% {
+      box-shadow: 0 0 0 0 rgba(212, 184, 122, 0);
+    }
+    50% {
+      box-shadow: 0 0 0 1px rgba(212, 184, 122, 0.22);
+    }
   }
 
   .session-context-pane,
