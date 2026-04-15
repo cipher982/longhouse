@@ -440,17 +440,12 @@ def _check_shipper() -> list[CheckResult]:
         if detect_platform() == Platform.MACOS:
             ambient = get_desktop_app_service_info()
             ambient_status = ambient.get("status")
-            if ambient_status == "running":
-                results.append(CheckResult(PASS, "Desktop App running"))
-            elif ambient_status == "stopped":
-                results.append(CheckResult(WARN, "Desktop App stopped", "Run: longhouse connect --install"))
-            else:
-                results.append(CheckResult(WARN, "Desktop App not installed", "Run: longhouse connect --install"))
-
             runtime_mode = ambient.get("runtime_mode")
             artifact_path = ambient.get("artifact_path")
+
+            # First report the bundle/installation state
             if runtime_mode == "app-bundle":
-                label = "Desktop App installed as Longhouse.app"
+                label = "Desktop App bundle installed (Longhouse.app)"
                 if artifact_path:
                     label = f"{label} ({artifact_path})"
                 results.append(CheckResult(PASS, label))
@@ -464,6 +459,23 @@ def _check_shipper() -> list[CheckResult]:
                 if artifact_path:
                     label = f"{label} ({artifact_path})"
                 results.append(CheckResult(WARN, label, "Run: longhouse connect --install"))
+            else:
+                results.append(CheckResult(WARN, "Desktop App bundle not installed", "Run: longhouse connect --install"))
+
+            # Then report the service status (only if we have a valid installation)
+            if runtime_mode in ("app-bundle", "source-build"):
+                if ambient_status == "running":
+                    results.append(CheckResult(PASS, "Desktop App service running"))
+                elif ambient_status == "stopped":
+                    results.append(
+                        CheckResult(
+                            WARN,
+                            "Desktop App service stopped (bundle present but not running)",
+                            "Run: launchctl load ~/Library/LaunchAgents/ai.longhouse.app.plist",
+                        )
+                    )
+                else:
+                    results.append(CheckResult(WARN, "Desktop App service not registered", "Run: longhouse connect --install"))
     except Exception:
         pass
 

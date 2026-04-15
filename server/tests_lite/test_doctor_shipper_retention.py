@@ -69,8 +69,8 @@ def test_check_shipper_reports_ambient_app_bundle(tmp_path, monkeypatch):
     results = doctor._check_shipper()
     labels = {r.label: r.status for r in results}
 
-    assert labels["Desktop App running"] == doctor.PASS
-    assert labels["Desktop App installed as Longhouse.app (/Applications/Longhouse.app)"] == doctor.PASS
+    assert labels["Desktop App bundle installed (Longhouse.app) (/Applications/Longhouse.app)"] == doctor.PASS
+    assert labels["Desktop App service running"] == doctor.PASS
 
 
 def test_check_shipper_accepts_local_source_build_desktop_app(tmp_path, monkeypatch):
@@ -89,8 +89,8 @@ def test_check_shipper_accepts_local_source_build_desktop_app(tmp_path, monkeypa
     results = doctor._check_shipper()
     labels = {r.label: r.status for r in results}
 
-    assert labels["Desktop App running"] == doctor.PASS
     assert labels["Desktop App installed from local source build (/Applications/Longhouse.app)"] == doctor.PASS
+    assert labels["Desktop App service running"] == doctor.PASS
 
 
 def test_check_shipper_warns_when_ambient_ui_uses_legacy_binary_install(tmp_path, monkeypatch):
@@ -109,3 +109,35 @@ def test_check_shipper_warns_when_ambient_ui_uses_legacy_binary_install(tmp_path
     labels = {r.label: r.status for r in results}
 
     assert labels["Desktop App install missing, broken, or unsupported (/Users/test/.local/bin/longhouse-local-health-menubar)"] == doctor.WARN
+
+
+def test_check_shipper_clarifies_bundle_present_but_service_stopped(tmp_path, monkeypatch):
+    """Test the fix for docket item: clarify when bundle exists but service is stopped.
+
+    This should NOT emit contradictory lines like:
+    - "Desktop App not installed"
+    - "Desktop App installed as Longhouse.app"
+
+    Instead it should clearly separate bundle state from service state.
+    """
+    claude_dir = tmp_path / ".claude"
+    _seed_claude_dir(claude_dir, settings={})
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
+    monkeypatch.setattr(shipper, "get_service_status", lambda: "running")
+    monkeypatch.setattr(desktop_app, "get_desktop_app_service_info", lambda: {
+        "status": "stopped",  # Service is stopped
+        "artifact_path": "/Applications/Longhouse.app",
+        "runtime_mode": "app-bundle",  # But bundle exists
+    })
+    monkeypatch.setattr("zerg.services.shipper.service.detect_platform", lambda: Platform.MACOS)
+
+    results = doctor._check_shipper()
+    labels = {r.label: r.status for r in results}
+
+    # Should NOT have any contradiction
+    assert "Desktop App not installed" not in labels
+    # Should clearly show bundle is installed
+    assert labels["Desktop App bundle installed (Longhouse.app) (/Applications/Longhouse.app)"] == doctor.PASS
+    # Should clearly show service is not running
+    assert "Desktop App service stopped" in labels
+    assert labels["Desktop App service stopped (bundle present but not running)"] == doctor.WARN
