@@ -115,8 +115,7 @@ export default function LandingPage() {
       // Demo site: go to the hosted control plane auth
       window.location.href = "https://control.longhouse.ai";
     } else {
-      // Production instance: AuthGuard will show the login screen
-      navigate("/timeline");
+      navigate("/login");
     }
   };
 
