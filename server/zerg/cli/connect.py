@@ -773,11 +773,11 @@ def _handle_status() -> None:
     typer.echo(f"Machine Agent: {info.get('service_name', 'N/A')}")
 
     if status == "running":
-        typer.secho("Status: running", fg=typer.colors.GREEN)
+        typer.echo("Status: running")
     elif status == "stopped":
-        typer.secho("Status: stopped", fg=typer.colors.YELLOW)
+        typer.echo("Status: stopped")
     else:
-        typer.secho("Status: not installed", fg=typer.colors.RED)
+        typer.echo("Status: not installed")
 
     if status != "not-installed":
         typer.echo(f"Config: {info.get('service_file', 'N/A')}")
@@ -789,11 +789,11 @@ def _handle_status() -> None:
         typer.echo(f"Desktop App: {menubar.get('service_name', 'N/A')}")
         menubar_status = menubar["status"]
         if menubar_status == "running":
-            typer.secho("Status: running", fg=typer.colors.GREEN)
+            typer.echo("Status: running")
         elif menubar_status == "stopped":
-            typer.secho("Status: stopped", fg=typer.colors.YELLOW)
+            typer.echo("Status: stopped")
         else:
-            typer.secho("Status: not installed", fg=typer.colors.RED)
+            typer.echo("Status: not installed")
         if menubar_status != "not-installed":
             typer.echo(f"Config: {menubar.get('service_file', 'N/A')}")
             typer.echo(f"Logs: {menubar['log_path']}")
@@ -809,12 +809,9 @@ def _handle_status() -> None:
                 detail = "Desktop App runtime: local source build"
                 if version:
                     detail = f"{detail} ({version})"
-                typer.secho(detail, fg=typer.colors.GREEN)
+                typer.echo(detail)
             elif runtime_mode == "broken-install":
-                typer.secho(
-                    "Desktop App runtime: install is missing, broken, or unsupported " "(run: longhouse connect --install)",
-                    fg=typer.colors.YELLOW,
-                )
+                typer.echo("Desktop App runtime: install is missing, broken, or unsupported (run: longhouse connect --install)")
 
 
 def _handle_uninstall() -> None:
