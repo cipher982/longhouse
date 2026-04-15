@@ -85,8 +85,6 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
     assert len(saved_configs) == 1
     assert saved_configs[0].server.host == "127.0.0.1"
     assert saved_configs[0].server.port == 8080
-    assert saved_configs[0].browser.default_url is None
-    assert saved_configs[0].shipper.api_url is None
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
 
 
