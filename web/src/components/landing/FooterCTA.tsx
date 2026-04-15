@@ -25,13 +25,11 @@ export function FooterCTA() {
             <Button variant="primary" size="lg" onClick={handleSelfHost}>
               Self-Host Free
             </Button>
-            <Button variant="secondary" size="lg" onClick={handleDocs}>
-              Read the Docs
-            </Button>
           </div>
           <p className="landing-footer-subnote">
             Or skip running the box —{" "}
-            <a href="https://control.longhouse.ai/signup">get hosted for $5/mo</a>.
+            <a href="https://control.longhouse.ai/signup">get hosted for $5/mo</a>.{" "}
+            <a href="/docs" className="landing-footer-subnote-docs">Read the docs</a>.
           </p>
         </div>
 
