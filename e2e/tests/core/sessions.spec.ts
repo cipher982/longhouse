@@ -11,12 +11,10 @@ import type { APIRequestContext } from "@playwright/test";
 import { test, expect, type Page } from "../fixtures";
 
 async function ensureDemoProviders(page: Page): Promise<void> {
-  // Hero empty state has no toolbar — seed demos first if visible
+  // Hero empty state has no toolbar — auto-seed fires automatically; wait for toolbar
   const heroEmpty = page.locator(".sessions-hero-empty");
   if (await heroEmpty.isVisible({ timeout: 2000 }).catch(() => false)) {
-    const loadDemo = page.getByRole("button", { name: /Load demo/i });
-    await loadDemo.click();
-    await page.waitForSelector(".sessions-toolbar", { timeout: 15000 });
+    await page.waitForSelector(".sessions-toolbar", { timeout: 20000 });
   }
 
   // Open filter popover to check available providers
@@ -31,17 +29,6 @@ async function ensureDemoProviders(page: Page): Promise<void> {
   const claudeOption = page.locator(
     '[data-filter-section="provider"] [data-filter-option="claude"]',
   );
-  const hasClaude = await claudeOption.count();
-  if (hasClaude > 0) {
-    return;
-  }
-
-  // Fallback: try loading demos if provider not yet available
-  const loadDemo = page.getByRole("button", { name: /Load demo/i });
-  if (await loadDemo.isVisible()) {
-    await loadDemo.click();
-  }
-
   await expect(claudeOption).toHaveCount(1, { timeout: 15000 });
 }
 
