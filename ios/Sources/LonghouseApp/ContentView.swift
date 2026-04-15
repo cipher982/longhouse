@@ -18,8 +18,10 @@ struct ContentView: View {
                     }
                 }
             } else if appState.isAuthenticated {
-                LonghouseWebView(serverURL: appState.serverURL)
-                    .ignoresSafeArea(.all, edges: .bottom)
+                LonghouseWebView(serverURL: appState.serverURL) {
+                    Task { await appState.signOutAndReturnToLogin() }
+                }
+                .ignoresSafeArea(.all, edges: .bottom)
                     .overlay(alignment: .topTrailing) {
                         Menu {
                             Button("Change Server") {

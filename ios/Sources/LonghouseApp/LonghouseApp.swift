@@ -217,6 +217,13 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Called by the WebView delegate when the web app redirects to /login.
+    /// Runs the full sign-out cleanup so no stale state is left behind,
+    /// then drops back to the native LoginView.
+    func signOutAndReturnToLogin() async {
+        await signOutLocallyAndRemotely()
+    }
+
     private enum SessionRestoreResult {
         case authenticated
         case unauthenticated
