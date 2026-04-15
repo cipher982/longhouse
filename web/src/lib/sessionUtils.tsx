@@ -200,6 +200,16 @@ export function compactRuntimeToolLabel(toolName: string | null): string | null 
   if (lower === "gemini") return "Gemini";
   if (lower === "default") return "Z.ai";
   if (lower === "shell" || lower === "bash" || lower === "terminal") return "Shell";
+  if (
+    lower === "edit" ||
+    lower === "write" ||
+    lower === "patch" ||
+    lower === "apply patch" ||
+    lower === "file change" ||
+    lower === "filechange"
+  ) {
+    return "Edit";
+  }
 
   return toTitleCaseWords(normalized);
 }
@@ -215,6 +225,77 @@ export function getCardRuntimePhaseLabel(runtime: ReturnType<typeof resolveSessi
   }
 
   return runtime.displayPhase;
+}
+
+export interface RuntimeDisplayCopy {
+  headline: string;
+  detail: string | null;
+}
+
+export function getRuntimeDisplayCopy(
+  runtime: ReturnType<typeof resolveSessionRuntimeState>,
+  {
+    managedLocal = false,
+  }: {
+    managedLocal?: boolean;
+  } = {},
+): RuntimeDisplayCopy {
+  const runtimePhaseLabel = getCardRuntimePhaseLabel(runtime);
+  if (!managedLocal) {
+    return {
+      headline: runtimePhaseLabel,
+      detail: null,
+    };
+  }
+
+  const compactTool = compactRuntimeToolLabel(runtime.presenceTool);
+
+  if (runtime.presenceState === "thinking") {
+    return {
+      headline: "Working",
+      detail: "Thinking",
+    };
+  }
+  if (runtime.presenceState === "running") {
+    return {
+      headline: "Working",
+      detail: compactTool ? `Running ${compactTool}` : runtimePhaseLabel,
+    };
+  }
+  if (runtime.presenceState === "needs_user") {
+    return {
+      headline: "Waiting for you",
+      detail: "Reply needed",
+    };
+  }
+  if (runtime.presenceState === "blocked") {
+    return {
+      headline: "Waiting for you",
+      detail: compactTool ? `Approval needed • ${compactTool}` : "Approval needed",
+    };
+  }
+  if (runtime.presenceState == null && runtime.truthTier !== "managed-local") {
+    if (runtime.heuristicActive) {
+      return {
+        headline: "State unavailable",
+        detail: "Last known activity",
+      };
+    }
+    return {
+      headline: "State unavailable",
+      detail: "Waiting for live signal",
+    };
+  }
+  if (runtime.presenceState === "idle" || runtime.isIdle) {
+    return {
+      headline: "Ready",
+      detail: "Ready for next prompt",
+    };
+  }
+  return {
+    headline: "Ready",
+    detail: "Ready for next prompt",
+  };
 }
 
 export function getTurnsColor(turns: number): string | undefined {

@@ -237,6 +237,9 @@ describe("SessionDetailPage", () => {
       "Live on cinder. Send prompts from Longhouse or reattach on the host.",
     );
     expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
+      "Working",
+    );
+    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
       "Running Shell",
     );
     expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
@@ -244,7 +247,13 @@ describe("SessionDetailPage", () => {
     );
     expect(
       screen.getByTestId("session-detail-header-runtime"),
+    ).toHaveTextContent("Working");
+    expect(
+      screen.getByTestId("session-detail-header-runtime"),
     ).toHaveTextContent("Running Shell");
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Working",
+    );
     expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
       "Running Shell",
     );
@@ -277,6 +286,86 @@ describe("SessionDetailPage", () => {
     await user.click(toolRow);
 
     expect(screen.getByText("Output")).toBeInTheDocument();
+  });
+
+  it("keeps managed waiting states explicit in the detail header, sidebar, and dock", () => {
+    const session = makeSession({
+      ended_at: null,
+      status: "active",
+      presence_state: "needs_user",
+      active_tool: null,
+      runtime_source: "managed_local_transport",
+      confidence: "live",
+      display_phase: "Needs you",
+      last_live_at: "2026-03-22T22:04:30Z",
+    });
+    const model = buildTimelineModel([
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: "2026-03-22T22:00:01Z",
+        event: {
+          id: 1,
+          role: "assistant",
+          content_text: "Need one follow-up from the user.",
+          tool_name: null,
+          tool_input_json: null,
+          tool_output_text: null,
+          tool_call_id: null,
+          timestamp: "2026-03-22T22:00:01Z",
+          in_active_context: true,
+        },
+      },
+    ]);
+
+    workspaceMocks.useSessionWorkspace.mockImplementation(() => {
+      const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+      return {
+        session,
+        sessionLoading: false,
+        sessionError: null,
+        threadSessions: [session],
+        currentThreadSession: session,
+        headThreadSession: session,
+        isViewingHead: true,
+        totalEntries: model.items.length,
+        loadedEntryCount: model.items.length,
+        items: model.items,
+        eventsLoading: false,
+        eventsError: null,
+        fetchPreviousPage: vi.fn(),
+        hasPreviousPage: false,
+        isFetchingPreviousPage: false,
+        abandonedEvents: 0,
+        showAbandonedBranches: false,
+        setShowAbandonedBranches: vi.fn(),
+        selectedKey,
+        selectedSelection: selectedKey
+          ? (model.selectionMap.get(selectedKey) ?? null)
+          : null,
+        selectKey: setSelectedKey,
+        handleVisibleSelectionChange: vi.fn(),
+        registerTimelineList: vi.fn(),
+      };
+    });
+
+    renderSessionDetailPage();
+
+    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
+      "Waiting for you",
+    );
+    expect(screen.getByTestId("session-sidebar-runtime")).toHaveTextContent(
+      "Reply needed",
+    );
+    expect(
+      screen.getByTestId("session-detail-header-runtime"),
+    ).toHaveTextContent("Waiting for you");
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Waiting for you",
+    );
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Reply needed",
+    );
   });
 
   it("keeps the dock visible for searchable-only sessions and explains the search-only state", () => {

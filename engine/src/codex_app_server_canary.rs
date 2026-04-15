@@ -90,6 +90,9 @@ pub struct CanarySummary {
     pub hook_states: Vec<String>,
     pub hook_notification_counts: BTreeMap<String, usize>,
     pub server_request_counts: BTreeMap<String, usize>,
+    pub item_started_counts: BTreeMap<String, usize>,
+    pub item_completed_counts: BTreeMap<String, usize>,
+    pub thread_active_flag_counts: BTreeMap<String, usize>,
     pub thread_read_turn_count: Option<usize>,
     pub thread_list_count: Option<usize>,
     pub thread_list_contains_thread: Option<bool>,
@@ -150,6 +153,9 @@ struct ObservationState {
     sent_requests: BTreeMap<String, usize>,
     received_notifications: BTreeMap<String, usize>,
     server_request_counts: BTreeMap<String, usize>,
+    item_started_counts: BTreeMap<String, usize>,
+    item_completed_counts: BTreeMap<String, usize>,
+    thread_active_flag_counts: BTreeMap<String, usize>,
     response_errors: Vec<String>,
     stderr_lines: Vec<String>,
 }
@@ -254,7 +260,12 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         None
     };
     let outbox_dir = if config.verify_hooks {
-        Some(effective_home.join(".longhouse").join("agent").join("outbox"))
+        Some(
+            effective_home
+                .join(".longhouse")
+                .join("agent")
+                .join("outbox"),
+        )
     } else {
         None
     };
@@ -576,6 +587,9 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         hook_states,
         hook_notification_counts,
         server_request_counts: state.server_request_counts,
+        item_started_counts: state.item_started_counts,
+        item_completed_counts: state.item_completed_counts,
+        thread_active_flag_counts: state.thread_active_flag_counts,
         thread_read_turn_count,
         thread_list_count,
         thread_list_contains_thread,
@@ -1018,8 +1032,26 @@ fn process_rpc_value(value: Value, state: &mut ObservationState) -> Result<()> {
     let params = value.get("params").cloned().unwrap_or(Value::Null);
     match method {
         "thread/started" | "thread/status/changed" => {
-            if let Some(id) = extract_string(&params, &["thread", "id"]) {
+            if let Some(id) = extract_string(&params, &["thread", "id"])
+                .or_else(|| extract_string(&params, &["threadId"]))
+            {
                 state.thread_id = Some(id);
+            }
+            let status = params
+                .get("status")
+                .or_else(|| params.get("thread").and_then(|thread| thread.get("status")));
+            if let Some(flags) = status
+                .and_then(|value| value.get("activeFlags"))
+                .and_then(Value::as_array)
+            {
+                for flag in flags {
+                    if let Some(flag_name) = flag.as_str() {
+                        *state
+                            .thread_active_flag_counts
+                            .entry(flag_name.to_string())
+                            .or_insert(0) += 1;
+                    }
+                }
             }
         }
         "turn/started" | "turn/completed" => {
@@ -1028,6 +1060,16 @@ fn process_rpc_value(value: Value, state: &mut ObservationState) -> Result<()> {
             }
             if let Some(status) = extract_string(&params, &["turn", "status"]) {
                 state.turn_status = Some(status);
+            }
+        }
+        "item/started" => {
+            if let Some(item_type) = extract_string(&params, &["item", "type"]) {
+                *state.item_started_counts.entry(item_type).or_insert(0) += 1;
+            }
+        }
+        "item/completed" => {
+            if let Some(item_type) = extract_string(&params, &["item", "type"]) {
+                *state.item_completed_counts.entry(item_type).or_insert(0) += 1;
             }
         }
         "item/agentMessage/delta" => {
@@ -1450,6 +1492,9 @@ for line in sys.stdin:
         emit({"method": "item/started", "params": {"threadId": "thr_test", "turnId": "turn_test", "item": {"id": "item_1", "type": "assistantMessage"}}})
         emit({"method": "item/agentMessage/delta", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "item_1", "delta": "CANARY"}})
         emit({"method": "item/completed", "params": {"threadId": "thr_test", "turnId": "turn_test", "item": {"id": "item_1", "type": "assistantMessage"}}})
+        emit({"method": "item/started", "params": {"threadId": "thr_test", "turnId": "turn_test", "item": {"id": "cmd_1", "type": "commandExecution", "status": "inProgress", "command": "pwd"}}})
+        emit({"method": "item/commandExecution/outputDelta", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "cmd_1", "delta": "/tmp/workspace\\n"}})
+        emit({"method": "item/completed", "params": {"threadId": "thr_test", "turnId": "turn_test", "item": {"id": "cmd_1", "type": "commandExecution", "status": "completed", "command": "pwd"}}})
         emit({"method": "turn/completed", "params": {"threadId": "thr_test", "turn": {"id": "turn_test", "status": "completed", "items": []}}})
     elif method == "thread/read":
         emit({"id": msg["id"], "result": {"thread": {"id": "thr_test", "turns": [{"id": "turn_test"}]}}})
@@ -1505,6 +1550,22 @@ for line in sys.stdin:
         assert_eq!(summary.thread_read_turn_count, Some(1));
         assert_eq!(summary.thread_list_count, Some(1));
         assert_eq!(summary.thread_list_contains_thread, Some(true));
+        assert_eq!(
+            summary.item_started_counts.get("assistantMessage"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary.item_completed_counts.get("assistantMessage"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary.item_started_counts.get("commandExecution"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary.item_completed_counts.get("commandExecution"),
+            Some(&1)
+        );
         assert!(
             summary
                 .received_notifications
@@ -1512,6 +1573,12 @@ for line in sys.stdin:
                 .copied()
                 .unwrap_or_default()
                 >= 1
+        );
+        assert_eq!(
+            summary
+                .received_notifications
+                .get("item/commandExecution/outputDelta"),
+            Some(&1)
         );
         let log_text = fs::read_to_string(log_path).unwrap();
         assert!(log_text.contains("\"direction\":\"client_request\""));
@@ -1560,12 +1627,15 @@ for line in sys.stdin:
     elif method == "turn/start":
         emit({"id": msg["id"], "result": {"turn": {"id": "turn_test", "status": "inProgress", "items": []}}})
         emit({"method": "turn/started", "params": {"threadId": "thr_test", "turn": {"id": "turn_test", "status": "inProgress", "items": []}}})
+        emit({"method": "thread/status/changed", "params": {"threadId": "thr_test", "status": {"type": "active", "activeFlags": ["waitingOnApproval"]}}})
         emit({"id": 99, "method": "item/commandExecution/requestApproval", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "cmd_1"}})
         expect_response(99, lambda result: result.get("decision") == "accept")
         emit({"id": 100, "method": "item/permissions/requestApproval", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "perm_1", "permissions": {"network": {"hosts": ["example.com"]}}}})
         expect_response(100, lambda result: result.get("scope") == "turn" and result.get("permissions", {}).get("network", {}).get("hosts") == ["example.com"])
+        emit({"method": "thread/status/changed", "params": {"threadId": "thr_test", "status": {"type": "active", "activeFlags": ["waitingOnUserInput"]}}})
         emit({"id": 101, "method": "item/tool/requestUserInput", "params": {"threadId": "thr_test", "turnId": "turn_test", "itemId": "input_1", "questions": [{"id": "color", "header": "Color", "question": "Pick one", "options": [{"label": "blue", "description": "Blue"}, {"label": "red", "description": "Red"}]}]}})
         expect_response(101, lambda result: result.get("answers", {}).get("color", {}).get("answers") == ["blue"])
+        emit({"method": "thread/status/changed", "params": {"threadId": "thr_test", "status": {"type": "active", "activeFlags": []}}})
         emit({"method": "turn/completed", "params": {"threadId": "thr_test", "turn": {"id": "turn_test", "status": "completed", "items": []}}})
     else:
         emit({"id": msg["id"], "result": {}})
@@ -1623,6 +1693,14 @@ for line in sys.stdin:
             summary
                 .server_request_counts
                 .get("item/tool/requestUserInput"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary.thread_active_flag_counts.get("waitingOnApproval"),
+            Some(&1)
+        );
+        assert_eq!(
+            summary.thread_active_flag_counts.get("waitingOnUserInput"),
             Some(&1)
         );
         assert_eq!(summary.turn_status, "completed");

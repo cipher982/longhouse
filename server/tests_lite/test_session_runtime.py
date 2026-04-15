@@ -36,10 +36,15 @@ def _make_db(tmp_path, name="session_runtime.db"):
     return engine, make_sessionmaker(engine)
 
 
-def _seed_session(db, *, started_at: datetime | None = None) -> AgentSession:
+def _seed_session(
+    db,
+    *,
+    started_at: datetime | None = None,
+    provider: str = "claude",
+) -> AgentSession:
     session = AgentSession(
         id=uuid4(),
-        provider="claude",
+        provider=provider,
         environment="test",
         project="runtime",
         started_at=started_at or datetime.now(timezone.utc) - timedelta(minutes=5),
@@ -465,5 +470,110 @@ def test_newer_progress_reopens_finished_runtime_state(tmp_path):
         assert view.status == "active"
         assert view.display_phase == "Recent progress"
         assert view.confidence == "inferred"
+
+    engine.dispose()
+
+
+def test_runtime_view_aligns_codex_running_with_claude_semantics(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_codex_running.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(
+            db,
+            provider="codex",
+            started_at=now - timedelta(minutes=20),
+        )
+        runtime_key = runtime_key_for_session("codex", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="codex",
+                    device_id="cinder",
+                    source="codex_bridge",
+                    kind="phase_signal",
+                    phase="running",
+                    tool_name="shell",
+                    occurred_at=now - timedelta(seconds=4),
+                    freshness_ms=phase_freshness_ms("running"),
+                    dedupe_key="codex-running-shell",
+                    payload={"managed_transport": "codex_app_server"},
+                )
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert state.phase == "running"
+        assert state.active_tool == "shell"
+        assert view.status == "working"
+        assert view.runtime_phase == "running"
+        assert view.presence_state == "running"
+        assert view.presence_tool == "shell"
+        assert view.display_phase == "Running shell"
+        assert view.confidence == "live"
+
+    engine.dispose()
+
+
+def test_progress_signal_does_not_override_attention_phase(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_attention_progress.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=20))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="blocked",
+                    tool_name="bash",
+                    occurred_at=now - timedelta(seconds=8),
+                    freshness_ms=phase_freshness_ms("blocked"),
+                    dedupe_key="blocked-live",
+                    payload={},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=now - timedelta(seconds=3),
+                    dedupe_key="progress-after-blocked",
+                    payload={"progress_kind": "assistant_message"},
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert state.phase == "blocked"
+        assert state.phase_source == "semantic"
+        assert state.active_tool == "bash"
+        assert state.last_progress_at == (now - timedelta(seconds=3)).replace(tzinfo=None)
+        assert view.status == "active"
+        assert view.runtime_phase == "blocked"
+        assert view.presence_state == "blocked"
+        assert view.presence_tool == "bash"
+        assert view.display_phase == "Blocked on bash"
+        assert view.confidence == "live"
 
     engine.dispose()
