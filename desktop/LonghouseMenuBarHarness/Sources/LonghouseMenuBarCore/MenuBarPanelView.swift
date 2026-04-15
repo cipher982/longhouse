@@ -4,7 +4,6 @@ public enum MenuBarPanelLayout {
     public static let panelWidth: CGFloat = 376
     public static let defaultWindowHeight: CGFloat = 560
     public static let chromeCornerRadius: CGFloat = 13
-    public static let sectionCornerRadius: CGFloat = 9
     public static let chromeHorizontalPadding: CGFloat = 14
     public static let chromeBottomPadding: CGFloat = 14
     public static let chromeTopRailInset: CGFloat = 11
