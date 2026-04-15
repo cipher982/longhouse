@@ -3,9 +3,11 @@ import WebKit
 
 struct LonghouseWebView: UIViewRepresentable {
     let serverURL: String
+    /// Called when the web app redirects to /login — native shell takes over auth.
+    let onLoginRedirect: () -> Void
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(serverURL: serverURL)
+        Coordinator(serverURL: serverURL, onLoginRedirect: onLoginRedirect)
     }
 
     func makeUIView(context: Context) -> WKWebView {
@@ -43,9 +45,11 @@ struct LonghouseWebView: UIViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
         let serverURL: String
+        let onLoginRedirect: () -> Void
 
-        init(serverURL: String) {
+        init(serverURL: String, onLoginRedirect: @escaping () -> Void) {
             self.serverURL = serverURL
+            self.onLoginRedirect = onLoginRedirect
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -65,6 +69,18 @@ struct LonghouseWebView: UIViewRepresentable {
                 return
             }
 
+            // Intercept /login navigations — cancel the WebView load and hand off
+            // to the native shell's login flow. This prevents the desktop web login
+            // UI from rendering inside the app when a session expires.
+            if let serverHost = URL(string: serverURL)?.host,
+               url.host == serverHost,
+               url.path.hasPrefix("/login") {
+                decisionHandler(.cancel)
+                onLoginRedirect()
+                return
+            }
+
+            // Open external links in Safari rather than inside the WebView.
             if let serverHost = URL(string: serverURL)?.host,
                let targetHost = url.host,
                targetHost != serverHost,

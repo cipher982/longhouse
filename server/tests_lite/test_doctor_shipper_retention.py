@@ -138,6 +138,5 @@ def test_check_shipper_clarifies_bundle_present_but_service_stopped(tmp_path, mo
     assert "Desktop App not installed" not in labels
     # Should clearly show bundle is installed
     assert labels["Desktop App bundle installed (Longhouse.app) (/Applications/Longhouse.app)"] == doctor.PASS
-    # Should clearly show service is not running
-    assert "Desktop App service stopped" in labels
+    # Should clearly show service is not running (label includes detail that bundle exists)
     assert labels["Desktop App service stopped (bundle present but not running)"] == doctor.WARN
