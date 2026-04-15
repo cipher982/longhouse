@@ -6,7 +6,7 @@ describe('buildRunnerNativeInstallCommand', () => {
   it('includes runner name when generating a repair command', () => {
     const command = buildRunnerNativeInstallCommand({
       enrollToken: 'token_123',
-      longhouseUrl: 'https://david010.longhouse.ai',
+      longhouseUrl: 'https://demo.longhouse.test',
       runnerName: 'clifford',
     }, 'server');
 
@@ -18,7 +18,7 @@ describe('buildRunnerNativeInstallCommand', () => {
   it('keeps the runner name in desktop repair commands', () => {
     const command = buildRunnerNativeInstallCommand({
       enrollToken: 'token_123',
-      longhouseUrl: 'https://david010.longhouse.ai',
+      longhouseUrl: 'https://demo.longhouse.test',
       oneLinerInstallCommand: 'curl -fsSL example | bash',
       runnerName: 'cinder',
     }, 'desktop');
@@ -31,7 +31,7 @@ describe('buildRunnerNativeInstallCommand', () => {
   it('uses the one-liner installer for desktop when no runner name override is needed', () => {
     const command = buildRunnerNativeInstallCommand({
       enrollToken: 'token_123',
-      longhouseUrl: 'https://david010.longhouse.ai',
+      longhouseUrl: 'https://demo.longhouse.test',
       oneLinerInstallCommand: 'curl -fsSL example | bash',
     }, 'desktop');
 

@@ -18,7 +18,7 @@ from zerg.models.models import User
 
 def _settings(**overrides):
     base = {
-        "app_public_url": "https://david010.longhouse.ai",
+        "app_public_url": "https://demo.longhouse.test",
         "testing": False,
         "runner_binary_tag": "runner-v9.9.9",
         "runner_docker_image": "ghcr.io/cipher982/longhouse-runner:latest",
@@ -232,16 +232,16 @@ def test_create_enroll_token_prefers_forwarded_https_when_public_url_missing(tmp
                     client = TestClient(app, backend="asyncio", base_url="http://127.0.0.1:43955")
                     response = client.post(
                         "/api/runners/enroll-token",
-                        headers={"host": "david010.longhouse.ai", "x-forwarded-proto": "https"},
+                        headers={"host": "demo.longhouse.test", "x-forwarded-proto": "https"},
                     )
             finally:
                 api_app.dependency_overrides.clear()
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["longhouse_url"] == "https://david010.longhouse.ai"
-    assert "https://david010.longhouse.ai/api/runners/install.sh" in payload["one_liner_install_command"]
-    assert "https://david010.longhouse.ai/api/runners/register" in payload["docker_command"]
+    assert payload["longhouse_url"] == "https://demo.longhouse.test"
+    assert "https://demo.longhouse.test/api/runners/install.sh" in payload["one_liner_install_command"]
+    assert "https://demo.longhouse.test/api/runners/register" in payload["docker_command"]
 
 
 def test_register_runner_reenroll_returns_existing_capabilities(tmp_path):
