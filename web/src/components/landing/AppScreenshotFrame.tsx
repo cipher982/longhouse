@@ -1,10 +1,3 @@
-/**
- * AppScreenshotFrame
- *
- * A styled frame component that makes screenshots look like real app UI.
- * Provides proper aspect ratio, loading states, and professional presentation.
- */
-
 import { useState } from "react";
 
 interface AppScreenshotFrameProps {
@@ -53,7 +46,7 @@ export function AppScreenshotFrame({
         {error && (
           <div className="app-screenshot-error">
             <div className="error-icon">⚠️</div>
-            <p>Screenshot coming soon</p>
+            <p>Screenshot unavailable</p>
           </div>
         )}
         <img
