@@ -12,7 +12,7 @@ function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
   return {
     platform: 'linux',
     env: {
-      LONGHOUSE_URL: 'https://david010.longhouse.ai',
+      LONGHOUSE_URL: 'https://demo.longhouse.test',
       RUNNER_NAME: 'clifford',
       RUNNER_SECRET: 'secret',
       RUNNER_INSTALL_MODE: 'server',
@@ -23,8 +23,8 @@ function deps(overrides: Partial<DoctorDeps> = {}): DoctorDeps {
     uid: 1000,
     exists: (path: string) => existingPaths.has(path),
     loadConfig: () => ({
-      longhouseUrl: 'https://david010.longhouse.ai',
-      longhouseUrls: ['https://david010.longhouse.ai'],
+      longhouseUrl: 'https://demo.longhouse.test',
+      longhouseUrls: ['https://demo.longhouse.test'],
       runnerId: null,
       runnerName: 'clifford',
       runnerSecret: 'secret',
@@ -108,7 +108,7 @@ describe('collectDoctorReport', () => {
   it('warns when the runner still uses the legacy install layout', async () => {
     const report = await collectDoctorReport({}, deps({
       env: {
-        LONGHOUSE_URL: 'https://david010.longhouse.ai',
+        LONGHOUSE_URL: 'https://demo.longhouse.test',
         RUNNER_NAME: 'clifford',
         RUNNER_SECRET: 'secret',
         RUNNER_INSTALL_MODE: 'server',

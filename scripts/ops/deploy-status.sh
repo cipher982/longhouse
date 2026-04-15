@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ZERG_HOST="${ZERG_HOST:-zerg}"
+CANARY_CONTAINER_NAME="${CANARY_CONTAINER_NAME:-}"
+CANARY_HEALTH_URL="${CANARY_HEALTH_URL:-}"
 
 # --- Gather container state from zerg ----------------------------------------
 
@@ -34,7 +36,11 @@ cp_sha=$(echo "$cp_raw" | awk '{print $1}')
 cp_uptime=$(echo "$cp_raw" | cut -d' ' -f2-)
 
 # Canary — direct container name
-canary_raw=$(ssh "$ZERG_HOST" "docker ps --format '{{.Image}} {{.Status}}' --filter 'name=longhouse-david010'" 2>/dev/null | head -1)
+if [[ -n "$CANARY_CONTAINER_NAME" ]]; then
+    canary_raw=$(ssh "$ZERG_HOST" "docker ps --format '{{.Image}} {{.Status}}' --filter 'name=$CANARY_CONTAINER_NAME'" 2>/dev/null | head -1)
+else
+    canary_raw=""
+fi
 if [[ -n "$canary_raw" ]]; then
     canary_image=$(echo "$canary_raw" | awk '{print $1}')
     canary_sha="${canary_image##*:}"
@@ -56,7 +62,11 @@ health_status() {
 
 demo_health=$(health_status "https://longhouse.ai/api/health")
 cp_health=$(health_status "https://control.longhouse.ai/health")
-canary_health=$(health_status "https://david010.longhouse.ai/api/health")
+if [[ -n "$CANARY_HEALTH_URL" ]]; then
+    canary_health=$(health_status "$CANARY_HEALTH_URL")
+else
+    canary_health="-"
+fi
 
 # --- Local HEAD for comparison ------------------------------------------------
 
@@ -69,7 +79,7 @@ printf "%-20s %-12s %-10s %s\n" "Surface" "SHA" "Health" "Uptime"
 printf "%-20s %-12s %-10s %s\n" "-------" "---" "------" "------"
 printf "%-20s %-12s %-10s %s\n" "Demo runtime"    "$demo_sha"   "$demo_health"   "$demo_uptime"
 printf "%-20s %-12s %-10s %s\n" "Control plane"   "$cp_sha"     "$cp_health"     "$cp_uptime"
-printf "%-20s %-12s %-10s %s\n" "Canary (david010)" "$canary_sha" "$canary_health" "$canary_uptime"
+printf "%-20s %-12s %-10s %s\n" "Canary"          "$canary_sha" "$canary_health" "$canary_uptime"
 printf "%-20s %-12s\n"          "Local HEAD"       "$local_sha"
 printf "\n"
 
