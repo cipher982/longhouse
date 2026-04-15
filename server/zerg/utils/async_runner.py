@@ -82,9 +82,27 @@ class SharedAsyncRunner:
                     logger.warning("Shared async runner thread did not stop gracefully")
 
     async def _run_forever(self) -> None:
-        """Internal loop that runs until shutdown."""
+        """Internal loop that runs until shutdown, draining pending tasks before exit."""
         while not self._shutdown_event.is_set():
             await asyncio.sleep(0.1)
+
+        # Drain pending tasks before exiting the loop
+        # This ensures WriteSerializer and other background work completes gracefully
+        try:
+            pending = asyncio.all_tasks(self._loop)
+            if pending:
+                logger.debug(f"Draining {len(pending)} pending tasks before loop exit")
+                # Remove the _run_forever task itself from pending
+                pending.discard(asyncio.current_task())
+                if pending:
+                    # Wait for remaining tasks with a reasonable timeout
+                    await asyncio.wait(pending, timeout=5.0)
+                    # Check for any tasks that didn't complete
+                    still_pending = asyncio.all_tasks(self._loop) - {asyncio.current_task()}
+                    if still_pending:
+                        logger.warning(f"Timeout draining {len(still_pending)} tasks, forcing shutdown")
+        except Exception as e:
+            logger.exception(f"Error during task drain: {e}")
 
     def run_coroutine(self, coro: Awaitable[Any]) -> Any:
         """Run a coroutine in the shared loop.
