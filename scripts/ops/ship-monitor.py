@@ -239,8 +239,27 @@ def failed_runs(runs: list[RunInfo]) -> list[RunInfo]:
     ]
 
 
-def summarize_runs(runs: list[RunInfo], short_sha: str) -> str:
-    lines = [f"Watching push workflows for {short_sha}:"]
+def select_load_bearing_runs(runs: list[RunInfo]) -> tuple[list[RunInfo], list[str]]:
+    workflow_names = {run.workflowName for run in runs}
+    required_names: list[str] = []
+
+    if DEPLOY_AND_VERIFY in workflow_names:
+        required_names.append(DEPLOY_AND_VERIFY)
+    if DEPLOY_CONTROL_PLANE in workflow_names:
+        required_names.append(DEPLOY_CONTROL_PLANE)
+
+    if not required_names:
+        return runs, []
+
+    selected = [run for run in runs if run.workflowName in required_names]
+    return selected, required_names
+
+
+def summarize_runs(runs: list[RunInfo], short_sha: str, scope_label: str | None = None) -> str:
+    if scope_label:
+        lines = [f"Watching {scope_label} for {short_sha}:"]
+    else:
+        lines = [f"Watching push workflows for {short_sha}:"]
     for run in runs:
         conclusion = run.conclusion or "-"
         lines.append(f"  - {run.workflowName} #{run.databaseId}: {run.status}/{conclusion}")
@@ -297,6 +316,7 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
     initial_deadline = start + args.initial_timeout
     deadline = start + args.timeout
     last_seen: tuple[tuple[int, str, str | None], ...] | None = None
+    last_scope_label: str | None = None
     next_heartbeat = start + max(args.heartbeat, 1) if args.heartbeat > 0 else None
 
     while True:
@@ -317,20 +337,38 @@ def wait_for_workflows(args: argparse.Namespace, sha: str) -> list[RunInfo]:
             time.sleep(args.poll)
             continue
 
-        current = fingerprint(runs)
+        monitored_runs, required_names = select_load_bearing_runs(runs)
+        scope_label = ", ".join(required_names) if required_names else None
+        current = fingerprint(monitored_runs)
+
+        if scope_label != last_scope_label:
+            if scope_label:
+                ignored = sorted({run.workflowName for run in runs if run.workflowName not in required_names})
+                if ignored:
+                    print(
+                        f"Load-bearing ship scope for {sha[:10]}: {scope_label} "
+                        f"(ignoring: {', '.join(ignored)})",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(f"Load-bearing ship scope for {sha[:10]}: {scope_label}", file=sys.stderr)
+            else:
+                print(f"Ship scope for {sha[:10]}: all push workflows", file=sys.stderr)
+            last_scope_label = scope_label
+
         if current != last_seen:
-            print(summarize_runs(runs, sha[:10]), file=sys.stderr)
+            print(summarize_runs(monitored_runs, sha[:10], scope_label), file=sys.stderr)
             last_seen = current
             if args.heartbeat > 0:
                 next_heartbeat = now + max(args.heartbeat, 1)
 
-        if all(run.status == "completed" for run in runs):
+        if all(run.status == "completed" for run in monitored_runs):
             return runs
 
         if next_heartbeat is not None and now >= next_heartbeat:
             print(
                 f"Still waiting on {sha[:10]} after {format_elapsed(now - start)}: "
-                f"{summarize_incomplete_runs(runs)}",
+                f"{summarize_incomplete_runs(monitored_runs)}",
                 file=sys.stderr,
             )
             next_heartbeat = now + max(args.heartbeat, 1)
@@ -476,21 +514,31 @@ def main() -> int:
             print(str(exc), file=sys.stderr)
         return EXIT_TIMEOUT
 
+    monitored_runs, required_names = select_load_bearing_runs(runs)
     workflow_payload = [asdict(run) for run in runs]
+    monitored_payload = [asdict(run) for run in monitored_runs]
 
-    if not runs_succeeded(runs):
-        failures = failed_runs(runs)
+    if not runs_succeeded(monitored_runs):
+        failures = failed_runs(monitored_runs)
         payload = {
             "repo": args.repo,
             "target_sha": target_sha,
             "result": "workflow_failure",
             "workflows": workflow_payload,
+            "monitored_workflows": monitored_payload,
+            "required_workflow_names": required_names,
             "failed_workflows": [asdict(run) for run in failures],
         }
         if args.json:
             emit_json(payload)
         else:
-            print(f"Push workflows failed for {short_sha}:", file=sys.stderr)
+            if required_names:
+                print(
+                    f"Load-bearing workflows failed for {short_sha}: {', '.join(required_names)}",
+                    file=sys.stderr,
+                )
+            else:
+                print(f"Push workflows failed for {short_sha}:", file=sys.stderr)
             for run in failures:
                 conclusion = run.conclusion or "unknown"
                 print(f"  - {run.workflowName} #{run.databaseId}: {conclusion}", file=sys.stderr)
@@ -529,6 +577,8 @@ def main() -> int:
         "target_sha": target_sha,
         "result": "success",
         "workflows": workflow_payload,
+        "monitored_workflows": monitored_payload,
+        "required_workflow_names": required_names,
     }
     if live_surfaces is not None:
         payload["live"] = live_surfaces
