@@ -4,13 +4,14 @@
  * When a request gets a 401, we attempt ONE silent refresh via
  * POST /api/auth/refresh (the refresh cookie is sent automatically).
  * If it succeeds, the original request is retried with the new AT cookie.
- * If it fails, we redirect to login.
+ * If it fails, we redirect to /login.
  *
  * Only one refresh can be in-flight at a time (mutex). Concurrent 401s
  * queue behind the same refresh promise to avoid rotation races.
  */
 
 import { config } from "./config";
+import { buildLoginUrl } from "./loginRedirect";
 
 // ---------------------------------------------------------------------------
 // Single-flight mutex
@@ -72,6 +73,9 @@ export async function fetchWithRefresh(
 
   const refreshed = await refreshAccessToken();
   if (!refreshed) {
+    // Refresh failed — session is dead. Redirect to /login preserving the current page.
+    const returnTo = window.location.pathname + window.location.search + window.location.hash;
+    window.location.replace(buildLoginUrl(returnTo));
     return response;
   }
 

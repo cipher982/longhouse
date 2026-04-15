@@ -1,7 +1,9 @@
-import React, { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Navigate, useLocation } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import config from './config';
+import { buildLoginUrl } from './loginRedirect';
 import { useServiceHealth, isServiceUnavailable } from './useServiceHealth';
 import { ServiceUnavailable } from '../components/ServiceUnavailable';
 
@@ -218,13 +220,7 @@ export function useCurrentUserQuery() {
   });
 }
 
-// Google Sign-In component
-interface GoogleSignInButtonProps {
-  clientId: string;
-  onSuccess?: () => void;
-  onError?: (error: string) => void;
-}
-
+// Global Google Sign-In SDK type augmentation (used by LoginPage and googleCodeClient)
 declare global {
   interface Window {
     google?: {
@@ -250,59 +246,6 @@ declare global {
   }
 }
 
-function GoogleSignInButton({ clientId, onSuccess, onError }: GoogleSignInButtonProps) {
-  const { login } = useAuth();
-  const [isLoading, setIsLoading] = useState(false);
-
-  useEffect(() => {
-    // Load Google Sign-In script
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.defer = true;
-    document.head.appendChild(script);
-
-    script.onload = () => {
-      if (window.google?.accounts?.id) {
-        window.google.accounts.id.initialize({
-          client_id: clientId,
-          callback: async (response) => {
-            setIsLoading(true);
-            try {
-              await login(response.credential);
-              onSuccess?.();
-            } catch (error) {
-              const errorMessage = error instanceof Error ? error.message : 'Login failed';
-              onError?.(errorMessage);
-            } finally {
-              setIsLoading(false);
-            }
-          },
-        });
-
-        const buttonDiv = document.getElementById('google-signin-button');
-        if (buttonDiv) {
-          window.google.accounts.id.renderButton(buttonDiv, {
-            theme: 'outline',
-            size: 'large',
-          });
-        }
-      }
-    };
-
-    return () => {
-      script.remove();
-    };
-  }, [clientId, login, onSuccess, onError]);
-
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-      <div id="google-signin-button" />
-      {isLoading && <div>Signing in...</div>}
-    </div>
-  );
-}
-
 // Auth methods response type
 export interface AuthMethods {
   google: boolean;
@@ -320,11 +263,6 @@ export function useAuthMethods() {
     queryFn: getAuthMethods,
     staleTime: 5 * 60 * 1000,
   });
-}
-
-export interface PasswordLoginResult {
-  ok: boolean;
-  error?: string;
 }
 
 // Fetch available authentication methods from the backend.
@@ -358,331 +296,16 @@ async function getAuthMethods(): Promise<AuthMethods> {
   }
 }
 
-// Password authentication
-async function loginWithPassword(password: string): Promise<PasswordLoginResult> {
-  const response = await fetch(`${config.apiBaseUrl}/auth/password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify({ password }),
-  });
-  if (response.ok) {
-    return { ok: true };
-  }
-
-  if (response.status === 400) {
-    return { ok: false, error: 'Password auth not configured' };
-  }
-
-  if (response.status === 429) {
-    const retryAfter = response.headers.get('Retry-After');
-    const suffix = retryAfter ? ` Try again in ${retryAfter}s.` : ' Try again later.';
-    return { ok: false, error: `Too many attempts.${suffix}` };
-  }
-
-  return { ok: false, error: 'Invalid password' };
-}
-
-// Dev login function (bypasses Google OAuth in development)
-async function loginWithDevAccount(): Promise<{ access_token: string; expires_in: number }> {
-  const response = await fetch(`${config.apiBaseUrl}/auth/dev-login`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    credentials: 'include', // Required for cookie to be set
-  });
-
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error(error || 'Dev login failed');
-  }
-
-  return response.json();
-}
-
-// Login overlay component
-interface LoginOverlayProps {
-  clientId: string;
-}
-
-function buildHostedLoginRedirectUrl(baseUrl: string | null | undefined): string | null {
-  if (!baseUrl) {
-    return null;
-  }
-
-  try {
-    const url = new URL(baseUrl);
-    const returnTo = `${window.location.pathname}${window.location.search}${window.location.hash}` || "/";
-    if (returnTo.startsWith("/")) {
-      url.searchParams.set("return_to", returnTo);
-    }
-    return url.toString();
-  } catch {
-    return baseUrl;
-  }
-}
-
-function LoginOverlay({ clientId }: LoginOverlayProps) {
-  const [password, setPassword] = useState('');
-  const [passwordError, setPasswordError] = useState<string | null>(null);
-  const [isPasswordLoading, setIsPasswordLoading] = useState(false);
-  const [isDevLoginLoading, setIsDevLoginLoading] = useState(false);
-  const [ssoRedirecting, setSsoRedirecting] = useState(false);
-  const { data: authMethods } = useAuthMethods();
-
-  // SSO-only: no local Google or password, redirect to control plane
-  useEffect(() => {
-    const hostedLoginUrl = buildHostedLoginRedirectUrl(authMethods?.sso_login_url || authMethods?.sso_url);
-    if (authMethods && authMethods.sso && !authMethods.google && !authMethods.password && hostedLoginUrl) {
-      setSsoRedirecting(true);
-      window.location.href = hostedLoginUrl;
-    }
-  }, [authMethods]);
-
-  if (ssoRedirecting) {
-    return (
-      <div style={{
-        position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-        background: '#120B09', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: 'rgba(243, 234, 217, 0.7)', fontSize: '1rem', zIndex: 1000,
-      }}>
-        Redirecting to sign in...
-      </div>
-    );
-  }
-
-  const handleLoginSuccess = () => {
-    // The AuthProvider will handle updating the authentication state
-  };
-
-  const handleLoginError = (error: string) => {
-    toast.error(error);
-  };
-
-  const handlePasswordSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!password.trim()) return;
-    setIsPasswordLoading(true);
-    setPasswordError(null);
-    try {
-      const result = await loginWithPassword(password);
-      if (result.ok) {
-        window.location.reload();
-      } else {
-        setPasswordError(result.error || 'Invalid password');
-      }
-    } catch {
-      setPasswordError('Login failed. Please try again.');
-    } finally {
-      setIsPasswordLoading(false);
-    }
-  };
-
-  const handleDevLogin = async () => {
-    setIsDevLoginLoading(true);
-    try {
-      await loginWithDevAccount();
-      window.location.reload();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Dev login failed');
-    } finally {
-      setIsDevLoginLoading(false);
-    }
-  };
-
-  const showGoogle = authMethods?.google ?? false;
-  const showPassword = authMethods?.password ?? false;
-  const showSso = authMethods?.sso && authMethods?.sso_url;
-  const hostedLoginUrl = buildHostedLoginRedirectUrl(authMethods?.sso_login_url || authMethods?.sso_url);
-  const ssoBase = authMethods?.sso_url ? authMethods.sso_url.replace(/\/+$/, '') : null;
-  const ssoHost = (() => {
-    if (!ssoBase) return null;
-    try {
-      return new URL(ssoBase).host;
-    } catch {
-      return null;
-    }
-  })();
-  const switchAccountUrl = ssoBase
-    ? `${ssoBase}/auth/logout?return_to=${encodeURIComponent(`${ssoBase}/?switch=1`)}`
-    : null;
-
-  return (
-    <div
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        background: '#120B09',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 1000,
-      }}
-    >
-      <div
-        style={{
-          background: '#1A1410',
-          border: '1px solid #231E16',
-          padding: '2.5rem',
-          borderRadius: '16px',
-          textAlign: 'center',
-          minWidth: '340px',
-          maxWidth: '400px',
-        }}
-      >
-        <h2 style={{ marginBottom: '1.5rem', color: 'rgba(243, 234, 217, 0.95)', fontSize: '20px', fontWeight: 600 }}>
-          Sign in to Longhouse
-        </h2>
-
-        {!authMethods && (
-          <div style={{ color: 'rgba(181, 164, 142, 0.5)', padding: '1rem 0' }}>Loading...</div>
-        )}
-
-        {showSso && (
-          <>
-            <button
-              onClick={() => { window.location.href = hostedLoginUrl!; }}
-              style={{
-                width: '100%',
-                padding: '0.75rem',
-                background: 'linear-gradient(135deg, #C9A66B 0%, #D4B87A 100%)',
-                color: '#120B09',
-                border: 'none',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Continue to your Longhouse account
-            </button>
-            <div style={{ marginTop: '0.6rem', color: 'rgba(181, 164, 142, 0.55)', fontSize: '12px' }}>
-              Redirects to {ssoHost ?? 'control.longhouse.ai'} to sign in
-            </div>
-            {switchAccountUrl && (
-              <button
-                type="button"
-                onClick={() => { window.location.href = switchAccountUrl; }}
-                style={{
-                  marginTop: '0.5rem',
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'rgba(243, 234, 217, 0.7)',
-                  fontSize: '12px',
-                  cursor: 'pointer',
-                  textDecoration: 'underline',
-                }}
-              >
-                Switch account
-              </button>
-            )}
-          </>
-        )}
-
-        {showGoogle && !showSso && (
-          <GoogleSignInButton
-            clientId={clientId}
-            onSuccess={handleLoginSuccess}
-            onError={handleLoginError}
-          />
-        )}
-
-        {showPassword && (showGoogle || showSso) && (
-          <div style={{ margin: '1rem 0', color: 'rgba(181, 164, 142, 0.3)', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <div style={{ flex: 1, height: '1px', background: 'rgba(243, 234, 217, 0.1)' }} />
-            <span>or</span>
-            <div style={{ flex: 1, height: '1px', background: 'rgba(243, 234, 217, 0.1)' }} />
-          </div>
-        )}
-
-        {showPassword && (
-          <form onSubmit={handlePasswordSubmit}>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => { setPassword(e.target.value); setPasswordError(null); }}
-              placeholder="Enter password"
-              autoFocus={!showGoogle && !showSso}
-              style={{
-                width: '100%',
-                padding: '0.75rem 1rem',
-                background: '#211C15',
-                border: `1px solid ${passwordError ? '#C45040' : '#2a2418'}`,
-                borderRadius: '8px',
-                fontSize: '14px',
-                color: 'rgba(243, 234, 217, 0.9)',
-                boxSizing: 'border-box',
-                marginBottom: '0.5rem',
-                outline: 'none',
-              }}
-            />
-            {passwordError && (
-              <div style={{ color: '#C45040', fontSize: '13px', marginBottom: '0.5rem', textAlign: 'left' }}>
-                {passwordError}
-              </div>
-            )}
-            <button
-              type="submit"
-              disabled={isPasswordLoading || !password.trim()}
-              style={{
-                width: '100%',
-                padding: '0.75rem',
-                background: 'linear-gradient(135deg, #C9A66B 0%, #D4B87A 100%)',
-                color: '#120B09',
-                border: 'none',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: 600,
-                cursor: isPasswordLoading || !password.trim() ? 'not-allowed' : 'pointer',
-                opacity: isPasswordLoading || !password.trim() ? 0.5 : 1,
-                marginTop: '0.25rem',
-              }}
-            >
-              {isPasswordLoading ? 'Signing in...' : 'Sign In'}
-            </button>
-          </form>
-        )}
-
-        {config.isDevelopment && (
-          <>
-            <div style={{ margin: '1rem 0', color: 'rgba(181, 164, 142, 0.3)' }}>or</div>
-            <button
-              onClick={handleDevLogin}
-              disabled={isDevLoginLoading}
-              style={{
-                padding: '0.75rem 2rem',
-                background: 'rgba(93, 155, 74, 0.2)',
-                color: '#5D9B4A',
-                border: '1px solid rgba(93, 155, 74, 0.3)',
-                borderRadius: '8px',
-                fontSize: '14px',
-                fontWeight: 600,
-                cursor: isDevLoginLoading ? 'not-allowed' : 'pointer',
-                opacity: isDevLoginLoading ? 0.5 : 1,
-              }}
-            >
-              {isDevLoginLoading ? 'Logging in...' : 'Dev Login (Local Only)'}
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Auth guard component
+// Auth guard component — redirects unauthenticated users to /login
 interface AuthGuardProps {
   children: ReactNode;
-  clientId: string;
+  clientId?: string; // kept for API compat, unused after LoginOverlay removal
 }
 
-export function AuthGuard({ children, clientId }: AuthGuardProps) {
+export function AuthGuard({ children }: AuthGuardProps) {
   const { isAuthenticated, isLoading } = useAuth();
   const { status: serviceStatus, retryCount, retry } = useServiceHealth();
+  const location = useLocation();
 
   // Skip auth guard if authentication is not real (dev/demo modes)
   if (!config.authEnabled || config.demoMode) {
@@ -690,18 +313,12 @@ export function AuthGuard({ children, clientId }: AuthGuardProps) {
   }
 
   // Show service unavailable screen when backend is not reachable
-  // This happens during deployments, restarts, or network issues
   if (serviceStatus === 'unavailable' || serviceStatus === 'checking') {
-    // During initial check, show unavailable if we've already failed once
-    // This prevents flash of "Loading..." followed by unavailable
     if (serviceStatus === 'checking' && retryCount === 0) {
       return (
         <div style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          height: '100vh',
-          fontSize: '1.2rem',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          height: '100vh', fontSize: '1.2rem',
           background: 'linear-gradient(135deg, #120B09 0%, #1A1410 100%)',
           color: 'rgba(243, 234, 217, 0.7)',
         }}>
@@ -712,15 +329,11 @@ export function AuthGuard({ children, clientId }: AuthGuardProps) {
     return <ServiceUnavailable retryCount={retryCount} onRetry={retry} />;
   }
 
-  // Service is available - now check authentication
   if (isLoading) {
     return (
       <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100vh',
-        fontSize: '1.2rem',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        height: '100vh', fontSize: '1.2rem',
         background: 'linear-gradient(135deg, #120B09 0%, #1A1410 100%)',
         color: 'rgba(243, 234, 217, 0.7)',
       }}>
@@ -730,7 +343,8 @@ export function AuthGuard({ children, clientId }: AuthGuardProps) {
   }
 
   if (!isAuthenticated) {
-    return <LoginOverlay clientId={clientId} />;
+    const returnTo = location.pathname + location.search + location.hash;
+    return <Navigate to={buildLoginUrl(returnTo)} replace />;
   }
 
   return <>{children}</>;
