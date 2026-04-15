@@ -139,7 +139,7 @@ def home(request: Request, error: str | None = None, return_to: str | None = Non
     <div class="hero-center">
       <img src="/static/logo.svg" alt="Longhouse" class="hero-logo">
       <h1>Longhouse</h1>
-      <p class="subtitle">Sign in to manage your hosted instance.</p>
+      <p class="subtitle">Welcome back.</p>
     </div>
     <div class="max-w-form">
       {error_html}
@@ -154,20 +154,19 @@ def home(request: Request, error: str | None = None, return_to: str | None = Non
       <form method="post" action="{html.escape(login_action)}">
         <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
         <label>Password <input type="password" name="password" required minlength="8" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;"></label>
-        <button type="submit" class="btn btn-secondary w-full">Sign In with Email</button>
+        <button type="submit" class="btn btn-secondary w-full">Sign In</button>
       </form>
       <p class="text-center mt-2 text-sm text-muted">
         <a href="/forgot-password">Forgot password?</a>
-      </p>
-      <p class="text-center mt-1 text-sm text-muted">
-        Don\'t have an account? <a href="{html.escape(signup_url)}">Create one</a>
+        &nbsp;&middot;&nbsp;
+        <a href="{html.escape(signup_url)}">Create account</a>
       </p>
     </div>
     <div class="max-w-form">
       <p class="text-center mt-6"><a href="https://longhouse.ai" class="text-muted text-sm">&larr; Back to longhouse.ai</a></p>
     </div>
     """
-    return _page("Home", body, nav=False)
+    return _page("Sign In", body, nav=False)
 
 
 @router.get("/signup", response_class=HTMLResponse)
@@ -186,13 +185,12 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
     body = f"""
     <div class="hero-center">
       <img src="/static/logo.svg" alt="Longhouse" class="hero-logo">
-      <h1>Create Account</h1>
-      <p class="subtitle">Get started with Longhouse.</p>
+      <h1>Get Hosted</h1>
+      <p class="subtitle">Always-on Longhouse instance &mdash; $5/mo.</p>
     </div>
     <div class="max-w-form">
-      <a href="{html.escape(google_signup_url)}" class="btn btn-primary google-btn w-full">{_GOOGLE_ICON} Sign up with Google</a>
-    </div>
-    <div class="max-w-form">
+      {error_html}
+      <a href="{html.escape(google_signup_url)}" class="btn btn-primary google-btn w-full">{_GOOGLE_ICON} Continue with Google</a>
       <div class="divider">
         <div class="divider-line"></div>
         <span class="divider-text">or</span>
@@ -200,12 +198,11 @@ def signup_page(request: Request, error: str | None = None, return_to: str | Non
       </div>
     </div>
     <div class="card max-w-form">
-      {error_html}
       <form method="post" action="/auth/signup">
         <label>Email <input type="email" name="email" required placeholder="you@example.com"></label>
         <label>Password <input type="password" name="password" required minlength="8" placeholder="Min. 8 characters"></label>
         <label>Confirm password <input type="password" name="password_confirm" required minlength="8" placeholder="Repeat password"></label>
-        <button type="submit" class="btn btn-secondary w-full">Create Account with Email</button>
+        <button type="submit" class="btn btn-secondary w-full">Create Account</button>
       </form>
       <p class="text-center mt-2 text-sm text-muted">
         Already have an account? <a href="{html.escape(signin_url)}">Sign in</a>
