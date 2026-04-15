@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from dataclasses import field
 from datetime import datetime
 from datetime import timezone
-from typing import Any
 
 
 @dataclass
@@ -89,7 +88,7 @@ class CommisContext:
         self,
         tool_name: str,
         tool_call_id: str | None = None,
-        args: dict[str, Any] | None = None,
+        args: dict[str, object] | None = None,
     ) -> ToolCall:
         """Record a tool call starting. Returns the ToolCall for later update."""
         args_preview = str(args)[:100] if args else ""

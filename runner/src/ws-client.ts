@@ -12,6 +12,7 @@ import type {
   ExecChunkMessage,
   ExecDoneMessage,
   ExecErrorMessage,
+  RunnerToServerMessage,
   ServerToRunnerMessage,
   getRunnerMetadata,
 } from './protocol';
@@ -307,7 +308,7 @@ export class RunnerWebSocketClient {
   /**
    * Send a message to the server.
    */
-  private send(message: any): void {
+  private send(message: RunnerToServerMessage): void {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       console.warn('[ws-client] Cannot send message, not connected');
       return;

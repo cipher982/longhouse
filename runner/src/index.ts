@@ -23,6 +23,12 @@ import {
 import { RUNNER_VERSION } from './version';
 import { RunnerWebSocketClient } from './ws-client';
 const VERSION = RUNNER_VERSION;
+
+interface RunnerCliValues {
+  envfile?: string;
+  'allow-insecure-envfile'?: boolean;
+}
+
 function printHelp(): void {
   console.log(`Usage: longhouse-runner [command] [options]
 Commands:
@@ -98,10 +104,10 @@ function startAutoUpdateLoop(clients: RunnerWebSocketClient[]): () => void {
   };
 }
 
-async function runDaemon(values: Record<string, any>) {
+async function runDaemon(values: RunnerCliValues): Promise<void> {
   if (values.envfile) {
     try {
-      loadEnvfile(values.envfile, { allowInsecure: values['allow-insecure-envfile'] });
+      loadEnvfile(values.envfile, { allowInsecure: values['allow-insecure-envfile'] === true });
     } catch (err) {
       console.error(`Error loading envfile ${values.envfile}:`, err);
       process.exit(1);
@@ -206,7 +212,10 @@ async function main() {
     process.exit(1);
   }
 
-  await runDaemon(values);
+  await runDaemon({
+    envfile: values.envfile,
+    'allow-insecure-envfile': values['allow-insecure-envfile'],
+  });
 }
 
 main().catch((error) => {

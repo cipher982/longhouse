@@ -14,7 +14,6 @@ import enum
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
 
 
@@ -96,18 +95,18 @@ class Settings:  # noqa: D401 – simple data container
     longhouse_password: str  # Simple password auth for OSS self-hosters (LONGHOUSE_PASSWORD)
     longhouse_password_hash: str  # Hashed password auth (LONGHOUSE_PASSWORD_HASH)
     internal_api_secret: str
-    google_client_id: Any
-    google_ios_client_id: Any
-    google_client_secret: Any
-    github_client_id: Any
-    github_client_secret: Any
-    trigger_signing_secret: Any
+    google_client_id: str | None
+    google_ios_client_id: str | None
+    google_client_secret: str | None
+    github_client_id: str | None
+    github_client_secret: str | None
+    trigger_signing_secret: str | None
 
     # Database ---------------------------------------------------------
     database_url: str
 
     # Cryptography -----------------------------------------------------
-    fernet_secret: Any
+    fernet_secret: str | None
 
     # Feature flags ----------------------------------------------------
     _llm_token_stream_default: bool  # internal default
@@ -116,9 +115,9 @@ class Settings:  # noqa: D401 – simple data container
     dev_admin: bool
     log_level: str
     e2e_log_suppress: bool
-    environment: Any
+    environment: str | None
     allowed_cors_origins: str
-    openai_api_key: Any
+    openai_api_key: str | None
     # Public URL --------------------------------------------------------
     # Legacy name (kept for backwards compatibility)
     app_public_url: str | None
@@ -286,7 +285,7 @@ class Settings:  # noqa: D401 – simple data container
         return _truthy(os.getenv("LLM_TOKEN_STREAM")) or self._llm_token_stream_default
 
     # Helper for tests to override values at runtime -------------------
-    def override(self, **kwargs: Any) -> None:  # pragma: no cover – test util
+    def override(self, **kwargs: object) -> None:  # pragma: no cover – test util
         for key, value in kwargs.items():
             if not hasattr(self, key):  # pragma: no cover – safety
                 raise AttributeError(f"Settings has no attribute '{key}'")

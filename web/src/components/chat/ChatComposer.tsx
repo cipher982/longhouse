@@ -1,4 +1,4 @@
-import { type FormEvent, useRef, useEffect } from "react";
+import { type FormEvent, type KeyboardEvent, useRef, useEffect } from "react";
 import clsx from "clsx";
 import { FileTextIcon } from "../icons";
 
@@ -31,11 +31,10 @@ export function ChatComposer({
     }
   }, [draft]);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      // Submit form
-      onSend(e as any);
+      e.currentTarget.form?.requestSubmit();
     }
   };
 

@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 
 import { loadConfig, type RunnerConfig } from './config';
 import { findDefaultEnvfile, loadEnvfile } from './envfile';
-import { hasManagedInstallLayout, resolveAutoUpdatePolicy } from './update';
+import { hasManagedInstallLayout, LEGACY_LAYOUT_REINSTALL_MESSAGE, resolveAutoUpdatePolicy } from './update';
 
 export type DoctorSeverity = 'healthy' | 'warning' | 'error';
 export type DoctorCheckStatus = 'ok' | 'warn' | 'fail';
@@ -160,6 +160,22 @@ function defaultFetchHealth(url: string): Promise<boolean> {
     .finally(() => clearTimeout(timeout));
 }
 
+type JsonRecord = Record<string, unknown>;
+
+function asRecord(value: unknown): JsonRecord | null {
+  return typeof value === 'object' && value !== null ? (value as JsonRecord) : null;
+}
+
+function readString(record: JsonRecord, key: string): string | null {
+  const value = record[key];
+  return typeof value === 'string' ? value : null;
+}
+
+function readNumber(record: JsonRecord, key: string): number | null {
+  const value = record[key];
+  return typeof value === 'number' ? value : null;
+}
+
 async function defaultFetchPreflight(
   url: string,
   payload: { runnerId: number | null; runnerName: string | null; secret: string },
@@ -178,12 +194,14 @@ async function defaultFetchPreflight(
       signal: controller.signal,
     });
 
-    let body: any = null;
+    let body: JsonRecord | null = null;
     try {
-      body = await response.json();
+      body = asRecord(await response.json());
     } catch {
       body = null;
     }
+
+    const detail = body ? asRecord(body.detail) : null;
 
     if (response.status === 404) {
       return {
@@ -196,12 +214,11 @@ async function defaultFetchPreflight(
     }
 
     if (!response.ok) {
-      const detail = body?.detail;
       return {
         ok: false,
         authenticated: false,
-        reasonCode: detail?.reason_code || 'preflight_failed',
-        summary: detail?.summary || `Longhouse rejected the preflight request (HTTP ${response.status}).`,
+        reasonCode: readString(detail ?? {}, 'reason_code') ?? 'preflight_failed',
+        summary: readString(detail ?? {}, 'summary') ?? `Longhouse rejected the preflight request (HTTP ${response.status}).`,
         httpStatus: response.status,
       };
     }
@@ -209,14 +226,14 @@ async function defaultFetchPreflight(
     return {
       ok: true,
       authenticated: Boolean(body?.authenticated),
-      reasonCode: typeof body?.reason_code === 'string' ? body.reason_code : 'unknown',
-      summary: typeof body?.summary === 'string' ? body.summary : 'Longhouse returned an invalid preflight response.',
+      reasonCode: readString(body ?? {}, 'reason_code') ?? 'unknown',
+      summary: readString(body ?? {}, 'summary') ?? 'Longhouse returned an invalid preflight response.',
       httpStatus: response.status,
-      runnerId: typeof body?.runner_id === 'number' ? body.runner_id : null,
-      runnerName: typeof body?.runner_name === 'string' ? body.runner_name : null,
-      status: typeof body?.status === 'string' ? body.status : null,
-      statusReason: typeof body?.status_reason === 'string' ? body.status_reason : null,
-      statusSummary: typeof body?.status_summary === 'string' ? body.status_summary : null,
+      runnerId: readNumber(body ?? {}, 'runner_id'),
+      runnerName: readString(body ?? {}, 'runner_name'),
+      status: readString(body ?? {}, 'status'),
+      statusReason: readString(body ?? {}, 'status_reason'),
+      statusSummary: readString(body ?? {}, 'status_summary'),
     };
   } catch {
     return {
@@ -311,7 +328,7 @@ export async function collectDoctorReport(options: DoctorOptions = {}, deps: Doc
       key: 'update_layout',
       label: 'Update Layout',
       status: 'warn',
-      message: 'This runner still uses the legacy install layout. Re-run the installer once before using update apply or background auto-updates.',
+      message: `${LEGACY_LAYOUT_REINSTALL_MESSAGE} before using update apply or background auto-updates.`,
     });
   }
 

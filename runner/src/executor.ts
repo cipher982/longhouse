@@ -8,7 +8,7 @@
  * - Capability-based command validation
  */
 
-import { spawn } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import type { ExecChunkMessage, ExecDoneMessage, ExecErrorMessage } from './protocol';
 import { CommandValidator } from './validator';
 
@@ -31,7 +31,7 @@ export interface ExecutionCallbacks {
 }
 
 export class CommandExecutor {
-  private runningJobs: Map<string, any> = new Map();
+  private runningJobs: Map<string, ChildProcess> = new Map();
   private validator: CommandValidator;
   private capabilities: string[];
 
