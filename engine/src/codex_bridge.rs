@@ -1603,14 +1603,7 @@ async fn emit_runtime_keepalive(context: &mut BridgeContext) {
 
 impl BridgeRuntimeSink {
     async fn post_phase(&self, phase: &str, dedupe_key: String, tool_name: Option<String>) {
-        let freshness_ms = match phase {
-            "thinking" => Some(90_000),
-            "running" => Some(600_000),
-            "idle" => Some(600_000),
-            "blocked" => Some(86_400_000),
-            "needs_user" => Some(86_400_000),
-            _ => Some(600_000),
-        };
+        // freshness_ms omitted — backend PHASE_FRESHNESS is the single source of truth.
         self.post_runtime_events(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
             "session_id": self.session_id,
@@ -1621,7 +1614,6 @@ impl BridgeRuntimeSink {
             "phase": phase,
             "tool_name": tool_name,
             "occurred_at": Utc::now().to_rfc3339(),
-            "freshness_ms": freshness_ms,
             "dedupe_key": dedupe_key,
             "payload": {
                 "managed_transport": "codex_app_server",
@@ -1642,7 +1634,6 @@ impl BridgeRuntimeSink {
             "phase": Value::Null,
             "tool_name": Value::Null,
             "occurred_at": Utc::now().to_rfc3339(),
-            "freshness_ms": 90_000,
             "dedupe_key": dedupe_key,
             "payload": {
                 "managed_transport": "codex_app_server",
@@ -2115,15 +2106,14 @@ mod tests {
 
     #[test]
     fn keepalive_interval_fits_within_thinking_freshness_budget() {
-        // ACTIVE_PHASE_KEEPALIVE_MS must be less than the "thinking" freshness window (90_000ms)
-        // so keepalives refresh the signal before the frontend decays to Ready.
-        // If either constant changes, this test will catch the mismatch.
-        const THINKING_FRESHNESS_MS: u64 = 90_000;
+        // Backend PHASE_FRESHNESS["thinking"] = 90s is the shortest TTL.
+        // Keepalive must fire before it expires so the phase stays live.
+        const BACKEND_THINKING_FRESHNESS_MS: u64 = 90_000;
         assert!(
-            ACTIVE_PHASE_KEEPALIVE_MS < THINKING_FRESHNESS_MS,
-            "keepalive interval {}ms must be shorter than thinking freshness budget {}ms",
+            ACTIVE_PHASE_KEEPALIVE_MS < BACKEND_THINKING_FRESHNESS_MS,
+            "keepalive interval {}ms must be shorter than backend thinking freshness {}ms",
             ACTIVE_PHASE_KEEPALIVE_MS,
-            THINKING_FRESHNESS_MS,
+            BACKEND_THINKING_FRESHNESS_MS,
         );
     }
 
