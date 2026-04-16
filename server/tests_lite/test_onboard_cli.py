@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
@@ -13,6 +14,10 @@ os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 from zerg.cli import config_file as config_file_cli
 from zerg.cli import onboard as onboard_cli
 from zerg.cli.main import app
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", text)
 
 
 def _install_result(*, hook_warning: str | None = None, desktop_app: bool = False) -> SimpleNamespace:
@@ -263,10 +268,11 @@ def test_onboard_topology_remote_requires_url_in_noninteractive_mode(monkeypatch
     monkeypatch.setattr(onboard_cli.sys.stdin, "isatty", lambda: False)
 
     result = runner.invoke(app, ["onboard", "--topology", "remote"])
+    plain_output = _strip_ansi(result.output)
 
     assert result.exit_code != 0
-    assert "Invalid value:" in result.output
-    assert "requires --remote-url in noninteractive" in result.output
+    assert "Invalid value:" in plain_output
+    assert "--topology remote requires --remote-url" in plain_output
 
 
 def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch, tmp_path):
