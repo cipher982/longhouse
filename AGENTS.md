@@ -245,6 +245,7 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Control-plane admin calls are user-agent sensitive. Use the existing scripts and curl patterns before improvising custom Python clients.
 - Hosted tenant data on `zerg` lives under `/var/app-data/longhouse/<subdomain>` and mounts to `/data` in the container.
 - Managed Codex TUI exits with `Connection reset without closing handshake` are not necessarily bridge crashes. Check `~/.codex/log/codex-tui.log`, the bridge `.json` state, rollout JSONL, and app-server `readyz` before assuming root cause; prior incidents involved a live app-server plus a fatal remote-TUI disconnect during an active turn.
+- Managed Codex runtime pinning should go through `--codex-source` on `longhouse connect --install` / `longhouse onboard`; `LONGHOUSE_CODEX_SOURCE` is the lower-level escape hatch, not the primary operator path.
 - macOS menu bar work is latency-sensitive: open from cached/loading state, refresh off the main thread, keep `local-health` internal-only, and require PNG harness plus live installed-app capture QA before ship.
 - Timeline scroll performance is fragile: hover prefetch, card hover transitions, and decorative shell animations can steal raster budget during active scroll and should be suppressed when scrolling.
 - `/api/threads/{id}/runs` needs direct backend coverage. Dead runtime imports can survive broad suites and only surface in hosted chat smoke.

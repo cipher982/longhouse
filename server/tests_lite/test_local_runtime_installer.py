@@ -206,7 +206,7 @@ def test_install_local_runtime_installs_managed_codex_when_configured(tmp_path, 
     home = tmp_path / "home"
     claude_dir = home / ".claude"
     state_writes: list[dict[str, object]] = []
-    ensure_calls: list[object] = []
+    ensure_calls: list[tuple[object, str | None]] = []
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(
@@ -216,11 +216,15 @@ def test_install_local_runtime_installs_managed_codex_when_configured(tmp_path, 
     )
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
-    monkeypatch.setattr(installer, "resolve_runtime_source_override", lambda component: "/tmp/codex" if component.value == "managed-codex" else "")
+    monkeypatch.setattr(
+        installer,
+        "resolve_runtime_source_override",
+        lambda component, *, source_override=None: source_override or ("/tmp/codex" if component.value == "managed-codex" else ""),
+    )
     monkeypatch.setattr(installer, "resolve_installed_runtime_artifact", lambda component: None)
 
-    def fake_ensure(component):
-        ensure_calls.append(component)
+    def fake_ensure(component, *, source_override=None):
+        ensure_calls.append((component, source_override))
         if component.value == "engine":
             return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False)
         if component.value == "managed-codex":
@@ -241,6 +245,7 @@ def test_install_local_runtime_installs_managed_codex_when_configured(tmp_path, 
         claude_dir=str(claude_dir),
         machine_name="test-box",
         menubar=False,
+        codex_source="/tmp/codex-patched",
     )
 
     assert state_writes == [
@@ -253,7 +258,10 @@ def test_install_local_runtime_installs_managed_codex_when_configured(tmp_path, 
             "topology_intent": None,
         }
     ]
-    assert [component.value for component in ensure_calls] == ["engine", "managed-codex"]
+    assert [(component.value, source_override) for component, source_override in ensure_calls] == [
+        ("engine", None),
+        ("managed-codex", "/tmp/codex-patched"),
+    ]
     assert result.codex_runtime.path == "/tmp/longhouse-codex"
     assert result.codex_runtime.installed_now is True
 

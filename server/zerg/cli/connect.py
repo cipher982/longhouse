@@ -489,6 +489,11 @@ def connect(
         "-m",
         help="Name for this machine in session labels (skips interactive prompt when using --install)",
     ),
+    codex_source: str | None = typer.Option(
+        None,
+        "--codex-source",
+        help="Advanced: path or URL for the managed Codex runtime artifact installed as longhouse-codex.",
+    ),
     menubar: bool = typer.Option(
         default_install_desktop_app(),
         "--menubar/--no-menubar",
@@ -547,9 +552,14 @@ def connect(
             claude_dir=claude_dir,
             interval=interval,
             machine_name=machine_name,
+            codex_source=codex_source,
             menubar=menubar,
         )
         return
+
+    if codex_source:
+        typer.secho("--codex-source requires --install.", fg=typer.colors.RED)
+        raise typer.Exit(code=1)
 
     # Auto-authenticate if no token exists for active shipping.
     if not token:
@@ -881,6 +891,7 @@ def _handle_install(
     claude_dir: str | None,
     interval: int,
     machine_name: str | None = None,
+    codex_source: str | None = None,
     menubar: bool = False,
 ) -> None:
     """Handle --install flag."""
@@ -900,6 +911,8 @@ def _handle_install(
     typer.echo(f"  URL: {url}")
     if menubar:
         typer.echo("  Desktop App: enabled")
+    if codex_source:
+        typer.echo(f"  Managed Codex source: {codex_source}")
 
     # Check for URL drift before install
     config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
@@ -913,6 +926,7 @@ def _handle_install(
             runtime_url=url,
             machine_name=resolved_name,
             menubar=menubar,
+            codex_source=codex_source,
             topology_intent="connect-remote",
         )
     except RuntimeError as e:
