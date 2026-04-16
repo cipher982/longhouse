@@ -266,6 +266,18 @@
     min-width: 0;
   }
 
+  .session-runtime-strip__meta-item {
+    display: inline-flex;
+    align-items: baseline;
+  }
+
+  .session-runtime-strip__elapsed {
+    display: inline-block;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+  }
+
   @keyframes session-runtime-strip-pulse {
     0%, 100% {
       box-shadow: 0 0 0 0 rgba(212, 184, 122, 0);

@@ -5,6 +5,7 @@ import { useSessionWorkspace } from "../useSessionWorkspace";
 const agentSessionMocks = vi.hoisted(() => ({
   useAgentSessionWorkspace: vi.fn(),
   useAgentSessionProjectionInfinite: vi.fn(),
+  useAgentSessionTurns: vi.fn(),
 }));
 const visibilityMocks = vi.hoisted(() => ({
   useDocumentVisible: vi.fn(),
@@ -69,6 +70,14 @@ function seedHookMocks(eventCount: number = 80) {
         total: events.length,
         abandoned_events: 0,
       },
+    },
+    isLoading: false,
+    error: null,
+  });
+  agentSessionMocks.useAgentSessionTurns.mockReturnValue({
+    data: {
+      turns: [],
+      total: 0,
     },
     isLoading: false,
     error: null,
@@ -186,6 +195,12 @@ describe("useSessionWorkspace", () => {
         focus_session_id: baseSession.id,
       }),
     });
+    expect(agentSessionMocks.useAgentSessionTurns).toHaveBeenCalledWith(baseSession.id, {
+      limit: 10,
+      order: "desc",
+      enabled: true,
+      refetchInterval: 30_000,
+    });
   });
 
   it("invalidates the workspace query itself when the SSE stream reports a change", () => {
@@ -218,6 +233,9 @@ describe("useSessionWorkspace", () => {
 
     expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["agent-session-workspace", baseSession.id],
+    });
+    expect(queryClientMocks.invalidateQueries).toHaveBeenCalledWith({
+      queryKey: ["agent-session-turns", baseSession.id],
     });
   });
 
@@ -271,6 +289,12 @@ describe("useSessionWorkspace", () => {
         },
       }),
     ).toBe(false);
+    expect(agentSessionMocks.useAgentSessionTurns).toHaveBeenCalledWith(baseSession.id, {
+      limit: 10,
+      order: "desc",
+      enabled: false,
+      refetchInterval: false,
+    });
   });
 
   it("retries auto-scroll until the timeline list becomes scrollable", async () => {

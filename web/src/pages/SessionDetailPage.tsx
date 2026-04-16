@@ -26,11 +26,12 @@ import { SessionContextPane } from "../components/session-workspace/SessionConte
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
 import { WorkspaceShell } from "../components/workspace/WorkspaceShell";
-import { useDocumentVisible } from "../hooks/useDocumentVisible";
 import { useLoopModeChange } from "../hooks/useLoopModeChange";
+import { useSecondClock } from "../hooks/useSecondClock";
 import { useSessionWorkspace } from "../hooks/useSessionWorkspace";
 import { config } from "../lib/config";
 import { useReadinessFlag } from "../lib/readiness-contract";
+import { getRuntimeElapsedLabel } from "../lib/sessionTiming";
 import { setSessionAction } from "../services/api/agents";
 import { DEMO_READ_ONLY_MESSAGE } from "../services/api/base";
 import { getSessionInteractionCapabilities } from "../lib/sessionWorkspace";
@@ -47,12 +48,12 @@ function SessionDetailWorkspaceRoute({
 }) {
   const navigate = useNavigate();
   const workspace = useSessionWorkspace(sessionId, { highlightEventId });
-  const documentVisible = useDocumentVisible();
 
   const {
     session,
     sessionLoading,
     sessionError,
+    turns,
     threadSessions,
     currentThreadSession,
     headThreadSession,
@@ -74,6 +75,11 @@ function SessionDetailWorkspaceRoute({
     handleVisibleSelectionChange,
     registerTimelineList,
   } = workspace;
+  const nowMs = useSecondClock(Boolean(session && session.ended_at == null));
+  const runtimeElapsedLabel = useMemo(
+    () => getRuntimeElapsedLabel(session, turns, nowMs),
+    [session, turns, nowMs],
+  );
 
   const navigateToSession = (nextSessionId: string) => {
     navigate(`/timeline/${nextSessionId}`, {
@@ -242,6 +248,7 @@ function SessionDetailWorkspaceRoute({
                     session={displaySession}
                     interaction={interaction}
                     hostLabel={runtimeHostLabel}
+                    elapsedLabel={runtimeElapsedLabel}
                     variant="inline"
                     testId="session-detail-header-runtime"
                   />
@@ -298,6 +305,7 @@ function SessionDetailWorkspaceRoute({
                   session={displaySession}
                   interaction={interaction}
                   hostLabel={runtimeHostLabel}
+                  elapsedLabel={runtimeElapsedLabel}
                   variant="dock"
                   testId="session-control-strip"
                 />
