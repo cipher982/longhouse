@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import SessionTurn
 from zerg.services.write_serializer import get_write_serializer
@@ -77,6 +78,12 @@ def _normalize_string(value: str | None) -> str | None:
     return normalized or None
 
 
+def _current_state(turn: SessionTurn | None) -> str | None:
+    if turn is None:
+        return None
+    return _normalize_string(turn.state)
+
+
 def run_session_turn_write(
     *,
     db_bind,
@@ -96,10 +103,10 @@ async def execute_session_turn_write(
 ) -> T:
     ws = get_write_serializer()
     if ws.is_configured:
-        return await ws.execute(
-            lambda _turn_db: run_session_turn_write(db_bind=db_bind, fn=fn),
+        return await ws.execute_with_session_factory(
+            make_sessionmaker(db_bind),
+            fn,
             label=label,
-            auto_commit=False,
         )
     return await asyncio.to_thread(run_session_turn_write, db_bind=db_bind, fn=fn)
 
@@ -204,13 +211,18 @@ def mark_session_turn_send_accepted(
     user_event_id: int | None = None,
 ) -> bool:
     turn = get_session_turn(db, session_id=session_id, request_id=request_id)
-    if turn is None or turn.send_accepted_at is not None:
+    if turn is None:
         return False
-    turn.send_accepted_at = _normalize_utc(accepted_at) or datetime.now(timezone.utc)
     normalized_user_event_id = _normalize_positive_int(user_event_id)
+    if turn.send_accepted_at is not None:
+        if turn.user_event_id is None and normalized_user_event_id is not None:
+            turn.user_event_id = normalized_user_event_id
+        return True
+
+    turn.send_accepted_at = _normalize_utc(accepted_at) or datetime.now(timezone.utc)
     if normalized_user_event_id is not None and turn.user_event_id is None:
         turn.user_event_id = normalized_user_event_id
-    if _normalize_string(turn.state) == SESSION_TURN_STATE_CREATED:
+    if _current_state(turn) == SESSION_TURN_STATE_CREATED:
         turn.state = SESSION_TURN_STATE_SEND_ACCEPTED
     return True
 
@@ -223,12 +235,18 @@ def mark_session_turn_active(
     observed_at: datetime | None = None,
 ) -> bool:
     turn = get_session_turn(db, session_id=session_id, request_id=request_id)
-    if turn is None or turn.active_phase_observed_at is not None:
+    if turn is None:
         return False
+    if turn.active_phase_observed_at is not None:
+        return True
+    if _current_state(turn) in {
+        SESSION_TURN_STATE_FAILED,
+        SESSION_TURN_STATE_TERMINAL,
+        SESSION_TURN_STATE_DURABLE,
+    }:
+        return True
     turn.active_phase_observed_at = _normalize_utc(observed_at) or datetime.now(timezone.utc)
-    turn.error_code = None
-    if _normalize_string(turn.state) not in {SESSION_TURN_STATE_TERMINAL, SESSION_TURN_STATE_DURABLE}:
-        turn.state = SESSION_TURN_STATE_ACTIVE
+    turn.state = SESSION_TURN_STATE_ACTIVE
     return True
 
 
@@ -241,13 +259,18 @@ def mark_session_turn_terminal(
     terminal_at: datetime | None = None,
 ) -> bool:
     turn = get_session_turn(db, session_id=session_id, request_id=request_id)
-    if turn is None or turn.terminal_at is not None:
+    if turn is None:
         return False
+    if turn.terminal_at is not None:
+        return True
+    if _current_state(turn) in {
+        SESSION_TURN_STATE_FAILED,
+        SESSION_TURN_STATE_DURABLE,
+    }:
+        return True
     turn.terminal_phase = _normalize_string(phase)
     turn.terminal_at = _normalize_utc(terminal_at) or datetime.now(timezone.utc)
-    turn.error_code = None
-    if _normalize_string(turn.state) != SESSION_TURN_STATE_DURABLE:
-        turn.state = SESSION_TURN_STATE_TERMINAL
+    turn.state = SESSION_TURN_STATE_TERMINAL
     return True
 
 
@@ -262,8 +285,15 @@ def mark_session_turn_failed(
     normalized_error_code = _normalize_string(error_code)
     if turn is None or normalized_error_code is None:
         return False
-    if _normalize_string(turn.state) == SESSION_TURN_STATE_DURABLE:
-        return False
+    if _current_state(turn) in {
+        SESSION_TURN_STATE_TERMINAL,
+        SESSION_TURN_STATE_DURABLE,
+    }:
+        return True
+    if _current_state(turn) == SESSION_TURN_STATE_FAILED:
+        if turn.error_code is None:
+            turn.error_code = normalized_error_code
+        return True
     turn.error_code = normalized_error_code
     turn.state = SESSION_TURN_STATE_FAILED
     return True
@@ -287,7 +317,7 @@ def maybe_mark_session_turn_durable(
     if not pending_turns:
         return None
 
-    for turn in pending_turns:
+    for idx, turn in enumerate(pending_turns):
         baseline_event_id = _normalize_positive_int(turn.baseline_event_id) or 0
         events = (
             db.query(AgentEvent)
@@ -301,6 +331,8 @@ def maybe_mark_session_turn_durable(
         match = _match_durable_turn(
             events=events,
             user_event_id=_normalize_positive_int(turn.user_event_id),
+            submitted_after=_normalize_utc(turn.user_submitted_at),
+            submitted_before=_normalize_utc(pending_turns[idx + 1].user_submitted_at) if idx + 1 < len(pending_turns) else None,
         )
         if match is None:
             continue
@@ -322,6 +354,8 @@ def _match_durable_turn(
     *,
     events: list[AgentEvent],
     user_event_id: int | None,
+    submitted_after: datetime | None,
+    submitted_before: datetime | None,
 ) -> tuple[AgentEvent, AgentEvent] | None:
     target_user_id = _normalize_positive_int(user_event_id)
     matched_user: AgentEvent | None = None
@@ -336,13 +370,29 @@ def _match_durable_turn(
                 continue
             if target_user_id is not None and int(getattr(event, "id", 0) or 0) != target_user_id:
                 continue
+            if target_user_id is None and not _event_in_turn_window(
+                event,
+                submitted_after=submitted_after,
+                submitted_before=submitted_before,
+            ):
+                continue
             matched_user = event
             continue
 
         if role == "user":
             if last_assistant is not None:
                 return matched_user, last_assistant
-            return None
+            if target_user_id is not None:
+                return None
+            if not _event_in_turn_window(
+                event,
+                submitted_after=submitted_after,
+                submitted_before=submitted_before,
+            ):
+                return None
+            matched_user = event
+            last_assistant = None
+            continue
 
         if role == "assistant" and content_text.strip():
             last_assistant = event
@@ -350,3 +400,19 @@ def _match_durable_turn(
     if matched_user is not None and last_assistant is not None:
         return matched_user, last_assistant
     return None
+
+
+def _event_in_turn_window(
+    event: AgentEvent,
+    *,
+    submitted_after: datetime | None,
+    submitted_before: datetime | None,
+) -> bool:
+    event_timestamp = _normalize_utc(getattr(event, "timestamp", None))
+    if event_timestamp is None:
+        return True
+    if submitted_after is not None and event_timestamp < submitted_after:
+        return False
+    if submitted_before is not None and event_timestamp >= submitted_before:
+        return False
+    return True

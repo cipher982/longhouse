@@ -478,11 +478,7 @@ def _schedule_managed_local_lock_release(
 
 
 def _managed_local_send_failure_code(send_result) -> str:
-    if bool(getattr(send_result, "verified_turn_started", False)):
-        return MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
-    if bool(getattr(send_result, "ok", False)):
-        return MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
-    if int(getattr(send_result, "exit_code", 1) or 1) == 0:
+    if bool(getattr(send_result, "ok", False)) or int(getattr(send_result, "exit_code", 1) or 1) == 0:
         return MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
     return MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
 
@@ -512,17 +508,6 @@ async def _dispatch_managed_local_text(
     baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
     user_submitted_at = datetime.now(timezone.utc)
     t_baseline = time.monotonic()
-    create_session_turn(
-        db,
-        session_id=source_session.id,
-        request_id=request_id,
-        source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-        timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
-        baseline_event_id=baseline_event_id,
-        baseline_runtime_cursor=baseline_hook_runtime_event_id,
-        user_submitted_at=user_submitted_at,
-    )
-    db.commit()
     run_best_effort_managed_local_turn_write(
         db_bind=db.get_bind(),
         label="create",
@@ -548,6 +533,17 @@ async def _dispatch_managed_local_text(
     )
     t_sent = time.monotonic()
     send_observed_at = datetime.now(timezone.utc)
+
+    create_session_turn(
+        db,
+        session_id=source_session.id,
+        request_id=request_id,
+        source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+        timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+        baseline_event_id=baseline_event_id,
+        baseline_runtime_cursor=baseline_hook_runtime_event_id,
+        user_submitted_at=user_submitted_at,
+    )
 
     if not send_result.ok or not bool(getattr(send_result, "verified_turn_started", False)):
         error_code = _managed_local_send_failure_code(send_result)

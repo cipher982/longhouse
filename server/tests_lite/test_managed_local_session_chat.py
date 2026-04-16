@@ -476,6 +476,8 @@ def test_managed_local_dispatch_requires_verified_turn_start(monkeypatch, tmp_pa
             assert canonical_rows[0].send_accepted_at is not None
         finally:
             api_app_ref.dependency_overrides = {}
+
+
 def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path):
     """Successful managed-local dispatch should keep the thread lock until terminal state."""
     session_local = _make_db(tmp_path)
@@ -679,3 +681,126 @@ def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(
         assert shadow_row.terminal_runtime_event_id is None
 
     assert release_calls == [(str(source_session.id), "req-terminal")]
+
+
+def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        _user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        create_session_turn(
+            db,
+            session_id=source_session.id,
+            request_id="req-active-after-terminal",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+        )
+        mark_session_turn_send_accepted(db, session_id=source_session.id, request_id="req-active-after-terminal")
+        db.commit()
+        db_bind = db.get_bind()
+
+    async def fake_terminal_wait(**_kwargs):
+        return ManagedLocalTerminalResult(
+            phase="idle",
+            control_status="completed",
+            runtime_event_id=0,
+            occurred_at=datetime.now(timezone.utc),
+        )
+
+    async def fake_active_wait(**_kwargs):
+        return ManagedLocalPhaseUpdate(
+            phase="thinking",
+            runtime_event_id=12,
+            occurred_at=datetime.now(timezone.utc),
+            source="claude_hook",
+        )
+
+    async def fake_release(_lock_scope_id, _request_id):
+        return True
+
+    monkeypatch.setattr("zerg.services.session_chat_impl.await_managed_local_turn_terminal", fake_terminal_wait)
+    monkeypatch.setattr("zerg.services.session_chat_impl.await_managed_local_hook_phase_update", fake_active_wait)
+    monkeypatch.setattr(session_chat_impl.session_lock_manager, "release", fake_release)
+
+    asyncio.run(
+        session_chat_impl._release_managed_local_lock_after_terminal(
+            lock_scope_id=str(source_session.id),
+            request_id="req-active-after-terminal",
+            session_id=source_session.id,
+            db_bind=db_bind,
+            after_runtime_event_id=0,
+            after_presence_updated_at=None,
+        )
+    )
+    asyncio.run(
+        session_chat_impl._observe_managed_local_turn_active_phase(
+            request_id="req-active-after-terminal",
+            session_id=source_session.id,
+            db_bind=db_bind,
+            after_runtime_event_id=0,
+            after_presence_updated_at=None,
+        )
+    )
+
+    with session_local() as verify_db:
+        row = (
+            verify_db.query(SessionTurn)
+            .filter(
+                SessionTurn.session_id == source_session.id,
+                SessionTurn.request_id == "req-active-after-terminal",
+            )
+            .one()
+        )
+        assert row.state == "terminal"
+        assert row.terminal_phase == "idle"
+        assert row.active_phase_observed_at is None
+
+
+def test_managed_local_dispatch_send_crash_does_not_persist_orphan_canonical_turn(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        client, api_app_ref = _make_client(db, user)
+
+        async def fake_send_text(
+            *,
+            db,
+            owner_id,
+            session,
+            text,
+            commis_id=None,
+            timeout_secs=15,
+            verify_turn_started=False,
+            verification_timeout_secs=None,
+        ):
+            raise RuntimeError("dispatch crashed")
+
+        monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
+
+        try:
+            response = client.post(
+                f"/api/sessions/{source_session.id}/send-live",
+                json={"message": "continue"},
+            )
+            assert response.status_code == 500
+
+            canonical_rows = (
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == source_session.id)
+                .all()
+            )
+            assert canonical_rows == []
+
+            shadow_rows = (
+                db.query(ManagedLocalTurn)
+                .filter(ManagedLocalTurn.session_id == source_session.id)
+                .all()
+            )
+            assert len(shadow_rows) == 1
+            assert shadow_rows[0].send_accepted_at is None
+            assert shadow_rows[0].error_code is None
+        finally:
+            api_app_ref.dependency_overrides = {}

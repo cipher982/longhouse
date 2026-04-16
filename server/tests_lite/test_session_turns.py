@@ -26,8 +26,10 @@ from zerg.services.agents_store import SessionIngest
 from zerg.services import session_turns as session_turns_service
 from zerg.services.session_turns import SESSION_TURN_CONFIDENCE_EXACT
 from zerg.services.session_turns import SESSION_TURN_SOURCE_MANAGED_LIVE
+from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
+from zerg.services.session_turns import SESSION_TURN_STATE_TERMINAL
 from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import get_session_turn_snapshot
@@ -394,7 +396,7 @@ def test_mark_session_turn_failed_does_not_overwrite_durable_state(tmp_path):
         durable_turn = maybe_mark_session_turn_durable(db, session_id=session.id)
         assert durable_turn is not None
         assert durable_turn.state == SESSION_TURN_STATE_DURABLE
-        assert not mark_session_turn_failed(
+        assert mark_session_turn_failed(
             db,
             session_id=session.id,
             request_id="req-durable",
@@ -404,6 +406,196 @@ def test_mark_session_turn_failed_does_not_overwrite_durable_state(tmp_path):
         row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-durable").one()
         assert row.state == SESSION_TURN_STATE_DURABLE
         assert row.error_code is None
+
+
+def test_mark_session_turn_failed_does_not_overwrite_terminal_state(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-terminal",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+        )
+        mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-terminal")
+        mark_session_turn_terminal(
+            db,
+            session_id=session.id,
+            request_id="req-terminal",
+            phase="idle",
+            terminal_at=datetime.now(timezone.utc),
+        )
+
+        assert mark_session_turn_failed(
+            db,
+            session_id=session.id,
+            request_id="req-terminal",
+            error_code="turn_timeout",
+        )
+
+        row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-terminal").one()
+        assert row.state == SESSION_TURN_STATE_TERMINAL
+        assert row.terminal_phase == "idle"
+        assert row.error_code is None
+
+
+def test_session_turn_milestones_are_idempotent_and_do_not_regress_state(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-idempotent",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+        )
+        accepted_at = datetime.now(timezone.utc)
+        active_at = datetime.now(timezone.utc)
+        terminal_at = datetime.now(timezone.utc)
+
+        assert mark_session_turn_send_accepted(
+            db,
+            session_id=session.id,
+            request_id="req-idempotent",
+            accepted_at=accepted_at,
+        )
+        assert mark_session_turn_send_accepted(
+            db,
+            session_id=session.id,
+            request_id="req-idempotent",
+            accepted_at=accepted_at,
+        )
+        assert mark_session_turn_active(
+            db,
+            session_id=session.id,
+            request_id="req-idempotent",
+            observed_at=active_at,
+        )
+        assert mark_session_turn_active(
+            db,
+            session_id=session.id,
+            request_id="req-idempotent",
+            observed_at=active_at,
+        )
+        assert mark_session_turn_terminal(
+            db,
+            session_id=session.id,
+            request_id="req-idempotent",
+            phase="idle",
+            terminal_at=terminal_at,
+        )
+        assert mark_session_turn_terminal(
+            db,
+            session_id=session.id,
+            request_id="req-idempotent",
+            phase="idle",
+            terminal_at=terminal_at,
+        )
+
+        row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-idempotent").one()
+        assert row.state == SESSION_TURN_STATE_TERMINAL
+        assert row.send_accepted_at == accepted_at
+        assert row.active_phase_observed_at == active_at
+        assert row.terminal_at == terminal_at
+
+
+def test_mark_session_turn_active_does_not_revive_failed_turn(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-failed",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+        )
+        mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-failed")
+        mark_session_turn_failed(
+            db,
+            session_id=session.id,
+            request_id="req-failed",
+            error_code="verification_timeout",
+        )
+
+        assert mark_session_turn_active(
+            db,
+            session_id=session.id,
+            request_id="req-failed",
+            observed_at=datetime.now(timezone.utc),
+        )
+
+        row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-failed").one()
+        assert row.state == SESSION_TURN_STATE_FAILED
+        assert row.error_code == "verification_timeout"
+        assert row.active_phase_observed_at is None
+
+
+def test_session_turn_durable_matching_uses_turn_submission_windows_for_multiple_pending_turns(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        turn1_submitted_at = datetime(2026, 4, 16, 12, 0, 0, tzinfo=timezone.utc)
+        turn2_submitted_at = datetime(2026, 4, 16, 12, 1, 0, tzinfo=timezone.utc)
+        create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-pending-1",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+            user_submitted_at=turn1_submitted_at,
+        )
+        create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-pending-2",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+            user_submitted_at=turn2_submitted_at,
+        )
+        mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-pending-1")
+        mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-pending-2")
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="first",
+                    timestamp=datetime(2026, 4, 16, 12, 0, 5, tzinfo=timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="second",
+                    timestamp=datetime(2026, 4, 16, 12, 1, 5, tzinfo=timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="reply to second",
+                    timestamp=datetime(2026, 4, 16, 12, 1, 6, tzinfo=timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        durable_turn = maybe_mark_session_turn_durable(db, session_id=session.id)
+        assert durable_turn is not None
+        assert durable_turn.request_id == "req-pending-2"
+
+        first_row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-pending-1").one()
+        second_row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-pending-2").one()
+        assert first_row.durable_at is None
+        assert first_row.durable_assistant_event_id is None
+        assert second_row.durable_at is not None
+        assert second_row.state == SESSION_TURN_STATE_DURABLE
 
 
 def test_execute_session_turn_write_uses_bound_database_when_serializer_is_configured(tmp_path, monkeypatch):
