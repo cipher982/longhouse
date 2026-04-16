@@ -20,6 +20,9 @@ use crate::text::truncate_tail_chars;
 const BRIDGE_RUNTIME_SOURCE: &str = "codex_bridge";
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
+const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
+const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
+const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
 
 #[derive(Debug, Clone)]
 pub struct BridgeStartConfig {
@@ -61,6 +64,12 @@ pub struct BridgeSendConfig {
 
 #[derive(Debug, Clone)]
 pub struct BridgeInterruptConfig {
+    pub session_id: String,
+    pub state_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BridgeStopConfig {
     pub session_id: String,
     pub state_root: Option<PathBuf>,
 }
@@ -149,6 +158,7 @@ struct BridgeContext {
     current_exe: PathBuf,
     last_progress_emit: Option<Instant>,
     runtime_tracker: CodexRuntimeTracker,
+    subscribed_thread_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -187,20 +197,33 @@ enum BridgeRuntimeUpdate {
     Progress,
 }
 
-/// IPC command sent from `send` to the running daemon via Unix socket.
-struct IpcCommand {
-    text: String,
-    thread_id: String,
-    reply: oneshot::Sender<Result<BridgeSendSummary>>,
+#[derive(Debug)]
+enum IpcCommand {
+    TurnStart {
+        text: String,
+        thread_id: String,
+        reply: oneshot::Sender<Result<Value>>,
+    },
+    Stop {
+        reply: oneshot::Sender<Result<Value>>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum BridgeFollowup {
+    SubscribeThread {
+        thread_id: String,
+        thread_path: Option<String>,
+    },
 }
 
 fn ipc_socket_path(state_file: &Path) -> PathBuf {
     state_file.with_extension("sock")
 }
 
-/// Spawn a Unix socket listener that accepts IPC commands from `send` callers.
-/// Each connection reads a single JSON line `{"text": "...", "thread_id": "..."}`,
-/// forwards it as an `IpcCommand` to the daemon loop, and writes back the JSON result.
+/// Spawn a Unix socket listener that accepts IPC commands from bridge helpers.
+/// Each connection reads a single JSON line and forwards it as an `IpcCommand`
+/// to the daemon loop, then writes back the JSON result.
 #[cfg(unix)]
 fn spawn_ipc_listener(
     sock_path: PathBuf,
@@ -256,37 +279,45 @@ async fn handle_ipc_connection(
     }
     let request: Value =
         serde_json::from_slice(&buf[..total]).context("parsing IPC request JSON")?;
-    let text = request
-        .get("text")
-        .and_then(Value::as_str)
-        .context("IPC request missing 'text'")?
-        .to_string();
-    let thread_id = request
-        .get("thread_id")
-        .and_then(Value::as_str)
-        .context("IPC request missing 'thread_id'")?
-        .to_string();
-
     let (reply_tx, reply_rx) = oneshot::channel();
-    tx.send(IpcCommand {
-        text,
-        thread_id,
-        reply: reply_tx,
-    })
-    .map_err(|_| anyhow!("daemon event loop closed"))?;
+    let command = match request.get("kind").and_then(Value::as_str) {
+        Some("stop") => IpcCommand::Stop { reply: reply_tx },
+        _ => {
+            let text = request
+                .get("text")
+                .and_then(Value::as_str)
+                .context("IPC request missing 'text'")?
+                .to_string();
+            let thread_id = request
+                .get("thread_id")
+                .and_then(Value::as_str)
+                .context("IPC request missing 'thread_id'")?
+                .to_string();
+            IpcCommand::TurnStart {
+                text,
+                thread_id,
+                reply: reply_tx,
+            }
+        }
+    };
+    tx.send(command)
+        .map_err(|_| anyhow!("daemon event loop closed"))?;
 
     let result = reply_rx
         .await
         .map_err(|_| anyhow!("daemon dropped reply channel"))?;
 
     let response = match result {
-        Ok(summary) => json!({
-            "ok": true,
-            "session_id": summary.session_id,
-            "thread_id": summary.thread_id,
-            "turn_id": summary.turn_id,
-            "turn_status": summary.turn_status,
-        }),
+        Ok(value) => match value {
+            Value::Object(mut object) => {
+                object.insert("ok".to_string(), Value::Bool(true));
+                Value::Object(object)
+            }
+            other => json!({
+                "ok": true,
+                "result": other,
+            }),
+        },
         Err(e) => json!({
             "ok": false,
             "error": format!("{e:#}"),
@@ -512,6 +543,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         current_exe,
         last_progress_emit: None,
         runtime_tracker: CodexRuntimeTracker::default(),
+        subscribed_thread_id: None,
     };
     // Mark ready so the CLI can read ws_url and launch the TUI.
     // idle is posted once the TUI creates a thread (thread/started notification).
@@ -538,6 +570,10 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         tokio::time::interval(Duration::from_millis(ACTIVE_PHASE_KEEPALIVE_MS));
     runtime_keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     runtime_keepalive.tick().await;
+    let mut thread_subscribe_retry =
+        tokio::time::interval(Duration::from_millis(THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS));
+    thread_subscribe_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    thread_subscribe_retry.tick().await;
 
     loop {
         tokio::select! {
@@ -553,7 +589,13 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                             let _ = client.pending_methods.remove(&id);
                             continue;
                         }
-                        process_notification(&value, &config, &mut context).await?;
+                        if let Some(followup) = process_notification(&value, &config, &mut context).await? {
+                            if let Err(err) =
+                                handle_bridge_followup(&config, &mut client, &mut context, followup).await
+                            {
+                                eprintln!("[codex-bridge] thread followup failed: {err}");
+                            }
+                        }
                     }
                     StreamEvent::Stderr(line) => {
                         eprintln!("[codex-bridge] app-server: {line}");
@@ -565,29 +607,62 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                     }
                 }
             }
+            _ = thread_subscribe_retry.tick() => {
+                if let Some(followup) = pending_thread_subscription(&context) {
+                    if let Err(err) =
+                        handle_bridge_followup(&config, &mut client, &mut context, followup).await
+                    {
+                        eprintln!("[codex-bridge] background thread subscribe failed: {err}");
+                    }
+                }
+            }
             Some(cmd) = ipc_rx.recv() => {
-                let result = handle_ipc_turn_start(&config, &mut client, &mut context, &cmd).await;
-                let _ = cmd.reply.send(result);
+                match cmd {
+                    IpcCommand::TurnStart { text, thread_id, reply } => {
+                        let result = handle_ipc_turn_start(
+                            &config,
+                            &mut client,
+                            &mut context,
+                            &text,
+                            &thread_id,
+                        )
+                        .await
+                        .and_then(|summary| serde_json::to_value(summary).map_err(Into::into));
+                        let _ = reply.send(result);
+                    }
+                    IpcCommand::Stop { reply } => {
+                        let _ = reply.send(Ok(json!({})));
+                        context.state.status = "stopped".to_string();
+                        context.state.active_turn_id = None;
+                        context.state.last_error = None;
+                        write_state_file(&context.state_file, &context.state)?;
+                        shutdown_child(&mut client).await?;
+                        break;
+                    }
+                }
             }
             _ = runtime_keepalive.tick() => {
                 emit_runtime_keepalive(&mut context).await;
             }
         }
     }
+
+    Ok(())
 }
 
 async fn handle_ipc_turn_start(
     config: &BridgeRunConfig,
     client: &mut RpcClient,
     context: &mut BridgeContext,
-    cmd: &IpcCommand,
+    text: &str,
+    thread_id: &str,
 ) -> Result<BridgeSendSummary> {
     let response = send_request_with_runtime(
         client,
         "turn/start",
         json!({
-            "threadId": cmd.thread_id,
-            "input": [{"type": "text", "text": cmd.text}],
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": text}],
         }),
         config,
         context,
@@ -599,7 +674,7 @@ async fn handle_ipc_turn_start(
         extract_string(&response, &["turn", "status"]).unwrap_or_else(|| "inProgress".to_string());
     Ok(BridgeSendSummary {
         session_id: context.state.session_id.clone(),
-        thread_id: cmd.thread_id.clone(),
+        thread_id: thread_id.to_string(),
         turn_id,
         turn_status,
     })
@@ -747,6 +822,62 @@ async fn send_via_ipc_inner(
             .unwrap_or("inProgress")
             .to_string(),
     })
+}
+
+#[cfg(unix)]
+async fn stop_via_ipc(sock_path: &Path) -> Result<()> {
+    tokio::time::timeout(IPC_SEND_TIMEOUT, stop_via_ipc_inner(sock_path))
+        .await
+        .map_err(|_| anyhow!("IPC stop timed out after {}s", IPC_SEND_TIMEOUT.as_secs()))?
+}
+
+#[cfg(unix)]
+async fn stop_via_ipc_inner(sock_path: &Path) -> Result<()> {
+    let mut stream = tokio::net::UnixStream::connect(sock_path)
+        .await
+        .with_context(|| format!("connecting to IPC socket {}", sock_path.display()))?;
+
+    let mut request = serde_json::to_vec(&json!({
+        "kind": "stop",
+    }))?;
+    request.push(b'\n');
+    stream.write_all(&request).await?;
+    stream.shutdown().await?;
+
+    let mut response_buf = Vec::new();
+    stream.read_to_end(&mut response_buf).await?;
+    let response: Value = serde_json::from_slice(&response_buf).context("parsing IPC response")?;
+
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown IPC error");
+        bail!("daemon IPC error: {error}");
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
+    let paths = resolve_bridge_paths(config.state_root.as_deref(), &config.session_id, None)?;
+    if !paths.state_file.exists() {
+        return Ok(());
+    }
+    let sock_path = ipc_socket_path(&paths.state_file);
+    if !sock_path.exists() {
+        bail!(
+            "bridge IPC socket is unavailable for session {}; manual cleanup may be required",
+            config.session_id
+        );
+    }
+    stop_via_ipc(&sock_path).await
+}
+
+#[cfg(not(unix))]
+pub async fn cmd_codex_bridge_stop(_config: BridgeStopConfig) -> Result<()> {
+    bail!("codex-bridge stop is only supported on unix platforms");
 }
 
 pub async fn cmd_codex_bridge_interrupt(config: BridgeInterruptConfig) -> Result<()> {
@@ -908,6 +1039,18 @@ async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+
+    #[cfg(unix)]
+    {
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setpgid(0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
 
     let mut child = command
         .spawn()
@@ -1173,7 +1316,7 @@ async fn send_request_with_runtime(
                     }
                     continue;
                 }
-                process_notification(&value, config, context).await?;
+                let _ = process_notification(&value, config, context).await?;
             }
             StreamEvent::Stderr(line) => {
                 eprintln!("[codex-bridge] app-server: {line}");
@@ -1261,11 +1404,12 @@ async fn process_notification(
     value: &Value,
     _config: &BridgeRunConfig,
     context: &mut BridgeContext,
-) -> Result<()> {
+) -> Result<Option<BridgeFollowup>> {
     let Some(method) = value.get("method").and_then(Value::as_str) else {
-        return Ok(());
+        return Ok(None);
     };
     let params = value.get("params").cloned().unwrap_or(Value::Null);
+    let mut followup = None;
     match method {
         "thread/started" => {
             // Capture the thread created by the TUI (first time only).
@@ -1276,6 +1420,7 @@ async fn process_notification(
                     context.state.thread_id = thread_id.clone();
                     context.state.thread_path = thread_path.clone();
                     context.runtime.thread_id = thread_id.clone();
+                    context.subscribed_thread_id = None;
                     write_state_file(&context.state_file, &context.state)?;
 
                     // Seed session_binding so the daemon ships with the managed session ID.
@@ -1303,6 +1448,10 @@ async fn process_notification(
                     )
                     .await;
                     eprintln!("[codex-bridge] TUI thread captured: {id}");
+                    followup = Some(BridgeFollowup::SubscribeThread {
+                        thread_id: id.clone(),
+                        thread_path,
+                    });
                 }
             }
         }
@@ -1314,6 +1463,9 @@ async fn process_notification(
             }
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(context, updates).await;
+            if followup.is_none() {
+                followup = pending_thread_subscription(context);
+            }
         }
         "item/agentMessage/delta"
         | "item/commandExecution/outputDelta"
@@ -1340,7 +1492,23 @@ async fn process_notification(
         }
         _ => {}
     }
-    Ok(())
+    Ok(followup)
+}
+
+fn pending_thread_subscription(context: &BridgeContext) -> Option<BridgeFollowup> {
+    let thread_id = context.state.thread_id.as_ref()?;
+    if context.subscribed_thread_id.as_deref() == Some(thread_id.as_str()) {
+        return None;
+    }
+    Some(BridgeFollowup::SubscribeThread {
+        thread_id: thread_id.clone(),
+        thread_path: context.state.thread_path.clone(),
+    })
+}
+
+fn is_retryable_thread_subscription_error(error_text: &str) -> bool {
+    error_text.contains("no rollout found for thread id")
+        || (error_text.contains("failed to load rollout") && error_text.contains("is empty"))
 }
 
 impl CodexRuntimeTracker {
@@ -1735,6 +1903,19 @@ fn update_bridge_error(context: &mut BridgeContext, error: &str) -> Result<()> {
 
 async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
     if let Some(ref mut child) = client.child {
+        #[cfg(unix)]
+        if let Some(process_group_id) = child.id().and_then(|pid| i32::try_from(pid).ok()) {
+            unsafe {
+                let _ = libc::killpg(process_group_id, libc::SIGTERM);
+            }
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let process_group_still_alive = unsafe { libc::killpg(process_group_id, 0) == 0 };
+            if process_group_still_alive {
+                unsafe {
+                    let _ = libc::killpg(process_group_id, libc::SIGKILL);
+                }
+            }
+        }
         if child.try_wait()?.is_none() {
             let _ = child.start_kill();
         }
@@ -1743,10 +1924,157 @@ async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
     Ok(())
 }
 
+async fn handle_bridge_followup(
+    config: &BridgeRunConfig,
+    client: &mut RpcClient,
+    context: &mut BridgeContext,
+    followup: BridgeFollowup,
+) -> Result<()> {
+    match followup {
+        BridgeFollowup::SubscribeThread {
+            thread_id,
+            thread_path,
+        } => {
+            let params = json!({
+                "threadId": thread_id,
+                "path": thread_path,
+            });
+            let mut last_error = None;
+            for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+                match send_request_with_runtime(
+                    client,
+                    "thread/resume",
+                    params.clone(),
+                    config,
+                    context,
+                )
+                .await
+                {
+                    Ok(response) => {
+                        apply_thread_resume_snapshot(context, &response).await?;
+                        context.subscribed_thread_id = Some(thread_id);
+                        return Ok(());
+                    }
+                    Err(err) => {
+                        let error_text = err.to_string();
+                        // Upstream can emit `thread/started` before the rollout file is
+                        // materialized, and the running-thread resume path can also see the
+                        // rollout file before its initial contents land on disk.
+                        let retryable = is_retryable_thread_subscription_error(&error_text);
+                        last_error = Some(err);
+                        if retryable && attempt < THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+                            tokio::time::sleep(Duration::from_millis(
+                                THREAD_SUBSCRIBE_RETRY_DELAY_MS,
+                            ))
+                            .await;
+                            continue;
+                        }
+                        break;
+                    }
+                }
+            }
+            Err(last_error.expect("subscribe retry loop should capture an error"))
+        }
+    }
+}
+
+async fn apply_thread_resume_snapshot(context: &mut BridgeContext, response: &Value) -> Result<()> {
+    let thread = response.get("thread").cloned().unwrap_or(Value::Null);
+    if thread.is_null() {
+        return Ok(());
+    }
+
+    let status_params = json!({
+        "thread": {
+            "status": thread.get("status").cloned().unwrap_or(Value::Null),
+        }
+    });
+    let _ = context
+        .runtime_tracker
+        .handle_notification("thread/status/changed", &status_params);
+
+    let resumed_active_turn = extract_in_progress_turn(&thread);
+    context.state.active_turn_id =
+        resumed_active_turn.and_then(|turn| extract_string(turn, &["id"]));
+    context.state.last_turn_status = resumed_active_turn
+        .and_then(|turn| extract_string(turn, &["status"]))
+        .or_else(|| context.state.last_turn_status.clone());
+    context.runtime_tracker.active_turn_id = context.state.active_turn_id.clone();
+    write_state_file(&context.state_file, &context.state)?;
+    emit_runtime_updates(
+        context,
+        vec![context.runtime_tracker.current_phase_update()],
+    )
+    .await;
+    Ok(())
+}
+
+fn extract_in_progress_turn(thread: &Value) -> Option<&Value> {
+    thread
+        .get("turns")
+        .and_then(Value::as_array)
+        .and_then(|turns| {
+            turns
+                .iter()
+                .rev()
+                .find(|turn| extract_string(turn, &["status"]).as_deref() == Some("inProgress"))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    fn make_test_context(temp: &tempfile::TempDir) -> BridgeContext {
+        let state_file = temp.path().join("bridge-state.json");
+        let log_file = temp.path().join("bridge.log");
+        BridgeContext {
+            state_file: state_file.clone(),
+            state: BridgeStateFile {
+                session_id: "session-123".to_string(),
+                cwd: temp.path().display().to_string(),
+                codex_bin: "codex".to_string(),
+                ws_url: Some("ws://example.test".to_string()),
+                thread_id: None,
+                thread_path: None,
+                pid: 42,
+                status: "ready".to_string(),
+                log_file: log_file.display().to_string(),
+                active_turn_id: None,
+                last_turn_status: None,
+                last_error: None,
+                updated_at: Utc::now().to_rfc3339(),
+            },
+            runtime: BridgeRuntimeSink {
+                http: reqwest::Client::new(),
+                api_url: "http://127.0.0.1:9".to_string(),
+                api_token: "token".to_string(),
+                session_id: "session-123".to_string(),
+                machine_name: Some("test-box".to_string()),
+                thread_id: None,
+            },
+            current_exe: PathBuf::from("/bin/echo"),
+            last_progress_emit: None,
+            runtime_tracker: CodexRuntimeTracker::default(),
+            subscribed_thread_id: None,
+        }
+    }
+
+    fn make_test_run_config(temp: &tempfile::TempDir) -> BridgeRunConfig {
+        BridgeRunConfig {
+            session_id: "session-123".to_string(),
+            cwd: temp.path().to_path_buf(),
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            codex_bin: "codex".to_string(),
+            session_source: None,
+            machine_name: Some("test-box".to_string()),
+            auto_approve: true,
+            state_file: temp.path().join("bridge-state.json"),
+            log_file: temp.path().join("bridge.log"),
+        }
+    }
 
     fn assert_phase_update(
         update: BridgeRuntimeUpdate,
@@ -2147,12 +2475,147 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn process_notification_requests_thread_subscription_after_first_thread_start() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+
+        let followup = process_notification(
+            &json!({
+                "method": "thread/started",
+                "params": {
+                    "thread": {
+                        "id": "thr-live",
+                        "path": "/tmp/thread.jsonl"
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            followup,
+            Some(BridgeFollowup::SubscribeThread {
+                thread_id: "thr-live".to_string(),
+                thread_path: Some("/tmp/thread.jsonl".to_string()),
+            })
+        );
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-live"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some("/tmp/thread.jsonl")
+        );
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-live"));
+    }
+
+    #[tokio::test]
+    async fn apply_thread_resume_snapshot_hydrates_active_turn_from_resume_response() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut context = make_test_context(&temp);
+
+        apply_thread_resume_snapshot(
+            &mut context,
+            &json!({
+                "thread": {
+                    "status": {
+                        "type": "active",
+                        "activeFlags": []
+                    },
+                    "turns": [
+                        {"id": "turn-old", "status": "completed"},
+                        {"id": "turn-live", "status": "inProgress"}
+                    ]
+                }
+            }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));
+        assert_eq!(
+            context.state.last_turn_status.as_deref(),
+            Some("inProgress")
+        );
+        assert_eq!(
+            context.runtime_tracker.active_turn_id.as_deref(),
+            Some("turn-live")
+        );
+    }
+
+    #[tokio::test]
+    async fn process_notification_retries_thread_subscription_until_bridge_is_subscribed() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-live".to_string());
+        context.state.thread_path = Some("/tmp/thread.jsonl".to_string());
+        context.runtime.thread_id = Some("thr-live".to_string());
+
+        let followup = process_notification(
+            &json!({
+                "method": "turn/started",
+                "params": {
+                    "turn": {
+                        "id": "turn-live",
+                        "status": "inProgress"
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            followup,
+            Some(BridgeFollowup::SubscribeThread {
+                thread_id: "thr-live".to_string(),
+                thread_path: Some("/tmp/thread.jsonl".to_string()),
+            })
+        );
+
+        context.subscribed_thread_id = Some("thr-live".to_string());
+        let followup = process_notification(
+            &json!({
+                "method": "item/started",
+                "params": {
+                    "item": {
+                        "id": "item-1",
+                        "type": "commandExecution"
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+    }
+
+    #[test]
+    fn retryable_thread_subscription_errors_cover_missing_and_empty_rollouts() {
+        assert!(is_retryable_thread_subscription_error(
+            "thread/resume failed: {\"code\":-32600,\"message\":\"no rollout found for thread id thr-live\"}"
+        ));
+        assert!(is_retryable_thread_subscription_error(
+            "thread/resume failed: {\"code\":-32603,\"message\":\"failed to load rollout `/tmp/thread.jsonl` for thread thr-live: rollout at /tmp/thread.jsonl is empty\"}"
+        ));
+        assert!(!is_retryable_thread_subscription_error(
+            "thread/resume failed: {\"code\":-32000,\"message\":\"permission denied\"}"
+        ));
+    }
+
+    #[tokio::test]
     async fn send_request_with_runtime_handles_interleaved_requests_and_notifications() {
         let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let temp = tempfile::tempdir().unwrap();
-        let state_file = temp.path().join("bridge-state.json");
-        let log_file = temp.path().join("bridge.log");
 
         let mut client = RpcClient {
             child: None,
@@ -2162,47 +2625,10 @@ mod tests {
             next_request_id: 1,
             ws_url: "ws://example.test".to_string(),
         };
-        let mut context = BridgeContext {
-            state_file: state_file.clone(),
-            state: BridgeStateFile {
-                session_id: "session-123".to_string(),
-                cwd: temp.path().display().to_string(),
-                codex_bin: "codex".to_string(),
-                ws_url: Some("ws://example.test".to_string()),
-                thread_id: Some("thr_test".to_string()),
-                thread_path: None,
-                pid: 42,
-                status: "ready".to_string(),
-                log_file: log_file.display().to_string(),
-                active_turn_id: None,
-                last_turn_status: None,
-                last_error: None,
-                updated_at: Utc::now().to_rfc3339(),
-            },
-            runtime: BridgeRuntimeSink {
-                http: reqwest::Client::new(),
-                api_url: "http://127.0.0.1:9".to_string(),
-                api_token: "token".to_string(),
-                session_id: "session-123".to_string(),
-                machine_name: Some("test-box".to_string()),
-                thread_id: Some("thr_test".to_string()),
-            },
-            current_exe: PathBuf::from("/bin/echo"),
-            last_progress_emit: None,
-            runtime_tracker: CodexRuntimeTracker::default(),
-        };
-        let config = BridgeRunConfig {
-            session_id: "session-123".to_string(),
-            cwd: temp.path().to_path_buf(),
-            api_url: "http://127.0.0.1:9".to_string(),
-            api_token: "token".to_string(),
-            codex_bin: "codex".to_string(),
-            session_source: None,
-            machine_name: Some("test-box".to_string()),
-            auto_approve: true,
-            state_file,
-            log_file,
-        };
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr_test".to_string());
+        context.runtime.thread_id = Some("thr_test".to_string());
+        let config = make_test_run_config(&temp);
 
         events_tx
             .send(StreamEvent::Rpc(json!({
