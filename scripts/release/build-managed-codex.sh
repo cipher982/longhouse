@@ -67,6 +67,27 @@ if [[ ! -f "${PATCH_FILE}" ]]; then
   exit 1
 fi
 
+cargo_build_release() {
+  if command -v cargo >/dev/null 2>&1; then
+    if cargo --version >/dev/null 2>&1; then
+      cargo build --release "$@"
+      return 0
+    fi
+    if cargo +stable --version >/dev/null 2>&1; then
+      cargo +stable build --release "$@"
+      return 0
+    fi
+  fi
+
+  if command -v rustup >/dev/null 2>&1 && rustup run stable cargo --version >/dev/null 2>&1; then
+    rustup run stable cargo build --release "$@"
+    return 0
+  fi
+
+  echo "Rust toolchain unavailable for cargo build --release" >&2
+  exit 1
+}
+
 WORKDIR=""
 cleanup() {
   if [[ ${KEEP_WORKDIR} -eq 0 && -n "${WORKDIR}" && -d "${WORKDIR}" ]]; then
@@ -94,10 +115,9 @@ fi
 git -C "${WORKTREE}" apply --check "${PATCH_FILE}"
 git -C "${WORKTREE}" apply "${PATCH_FILE}"
 
-cargo build \
+cargo_build_release \
   --manifest-path "${WORKTREE}/codex-rs/Cargo.toml" \
   -p codex-cli \
-  --release \
   --bin codex
 
 BUILT_BINARY="${WORKTREE}/codex-rs/target/release/codex"

@@ -21,6 +21,7 @@ from pathlib import Path
 
 import httpx
 import typer
+from click import Choice
 
 from zerg.cli.config_file import get_config_path
 from zerg.cli.config_file import load_config
@@ -380,6 +381,12 @@ def onboard(
         "--remote-url",
         help="Skip local runtime and connect to an existing Longhouse at this URL",
     ),
+    topology: str | None = typer.Option(
+        None,
+        "--topology",
+        help="Skip the interactive topology prompt: local or remote.",
+        click_type=Choice(["local", "remote"], case_sensitive=False),
+    ),
     codex_source: str | None = typer.Option(
         None,
         "--codex-source",
@@ -387,16 +394,30 @@ def onboard(
     ),
 ) -> None:
     """Run the default local quickstart or connect to existing Longhouse."""
+    normalized_topology = topology.lower() if topology else None
+
+    if remote_url and normalized_topology == "local":
+        raise typer.BadParameter("--topology local cannot be combined with --remote-url.")
+
+    if normalized_topology == "remote" and not remote_url and not sys.stdin.isatty():
+        raise typer.BadParameter("--topology remote requires --remote-url in noninteractive mode.")
+
     typer.echo("")
     typer.secho("Welcome to Longhouse", fg=typer.colors.CYAN, bold=True)
     typer.echo("")
 
     # Topology choice: decide where the server runs (unless --remote-url specified)
-    if remote_url:
+    if remote_url or normalized_topology == "remote":
         # User specified --remote-url flag, use remote path directly
         topology_intent = "connect-remote"
+        if remote_url is None:
+            remote_url = typer.prompt("URL of your Longhouse server", default="https://longhouse.example.com")
         api_url = remote_url
         skip_local_server = True
+    elif normalized_topology == "local":
+        topology_intent = "serve-local"
+        api_url = _derive_client_url(host, port)
+        skip_local_server = False
     else:
         # Interactive topology choice
         typer.echo("Where should your Longhouse server run?")
@@ -405,9 +426,7 @@ def onboard(
         typer.echo("  2. Connect to existing Longhouse (agent on this Mac, server on VPS/homelab/Mac mini)")
         typer.echo("")
 
-        import click
-
-        choice = typer.prompt("Choose", type=click.Choice(["1", "2"], case_sensitive=False), default="1")
+        choice = typer.prompt("Choose", type=Choice(["1", "2"], case_sensitive=False), default="1")
 
         if choice == "2":
             # Remote server path

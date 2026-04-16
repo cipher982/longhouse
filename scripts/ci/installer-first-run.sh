@@ -810,7 +810,7 @@ fi
 
 log "🧭 Running local quickstart..."
 ONBOARD_LOG="$(mktemp -t longhouse-onboard.XXXXXX.log)"
-longhouse onboard --no-browser --port "$PORT" | tee "$ONBOARD_LOG"
+longhouse onboard --topology local --no-browser --port "$PORT" | tee "$ONBOARD_LOG"
 rm -f "$ONBOARD_LOG"
 
 log "🔌 Verifying local runtime install..."
