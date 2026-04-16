@@ -2113,6 +2113,49 @@ mod tests {
         assert!(tracker.keepalive_update().is_none());
     }
 
+    #[test]
+    fn keepalive_interval_fits_within_thinking_freshness_budget() {
+        // ACTIVE_PHASE_KEEPALIVE_MS must be less than the "thinking" freshness window (90_000ms)
+        // so keepalives refresh the signal before the frontend decays to Ready.
+        // If either constant changes, this test will catch the mismatch.
+        const THINKING_FRESHNESS_MS: u64 = 90_000;
+        assert!(
+            ACTIVE_PHASE_KEEPALIVE_MS < THINKING_FRESHNESS_MS,
+            "keepalive interval {}ms must be shorter than thinking freshness budget {}ms",
+            ACTIVE_PHASE_KEEPALIVE_MS,
+            THINKING_FRESHNESS_MS,
+        );
+    }
+
+    #[test]
+    fn keepalive_suppressed_for_needs_user_attention_state() {
+        let mut tracker = CodexRuntimeTracker::default();
+
+        // Enter thinking
+        tracker.handle_notification(
+            "turn/started",
+            &json!({
+                "turn": {"id": "turn-1", "status": "inProgress"}
+            }),
+        );
+        assert!(tracker.keepalive_update().is_some());
+
+        // Transition to needs_user (reply needed)
+        tracker.handle_notification(
+            "thread/status/changed",
+            &json!({
+                "status": {
+                    "type": "active",
+                    "activeFlags": ["waitingOnUserInput"]
+                }
+            }),
+        );
+        assert!(
+            tracker.keepalive_update().is_none(),
+            "keepalive must be suppressed in needs_user state"
+        );
+    }
+
     #[tokio::test]
     async fn send_request_with_runtime_handles_interleaved_requests_and_notifications() {
         let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();

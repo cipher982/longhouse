@@ -292,6 +292,12 @@ export function getRuntimeDisplayCopy(
       detail: runtimePhaseLabel,
     };
   }
+  if (runtime.presenceState == null && runtime.truthTier === "managed-local") {
+    return {
+      headline: "State unavailable",
+      detail: "Waiting for live signal",
+    };
+  }
   if (runtime.presenceState === "idle" || runtime.isIdle) {
     return {
       headline: "Ready",
