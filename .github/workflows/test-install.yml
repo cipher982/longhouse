@@ -35,7 +35,13 @@ on:
       - '.github/workflows/test-install.yml'
   schedule:
     - cron: '11 9 * * *'
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      run_public_canary:
+        description: 'Also run the published installer canary against the default branch'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   runtime-packaging-macos:
@@ -112,7 +118,7 @@ jobs:
           ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}"
 
   installer-first-run-remote:
-    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_public_canary) }}
     env:
       GITHUB_TOKEN: ${{ github.token }}
     strategy:
