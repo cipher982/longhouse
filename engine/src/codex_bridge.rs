@@ -785,6 +785,8 @@ pub async fn cmd_codex_bridge_send(config: BridgeSendConfig) -> Result<BridgeSen
 /// The entire round-trip (connect + write + read response) is bounded by a
 /// timeout to prevent wedging if the daemon or app-server stalls.
 const IPC_SEND_TIMEOUT: Duration = Duration::from_secs(30);
+const IPC_STOP_TIMEOUT: Duration = Duration::from_secs(3);
+const CHILD_SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_millis(500);
 
 #[cfg(unix)]
 async fn send_via_ipc(sock_path: &Path, text: &str, thread_id: &str) -> Result<BridgeSendSummary> {
@@ -852,9 +854,9 @@ async fn send_via_ipc_inner(
 
 #[cfg(unix)]
 async fn stop_via_ipc(sock_path: &Path) -> Result<()> {
-    tokio::time::timeout(IPC_SEND_TIMEOUT, stop_via_ipc_inner(sock_path))
+    tokio::time::timeout(IPC_STOP_TIMEOUT, stop_via_ipc_inner(sock_path))
         .await
-        .map_err(|_| anyhow!("IPC stop timed out after {}s", IPC_SEND_TIMEOUT.as_secs()))?
+        .map_err(|_| anyhow!("IPC stop timed out after {}s", IPC_STOP_TIMEOUT.as_secs()))?
 }
 
 #[cfg(unix)]
@@ -888,10 +890,21 @@ async fn stop_via_ipc_inner(sock_path: &Path) -> Result<()> {
 #[cfg(unix)]
 pub async fn cmd_codex_bridge_stop(config: BridgeStopConfig) -> Result<()> {
     let paths = resolve_bridge_paths(config.state_root.as_deref(), &config.session_id, None)?;
+    let sock_path = ipc_socket_path(&paths.state_file);
     if !paths.state_file.exists() {
+        if sock_path.exists() {
+            eprintln!(
+                "bridge state file is missing for session {}; attempting IPC stop via existing socket",
+                config.session_id
+            );
+            return stop_via_ipc(&sock_path).await;
+        }
+        eprintln!(
+            "bridge state file is missing for session {}; nothing to stop",
+            config.session_id
+        );
         return Ok(());
     }
-    let sock_path = ipc_socket_path(&paths.state_file);
     if !sock_path.exists() {
         bail!(
             "bridge IPC socket is unavailable for session {}; manual cleanup may be required",
@@ -1937,14 +1950,24 @@ fn update_bridge_error(context: &mut BridgeContext, error: &str) -> Result<()> {
     write_state_file(&context.state_file, &context.state)
 }
 
+#[cfg(unix)]
+fn dedicated_child_process_group_id(child: &Child) -> Option<i32> {
+    let pid = child.id().and_then(|pid| i32::try_from(pid).ok())?;
+    let process_group_id = unsafe { libc::getpgid(pid) };
+    if process_group_id <= 0 || process_group_id != pid {
+        return None;
+    }
+    Some(process_group_id)
+}
+
 async fn shutdown_child(client: &mut RpcClient) -> Result<()> {
     if let Some(ref mut child) = client.child {
         #[cfg(unix)]
-        if let Some(process_group_id) = child.id().and_then(|pid| i32::try_from(pid).ok()) {
+        if let Some(process_group_id) = dedicated_child_process_group_id(child) {
             unsafe {
                 let _ = libc::killpg(process_group_id, libc::SIGTERM);
             }
-            tokio::time::sleep(Duration::from_millis(150)).await;
+            tokio::time::sleep(CHILD_SHUTDOWN_GRACE_PERIOD).await;
             let process_group_still_alive = unsafe { libc::killpg(process_group_id, 0) == 0 };
             if process_group_still_alive {
                 unsafe {

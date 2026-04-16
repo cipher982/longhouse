@@ -7,6 +7,7 @@ import os
 import shlex
 import shutil
 import subprocess
+from collections import deque
 from pathlib import Path
 
 import typer
@@ -24,6 +25,9 @@ from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
 
 _CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
+_ROLLOUT_TURN_EVENT_TYPES = {"task_started", "task_complete", "turn_aborted"}
+_ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
+_ROLLOUT_TAIL_LINES = 256
 
 
 def _resolve_explicit_codex_binary(candidate: str, *, source: str) -> str:
@@ -135,6 +139,51 @@ def _load_native_codex_bridge_state(state_file: str | None) -> dict[str, object]
         return None
 
 
+def _recent_rollout_turn_events(thread_path: str | None) -> list[tuple[str, str]]:
+    rollout_path = str(thread_path or "").strip()
+    if not rollout_path:
+        return []
+    try:
+        with Path(rollout_path).open("r", encoding="utf-8", errors="replace") as handle:
+            tail = deque(handle, maxlen=_ROLLOUT_TAIL_LINES)
+    except OSError:
+        return []
+
+    events: list[tuple[str, str]] = []
+    for raw_line in reversed(tail):
+        try:
+            payload = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if payload.get("type") != "event_msg":
+            continue
+        message = payload.get("payload")
+        if not isinstance(message, dict):
+            continue
+        event_type = str(message.get("type") or "").strip()
+        turn_id = str(message.get("turn_id") or "").strip()
+        if event_type in _ROLLOUT_TURN_EVENT_TYPES and turn_id:
+            events.append((event_type, turn_id))
+    return events
+
+
+def _rollout_turn_reached_terminal(thread_path: str | None, *, turn_id: str) -> bool:
+    for event_type, event_turn_id in _recent_rollout_turn_events(thread_path):
+        if event_turn_id != turn_id:
+            continue
+        if event_type in _ROLLOUT_TERMINAL_EVENT_TYPES:
+            return True
+        if event_type == "task_started":
+            return False
+    return False
+
+
+def _latest_rollout_turn_is_terminal(thread_path: str | None) -> bool:
+    for event_type, _turn_id in _recent_rollout_turn_events(thread_path):
+        return event_type in _ROLLOUT_TERMINAL_EVENT_TYPES
+    return False
+
+
 def _active_turn_survived_tui_exit(state_file: str | None) -> bool:
     state = _load_native_codex_bridge_state(state_file)
     if not state:
@@ -143,9 +192,15 @@ def _active_turn_survived_tui_exit(state_file: str | None) -> bool:
         return False
     if not str(state.get("thread_id") or "").strip():
         return False
-    if str(state.get("active_turn_id") or "").strip():
+    thread_path = str(state.get("thread_path") or "").strip() or None
+    active_turn_id = str(state.get("active_turn_id") or "").strip()
+    if active_turn_id:
+        if _rollout_turn_reached_terminal(thread_path, turn_id=active_turn_id):
+            return False
         return True
-    return str(state.get("last_turn_status") or "").strip() == "inProgress"
+    if str(state.get("last_turn_status") or "").strip() != "inProgress":
+        return False
+    return not _latest_rollout_turn_is_terminal(thread_path)
 
 
 def _stop_native_codex_bridge(*, session_id: str) -> str | None:
