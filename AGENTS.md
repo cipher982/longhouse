@@ -203,6 +203,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 - Use `scripts/hosted-loop-debug.sh <subdomain>` before improvising hosted loop debugging.
 - If a tool or workflow already provides a completion signal, do not turn it into a polling loop.
 - `/api/timeline/sessions` caps `limit` at 100. Frontend URL parsing needs to clamp to that or the timeline can self-422 on oversized `limit` params.
+- For `longhouse-engine codex-bridge` repros, `--state-root` isolates bridge files only; also set `--longhouse-home` to a temp dir or you will contaminate the live shipper DB/session_binding state under `~/.longhouse`.
 
 ## Pushing Changes
 
@@ -243,6 +244,7 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Demo session reset/reseed uses `provider_session_id LIKE 'demo-%'`, not `device_id`.
 - Control-plane admin calls are user-agent sensitive. Use the existing scripts and curl patterns before improvising custom Python clients.
 - Hosted tenant data on `zerg` lives under `/var/app-data/longhouse/<subdomain>` and mounts to `/data` in the container.
+- Managed Codex TUI exits with `Connection reset without closing handshake` are not necessarily bridge crashes. Check `~/.codex/log/codex-tui.log`, the bridge `.json` state, rollout JSONL, and app-server `readyz` before assuming root cause; prior incidents involved a live app-server plus a fatal remote-TUI disconnect during an active turn.
 - macOS menu bar work is latency-sensitive: open from cached/loading state, refresh off the main thread, keep `local-health` internal-only, and require PNG harness plus live installed-app capture QA before ship.
 - Timeline scroll performance is fragile: hover prefetch, card hover transitions, and decorative shell animations can steal raster budget during active scroll and should be suppressed when scrolling.
 - `/api/threads/{id}/runs` needs direct backend coverage. Dead runtime imports can survive broad suites and only surface in hosted chat smoke.
