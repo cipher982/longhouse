@@ -58,6 +58,7 @@ class ManagedLocalSendResult:
     error: str | None = None
     baseline_event_id: int | None = None
     verified_turn_started: bool = False
+    verified_user_event_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -558,6 +559,13 @@ async def send_text_to_managed_local_session(
                     error="Managed local session did not acknowledge the prompt after send",
                     verified_turn_started=False,
                 )
+            return ManagedLocalSendResult(
+                ok=True,
+                exit_code=0,
+                baseline_event_id=baseline_event_id,
+                verified_turn_started=True,
+                verified_user_event_id=int(getattr(persisted_prompt, "id", 0) or 0) or None,
+            )
         else:
             hook_event = await await_managed_local_hook_phase_update(
                 db_bind=db.get_bind(),

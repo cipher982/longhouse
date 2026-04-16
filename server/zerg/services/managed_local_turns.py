@@ -112,8 +112,9 @@ def mark_managed_local_turn_terminal(
         return False
     turn.terminal_phase = str(phase or "").strip() or None
     turn.terminal_at = _normalize_utc(terminal_at) or datetime.now(timezone.utc)
-    if terminal_runtime_event_id is not None and turn.terminal_runtime_event_id is None:
-        turn.terminal_runtime_event_id = int(terminal_runtime_event_id)
+    normalized_runtime_event_id = int(terminal_runtime_event_id or 0)
+    if normalized_runtime_event_id > 0 and turn.terminal_runtime_event_id is None:
+        turn.terminal_runtime_event_id = normalized_runtime_event_id
     return True
 
 
@@ -257,7 +258,7 @@ def get_managed_local_turn_snapshot(
             send_accepted_at=_normalize_utc(turn.send_accepted_at),
             terminal_phase=str(turn.terminal_phase or "").strip() or None,
             terminal_at=_normalize_utc(turn.terminal_at),
-            terminal_runtime_event_id=(int(turn.terminal_runtime_event_id) if turn.terminal_runtime_event_id is not None else None),
+            terminal_runtime_event_id=(int(turn.terminal_runtime_event_id) if int(turn.terminal_runtime_event_id or 0) > 0 else None),
             durable_user_event_id=int(turn.durable_user_event_id) if turn.durable_user_event_id is not None else None,
             durable_assistant_event_id=(int(turn.durable_assistant_event_id) if turn.durable_assistant_event_id is not None else None),
             durable_at=_normalize_utc(turn.durable_at),
