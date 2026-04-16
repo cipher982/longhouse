@@ -430,6 +430,12 @@ fn resolve_payload_session_id<'a>(
         return &parse_result.metadata.session_id;
     };
 
+    // Override must be a valid UUID — non-UUID bindings (e.g. human-readable
+    // session names from testing) would be rejected by the ingest endpoint.
+    if uuid::Uuid::parse_str(override_session_id).is_err() {
+        return &parse_result.metadata.session_id;
+    }
+
     // Managed-local Codex roots deliberately override the ingest UUID so the
     // transcript binds to the Longhouse-owned session row. Forked subagent
     // transcripts are different: they carry their own native session_meta id
