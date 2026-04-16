@@ -374,6 +374,9 @@ enum CodexBridgeCommands {
         state_root: Option<PathBuf>,
 
         #[arg(long)]
+        longhouse_home: Option<PathBuf>,
+
+        #[arg(long)]
         log_file: Option<PathBuf>,
 
         #[arg(long, default_value_t = 25)]
@@ -417,6 +420,9 @@ enum CodexBridgeCommands {
 
         #[arg(long)]
         auto_approve: bool,
+
+        #[arg(long)]
+        longhouse_home: Option<PathBuf>,
 
         #[arg(long)]
         state_file: PathBuf,
@@ -803,6 +809,7 @@ fn main() -> anyhow::Result<()> {
                     machine_name,
                     auto_approve,
                     state_root,
+                    longhouse_home,
                     log_file,
                     start_timeout_secs,
                     json,
@@ -819,6 +826,7 @@ fn main() -> anyhow::Result<()> {
                         machine_name,
                         auto_approve,
                         state_root,
+                        longhouse_home,
                         log_file,
                         start_timeout_secs,
                     }))?;
@@ -850,6 +858,7 @@ fn main() -> anyhow::Result<()> {
                     model: _,
                     machine_name,
                     auto_approve,
+                    longhouse_home,
                     state_file,
                     log_file,
                 } => {
@@ -862,6 +871,7 @@ fn main() -> anyhow::Result<()> {
                         session_source,
                         machine_name,
                         auto_approve,
+                        longhouse_home,
                         state_file,
                         log_file,
                     }))?;
