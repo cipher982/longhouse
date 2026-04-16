@@ -56,7 +56,7 @@ def _resolve_codex_binary(explicit: str | None = None) -> str | None:
     managed_runtime = resolve_installed_runtime_artifact(RuntimeComponent.MANAGED_CODEX)
     if managed_runtime is not None:
         return managed_runtime.launch_path
-    return shutil.which("codex")
+    return None
 
 
 def _build_codex_attach_command(
@@ -315,7 +315,7 @@ def codex(
     codex_bin: str | None = typer.Option(
         None,
         "--codex-bin",
-        help=f"Codex executable for managed sessions (defaults to {_CODEX_BIN_ENV} or codex on PATH).",
+        help=f"Codex executable override for managed sessions (defaults to {_CODEX_BIN_ENV} or the installed managed runtime).",
     ),
     bypass_approvals: bool = typer.Option(
         False,
@@ -335,8 +335,8 @@ def codex(
     resolved_codex_bin = _resolve_codex_binary(codex_bin)
     if not resolved_codex_bin:
         typer.secho(
-            "Managed Codex requires a Codex runtime. Install Codex, run `longhouse connect --install` "
-            f"with a managed Codex runtime configured, or set {_CODEX_BIN_ENV} / --codex-bin.",
+            "Managed Codex runtime is not installed. Run `longhouse connect --install` to provision the "
+            f"Longhouse-managed Codex runtime, or set {_CODEX_BIN_ENV} / --codex-bin to override it explicitly.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)

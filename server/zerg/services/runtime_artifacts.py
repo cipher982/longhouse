@@ -107,6 +107,11 @@ RELEASE_ASSET_FILENAMES: dict[RuntimeComponent, dict[str, str]] = {
         "linux-x64": "longhouse-engine-linux-x64",
         "linux-arm64": "longhouse-engine-linux-arm64",
     },
+    RuntimeComponent.MANAGED_CODEX: {
+        "darwin-arm64": "longhouse-codex-darwin-arm64",
+        "linux-x64": "longhouse-codex-linux-x64",
+        "linux-arm64": "longhouse-codex-linux-arm64",
+    },
     RuntimeComponent.DESKTOP_APP: {
         "darwin-arm64": "Longhouse-macos-arm64.zip",
     },

@@ -405,9 +405,39 @@ def test_desktop_window_has_no_published_release_asset():
         runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.DESKTOP_WINDOW)
 
 
-def test_managed_codex_has_no_published_release_asset():
-    with pytest.raises(RuntimeError, match="local-only runtime artifact"):
-        runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.MANAGED_CODEX)
+def test_managed_codex_uses_release_url_when_override_missing(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+
+    downloads: list[str] = []
+    downloaded_binary = tmp_path / "downloaded-codex"
+    downloaded_binary.write_text("#!/bin/sh\necho managed-codex\n")
+    downloaded_binary.chmod(0o755)
+
+    def fake_download(url: str) -> Path:
+        downloads.append(url)
+        return downloaded_binary
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
+    monkeypatch.setattr(runtime_artifacts, "resolve_longhouse_home", lambda: home / ".longhouse")
+    monkeypatch.setattr(runtime_artifacts, "_download_to_temp_path", fake_download)
+    monkeypatch.setattr(runtime_artifacts, "_verify_download_checksum", lambda url, downloaded_path: None)
+    monkeypatch.setattr(runtime_artifacts, "_platform_target", lambda: "darwin-arm64")
+    monkeypatch.setattr(runtime_artifacts.metadata, "version", lambda package: "0.1.9")
+    monkeypatch.setattr(runtime_artifacts, "_probe_executable_version", lambda path: "codex-cli 0.121.0")
+
+    result = runtime_artifacts.ensure_runtime_binary(runtime_artifacts.RuntimeComponent.MANAGED_CODEX)
+
+    launcher = home / ".local" / "bin" / "longhouse-codex"
+    install_root = home / ".longhouse" / "runtimes" / "codex"
+    versions = list((install_root / "versions").iterdir())
+
+    assert result.path == str(launcher)
+    assert result.installed_now is True
+    assert len(versions) == 1
+    assert downloads == ["https://github.com/cipher982/longhouse/releases/download/v0.1.9/longhouse-codex-darwin-arm64"]
+    assert (versions[0] / "longhouse-codex").read_text() == "#!/bin/sh\necho managed-codex\n"
 
 
 def test_ensure_runtime_artifact_falls_back_to_legacy_release_asset_when_canonical_zip_missing(monkeypatch, tmp_path: Path):
