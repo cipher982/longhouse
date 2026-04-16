@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
+from typing import Callable
+from typing import TypeVar
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import SessionTurn
+from zerg.services.write_serializer import get_write_serializer
 
 SESSION_TURN_SOURCE_MANAGED_LIVE = "managed_live"
 SESSION_TURN_SOURCE_IMPORTED_RECONSTRUCTED = "imported_reconstructed"
@@ -26,6 +30,8 @@ SESSION_TURN_STATE_ACTIVE = "active"
 SESSION_TURN_STATE_TERMINAL = "terminal"
 SESSION_TURN_STATE_DURABLE = "durable"
 SESSION_TURN_STATE_FAILED = "failed"
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -69,6 +75,29 @@ def _normalize_positive_int(value: int | None) -> int | None:
 def _normalize_string(value: str | None) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def run_session_turn_write(
+    *,
+    db_bind,
+    fn: Callable[[Session], T],
+) -> T:
+    with Session(bind=db_bind) as turn_db:
+        result = fn(turn_db)
+        turn_db.commit()
+        return result
+
+
+async def execute_session_turn_write(
+    *,
+    db_bind,
+    label: str,
+    fn: Callable[[Session], T],
+) -> T:
+    ws = get_write_serializer()
+    if ws.is_configured:
+        return await ws.execute(lambda turn_db: fn(turn_db), label=label)
+    return await asyncio.to_thread(run_session_turn_write, db_bind=db_bind, fn=fn)
 
 
 def create_session_turn(

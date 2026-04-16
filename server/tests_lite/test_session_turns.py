@@ -19,6 +19,9 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
+from zerg.services.agents_store import AgentsStore
+from zerg.services.agents_store import EventIngest
+from zerg.services.agents_store import SessionIngest
 from zerg.services.session_turns import SESSION_TURN_CONFIDENCE_EXACT
 from zerg.services.session_turns import SESSION_TURN_SOURCE_MANAGED_LIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
@@ -293,3 +296,61 @@ def test_session_turn_durable_heals_timeout_style_failure_when_events_arrive(tmp
         assert durable_turn is not None
         assert durable_turn.error_code is None
         assert durable_turn.state == SESSION_TURN_STATE_DURABLE
+
+
+def test_agents_store_ingest_marks_canonical_session_turn_durable(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-ingest",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+            baseline_event_id=0,
+        )
+        mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-ingest")
+        db.commit()
+
+        store = AgentsStore(db)
+        result = store.ingest_session(
+            SessionIngest(
+                id=session.id,
+                provider="claude",
+                environment="development",
+                project="zerg",
+                device_id="cinder",
+                cwd="/Users/davidrose/git/zerg",
+                started_at=session.started_at,
+                events=[
+                    EventIngest(
+                        role="user",
+                        content_text="continue",
+                        timestamp=datetime.now(timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=0,
+                    ),
+                    EventIngest(
+                        role="assistant",
+                        content_text="done",
+                        timestamp=datetime.now(timezone.utc),
+                        source_path="/tmp/session.jsonl",
+                        source_offset=1,
+                    ),
+                ],
+            )
+        )
+
+        assert result.events_inserted == 2
+
+        row = (
+            db.query(SessionTurn)
+            .filter(SessionTurn.session_id == session.id, SessionTurn.request_id == "req-ingest")
+            .one()
+        )
+        assert row.user_event_id is not None
+        assert row.durable_assistant_event_id is not None
+        assert row.durable_at is not None
+        assert row.state == SESSION_TURN_STATE_DURABLE

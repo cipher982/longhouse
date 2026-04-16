@@ -1529,6 +1529,11 @@ class AgentsStore:
             )
         ingest_runtime_events(self.db, runtime_events)
 
+        if events_inserted > 0 and transcript_changed:
+            from zerg.services.session_turns import maybe_mark_session_turn_durable
+
+            maybe_mark_session_turn_durable(self.db, session_id=session_id)
+
         self.db.commit()
 
         if events_inserted > 0 and transcript_changed:

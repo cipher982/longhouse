@@ -61,6 +61,8 @@ _LABEL_PRIORITIES: dict[str, int] = {
     "runner-online": 10,
     "presence-flush": 10,
     "runtime-events": 10,
+    "session-turn-active": 15,
+    "session-turn-terminal": 15,
     "runner-output": 20,
     "runner-job-complete": 20,
     "runner-job-error": 20,

@@ -34,6 +34,7 @@ from zerg.services.managed_local_control import MANAGED_LOCAL_CONTROL_STATUS_FAI
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_COMPLETE
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_FAILED
 from zerg.services.managed_local_control import MANAGED_LOCAL_SYNC_STATUS_PENDING
+from zerg.services.managed_local_control import await_managed_local_hook_phase_update
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import get_managed_local_control_status_for_phase
 from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
@@ -60,6 +61,14 @@ from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_dura
 from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_turns import SESSION_TURN_CONFIDENCE_EXACT
+from zerg.services.session_turns import SESSION_TURN_SOURCE_MANAGED_LIVE
+from zerg.services.session_turns import create_session_turn
+from zerg.services.session_turns import execute_session_turn_write
+from zerg.services.session_turns import mark_session_turn_active
+from zerg.services.session_turns import mark_session_turn_failed
+from zerg.services.session_turns import mark_session_turn_send_accepted
+from zerg.services.session_turns import mark_session_turn_terminal
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
@@ -70,6 +79,7 @@ _CURRENT_SESSION_HEADER = "X-Longhouse-Session-Id"
 MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS = 300.0
 MANAGED_LOCAL_POST_TERMINAL_SYNC_GRACE_SECS = 10.0
 MANAGED_LOCAL_POST_DURABLE_TERMINAL_GRACE_SECS = 0.5
+_MANAGED_LOCAL_ACTIVE_PHASES = frozenset({"thinking", "running"})
 _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE = "".join(
     [
         "Message was sent to the managed local session, but Longhouse ",
@@ -304,6 +314,43 @@ async def _release_managed_local_lock_after_terminal(
         )
         return
 
+    try:
+        updated_session_turn, _updated_shadow_turn = await execute_session_turn_write(
+            db_bind=db_bind,
+            label="session-turn-terminal",
+            fn=lambda turn_db: (
+                mark_session_turn_terminal(
+                    turn_db,
+                    session_id=session_id,
+                    request_id=request_id,
+                    phase=terminal_result.phase,
+                    terminal_at=terminal_result.occurred_at,
+                ),
+                mark_managed_local_turn_terminal(
+                    turn_db,
+                    session_id=session_id,
+                    request_id=request_id,
+                    phase=terminal_result.phase,
+                    terminal_at=terminal_result.occurred_at,
+                    terminal_runtime_event_id=terminal_result.runtime_event_id,
+                ),
+            ),
+        )
+        if not updated_session_turn:
+            logger.warning(
+                "[%s] Managed-local terminal watcher saw %s for %s but canonical turn update did not apply",
+                request_id,
+                terminal_result.phase,
+                session_id,
+            )
+    except Exception:
+        logger.warning(
+            "[%s] Managed-local terminal watcher failed to persist terminal state for %s",
+            request_id,
+            session_id,
+            exc_info=True,
+        )
+
     released = await session_lock_manager.release(lock_scope_id, request_id)
     logger.info(
         "[%s] Managed-local session reached terminal phase %s; lock release=%s",
@@ -311,6 +358,92 @@ async def _release_managed_local_lock_after_terminal(
         terminal_result.phase,
         released,
     )
+
+
+async def _observe_managed_local_turn_active_phase(
+    *,
+    request_id: str,
+    session_id: UUID,
+    db_bind,
+    after_runtime_event_id: int,
+    after_presence_updated_at: datetime | None,
+) -> None:
+    try:
+        active_update = await await_managed_local_hook_phase_update(
+            db_bind=db_bind,
+            session_id=session_id,
+            after_runtime_event_id=after_runtime_event_id,
+            after_presence_updated_at=after_presence_updated_at,
+            phases=set(_MANAGED_LOCAL_ACTIVE_PHASES),
+            timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
+            poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
+        )
+    except Exception:
+        logger.warning(
+            "[%s] Managed-local active watcher crashed for %s",
+            request_id,
+            session_id,
+            exc_info=True,
+        )
+        return
+
+    if active_update is None:
+        return
+
+    try:
+        updated = await execute_session_turn_write(
+            db_bind=db_bind,
+            label="session-turn-active",
+            fn=lambda turn_db: mark_session_turn_active(
+                turn_db,
+                session_id=session_id,
+                request_id=request_id,
+                observed_at=active_update.occurred_at,
+            ),
+        )
+        if not updated:
+            logger.debug(
+                "[%s] Managed-local active watcher saw %s for %s but no canonical update was needed",
+                request_id,
+                active_update.phase,
+                session_id,
+            )
+    except Exception:
+        logger.warning(
+            "[%s] Managed-local active watcher failed to persist active phase for %s",
+            request_id,
+            session_id,
+            exc_info=True,
+        )
+
+
+def _schedule_managed_local_active_phase_observation(
+    *,
+    request_id: str,
+    session_id: UUID,
+    db_bind,
+    after_runtime_event_id: int,
+    after_presence_updated_at: datetime | None,
+) -> None:
+    task = asyncio.create_task(
+        _observe_managed_local_turn_active_phase(
+            request_id=request_id,
+            session_id=session_id,
+            db_bind=db_bind,
+            after_runtime_event_id=after_runtime_event_id,
+            after_presence_updated_at=after_presence_updated_at,
+        )
+    )
+
+    def _log_task_failure(done: asyncio.Task[None]) -> None:
+        try:
+            done.result()
+        except asyncio.CancelledError:
+            logger.debug("[%s] Managed-local active watcher cancelled for %s", request_id, session_id)
+        except Exception:
+            logger.exception("[%s] Managed-local active watcher failed for %s", request_id, session_id)
+
+    task.add_done_callback(_log_task_failure)
 
 
 def _schedule_managed_local_lock_release(
@@ -377,7 +510,19 @@ async def _dispatch_managed_local_text(
         session_id=source_session.id,
     )
     baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
+    user_submitted_at = datetime.now(timezone.utc)
     t_baseline = time.monotonic()
+    create_session_turn(
+        db,
+        session_id=source_session.id,
+        request_id=request_id,
+        source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+        timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+        baseline_event_id=baseline_event_id,
+        baseline_runtime_cursor=baseline_hook_runtime_event_id,
+        user_submitted_at=user_submitted_at,
+    )
+    db.commit()
     run_best_effort_managed_local_turn_write(
         db_bind=db.get_bind(),
         label="create",
@@ -402,9 +547,38 @@ async def _dispatch_managed_local_text(
         verification_timeout_secs=15.0,
     )
     t_sent = time.monotonic()
+    send_observed_at = datetime.now(timezone.utc)
 
     if not send_result.ok or not bool(getattr(send_result, "verified_turn_started", False)):
         error_code = _managed_local_send_failure_code(send_result)
+        if error_code == MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT:
+            if not mark_session_turn_send_accepted(
+                db,
+                session_id=source_session.id,
+                request_id=request_id,
+                accepted_at=send_observed_at,
+                user_event_id=getattr(send_result, "verified_user_event_id", None),
+            ):
+                raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
+        if not mark_session_turn_failed(
+            db,
+            session_id=source_session.id,
+            request_id=request_id,
+            error_code=error_code,
+        ):
+            raise RuntimeError(f"Failed to record canonical failed milestone for {source_session.id}/{request_id}")
+        db.commit()
+        if error_code == MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT:
+            run_best_effort_managed_local_turn_write(
+                db_bind=db.get_bind(),
+                label="send_accepted_timeout",
+                fn=lambda turn_db: mark_managed_local_turn_send_accepted(
+                    turn_db,
+                    session_id=source_session.id,
+                    request_id=request_id,
+                    accepted_at=send_observed_at,
+                ),
+            )
         run_best_effort_managed_local_turn_write(
             db_bind=db.get_bind(),
             label="send_failed",
@@ -438,6 +612,15 @@ async def _dispatch_managed_local_text(
             },
         )
 
+    if not mark_session_turn_send_accepted(
+        db,
+        session_id=source_session.id,
+        request_id=request_id,
+        accepted_at=send_observed_at,
+        user_event_id=getattr(send_result, "verified_user_event_id", None),
+    ):
+        raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
+    db.commit()
     run_best_effort_managed_local_turn_write(
         db_bind=db.get_bind(),
         label="send_accepted",
@@ -445,9 +628,17 @@ async def _dispatch_managed_local_text(
             turn_db,
             session_id=source_session.id,
             request_id=request_id,
+            accepted_at=send_observed_at,
         ),
     )
 
+    _schedule_managed_local_active_phase_observation(
+        request_id=request_id,
+        session_id=source_session.id,
+        db_bind=db.get_bind(),
+        after_runtime_event_id=baseline_hook_runtime_event_id,
+        after_presence_updated_at=baseline_presence_updated_at,
+    )
     _schedule_managed_local_lock_release(
         lock_scope_id=lock_scope_id,
         request_id=request_id,

@@ -21,11 +21,21 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentSession
 from zerg.models.agents import ManagedLocalTurn
+from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.routers import session_chat
+from zerg.services import session_chat_impl
+from zerg.services.managed_local_control import ManagedLocalPhaseUpdate
+from zerg.services.managed_local_control import ManagedLocalTerminalResult
+from zerg.services.managed_local_turns import create_managed_local_turn
+from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
 from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_turns import SESSION_TURN_CONFIDENCE_EXACT
+from zerg.services.session_turns import SESSION_TURN_SOURCE_MANAGED_LIVE
+from zerg.services.session_turns import create_session_turn
+from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.session_execution_home import ManagedSessionTransport
 
 
@@ -239,6 +249,17 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
             assert len(turn_rows) == 1
             assert turn_rows[0].send_accepted_at is not None
 
+            canonical_rows = (
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == source_session.id)
+                .all()
+            )
+            assert len(canonical_rows) == 1
+            assert canonical_rows[0].send_accepted_at is not None
+            assert canonical_rows[0].state == "send_accepted"
+            assert canonical_rows[0].source_kind == "managed_live"
+            assert canonical_rows[0].timing_confidence == "exact"
+
             # Verify send was called with correct params
             assert len(calls) == 1
             assert calls[0]["runner_id"] == runner.id
@@ -335,6 +356,15 @@ def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
             )
             assert len(turn_rows) == 1
             assert turn_rows[0].error_code == "send_failed"
+
+            canonical_rows = (
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == source_session.id)
+                .all()
+            )
+            assert len(canonical_rows) == 1
+            assert canonical_rows[0].state == "failed"
+            assert canonical_rows[0].error_code == "send_failed"
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -434,6 +464,16 @@ def test_managed_local_dispatch_requires_verified_turn_start(monkeypatch, tmp_pa
             assert len(turn_rows) == 1
             assert turn_rows[0].error_code == "verification_timeout"
             assert data["error_code"] == "verification_timeout"
+
+            canonical_rows = (
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == source_session.id)
+                .all()
+            )
+            assert len(canonical_rows) == 1
+            assert canonical_rows[0].state == "failed"
+            assert canonical_rows[0].error_code == "verification_timeout"
+            assert canonical_rows[0].send_accepted_at is not None
         finally:
             api_app_ref.dependency_overrides = {}
 def test_managed_local_dispatch_keeps_lock_until_terminal(monkeypatch, tmp_path):
@@ -518,3 +558,124 @@ def test_managed_local_dispatch_updates_lock_endpoint_until_terminal(monkeypatch
         finally:
             asyncio.run(session_lock_manager.release(str(source_session.id)))
             api_app_ref.dependency_overrides = {}
+
+
+def test_managed_local_active_observer_marks_canonical_turn(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        _user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        create_session_turn(
+            db,
+            session_id=source_session.id,
+            request_id="req-active",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+        )
+        mark_session_turn_send_accepted(db, session_id=source_session.id, request_id="req-active")
+        db.commit()
+        db_bind = db.get_bind()
+
+    async def fake_wait(**_kwargs):
+        return ManagedLocalPhaseUpdate(
+            phase="thinking",
+            runtime_event_id=12,
+            occurred_at=datetime.now(timezone.utc),
+            source="claude_hook",
+        )
+
+    monkeypatch.setattr("zerg.services.session_chat_impl.await_managed_local_hook_phase_update", fake_wait)
+
+    asyncio.run(
+        session_chat_impl._observe_managed_local_turn_active_phase(
+            request_id="req-active",
+            session_id=source_session.id,
+            db_bind=db_bind,
+            after_runtime_event_id=0,
+            after_presence_updated_at=None,
+        )
+    )
+
+    with session_local() as verify_db:
+        row = (
+            verify_db.query(SessionTurn)
+            .filter(SessionTurn.session_id == source_session.id, SessionTurn.request_id == "req-active")
+            .one()
+        )
+        assert row.active_phase_observed_at is not None
+        assert row.state == "active"
+
+
+def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+    release_calls: list[tuple[str, str]] = []
+
+    with session_local() as db:
+        _user, runner = _seed_user_and_runner(db)
+        source_session = _seed_managed_local_session(db, runner=runner, provider="claude")
+        create_session_turn(
+            db,
+            session_id=source_session.id,
+            request_id="req-terminal",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+        )
+        mark_session_turn_send_accepted(db, session_id=source_session.id, request_id="req-terminal")
+        create_managed_local_turn(
+            db,
+            session_id=source_session.id,
+            request_id="req-terminal",
+            baseline_event_id=0,
+            baseline_runtime_event_id=0,
+            expected_user_text="continue",
+        )
+        mark_managed_local_turn_send_accepted(db, session_id=source_session.id, request_id="req-terminal")
+        db.commit()
+        db_bind = db.get_bind()
+
+    async def fake_terminal_wait(**_kwargs):
+        return ManagedLocalTerminalResult(
+            phase="idle",
+            control_status="completed",
+            runtime_event_id=0,
+            occurred_at=datetime.now(timezone.utc),
+        )
+
+    async def fake_release(lock_scope_id, request_id):
+        release_calls.append((lock_scope_id, request_id))
+        return True
+
+    monkeypatch.setattr("zerg.services.session_chat_impl.await_managed_local_turn_terminal", fake_terminal_wait)
+    monkeypatch.setattr(session_chat_impl.session_lock_manager, "release", fake_release)
+
+    asyncio.run(
+        session_chat_impl._release_managed_local_lock_after_terminal(
+            lock_scope_id=str(source_session.id),
+            request_id="req-terminal",
+            session_id=source_session.id,
+            db_bind=db_bind,
+            after_runtime_event_id=0,
+            after_presence_updated_at=None,
+        )
+    )
+
+    with session_local() as verify_db:
+        canonical_row = (
+            verify_db.query(SessionTurn)
+            .filter(SessionTurn.session_id == source_session.id, SessionTurn.request_id == "req-terminal")
+            .one()
+        )
+        assert canonical_row.terminal_at is not None
+        assert canonical_row.terminal_phase == "idle"
+        assert canonical_row.state == "terminal"
+
+        shadow_row = (
+            verify_db.query(ManagedLocalTurn)
+            .filter(ManagedLocalTurn.session_id == source_session.id, ManagedLocalTurn.request_id == "req-terminal")
+            .one()
+        )
+        assert shadow_row.terminal_at is not None
+        assert shadow_row.terminal_runtime_event_id is None
+
+    assert release_calls == [(str(source_session.id), "req-terminal")]
