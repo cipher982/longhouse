@@ -47,26 +47,21 @@ from zerg.services.managed_local_event_polling import await_managed_local_turn_e
 from zerg.services.managed_local_event_polling import fetch_managed_local_events_between_ids
 from zerg.services.managed_local_event_polling import fetch_managed_local_events_since
 from zerg.services.managed_local_event_polling import get_managed_local_latest_event_id
-from zerg.services.managed_local_event_polling import get_managed_local_turn_snapshot_best_effort
-from zerg.services.managed_local_event_polling import hydrate_managed_local_turn_events_from_ledger
-from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
-from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
-from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT
-from zerg.services.managed_local_turns import MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
-from zerg.services.managed_local_turns import create_managed_local_turn
-from zerg.services.managed_local_turns import mark_managed_local_turn_failed
-from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
-from zerg.services.managed_local_turns import mark_managed_local_turn_terminal
-from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
-from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
+from zerg.services.managed_local_event_polling import get_session_turn_snapshot_best_effort
+from zerg.services.managed_local_event_polling import hydrate_turn_events_from_snapshot
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_continuity import session_lock_manager
+from zerg.services.session_turns import SESSION_TURN_ERROR_SEND_FAILED
+from zerg.services.session_turns import SESSION_TURN_ERROR_TURN_TIMEOUT
+from zerg.services.session_turns import SESSION_TURN_ERROR_VERIFICATION_TIMEOUT
 from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import mark_session_turn_active
 from zerg.services.session_turns import mark_session_turn_failed
 from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.services.session_turns import mark_session_turn_terminal
+from zerg.services.session_turns import maybe_mark_session_turn_durable
+from zerg.services.session_turns import run_best_effort_session_turn_write
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
 from zerg.session_loop_mode import SessionLoopMode
@@ -313,25 +308,15 @@ async def _release_managed_local_lock_after_terminal(
         return
 
     try:
-        updated_session_turn, _updated_shadow_turn = await execute_session_turn_write(
+        updated_session_turn = await execute_session_turn_write(
             db_bind=db_bind,
             label="session-turn-terminal",
-            fn=lambda turn_db: (
-                mark_session_turn_terminal(
-                    turn_db,
-                    session_id=session_id,
-                    request_id=request_id,
-                    phase=terminal_result.phase,
-                    terminal_at=terminal_result.occurred_at,
-                ),
-                mark_managed_local_turn_terminal(
-                    turn_db,
-                    session_id=session_id,
-                    request_id=request_id,
-                    phase=terminal_result.phase,
-                    terminal_at=terminal_result.occurred_at,
-                    terminal_runtime_event_id=terminal_result.runtime_event_id,
-                ),
+            fn=lambda turn_db: mark_session_turn_terminal(
+                turn_db,
+                session_id=session_id,
+                request_id=request_id,
+                phase=terminal_result.phase,
+                terminal_at=terminal_result.occurred_at,
             ),
         )
         if not updated_session_turn:
@@ -477,8 +462,8 @@ def _schedule_managed_local_lock_release(
 
 def _managed_local_send_failure_code(send_result) -> str:
     if bool(getattr(send_result, "ok", False)) or int(getattr(send_result, "exit_code", 1) or 1) == 0:
-        return MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT
-    return MANAGED_LOCAL_TURN_ERROR_SEND_FAILED
+        return SESSION_TURN_ERROR_VERIFICATION_TIMEOUT
+    return SESSION_TURN_ERROR_SEND_FAILED
 
 
 async def _dispatch_managed_local_text(
@@ -506,18 +491,16 @@ async def _dispatch_managed_local_text(
     baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
     user_submitted_at = datetime.now(timezone.utc)
     t_baseline = time.monotonic()
-    run_best_effort_managed_local_turn_write(
-        db_bind=db.get_bind(),
-        label="create",
-        fn=lambda turn_db: create_managed_local_turn(
-            turn_db,
-            session_id=source_session.id,
-            request_id=request_id,
-            baseline_event_id=baseline_event_id,
-            baseline_runtime_event_id=baseline_hook_runtime_event_id,
-            expected_user_text=message,
-        ),
+    create_session_turn(
+        db,
+        session_id=source_session.id,
+        request_id=request_id,
+        baseline_event_id=baseline_event_id,
+        baseline_runtime_cursor=baseline_hook_runtime_event_id,
+        user_submitted_at=user_submitted_at,
+        expected_user_text=message,
     )
+    db.commit()
     t_turn_created = time.monotonic()
     send_result = await live_session_dispatch.send_text_to_live_session(
         db=db,
@@ -532,18 +515,9 @@ async def _dispatch_managed_local_text(
     t_sent = time.monotonic()
     send_observed_at = datetime.now(timezone.utc)
 
-    create_session_turn(
-        db,
-        session_id=source_session.id,
-        request_id=request_id,
-        baseline_event_id=baseline_event_id,
-        baseline_runtime_cursor=baseline_hook_runtime_event_id,
-        user_submitted_at=user_submitted_at,
-    )
-
     if not send_result.ok or not bool(getattr(send_result, "verified_turn_started", False)):
         error_code = _managed_local_send_failure_code(send_result)
-        if error_code == MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT:
+        if error_code == SESSION_TURN_ERROR_VERIFICATION_TIMEOUT:
             if not mark_session_turn_send_accepted(
                 db,
                 session_id=source_session.id,
@@ -560,27 +534,6 @@ async def _dispatch_managed_local_text(
         ):
             raise RuntimeError(f"Failed to record canonical failed milestone for {source_session.id}/{request_id}")
         db.commit()
-        if error_code == MANAGED_LOCAL_TURN_ERROR_VERIFICATION_TIMEOUT:
-            run_best_effort_managed_local_turn_write(
-                db_bind=db.get_bind(),
-                label="send_accepted_timeout",
-                fn=lambda turn_db: mark_managed_local_turn_send_accepted(
-                    turn_db,
-                    session_id=source_session.id,
-                    request_id=request_id,
-                    accepted_at=send_observed_at,
-                ),
-            )
-        run_best_effort_managed_local_turn_write(
-            db_bind=db.get_bind(),
-            label="send_failed",
-            fn=lambda turn_db: mark_managed_local_turn_failed(
-                turn_db,
-                session_id=source_session.id,
-                request_id=request_id,
-                error_code=error_code,
-            ),
-        )
         error_message = str(send_result.error or "Managed local session did not acknowledge the prompt after send")
         logger.warning(
             "[%s] Managed-local send-live failed for %s: error_code=%s verified=%s exit_code=%s error=%s",
@@ -613,16 +566,6 @@ async def _dispatch_managed_local_text(
     ):
         raise RuntimeError(f"Failed to record canonical send_accepted milestone for {source_session.id}/{request_id}")
     db.commit()
-    run_best_effort_managed_local_turn_write(
-        db_bind=db.get_bind(),
-        label="send_accepted",
-        fn=lambda turn_db: mark_managed_local_turn_send_accepted(
-            turn_db,
-            session_id=source_session.id,
-            request_id=request_id,
-            accepted_at=send_observed_at,
-        ),
-    )
 
     _schedule_managed_local_active_phase_observation(
         request_id=request_id,
@@ -699,13 +642,9 @@ async def _acquire_session_lock_or_raise(*, source_session, request_id: str) -> 
     )
 
 
-# Aliases for moved functions (kept as private names for internal callers)
 _fetch_managed_local_events_since = fetch_managed_local_events_since
 _fetch_managed_local_events_between_ids = fetch_managed_local_events_between_ids
-_get_managed_local_turn_snapshot_best_effort = get_managed_local_turn_snapshot_best_effort
-_hydrate_managed_local_turn_events_from_ledger = hydrate_managed_local_turn_events_from_ledger
 _get_managed_local_latest_event_id = get_managed_local_latest_event_id
-_managed_local_events_include_expected_turn = managed_local_events_include_expected_turn
 _await_managed_local_turn_events = await_managed_local_turn_events
 _await_managed_local_events_task = await_managed_local_events_task
 _await_managed_local_terminal_task = await_managed_local_terminal_task
@@ -752,15 +691,15 @@ async def _stream_managed_local_output(
         session_id=source_session.id,
     )
     baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
-    run_best_effort_managed_local_turn_write(
+    run_best_effort_session_turn_write(
         db_bind=db.get_bind(),
         label="create",
-        fn=lambda turn_db: create_managed_local_turn(
+        fn=lambda turn_db: create_session_turn(
             turn_db,
             session_id=source_session.id,
             request_id=request_id,
             baseline_event_id=baseline_event_id,
-            baseline_runtime_event_id=baseline_hook_runtime_event_id,
+            baseline_runtime_cursor=baseline_hook_runtime_event_id,
             expected_user_text=message,
         ),
     )
@@ -775,10 +714,10 @@ async def _stream_managed_local_output(
 
     if not send_result.ok:
         error_code = _managed_local_send_failure_code(send_result)
-        run_best_effort_managed_local_turn_write(
+        run_best_effort_session_turn_write(
             db_bind=db.get_bind(),
             label="send_failed",
-            fn=lambda turn_db: mark_managed_local_turn_failed(
+            fn=lambda turn_db: mark_session_turn_failed(
                 turn_db,
                 session_id=source_session.id,
                 request_id=request_id,
@@ -819,10 +758,10 @@ async def _stream_managed_local_output(
             ),
         ).encode()
         return
-    run_best_effort_managed_local_turn_write(
+    run_best_effort_session_turn_write(
         db_bind=db.get_bind(),
         label="send_accepted",
-        fn=lambda turn_db: mark_managed_local_turn_send_accepted(
+        fn=lambda turn_db: mark_session_turn_send_accepted(
             turn_db,
             session_id=source_session.id,
             request_id=request_id,
@@ -899,34 +838,33 @@ async def _stream_managed_local_output(
         await asyncio.gather(terminal_task, events_task, return_exceptions=True)
 
     if terminal_result is not None:
-        run_best_effort_managed_local_turn_write(
+        run_best_effort_session_turn_write(
             db_bind=db.get_bind(),
             label="terminal",
-            fn=lambda turn_db: mark_managed_local_turn_terminal(
+            fn=lambda turn_db: mark_session_turn_terminal(
                 turn_db,
                 session_id=source_session.id,
                 request_id=request_id,
                 phase=terminal_result.phase,
                 terminal_at=terminal_result.occurred_at,
-                terminal_runtime_event_id=terminal_result.runtime_event_id,
             ),
         )
     if new_events:
-        run_best_effort_managed_local_turn_write(
+        run_best_effort_session_turn_write(
             db_bind=db.get_bind(),
             label="durable",
-            fn=lambda turn_db: maybe_mark_managed_local_turn_durable(
+            fn=lambda turn_db: maybe_mark_session_turn_durable(
                 turn_db,
                 session_id=source_session.id,
             ),
         )
-    turn_snapshot = _get_managed_local_turn_snapshot_best_effort(
+    turn_snapshot = get_session_turn_snapshot_best_effort(
         db_bind=db.get_bind(),
         session_id=source_session.id,
         request_id=request_id,
     )
     if not new_events:
-        ledger_snapshot, ledger_events = _hydrate_managed_local_turn_events_from_ledger(
+        ledger_snapshot, ledger_events = hydrate_turn_events_from_snapshot(
             db_bind=db.get_bind(),
             session_id=source_session.id,
             request_id=request_id,
@@ -938,14 +876,14 @@ async def _stream_managed_local_output(
             new_events = ledger_events
 
     if not new_events and terminal_result is None and not (turn_snapshot and turn_snapshot.terminal_at is not None):
-        run_best_effort_managed_local_turn_write(
+        run_best_effort_session_turn_write(
             db_bind=db.get_bind(),
             label="turn_timeout",
-            fn=lambda turn_db: mark_managed_local_turn_failed(
+            fn=lambda turn_db: mark_session_turn_failed(
                 turn_db,
                 session_id=source_session.id,
                 request_id=request_id,
-                error_code=MANAGED_LOCAL_TURN_ERROR_TURN_TIMEOUT,
+                error_code=SESSION_TURN_ERROR_TURN_TIMEOUT,
             ),
         )
         persistence_error = _MANAGED_LOCAL_TURN_TIMEOUT_MESSAGE

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import datetime
 from datetime import timezone
@@ -15,8 +17,11 @@ from sqlalchemy.orm import Session
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import SessionTurn
+from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import normalize_utc
+
+logger = logging.getLogger(__name__)
 
 SESSION_TURN_STATE_CREATED = "created"
 SESSION_TURN_STATE_SEND_ACCEPTED = "send_accepted"
@@ -24,6 +29,10 @@ SESSION_TURN_STATE_ACTIVE = "active"
 SESSION_TURN_STATE_TERMINAL = "terminal"
 SESSION_TURN_STATE_DURABLE = "durable"
 SESSION_TURN_STATE_FAILED = "failed"
+
+SESSION_TURN_ERROR_SEND_FAILED = "send_failed"
+SESSION_TURN_ERROR_VERIFICATION_TIMEOUT = "verification_timeout"
+SESSION_TURN_ERROR_TURN_TIMEOUT = "turn_timeout"
 
 T = TypeVar("T")
 
@@ -49,6 +58,10 @@ class SessionTurnSnapshot:
     updated_at: datetime | None
 
 
+def hash_user_text(text: str) -> str:
+    return hashlib.sha256(str(text).encode("utf-8")).hexdigest()
+
+
 def run_session_turn_write(
     *,
     db_bind,
@@ -58,6 +71,22 @@ def run_session_turn_write(
         result = fn(turn_db)
         turn_db.commit()
         return result
+
+
+def run_best_effort_session_turn_write(
+    *,
+    db_bind,
+    label: str,
+    fn: Callable[[Session], object],
+):
+    try:
+        with Session(bind=db_bind) as turn_db:
+            result = fn(turn_db)
+            turn_db.commit()
+            return result
+    except Exception:
+        logger.warning("Session turn write failed for %s", label, exc_info=True)
+        return None
 
 
 async def execute_session_turn_write(
@@ -84,6 +113,7 @@ def create_session_turn(
     baseline_event_id: int | None = None,
     baseline_runtime_cursor: int | None = None,
     user_submitted_at: datetime | None = None,
+    expected_user_text: str | None = None,
 ) -> SessionTurn:
     if request_id is not None:
         existing = (
@@ -100,6 +130,7 @@ def create_session_turn(
     turn = SessionTurn(
         session_id=session_id,
         request_id=request_id,
+        expected_user_text_hash=hash_user_text(expected_user_text) if expected_user_text else None,
         state=SESSION_TURN_STATE_CREATED,
         baseline_event_id=baseline_event_id if baseline_event_id and baseline_event_id > 0 else None,
         baseline_runtime_cursor=baseline_runtime_cursor if baseline_runtime_cursor and baseline_runtime_cursor > 0 else None,
@@ -326,12 +357,16 @@ def maybe_mark_session_turn_durable(
             .order_by(AgentEvent.timestamp.asc(), AgentEvent.id.asc())
             .all()
         )
-        match = _match_durable_turn(
-            events=events,
-            user_event_id=turn.user_event_id,
-            submitted_after=normalize_utc(turn.user_submitted_at),
-            submitted_before=normalize_utc(pending_turns[idx + 1].user_submitted_at) if idx + 1 < len(pending_turns) else None,
-        )
+        expected_hash = turn.expected_user_text_hash
+        if expected_hash:
+            match = _match_durable_turn_by_hash(events=events, expected_user_text_hash=expected_hash)
+        else:
+            match = _match_durable_turn_by_window(
+                events=events,
+                user_event_id=turn.user_event_id,
+                submitted_after=normalize_utc(turn.user_submitted_at),
+                submitted_before=normalize_utc(pending_turns[idx + 1].user_submitted_at) if idx + 1 < len(pending_turns) else None,
+            )
         if match is None:
             continue
 
@@ -340,7 +375,14 @@ def maybe_mark_session_turn_durable(
             turn.user_event_id = int(user_event.id)
         turn.durable_assistant_event_id = int(assistant_event.id)
         turn.durable_at = datetime.now(timezone.utc)
-        turn.error_code = None
+        if turn.error_code in {SESSION_TURN_ERROR_TURN_TIMEOUT, SESSION_TURN_ERROR_VERIFICATION_TIMEOUT}:
+            logger.info(
+                "Session turn %s for session %s became durable after %s",
+                str(turn.request_id or ""),
+                str(session_id),
+                turn.error_code,
+            )
+            turn.error_code = None
         turn.state = SESSION_TURN_STATE_DURABLE
         db.flush()
         return turn
@@ -348,7 +390,40 @@ def maybe_mark_session_turn_durable(
     return None
 
 
-def _match_durable_turn(
+def _match_durable_turn_by_hash(
+    *,
+    events: list[AgentEvent],
+    expected_user_text_hash: str,
+) -> tuple[AgentEvent, AgentEvent] | None:
+    if not expected_user_text_hash:
+        return None
+
+    matched_user: AgentEvent | None = None
+    last_assistant: AgentEvent | None = None
+    for event in events:
+        role = str(getattr(event, "role", "") or "").strip().lower()
+        content_text = str(getattr(event, "content_text", "") or "")
+
+        if matched_user is None:
+            normalized_user_text = strip_claude_channel_wrapper(content_text)
+            if role == "user" and hash_user_text(normalized_user_text) == expected_user_text_hash:
+                matched_user = event
+            continue
+
+        if role == "user":
+            if last_assistant is not None:
+                return matched_user, last_assistant
+            return None
+
+        if role == "assistant" and content_text.strip():
+            last_assistant = event
+
+    if matched_user is not None and last_assistant is not None:
+        return matched_user, last_assistant
+    return None
+
+
+def _match_durable_turn_by_window(
     *,
     events: list[AgentEvent],
     user_event_id: int | None,

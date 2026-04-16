@@ -20,17 +20,14 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.oikos_auth import get_current_oikos_user
 from zerg.models.agents import AgentSession
-from zerg.models.agents import ManagedLocalTurn
 from zerg.models.agents import SessionTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
-from zerg.routers import session_chat
 from zerg.services import session_chat_impl
+from zerg.services.managed_local_event_polling import managed_local_events_include_expected_turn
 from zerg.services.managed_local_control import ManagedLocalPhaseUpdate
 from zerg.services.managed_local_control import ManagedLocalTerminalResult
-from zerg.services.managed_local_turns import create_managed_local_turn
-from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
 from zerg.services.session_continuity import session_lock_manager
 from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import mark_session_turn_send_accepted
@@ -129,7 +126,7 @@ def _seed_managed_local_session(db, *, runner: Runner, provider: str = "claude")
 def test_managed_local_events_include_expected_turn_requires_current_prompt_and_reply():
     prompt = "continue"
 
-    assert session_chat._managed_local_events_include_expected_turn(
+    assert managed_local_events_include_expected_turn(
         events=[
             SimpleNamespace(role="system", content_text="snapshot", tool_name=None),
             SimpleNamespace(role="user", content_text=prompt, tool_name=None),
@@ -138,7 +135,7 @@ def test_managed_local_events_include_expected_turn_requires_current_prompt_and_
         expected_user_message=prompt,
     )
 
-    assert not session_chat._managed_local_events_include_expected_turn(
+    assert not managed_local_events_include_expected_turn(
         events=[
             SimpleNamespace(role="system", content_text="snapshot", tool_name=None),
             SimpleNamespace(role="assistant", content_text="done", tool_name=None),
@@ -146,7 +143,7 @@ def test_managed_local_events_include_expected_turn_requires_current_prompt_and_
         expected_user_message=prompt,
     )
 
-    assert not session_chat._managed_local_events_include_expected_turn(
+    assert not managed_local_events_include_expected_turn(
         events=[
             SimpleNamespace(role="assistant", content_text="older reply", tool_name=None),
             SimpleNamespace(role="user", content_text=prompt, tool_name=None),
@@ -154,7 +151,7 @@ def test_managed_local_events_include_expected_turn_requires_current_prompt_and_
         expected_user_message=prompt,
     )
 
-    assert not session_chat._managed_local_events_include_expected_turn(
+    assert not managed_local_events_include_expected_turn(
         events=[
             SimpleNamespace(role="user", content_text=prompt, tool_name=None),
             SimpleNamespace(role="system", content_text="snapshot", tool_name=None),
@@ -166,7 +163,7 @@ def test_managed_local_events_include_expected_turn_requires_current_prompt_and_
 def test_managed_local_events_include_expected_turn_accepts_native_claude_channel_wrapper():
     prompt = "continue"
 
-    assert session_chat._managed_local_events_include_expected_turn(
+    assert managed_local_events_include_expected_turn(
         events=[
             SimpleNamespace(
                 role="user",
@@ -238,23 +235,15 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
             assert "request_id" in data
             assert "dispatch_ms" in data
 
-            # Verify turn was created in the ledger
+            # Verify turn was created
             turn_rows = (
-                db.query(ManagedLocalTurn)
-                .filter(ManagedLocalTurn.session_id == source_session.id)
-                .all()
-            )
-            assert len(turn_rows) == 1
-            assert turn_rows[0].send_accepted_at is not None
-
-            canonical_rows = (
                 db.query(SessionTurn)
                 .filter(SessionTurn.session_id == source_session.id)
                 .all()
             )
-            assert len(canonical_rows) == 1
-            assert canonical_rows[0].send_accepted_at is not None
-            assert canonical_rows[0].state == "send_accepted"
+            assert len(turn_rows) == 1
+            assert turn_rows[0].send_accepted_at is not None
+            assert turn_rows[0].state == "send_accepted"
 
             # Verify send was called with correct params
             assert len(calls) == 1
@@ -344,23 +333,15 @@ def test_managed_local_dispatch_send_failure_returns_502(monkeypatch, tmp_path):
             assert "Runner send failed" in data["error"]
             assert data["error_code"] == "send_failed"
 
-            # Verify turn was marked as failed in the ledger
+            # Verify turn was marked as failed
             turn_rows = (
-                db.query(ManagedLocalTurn)
-                .filter(ManagedLocalTurn.session_id == source_session.id)
-                .all()
-            )
-            assert len(turn_rows) == 1
-            assert turn_rows[0].error_code == "send_failed"
-
-            canonical_rows = (
                 db.query(SessionTurn)
                 .filter(SessionTurn.session_id == source_session.id)
                 .all()
             )
-            assert len(canonical_rows) == 1
-            assert canonical_rows[0].state == "failed"
-            assert canonical_rows[0].error_code == "send_failed"
+            assert len(turn_rows) == 1
+            assert turn_rows[0].state == "failed"
+            assert turn_rows[0].error_code == "send_failed"
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -407,9 +388,9 @@ def test_managed_local_dispatch_send_failure_releases_lock_for_retry(monkeypatch
             assert send_calls == 2
 
             turn_rows = (
-                db.query(ManagedLocalTurn)
-                .filter(ManagedLocalTurn.session_id == source_session.id)
-                .order_by(ManagedLocalTurn.id.asc())
+                db.query(SessionTurn)
+                .filter(SessionTurn.session_id == source_session.id)
+                .order_by(SessionTurn.id.asc())
                 .all()
             )
             assert len(turn_rows) == 2
@@ -452,24 +433,17 @@ def test_managed_local_dispatch_requires_verified_turn_start(monkeypatch, tmp_pa
             assert data["accepted"] is False
             assert data["error"] == "Managed local session did not acknowledge the prompt after send"
 
-            turn_rows = (
-                db.query(ManagedLocalTurn)
-                .filter(ManagedLocalTurn.session_id == source_session.id)
-                .all()
-            )
-            assert len(turn_rows) == 1
-            assert turn_rows[0].error_code == "verification_timeout"
             assert data["error_code"] == "verification_timeout"
 
-            canonical_rows = (
+            turn_rows = (
                 db.query(SessionTurn)
                 .filter(SessionTurn.session_id == source_session.id)
                 .all()
             )
-            assert len(canonical_rows) == 1
-            assert canonical_rows[0].state == "failed"
-            assert canonical_rows[0].error_code == "verification_timeout"
-            assert canonical_rows[0].send_accepted_at is not None
+            assert len(turn_rows) == 1
+            assert turn_rows[0].state == "failed"
+            assert turn_rows[0].error_code == "verification_timeout"
+            assert turn_rows[0].send_accepted_at is not None
         finally:
             api_app_ref.dependency_overrides = {}
 
@@ -616,15 +590,6 @@ def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(
             request_id="req-terminal",
         )
         mark_session_turn_send_accepted(db, session_id=source_session.id, request_id="req-terminal")
-        create_managed_local_turn(
-            db,
-            session_id=source_session.id,
-            request_id="req-terminal",
-            baseline_event_id=0,
-            baseline_runtime_event_id=0,
-            expected_user_text="continue",
-        )
-        mark_managed_local_turn_send_accepted(db, session_id=source_session.id, request_id="req-terminal")
         db.commit()
         db_bind = db.get_bind()
 
@@ -663,14 +628,6 @@ def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(
         assert canonical_row.terminal_at is not None
         assert canonical_row.terminal_phase == "idle"
         assert canonical_row.state == "terminal"
-
-        shadow_row = (
-            verify_db.query(ManagedLocalTurn)
-            .filter(ManagedLocalTurn.session_id == source_session.id, ManagedLocalTurn.request_id == "req-terminal")
-            .one()
-        )
-        assert shadow_row.terminal_at is not None
-        assert shadow_row.terminal_runtime_event_id is None
 
     assert release_calls == [(str(source_session.id), "req-terminal")]
 
@@ -777,20 +734,14 @@ def test_managed_local_dispatch_send_crash_does_not_persist_orphan_canonical_tur
             )
             assert response.status_code == 500
 
+            # Turn was committed before send, so it survives the crash in 'created' state
             canonical_rows = (
                 db.query(SessionTurn)
                 .filter(SessionTurn.session_id == source_session.id)
                 .all()
             )
-            assert canonical_rows == []
-
-            shadow_rows = (
-                db.query(ManagedLocalTurn)
-                .filter(ManagedLocalTurn.session_id == source_session.id)
-                .all()
-            )
-            assert len(shadow_rows) == 1
-            assert shadow_rows[0].send_accepted_at is None
-            assert shadow_rows[0].error_code is None
+            assert len(canonical_rows) == 1
+            assert canonical_rows[0].state == "created"
+            assert canonical_rows[0].send_accepted_at is None
         finally:
             api_app_ref.dependency_overrides = {}
