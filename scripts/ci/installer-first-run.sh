@@ -723,7 +723,8 @@ fi
 if [[ "$INSTALLER_MODE" == "local" ]]; then
   LONGHOUSE_CODEX_BINARY_SOURCE="$HOME/.longhouse-managed-codex-source/longhouse-codex"
   mkdir -p "$(dirname "$LONGHOUSE_CODEX_BINARY_SOURCE")"
-  export LONGHOUSE_CODEX_SOURCE="$(build_managed_codex_binary "$LONGHOUSE_CODEX_BINARY_SOURCE")"
+  build_managed_codex_binary "$LONGHOUSE_CODEX_BINARY_SOURCE" >/dev/null
+  export LONGHOUSE_CODEX_SOURCE="$LONGHOUSE_CODEX_BINARY_SOURCE"
   env_vars+=("LONGHOUSE_CODEX_SOURCE=$LONGHOUSE_CODEX_SOURCE")
 fi
 

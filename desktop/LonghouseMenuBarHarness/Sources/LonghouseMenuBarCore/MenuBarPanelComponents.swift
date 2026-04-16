@@ -83,23 +83,27 @@ struct PanelMaterialBackground: NSViewRepresentable {
     let cornerRadius: CGFloat
 
     func makeNSView(context: Context) -> NSView {
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             let glass = NSGlassEffectView()
             glass.cornerRadius = cornerRadius
             return glass
-        } else {
-            let view = NSVisualEffectView()
-            view.material = .popover
-            view.blendingMode = .behindWindow
-            view.state = .active
-            return view
         }
+        #endif
+
+        let view = NSVisualEffectView()
+        view.material = .popover
+        view.blendingMode = .behindWindow
+        view.state = .active
+        return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             (nsView as? NSGlassEffectView)?.cornerRadius = cornerRadius
         }
+        #endif
     }
 }
 
@@ -442,6 +446,7 @@ struct ProminentActionButtonStyle: ViewModifier {
     let tint: Color
 
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             content
                 .buttonStyle(.glassProminent)
@@ -451,16 +456,25 @@ struct ProminentActionButtonStyle: ViewModifier {
                 .buttonStyle(.borderedProminent)
                 .tint(tint)
         }
+        #else
+        content
+            .buttonStyle(.borderedProminent)
+            .tint(tint)
+        #endif
     }
 }
 
 struct SecondaryActionButtonStyle: ViewModifier {
     func body(content: Content) -> some View {
+        #if compiler(>=6.2)
         if #available(macOS 26.0, *) {
             content.buttonStyle(.glass)
         } else {
             content.buttonStyle(.bordered)
         }
+        #else
+        content.buttonStyle(.bordered)
+        #endif
     }
 }
 

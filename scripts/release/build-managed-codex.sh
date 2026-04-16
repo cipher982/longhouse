@@ -68,6 +68,8 @@ if [[ ! -f "${PATCH_FILE}" ]]; then
 fi
 
 cargo_build_release() {
+  export CARGO_NET_GIT_FETCH_WITH_CLI="${CARGO_NET_GIT_FETCH_WITH_CLI:-true}"
+
   if command -v cargo >/dev/null 2>&1; then
     if cargo --version >/dev/null 2>&1; then
       cargo build --release "$@"
