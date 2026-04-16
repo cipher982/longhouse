@@ -98,6 +98,12 @@ jobs:
         with:
           bun-version: '1.2.20'
 
+      - name: Install Linux build deps for managed Codex
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev
+
       - name: Run disposable installer smoke
         env:
           INSTALLER_TEST_MENUBAR: ${{ matrix.menubar_smoke }}
@@ -181,6 +187,12 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.2.20'
+
+      - name: Install Linux build deps for managed Codex
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev
 
       - name: Rehearse install -> upgrade in disposable HOME
         run: |
