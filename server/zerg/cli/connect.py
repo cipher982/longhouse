@@ -930,6 +930,18 @@ def _handle_install(
         typer.secho(f"  [OK] Engine binary installed at {install_result.engine_runtime.path}", fg=typer.colors.GREEN)
     else:
         typer.secho(f"  [OK] Engine binary ready at {install_result.engine_runtime.path}", fg=typer.colors.GREEN)
+    codex_runtime = getattr(install_result, "codex_runtime", None)
+    if codex_runtime:
+        if codex_runtime.installed_now:
+            typer.secho(
+                f"  [OK] Managed Codex runtime installed at {codex_runtime.path}",
+                fg=typer.colors.GREEN,
+            )
+        else:
+            typer.secho(
+                f"  [OK] Managed Codex runtime ready at {codex_runtime.path}",
+                fg=typer.colors.GREEN,
+            )
     typer.secho(f"[OK] {install_result.service_result['message']}", fg=typer.colors.GREEN)
     typer.echo(f"  Machine Agent: {install_result.service_result.get('service', 'N/A')}")
     typer.echo("  Config: " f"{install_result.service_result.get('plist_path') or install_result.service_result.get('unit_path', 'N/A')}")

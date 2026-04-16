@@ -62,6 +62,30 @@ def test_ensure_runtime_binary_copies_window_host_from_local_override(monkeypatc
     assert result.installed_now is True
 
 
+def test_ensure_runtime_binary_copies_managed_codex_from_local_override(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    source = tmp_path / "build" / "codex"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("codex")
+    source.chmod(0o755)
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
+
+    result = runtime_artifacts.ensure_runtime_binary(
+        runtime_artifacts.RuntimeComponent.MANAGED_CODEX,
+        source_override=str(source),
+    )
+
+    destination = home / ".local" / "bin" / "longhouse-codex"
+    assert destination.exists()
+    assert destination.read_text() == "codex"
+    assert result.path == str(destination)
+    assert result.launch_path == str(destination)
+    assert result.installed_now is True
+
+
 def test_ensure_runtime_artifact_copies_app_bundle_from_local_override(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
@@ -236,6 +260,11 @@ def test_ensure_runtime_artifact_uses_release_url_for_app_bundle(monkeypatch, tm
 def test_desktop_window_has_no_published_release_asset():
     with pytest.raises(RuntimeError, match="local-only runtime artifact"):
         runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.DESKTOP_WINDOW)
+
+
+def test_managed_codex_has_no_published_release_asset():
+    with pytest.raises(RuntimeError, match="local-only runtime artifact"):
+        runtime_artifacts._default_release_asset_url(runtime_artifacts.RuntimeComponent.MANAGED_CODEX)
 
 
 def test_ensure_runtime_artifact_falls_back_to_legacy_release_asset_when_canonical_zip_missing(monkeypatch, tmp_path: Path):

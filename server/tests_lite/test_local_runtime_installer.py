@@ -202,6 +202,62 @@ def test_install_local_runtime_keeps_service_install_when_hooks_warn(tmp_path, m
     assert result.hooks.warning == "hooks boom"
 
 
+def test_install_local_runtime_installs_managed_codex_when_configured(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+    state_writes: list[dict[str, object]] = []
+    ensure_calls: list[object] = []
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        installer,
+        "write_machine_state",
+        lambda **kwargs: state_writes.append(kwargs) or _stub_machine_state(**kwargs),
+    )
+    monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
+    monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
+    monkeypatch.setattr(installer, "resolve_runtime_source_override", lambda component: "/tmp/codex" if component.value == "managed-codex" else "")
+    monkeypatch.setattr(installer, "resolve_installed_runtime_artifact", lambda component: None)
+
+    def fake_ensure(component):
+        ensure_calls.append(component)
+        if component.value == "engine":
+            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False)
+        if component.value == "managed-codex":
+            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=True)
+        raise AssertionError(f"unexpected component: {component}")
+
+    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: {"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+    )
+    monkeypatch.setattr(installer, "install_hooks", lambda **kwargs: ["hooks installed"])
+
+    result = installer.install_local_runtime(
+        url="https://example.com",
+        token=None,
+        claude_dir=str(claude_dir),
+        machine_name="test-box",
+        menubar=False,
+    )
+
+    assert state_writes == [
+        {
+            "base_dir": home / ".longhouse",
+            "written_by": "connect-install",
+            "runtime_url": "https://example.com",
+            "machine_name": "test-box",
+            "desktop_app_enabled": False,
+            "topology_intent": None,
+        }
+    ]
+    assert [component.value for component in ensure_calls] == ["engine", "managed-codex"]
+    assert result.codex_runtime.path == "/tmp/longhouse-codex"
+    assert result.codex_runtime.installed_now is True
+
+
 def test_reconcile_local_runtime_uses_canonical_machine_state(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"

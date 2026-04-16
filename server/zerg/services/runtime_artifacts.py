@@ -38,6 +38,7 @@ RELEASE_CHECKSUMS_FILENAME = "local-runtime-checksums.txt"
 
 class RuntimeComponent(str, Enum):
     ENGINE = "engine"
+    MANAGED_CODEX = "managed-codex"
     DESKTOP_APP = "desktop-app"
     DESKTOP_WINDOW = "desktop-window"
     LOCAL_HEALTH_APP = "desktop-app"
@@ -56,6 +57,7 @@ class RuntimeComponent(str, Enum):
 
 CANONICAL_BINARY_NAMES: dict[RuntimeComponent, str] = {
     RuntimeComponent.ENGINE: "longhouse-engine",
+    RuntimeComponent.MANAGED_CODEX: "longhouse-codex",
     RuntimeComponent.DESKTOP_WINDOW: "longhouse-desktop-window",
 }
 
@@ -75,6 +77,7 @@ class RuntimeArtifactKind(str, Enum):
 
 ARTIFACT_KINDS: dict[RuntimeComponent, RuntimeArtifactKind] = {
     RuntimeComponent.ENGINE: RuntimeArtifactKind.EXECUTABLE,
+    RuntimeComponent.MANAGED_CODEX: RuntimeArtifactKind.EXECUTABLE,
     RuntimeComponent.DESKTOP_APP: RuntimeArtifactKind.APP_BUNDLE,
     RuntimeComponent.DESKTOP_WINDOW: RuntimeArtifactKind.EXECUTABLE,
 }
@@ -85,6 +88,7 @@ APP_BUNDLE_EXECUTABLE_RELATIVE_PATHS: dict[RuntimeComponent, Path] = {
 
 DEFAULT_SOURCE_ENV_VARS: dict[RuntimeComponent, str] = {
     RuntimeComponent.ENGINE: "LONGHOUSE_ENGINE_SOURCE",
+    RuntimeComponent.MANAGED_CODEX: "LONGHOUSE_CODEX_SOURCE",
     RuntimeComponent.DESKTOP_APP: "LONGHOUSE_DESKTOP_APP_SOURCE",
     RuntimeComponent.DESKTOP_WINDOW: "LONGHOUSE_DESKTOP_WINDOW_SOURCE",
 }
@@ -430,6 +434,16 @@ def _resolve_source_override(component: RuntimeComponent, source_override: str |
         if raw:
             return raw
     return ""
+
+
+def resolve_runtime_source_override(
+    component: RuntimeComponent,
+    *,
+    source_override: str | None = None,
+) -> str:
+    """Return the configured source override for a runtime component, if any."""
+
+    return _resolve_source_override(component, source_override)
 
 
 def ensure_runtime_artifact(
