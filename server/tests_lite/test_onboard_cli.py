@@ -78,6 +78,7 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
             "claude_dir": None,
             "machine_name": "test-box",
             "menubar": False,
+            "codex_source": None,
             "written_by": "onboard",
             "topology_intent": "serve-local",
         }
@@ -86,6 +87,51 @@ def test_onboard_imports_existing_sessions_first(monkeypatch, tmp_path):
     assert saved_configs[0].server.host == "127.0.0.1"
     assert saved_configs[0].server.port == 8080
     assert ["longhouse", "ship", "--url", "http://127.0.0.1:8080"] in subprocess_calls
+
+
+def test_onboard_forwards_managed_codex_source(monkeypatch, tmp_path):
+    runner = CliRunner()
+    install_calls: list[dict[str, object]] = []
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "codex")
+    monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
+    monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)
+    monkeypatch.setattr(onboard_cli, "_is_server_running", lambda: (False, None))
+    monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
+    monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
+    monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
+    monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
+    monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
+    monkeypatch.setattr(
+        onboard_cli,
+        "install_local_runtime",
+        lambda **kwargs: install_calls.append(kwargs) or _install_result(),
+    )
+    monkeypatch.setattr(
+        onboard_cli.subprocess,
+        "run",
+        lambda args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+
+    result = runner.invoke(app, ["onboard", "--codex-source", "/tmp/codex-patched"])
+
+    assert result.exit_code == 0, result.output
+    assert install_calls == [
+        {
+            "url": "http://127.0.0.1:8080",
+            "token": None,
+            "claude_dir": None,
+            "machine_name": "test-box",
+            "menubar": False,
+            "codex_source": "/tmp/codex-patched",
+            "written_by": "onboard",
+            "topology_intent": "serve-local",
+        }
+    ]
 
 
 def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
@@ -135,6 +181,7 @@ def test_onboard_without_cli_skips_initial_import(monkeypatch, tmp_path):
             "claude_dir": None,
             "machine_name": "test-box",
             "menubar": False,
+            "codex_source": None,
             "written_by": "onboard",
             "topology_intent": "serve-local",
         }
@@ -229,6 +276,7 @@ def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch,
             "claude_dir": None,
             "machine_name": "test-box",
             "menubar": True,
+            "codex_source": None,
             "written_by": "onboard",
             "topology_intent": "serve-local",
         }

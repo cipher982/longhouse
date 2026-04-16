@@ -49,12 +49,12 @@ class LocalRuntimeReconcileResult:
     install_result: LocalRuntimeInstallResult
 
 
-def _maybe_ensure_managed_codex_runtime() -> InstalledRuntimeBinary | None:
-    if not resolve_runtime_source_override(RuntimeComponent.MANAGED_CODEX) and (
+def _maybe_ensure_managed_codex_runtime(*, source_override: str | None = None) -> InstalledRuntimeBinary | None:
+    if not resolve_runtime_source_override(RuntimeComponent.MANAGED_CODEX, source_override=source_override) and (
         resolve_installed_runtime_artifact(RuntimeComponent.MANAGED_CODEX) is None
     ):
         return None
-    return ensure_runtime_binary(RuntimeComponent.MANAGED_CODEX)
+    return ensure_runtime_binary(RuntimeComponent.MANAGED_CODEX, source_override=source_override)
 
 
 def _install_local_runtime_artifacts(
@@ -64,6 +64,7 @@ def _install_local_runtime_artifacts(
     claude_dir: str | None,
     machine_name: str,
     menubar: bool,
+    codex_source: str | None = None,
     machine_config_generation: str | None = None,
     machine_state_hash: str | None = None,
 ) -> LocalRuntimeInstallResult:
@@ -76,7 +77,7 @@ def _install_local_runtime_artifacts(
         save_token(token, config_dir)
 
     engine_runtime = ensure_runtime_binary(RuntimeComponent.ENGINE)
-    codex_runtime = _maybe_ensure_managed_codex_runtime()
+    codex_runtime = _maybe_ensure_managed_codex_runtime(source_override=codex_source)
     service_result = install_service(
         url=url,
         token=token,
@@ -126,6 +127,7 @@ def install_local_runtime(
     claude_dir: str | None,
     machine_name: str,
     menubar: bool,
+    codex_source: str | None = None,
     written_by: str = "connect-install",
     topology_intent: str | None = None,
 ) -> LocalRuntimeInstallResult:
@@ -149,6 +151,7 @@ def install_local_runtime(
         claude_dir=claude_dir,
         machine_name=resolved_name,
         menubar=menubar,
+        codex_source=codex_source,
         machine_config_generation=machine_state.config_generation,
         machine_state_hash=machine_state_source_hash(machine_state),
     )
@@ -162,6 +165,7 @@ def reconcile_local_runtime(
     runtime_url: str | None = None,
     machine_name: str | None = None,
     menubar: bool | None = None,
+    codex_source: str | None = None,
     topology_intent: str | None = None,
 ) -> LocalRuntimeReconcileResult:
     """Regenerate runtime artifacts from canonical machine state.
@@ -211,6 +215,7 @@ def reconcile_local_runtime(
         claude_dir=claude_dir,
         machine_name=machine_state.machine_name or resolved_name,
         menubar=bool(machine_state.desktop_app_enabled),
+        codex_source=codex_source,
         machine_config_generation=machine_state.config_generation,
         machine_state_hash=machine_state_source_hash(machine_state),
     )
