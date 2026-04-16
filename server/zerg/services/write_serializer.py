@@ -186,6 +186,41 @@ class WriteSerializer:
         Raises:
             Whatever fn raises (after rollback).
         """
+        return await self._execute_queued(
+            fn,
+            label=label,
+            priority=priority,
+            auto_commit=auto_commit,
+            session_factory=self._resolve_session_factory(),
+        )
+
+    async def execute_with_session_factory(
+        self,
+        session_factory: sessionmaker,
+        fn: Callable[[Session], T],
+        *,
+        label: str = "",
+        priority: int | None = None,
+        auto_commit: bool = True,
+    ) -> T:
+        """Submit a write operation using the provided session factory."""
+        return await self._execute_queued(
+            fn,
+            label=label,
+            priority=priority,
+            auto_commit=auto_commit,
+            session_factory=session_factory,
+        )
+
+    async def _execute_queued(
+        self,
+        fn: Callable[[Session], T],
+        *,
+        label: str,
+        priority: int | None,
+        auto_commit: bool,
+        session_factory: sessionmaker,
+    ) -> T:
         if not self._configured:
             raise RuntimeError("WriteSerializer not configured — call configure() first")
 
@@ -217,7 +252,9 @@ class WriteSerializer:
         t1 = time.monotonic()
         queue_wait_ms = (t1 - t0) * 1000
 
-        worker_task: asyncio.Task[T] = asyncio.create_task(asyncio.to_thread(self._run, fn, auto_commit, label))
+        worker_task: asyncio.Task[T] = asyncio.create_task(
+            asyncio.to_thread(self._run_with_factory, session_factory, fn, auto_commit, label)
+        )
         finalized = False
 
         async def _finalize(*, was_cancelled: bool) -> None:
@@ -361,7 +398,16 @@ class WriteSerializer:
 
     def _run(self, fn: Callable[[Session], T], auto_commit: bool, label: str) -> T:
         """Execute fn with a fresh session. Runs in a worker thread."""
-        session_factory = self._resolve_session_factory()
+        return self._run_with_factory(self._resolve_session_factory(), fn, auto_commit, label)
+
+    def _run_with_factory(
+        self,
+        session_factory: sessionmaker,
+        fn: Callable[[Session], T],
+        auto_commit: bool,
+        label: str,
+    ) -> T:
+        """Execute fn with a fresh session from the provided factory."""
         db = session_factory()
         try:
             result = fn(db)
