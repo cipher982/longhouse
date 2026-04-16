@@ -296,7 +296,7 @@ def _managed_codex_launcher_script(layout: VersionedExecutableLayout) -> str:
         '  echo "Managed Codex runtime is not installed under $CURRENT_LINK" >&2\n'
         "  exit 1\n"
         "fi\n\n"
-        'exec "$TARGET" "$@"\n'
+        'exec "$TARGET" -c check_for_update_on_startup=false "$@"\n'
     )
 
 
