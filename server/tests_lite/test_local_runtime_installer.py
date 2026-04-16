@@ -30,11 +30,15 @@ def test_install_local_runtime_does_not_create_global_mcp_configs(tmp_path, monk
     )
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
-    monkeypatch.setattr(
-        installer,
-        "ensure_runtime_binary",
-        lambda component: SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
-    )
+
+    def fake_ensure(component, *, source_override=None, overwrite=False):
+        if component.value == "engine":
+            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False)
+        if component.value == "managed-codex":
+            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=False)
+        raise AssertionError(f"unexpected component: {component}")
+
+    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
     monkeypatch.setattr(
         installer,
         "install_service",
@@ -55,6 +59,7 @@ def test_install_local_runtime_does_not_create_global_mcp_configs(tmp_path, monk
     )
 
     assert result.machine_name == "test-box"
+    assert result.codex_runtime.path == "/tmp/longhouse-codex"
     assert result.hooks.actions == ["hooks installed"]
     assert result.hooks.warning is None
     assert state_writes == [
@@ -93,11 +98,15 @@ def test_install_local_runtime_installs_desktop_app_when_requested(tmp_path, mon
     )
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
-    monkeypatch.setattr(
-        installer,
-        "ensure_runtime_binary",
-        lambda component: SimpleNamespace(path="/tmp/longhouse-engine", installed_now=True),
-    )
+
+    def fake_ensure(component, *, source_override=None, overwrite=False):
+        if component.value == "engine":
+            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=True)
+        if component.value == "managed-codex":
+            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=True)
+        raise AssertionError(f"unexpected component: {component}")
+
+    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
     monkeypatch.setattr(
         installer,
         "install_service",
@@ -167,11 +176,15 @@ def test_install_local_runtime_keeps_service_install_when_hooks_warn(tmp_path, m
     )
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
-    monkeypatch.setattr(
-        installer,
-        "ensure_runtime_binary",
-        lambda component: SimpleNamespace(path="/tmp/longhouse-engine", installed_now=True),
-    )
+
+    def fake_ensure(component, *, source_override=None, overwrite=False):
+        if component.value == "engine":
+            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=True)
+        if component.value == "managed-codex":
+            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=True)
+        raise AssertionError(f"unexpected component: {component}")
+
+    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
     monkeypatch.setattr(
         installer,
         "install_service",
@@ -216,13 +229,6 @@ def test_install_local_runtime_installs_managed_codex_when_configured(tmp_path, 
     )
     monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
     monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
-    monkeypatch.setattr(
-        installer,
-        "resolve_runtime_source_override",
-        lambda component, *, source_override=None: source_override or ("/tmp/codex" if component.value == "managed-codex" else ""),
-    )
-    monkeypatch.setattr(installer, "resolve_installed_runtime_artifact", lambda component: None)
-
     def fake_ensure(component, *, source_override=None):
         ensure_calls.append((component, source_override))
         if component.value == "engine":
@@ -266,6 +272,52 @@ def test_install_local_runtime_installs_managed_codex_when_configured(tmp_path, 
     assert result.codex_runtime.installed_now is True
 
 
+def test_install_local_runtime_installs_managed_codex_by_default(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+    ensure_calls: list[tuple[str, str | None]] = []
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        installer,
+        "write_machine_state",
+        lambda **kwargs: _stub_machine_state(**kwargs),
+    )
+    monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
+    monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
+
+    def fake_ensure(component, *, source_override=None, overwrite=False):
+        ensure_calls.append((component.value, source_override))
+        if component.value == "engine":
+            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False)
+        if component.value == "managed-codex":
+            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=True)
+        raise AssertionError(f"unexpected component: {component}")
+
+    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: {"message": "ok", "service": "launchd", "plist_path": "/tmp/test.plist"},
+    )
+    monkeypatch.setattr(installer, "install_hooks", lambda **kwargs: ["hooks installed"])
+
+    result = installer.install_local_runtime(
+        url="https://example.com",
+        token=None,
+        claude_dir=str(claude_dir),
+        machine_name="test-box",
+        menubar=False,
+        codex_source=None,
+    )
+
+    assert ensure_calls == [
+        ("engine", None),
+        ("managed-codex", None),
+    ]
+    assert result.codex_runtime.path == "/tmp/longhouse-codex"
+
+
 def test_reconcile_local_runtime_uses_canonical_machine_state(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"
@@ -285,11 +337,15 @@ def test_reconcile_local_runtime_uses_canonical_machine_state(tmp_path, monkeypa
     desktop_calls: list[dict[str, str | None]] = []
 
     monkeypatch.setattr(installer, "load_token", lambda config_dir: "stored-token")
-    monkeypatch.setattr(
-        installer,
-        "ensure_runtime_binary",
-        lambda component: SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False),
-    )
+
+    def fake_ensure(component, *, source_override=None, overwrite=False):
+        if component.value == "engine":
+            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False)
+        if component.value == "managed-codex":
+            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=False)
+        raise AssertionError(f"unexpected component: {component}")
+
+    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
     monkeypatch.setattr(
         installer,
         "install_service",
