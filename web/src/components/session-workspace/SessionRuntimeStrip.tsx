@@ -18,6 +18,7 @@ interface SessionRuntimeStripProps {
     | "sourceOriginLabel"
   >;
   hostLabel?: string | null;
+  elapsedLabel?: string | null;
   variant?: "inline" | "block" | "dock";
   testId?: string;
 }
@@ -44,6 +45,7 @@ export function SessionRuntimeStrip({
   session,
   interaction,
   hostLabel,
+  elapsedLabel,
   variant = "inline",
   testId,
 }: SessionRuntimeStripProps) {
@@ -69,13 +71,30 @@ export function SessionRuntimeStrip({
     interaction.sourceOriginLabel ||
     "host";
   const metaParts = [
-    getCapabilityMeta({
-      liveControlAvailable: interaction.liveControlAvailable,
-      hostReattachAvailable: interaction.hostReattachAvailable,
-      hostLabel: resolvedHostLabel,
-    }),
-    runtimeMeta && runtimeMeta !== "Live on host" ? runtimeMeta : null,
-  ].filter(Boolean);
+    {
+      key: "capability",
+      label: getCapabilityMeta({
+        liveControlAvailable: interaction.liveControlAvailable,
+        hostReattachAvailable: interaction.hostReattachAvailable,
+        hostLabel: resolvedHostLabel,
+      }),
+      className: null,
+    },
+    runtimeMeta && runtimeMeta !== "Live on host"
+      ? {
+          key: "runtime",
+          label: runtimeMeta,
+          className: null,
+        }
+      : null,
+    elapsedLabel
+      ? {
+          key: "elapsed",
+          label: elapsedLabel,
+          className: "session-runtime-strip__elapsed",
+        }
+      : null,
+  ].filter((part): part is { key: string; label: string; className: string | null } => part != null);
 
   return (
     <div
@@ -107,7 +126,20 @@ export function SessionRuntimeStrip({
       </div>
       {metaParts.length > 0 ? (
         <div className="session-runtime-strip__meta">
-          {metaParts.join(" • ")}
+          {metaParts.map((part, index) => (
+            <span key={part.key} className="session-runtime-strip__meta-item">
+              {index > 0 ? (
+                <span
+                  className="session-runtime-strip__meta-separator"
+                  aria-hidden="true"
+                >
+                  {" "}
+                  •{" "}
+                </span>
+              ) : null}
+              <span className={part.className ?? undefined}>{part.label}</span>
+            </span>
+          ))}
         </div>
       ) : null}
     </div>

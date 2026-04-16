@@ -51,6 +51,8 @@ from zerg.services.session_views import SessionProjectionResponse
 from zerg.services.session_views import SessionResponse
 from zerg.services.session_views import SessionsSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
+from zerg.services.session_views import SessionTurnEnvelopeResponse
+from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import load_presence_map
@@ -727,6 +729,40 @@ async def get_timeline_session_thread(
     db: Session = Depends(get_db),
 ):
     return await _sessions_router.get_session_thread(session_id=session_id, response=response, db=db, _auth=None, _single=None)
+
+
+@router.get("/sessions/{session_id}/turns", response_model=SessionTurnsListResponse)
+async def get_timeline_session_turns(
+    session_id: UUID,
+    limit: int = Query(50, ge=1, le=100, description="Max turns to return"),
+    offset: int = Query(0, ge=0, description="Offset within the stable per-session turn order"),
+    order: str = Query("asc", description="Turn order: asc|desc"),
+    db: Session = Depends(get_db),
+):
+    return await _sessions_router.get_session_turns(
+        session_id=session_id,
+        limit=limit,
+        offset=offset,
+        order=order,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
+
+
+@router.get("/sessions/{session_id}/turns/{turn_id}", response_model=SessionTurnEnvelopeResponse)
+async def get_timeline_session_turn(
+    session_id: UUID,
+    turn_id: int,
+    db: Session = Depends(get_db),
+):
+    return await _sessions_router.get_session_turn_detail(
+        session_id=session_id,
+        turn_id=turn_id,
+        db=db,
+        _auth=None,
+        _single=None,
+    )
 
 
 @router.get("/sessions/{session_id}/events", response_model=EventsListResponse)

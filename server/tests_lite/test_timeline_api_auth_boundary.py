@@ -31,6 +31,7 @@ from zerg.main import api_app
 from zerg.models import User
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionTurn
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 
 
@@ -254,6 +255,58 @@ def test_timeline_session_detail_includes_attach_command_for_native_claude_bridg
             "source_runner_name": "work-laptop",
             "attach_command": build_managed_local_attach_command(session=session),
         }
+    finally:
+        auth_deps._strategy_cache.clear()
+        api_app.dependency_overrides.clear()
+
+
+def test_timeline_session_turns_accept_browser_session_cookie(tmp_path):
+    session_local = _make_db(tmp_path)
+    with session_local() as db:
+        _seed_user(db)
+        session_id = uuid4()
+        session = AgentSession(
+            id=session_id,
+            provider="codex",
+            environment="development",
+            project="timeline-auth",
+            device_id="cinder",
+            cwd="/tmp/timeline-auth",
+            git_repo=None,
+            git_branch="main",
+            started_at=datetime(2026, 3, 22, 22, 0, tzinfo=timezone.utc),
+            ended_at=None,
+            user_messages=1,
+            assistant_messages=1,
+            tool_calls=0,
+        )
+        turn = SessionTurn(
+            session_id=session_id,
+            request_id="req-1",
+            source_kind="managed_local",
+            timing_confidence="exact",
+            state="active",
+            user_submitted_at=datetime(2026, 3, 22, 22, 3, 45, tzinfo=timezone.utc),
+            send_accepted_at=datetime(2026, 3, 22, 22, 3, 46, tzinfo=timezone.utc),
+            active_phase_observed_at=datetime(2026, 3, 22, 22, 3, 47, tzinfo=timezone.utc),
+        )
+        db.add(session)
+        db.add(turn)
+        db.commit()
+
+    client = _make_client(session_local)
+
+    try:
+        with _force_browser_jwt_mode():
+            client.cookies.set(SESSION_COOKIE_NAME, _issue_session_cookie())
+            response = client.get(f"/timeline/sessions/{session_id}/turns")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["turns"][0]["request_id"] == "req-1"
+        assert payload["turns"][0]["state"] == "active"
+        assert payload["turns"][0]["user_submitted_at"].endswith("Z")
     finally:
         auth_deps._strategy_cache.clear()
         api_app.dependency_overrides.clear()

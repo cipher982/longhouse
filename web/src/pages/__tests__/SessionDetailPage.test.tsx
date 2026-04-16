@@ -9,6 +9,7 @@ import type {
   AgentSession,
   AgentSessionProjectionItem,
   SessionCapabilities,
+  AgentSessionTurn,
 } from "../../services/api/agents";
 import { TestRouter } from "../../test/test-utils";
 import SessionDetailPage from "../SessionDetailPage";
@@ -16,9 +17,15 @@ import SessionDetailPage from "../SessionDetailPage";
 const workspaceMocks = vi.hoisted(() => ({
   useSessionWorkspace: vi.fn(),
 }));
+const secondClockMocks = vi.hoisted(() => ({
+  useSecondClock: vi.fn(),
+}));
 
 vi.mock("../../hooks/useSessionWorkspace", () => ({
   useSessionWorkspace: workspaceMocks.useSessionWorkspace,
+}));
+vi.mock("../../hooks/useSecondClock", () => ({
+  useSecondClock: secondClockMocks.useSecondClock,
 }));
 
 vi.mock("../../lib/readiness-contract", () => ({
@@ -140,9 +147,37 @@ function renderSessionDetailPage() {
   );
 }
 
+function makeTurn(overrides: Partial<AgentSessionTurn> = {}): AgentSessionTurn {
+  return {
+    id: 1,
+    session_id: "session-codex",
+    request_id: "req-1",
+    source_kind: "managed_local",
+    timing_confidence: "exact",
+    state: "active",
+    terminal_phase: null,
+    error_code: null,
+    user_event_id: null,
+    durable_assistant_event_id: null,
+    baseline_event_id: null,
+    baseline_runtime_cursor: null,
+    user_submitted_at: "2026-03-22T22:03:45Z",
+    send_accepted_at: "2026-03-22T22:03:46Z",
+    active_phase_observed_at: "2026-03-22T22:03:47Z",
+    terminal_at: null,
+    durable_at: null,
+    created_at: "2026-03-22T22:03:45Z",
+    updated_at: "2026-03-22T22:03:47Z",
+    ...overrides,
+  };
+}
+
 describe("SessionDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    secondClockMocks.useSecondClock.mockReturnValue(
+      Date.parse("2026-03-22T22:04:30Z"),
+    );
 
     const session = makeSession({
       ended_at: null,
@@ -196,6 +231,9 @@ describe("SessionDetailPage", () => {
         session,
         sessionLoading: false,
         sessionError: null,
+        turns: [],
+        turnsLoading: false,
+        turnsError: null,
         threadSessions: [session],
         currentThreadSession: session,
         headThreadSession: session,
@@ -281,6 +319,80 @@ describe("SessionDetailPage", () => {
     expect(screen.getByText("Output")).toBeInTheDocument();
   });
 
+  it("shows the active turn elapsed counter in the header and control strip", () => {
+    const session = makeSession({
+      ended_at: null,
+      status: "working",
+      presence_state: "running",
+      active_tool: "Bash",
+      runtime_source: "managed_local_transport",
+      confidence: "live",
+      display_phase: "Running Bash",
+      last_live_at: "2026-03-22T22:04:30Z",
+    });
+    const model = buildTimelineModel([
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: "2026-03-22T22:00:01Z",
+        event: {
+          id: 1,
+          role: "assistant",
+          content_text: "Still working.",
+          tool_name: null,
+          tool_input_json: null,
+          tool_output_text: null,
+          tool_call_id: null,
+          timestamp: "2026-03-22T22:00:01Z",
+          in_active_context: true,
+        },
+      },
+    ]);
+
+    workspaceMocks.useSessionWorkspace.mockImplementation(() => {
+      const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+      return {
+        session,
+        sessionLoading: false,
+        sessionError: null,
+        turns: [makeTurn({ session_id: session.id })],
+        turnsLoading: false,
+        turnsError: null,
+        threadSessions: [session],
+        currentThreadSession: session,
+        headThreadSession: session,
+        isViewingHead: true,
+        totalEntries: model.items.length,
+        loadedEntryCount: model.items.length,
+        items: model.items,
+        eventsLoading: false,
+        eventsError: null,
+        fetchPreviousPage: vi.fn(),
+        hasPreviousPage: false,
+        isFetchingPreviousPage: false,
+        abandonedEvents: 0,
+        showAbandonedBranches: false,
+        setShowAbandonedBranches: vi.fn(),
+        selectedKey,
+        selectedSelection: selectedKey
+          ? (model.selectionMap.get(selectedKey) ?? null)
+          : null,
+        selectKey: setSelectedKey,
+        handleVisibleSelectionChange: vi.fn(),
+        registerTimelineList: vi.fn(),
+      };
+    });
+
+    renderSessionDetailPage();
+
+    expect(
+      screen.getByTestId("session-detail-header-runtime"),
+    ).toHaveTextContent("Turn 00:45");
+    expect(screen.getByTestId("session-control-strip")).toHaveTextContent(
+      "Turn 00:45",
+    );
+  });
+
   it("keeps managed waiting states explicit in the detail header, sidebar, and dock", () => {
     const session = makeSession({
       ended_at: null,
@@ -317,6 +429,9 @@ describe("SessionDetailPage", () => {
         session,
         sessionLoading: false,
         sessionError: null,
+        turns: [],
+        turnsLoading: false,
+        turnsError: null,
         threadSessions: [session],
         currentThreadSession: session,
         headThreadSession: session,
@@ -404,6 +519,9 @@ describe("SessionDetailPage", () => {
         session,
         sessionLoading: false,
         sessionError: null,
+        turns: [],
+        turnsLoading: false,
+        turnsError: null,
         threadSessions: [session],
         currentThreadSession: session,
         headThreadSession: session,
@@ -492,6 +610,9 @@ describe("SessionDetailPage", () => {
         session,
         sessionLoading: false,
         sessionError: null,
+        turns: [],
+        turnsLoading: false,
+        turnsError: null,
         threadSessions: [session],
         currentThreadSession: session,
         headThreadSession: session,

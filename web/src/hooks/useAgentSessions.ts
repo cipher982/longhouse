@@ -17,6 +17,7 @@ import {
   fetchAgentSessionThread,
   fetchAgentSessionProjection,
   fetchAgentSessionWorkspace,
+  fetchAgentSessionTurns,
   fetchAgentSessionEvents,
   fetchAgentSessionSummaries,
   fetchAgentSessionPreview,
@@ -28,6 +29,7 @@ import {
   type AgentSessionThreadResponse,
   type AgentSessionProjectionResponse,
   type AgentSessionWorkspaceResponse,
+  type AgentSessionTurnsListResponse,
   type AgentEventsListResponse,
   type AgentSessionSummaryFilters,
   type AgentSessionSummaryListResponse,
@@ -135,6 +137,42 @@ export function useAgentSessionWorkspace(
       fetchAgentSessionWorkspace(sessionId!, {
         limit,
         branch_mode,
+      }),
+    enabled: enabled ?? !!sessionId,
+    refetchInterval,
+    staleTime: 10_000,
+    gcTime: 5 * 60_000,
+  });
+}
+
+type AgentSessionTurnsQueryOptions = Pick<
+  UseQueryOptions<AgentSessionTurnsListResponse>,
+  "enabled" | "refetchInterval"
+>;
+
+export function useAgentSessionTurns(
+  sessionId: string | null,
+  options: AgentSessionTurnsQueryOptions & {
+    limit?: number;
+    offset?: number;
+    order?: "asc" | "desc";
+  } = {},
+) {
+  const {
+    limit = 10,
+    offset = 0,
+    order = "desc",
+    enabled,
+    refetchInterval,
+  } = options;
+
+  return useQuery<AgentSessionTurnsListResponse>({
+    queryKey: ["agent-session-turns", sessionId, { limit, offset, order }],
+    queryFn: () =>
+      fetchAgentSessionTurns(sessionId!, {
+        limit,
+        offset,
+        order,
       }),
     enabled: enabled ?? !!sessionId,
     refetchInterval,

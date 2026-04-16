@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   useAgentSessionProjectionInfinite,
+  useAgentSessionTurns,
   useAgentSessionWorkspace,
 } from "./useAgentSessions";
 import { useDocumentVisible } from "./useDocumentVisible";
@@ -13,6 +14,7 @@ import {
 } from "../lib/sessionWorkspace";
 import {
   connectSessionWorkspaceStream,
+  type AgentSession,
   type AgentSessionProjectionItem,
   type AgentSessionProjectionResponse,
 } from "../services/api/agents";
@@ -53,6 +55,22 @@ function mergeProjectionItems(
   return merged;
 }
 
+function shouldRefreshWorkspaceSession(
+  session: AgentSession | null | undefined,
+): boolean {
+  if (!session) {
+    return false;
+  }
+
+  const runtime = resolveSessionRuntimeState(session);
+  return (
+    session.ended_at == null ||
+    runtime.isLive ||
+    runtime.needsAttention ||
+    runtime.heuristicActive
+  );
+}
+
 export function useSessionWorkspace(
   sessionId: string | null,
   options: UseSessionWorkspaceOptions = {},
@@ -77,6 +95,7 @@ export function useSessionWorkspace(
           void queryClient.invalidateQueries({ queryKey: ["agent-session-workspace", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session-thread", sessionId] });
+          void queryClient.invalidateQueries({ queryKey: ["agent-session-turns", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session-projection-infinite", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session-events", sessionId] });
           void queryClient.invalidateQueries({ queryKey: ["agent-session-events-infinite", sessionId] });
@@ -105,22 +124,27 @@ export function useSessionWorkspace(
 
       // Fallback: poll at reduced frequency when stream is down
       const currentSession = query.state.data?.session;
-      if (!documentVisible || !currentSession) {
+      if (!documentVisible || !shouldRefreshWorkspaceSession(currentSession)) {
         return false;
       }
-
-      const runtime = resolveSessionRuntimeState(currentSession);
-      const shouldRefresh =
-        currentSession.ended_at == null ||
-        runtime.isLive ||
-        runtime.needsAttention ||
-        runtime.heuristicActive;
-
-      return shouldRefresh ? WORKSPACE_FALLBACK_REFRESH_MS : false;
+      return WORKSPACE_FALLBACK_REFRESH_MS;
     },
   });
   const session = workspaceData?.session ?? null;
   const threadData = workspaceData?.thread ?? null;
+  const {
+    data: turnsData,
+    isLoading: turnsLoading,
+    error: turnsError,
+  } = useAgentSessionTurns(sessionId, {
+    limit: 10,
+    order: "desc",
+    enabled: Boolean(sessionId) && session?.ended_at == null,
+    refetchInterval:
+      streamConnected || !documentVisible || !shouldRefreshWorkspaceSession(session)
+        ? false
+        : WORKSPACE_FALLBACK_REFRESH_MS,
+  });
   const {
     data: projectionPagesData,
     isLoading: projectionLoading,
@@ -378,6 +402,9 @@ export function useSessionWorkspace(
     session,
     sessionLoading,
     sessionError,
+    turns: turnsData?.turns ?? [],
+    turnsLoading,
+    turnsError,
     threadSessions,
     headSessionId,
     currentThreadSession,

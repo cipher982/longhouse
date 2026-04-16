@@ -142,6 +142,41 @@ export interface AgentSessionWorkspaceResponse {
   projection: AgentSessionProjectionResponse;
 }
 
+export type AgentSessionTurnState =
+  | "created"
+  | "send_accepted"
+  | "active"
+  | "terminal"
+  | "durable"
+  | "failed";
+
+export interface AgentSessionTurn {
+  id: number;
+  session_id: string;
+  request_id: string | null;
+  source_kind: string;
+  timing_confidence: "exact" | "partial" | "inferred" | (string & {});
+  state: AgentSessionTurnState | (string & {});
+  terminal_phase: string | null;
+  error_code: string | null;
+  user_event_id: number | null;
+  durable_assistant_event_id: number | null;
+  baseline_event_id: number | null;
+  baseline_runtime_cursor: number | null;
+  user_submitted_at: string;
+  send_accepted_at: string | null;
+  active_phase_observed_at: string | null;
+  terminal_at: string | null;
+  durable_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+export interface AgentSessionTurnsListResponse {
+  turns: AgentSessionTurn[];
+  total: number;
+}
+
 export interface AgentSessionSummary {
   id: string;
   project: string | null;
@@ -624,6 +659,26 @@ export async function fetchAgentSessionWorkspace(
   const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/workspace${queryString ? `?${queryString}` : ""}`;
 
   return request<AgentSessionWorkspaceResponse>(path, { method: "GET" });
+}
+
+export async function fetchAgentSessionTurns(
+  sessionId: string,
+  options: {
+    limit?: number;
+    offset?: number;
+    order?: "asc" | "desc";
+  } = {},
+): Promise<AgentSessionTurnsListResponse> {
+  const params = new URLSearchParams();
+
+  if (options.limit) params.set("limit", String(options.limit));
+  if (options.offset) params.set("offset", String(options.offset));
+  if (options.order) params.set("order", options.order);
+
+  const queryString = params.toString();
+  const path = `${TIMELINE_SESSIONS_PREFIX}/${sessionId}/turns${queryString ? `?${queryString}` : ""}`;
+
+  return request<AgentSessionTurnsListResponse>(path, { method: "GET" });
 }
 
 /**
