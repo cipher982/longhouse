@@ -153,17 +153,19 @@ jobs:
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' >&2
           exit 1
 
-      - name: Run disposable installer smoke (wheel build + installer onboarding + released artifacts)
+      - name: Run disposable installer smoke
         run: |
           chmod +x scripts/ci/installer-first-run.sh
           args=(
             --shell "${{ matrix.shell_path }}"
-            --wheel
             --installer-onboard
             --e2e-browser
           )
           if [[ "${{ github.event_name }}" == "release" ]]; then
+            args+=(--installer remote)
             args+=(--runtime-artifact-smoke)
+          else
+            args+=(--wheel)
           fi
           ./scripts/ci/installer-first-run.sh "${args[@]}"
 
