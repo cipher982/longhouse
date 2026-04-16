@@ -6,18 +6,25 @@ on:
       - 'v*'
     paths:
       - '.github/workflows/launch-gate.yml'
+      - '.github/workflows/local-runtime-release.yml'
       - '.github/workflows/test-install.yml'
       - '.github/workflows/runner-onboarding-validation.yml'
       - 'server/pyproject.toml'
       - 'server/zerg/cli/connect.py'
+      - 'server/zerg/cli/codex.py'
       - 'server/zerg/cli/doctor.py'
       - 'server/zerg/cli/onboard.py'
       - 'server/zerg/cli/serve.py'
+      - 'server/zerg/services/local_runtime_installer.py'
+      - 'server/zerg/services/runtime_artifacts.py'
       - 'e2e/**'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/ci/runtime-artifact-smoke.py'
       - 'scripts/qa/qa-oss.sh'
       - 'scripts/ops/run-onboarding-funnel.sh'
+      - 'scripts/release/build-managed-codex.sh'
+      - 'scripts/release/managed-codex.patch'
       - 'Makefile'
       - 'README.md'
   release:
@@ -25,18 +32,25 @@ on:
   pull_request:
     paths:
       - '.github/workflows/launch-gate.yml'
+      - '.github/workflows/local-runtime-release.yml'
       - '.github/workflows/test-install.yml'
       - '.github/workflows/runner-onboarding-validation.yml'
       - 'server/pyproject.toml'
       - 'server/zerg/cli/connect.py'
+      - 'server/zerg/cli/codex.py'
       - 'server/zerg/cli/doctor.py'
       - 'server/zerg/cli/onboard.py'
       - 'server/zerg/cli/serve.py'
+      - 'server/zerg/services/local_runtime_installer.py'
+      - 'server/zerg/services/runtime_artifacts.py'
       - 'e2e/**'
       - 'scripts/install.sh'
       - 'scripts/ci/installer-first-run.sh'
+      - 'scripts/ci/runtime-artifact-smoke.py'
       - 'scripts/qa/qa-oss.sh'
       - 'scripts/ops/run-onboarding-funnel.sh'
+      - 'scripts/release/build-managed-codex.sh'
+      - 'scripts/release/managed-codex.patch'
       - 'Makefile'
       - 'README.md'
   schedule:
@@ -81,17 +95,33 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Wait for released macOS desktop artifacts
-        if: ${{ github.event_name == 'release' && matrix.os == 'macos-latest' }}
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Wait for released runtime artifacts
+        if: ${{ github.event_name == 'release' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          MATRIX_OS: ${{ matrix.os }}
         run: |
           deadline=$((SECONDS + 900))
-          required_assets=(
-            "Longhouse-macos-arm64.zip"
-            "local-runtime-checksums.txt"
-          )
+          required_assets=("local-runtime-checksums.txt")
+          case "$MATRIX_OS" in
+            macos-latest)
+              required_assets+=(
+                "longhouse-engine-darwin-arm64"
+                "longhouse-codex-darwin-arm64"
+                "Longhouse-macos-arm64.zip"
+              )
+              ;;
+            ubuntu-latest)
+              required_assets+=(
+                "longhouse-engine-linux-x64"
+                "longhouse-codex-linux-x64"
+              )
+              ;;
+          esac
 
           while (( SECONDS < deadline )); do
             assets="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
