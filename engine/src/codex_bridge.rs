@@ -52,6 +52,7 @@ pub struct BridgeStartConfig {
     pub machine_name: Option<String>,
     pub auto_approve: bool,
     pub state_root: Option<PathBuf>,
+    pub longhouse_home: Option<PathBuf>,
     pub log_file: Option<PathBuf>,
     pub start_timeout_secs: u64,
 }
@@ -66,6 +67,7 @@ pub struct BridgeRunConfig {
     pub session_source: Option<String>,
     pub machine_name: Option<String>,
     pub auto_approve: bool,
+    pub longhouse_home: Option<PathBuf>,
     pub state_file: PathBuf,
     pub log_file: PathBuf,
 }
@@ -349,6 +351,12 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
     if config.session_id.trim().is_empty() {
         bail!("session_id must not be empty");
     }
+    if uuid::Uuid::parse_str(&config.session_id).is_err() {
+        bail!(
+            "session_id must be a valid UUID, got: {}",
+            config.session_id
+        );
+    }
     if config.cwd.as_os_str().is_empty() || !config.cwd.is_dir() {
         bail!("cwd does not exist: {}", config.cwd.display());
     }
@@ -414,6 +422,9 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))
         .stdin(Stdio::null());
+    if let Some(longhouse_home) = config.longhouse_home.as_deref() {
+        child.arg("--longhouse-home").arg(longhouse_home);
+    }
     if let Some(policy) = config.approval_policy.as_deref() {
         child.arg("--approval-policy").arg(policy);
     }
@@ -989,6 +1000,13 @@ fn resolve_bridge_paths(
     })
 }
 
+fn resolve_bridge_agent_db_path(longhouse_home_override: Option<&Path>) -> Result<PathBuf> {
+    match longhouse_home_override {
+        Some(home) => Ok(home.join("agent").join("longhouse-shipper.db")),
+        None => crate::config::get_agent_db_path(),
+    }
+}
+
 fn write_state_file(path: &Path, state: &BridgeStateFile) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -1418,7 +1436,7 @@ async fn handle_server_request(
 
 async fn process_notification(
     value: &Value,
-    _config: &BridgeRunConfig,
+    config: &BridgeRunConfig,
     context: &mut BridgeContext,
 ) -> Result<Option<BridgeFollowup>> {
     let Some(method) = value.get("method").and_then(Value::as_str) else {
@@ -1441,7 +1459,9 @@ async fn process_notification(
 
                     // Seed session_binding so the daemon ships with the managed session ID.
                     if let Some(ref tp) = thread_path {
-                        match crate::state::db::open_db(None) {
+                        match resolve_bridge_agent_db_path(config.longhouse_home.as_deref())
+                            .and_then(|db_path| crate::state::db::open_db(Some(&db_path)))
+                        {
                             Ok(conn) => {
                                 let sb = crate::state::session_binding::SessionBinding::new(&conn);
                                 let canonical = std::fs::canonicalize(tp)
@@ -2087,6 +2107,7 @@ mod tests {
             session_source: None,
             machine_name: Some("test-box".to_string()),
             auto_approve: true,
+            longhouse_home: None,
             state_file: temp.path().join("bridge-state.json"),
             log_file: temp.path().join("bridge.log"),
         }
@@ -2133,6 +2154,16 @@ mod tests {
                 .join("managed-local")
                 .join("codex-bridge")
                 .join("session-123.log")
+        );
+    }
+
+    #[test]
+    fn resolve_bridge_agent_db_path_respects_longhouse_home_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = resolve_bridge_agent_db_path(Some(temp.path())).unwrap();
+        assert_eq!(
+            db_path,
+            temp.path().join("agent").join("longhouse-shipper.db")
         );
     }
 
