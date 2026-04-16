@@ -46,6 +46,12 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux build deps for managed Codex
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev
+
       - name: Build engine binary
         run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
 

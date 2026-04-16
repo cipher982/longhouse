@@ -98,6 +98,12 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux build deps for managed Codex
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev
+
       - name: Wait for released runtime artifacts
         if: ${{ github.event_name == 'release' }}
         env:
@@ -206,6 +212,11 @@ jobs:
           cd e2e
           bun install --silent
           bunx playwright install --with-deps chromium
+
+      - name: Install Linux build deps for managed Codex
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev
 
       - name: Run launch gate locally
         run: make launch-gate-local
