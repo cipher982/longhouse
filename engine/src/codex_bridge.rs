@@ -19,6 +19,7 @@ use crate::text::truncate_tail_chars;
 
 const BRIDGE_RUNTIME_SOURCE: &str = "codex_bridge";
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
+const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 
 #[derive(Debug, Clone)]
 pub struct BridgeStartConfig {
@@ -531,6 +532,12 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         }
     }
     let _sock_guard = SocketCleanup(sock_path);
+    // Codex can spend minutes in model-only thinking without emitting any
+    // item deltas. Refresh the live phase so Timeline does not decay to Ready.
+    let mut runtime_keepalive =
+        tokio::time::interval(Duration::from_millis(ACTIVE_PHASE_KEEPALIVE_MS));
+    runtime_keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    runtime_keepalive.tick().await;
 
     loop {
         tokio::select! {
@@ -561,6 +568,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             Some(cmd) = ipc_rx.recv() => {
                 let result = handle_ipc_turn_start(&config, &mut client, &mut context, &cmd).await;
                 let _ = cmd.reply.send(result);
+            }
+            _ = runtime_keepalive.tick() => {
+                emit_runtime_keepalive(&mut context).await;
             }
         }
     }
@@ -1486,6 +1496,17 @@ impl CodexRuntimeTracker {
         }
     }
 
+    fn keepalive_update(&self) -> Option<BridgeRuntimeUpdate> {
+        match self.current_phase_update() {
+            BridgeRuntimeUpdate::Phase { phase, tool_name }
+                if matches!(phase, "thinking" | "running") =>
+            {
+                Some(BridgeRuntimeUpdate::Phase { phase, tool_name })
+            }
+            _ => None,
+        }
+    }
+
     fn primary_running_tool(&self) -> Option<String> {
         self.active_items
             .values()
@@ -1571,6 +1592,12 @@ async fn emit_runtime_updates(context: &mut BridgeContext, updates: Vec<BridgeRu
                 }
             }
         }
+    }
+}
+
+async fn emit_runtime_keepalive(context: &mut BridgeContext) {
+    if let Some(update) = context.runtime_tracker.keepalive_update() {
+        emit_runtime_updates(context, vec![update]).await;
     }
 }
 
@@ -2030,6 +2057,60 @@ mod tests {
             "idle",
             None,
         );
+    }
+
+    #[test]
+    fn codex_runtime_tracker_keepalive_only_replays_live_execution_phases() {
+        let mut tracker = CodexRuntimeTracker::default();
+        assert!(tracker.keepalive_update().is_none());
+
+        tracker.handle_notification(
+            "turn/started",
+            &json!({
+                "turn": {"id": "turn-1", "status": "inProgress"}
+            }),
+        );
+        assert_phase_update(
+            tracker.keepalive_update().expect("thinking keepalive"),
+            "thinking",
+            None,
+        );
+
+        tracker.handle_notification(
+            "item/started",
+            &json!({
+                "item": {
+                    "id": "cmd-1",
+                    "type": "commandExecution",
+                    "status": "inProgress",
+                    "command": "pwd"
+                }
+            }),
+        );
+        assert_phase_update(
+            tracker.keepalive_update().expect("running keepalive"),
+            "running",
+            Some("shell"),
+        );
+
+        tracker.handle_notification(
+            "thread/status/changed",
+            &json!({
+                "status": {
+                    "type": "active",
+                    "activeFlags": ["waitingOnApproval"]
+                }
+            }),
+        );
+        assert!(tracker.keepalive_update().is_none());
+
+        tracker.handle_notification(
+            "turn/completed",
+            &json!({
+                "turn": {"id": "turn-1", "status": "completed"}
+            }),
+        );
+        assert!(tracker.keepalive_update().is_none());
     }
 
     #[tokio::test]
