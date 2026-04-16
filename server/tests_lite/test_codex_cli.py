@@ -47,6 +47,20 @@ class _FakeClient:
         return self.response
 
 
+def test_resolve_codex_binary_prefers_flag_then_env(monkeypatch, tmp_path):
+    explicit = tmp_path / "codex-explicit"
+    explicit.write_text("#!/bin/sh\n")
+    explicit.chmod(0o755)
+    env_bin = tmp_path / "codex-env"
+    env_bin.write_text("#!/bin/sh\n")
+    env_bin.chmod(0o755)
+
+    monkeypatch.setenv(codex_cli._CODEX_BIN_ENV, str(env_bin))
+
+    assert codex_cli._resolve_codex_binary(str(explicit)) == str(explicit.resolve())
+    assert codex_cli._resolve_codex_binary() == str(env_bin.resolve())
+
+
 def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path):
     fake_client = _FakeClient(
         response=_FakeResponse(
@@ -97,7 +111,8 @@ def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path
 def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     runner = CliRunner()
     open_calls: list[str] = []
-    native_tui_calls: list[tuple[str, str, bool]] = []
+    bridge_calls: list[dict[str, object]] = []
+    native_tui_calls: list[tuple[str, str, str, bool]] = []
 
     monkeypatch.setattr(
         codex_cli,
@@ -115,12 +130,20 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
             source_runner_name="work-laptop",
         ),
     )
-    monkeypatch.setattr(codex_cli, "_start_native_codex_bridge", lambda **_kwargs: ("thr_123", "ws://127.0.0.1:4800"))
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/longhouse-codex")
+    monkeypatch.setattr(
+        codex_cli,
+        "_start_native_codex_bridge",
+        lambda **kwargs: bridge_calls.append(kwargs) or ("thr_123", "ws://127.0.0.1:4800", "/tmp/state.json"),
+    )
     monkeypatch.setattr(codex_cli, "_interactive_stdio", lambda: True)
     monkeypatch.setattr(
         codex_cli,
         "_run_native_codex_tui",
-        lambda *, ws_url, cwd, bypass_approvals=False: native_tui_calls.append((ws_url, str(cwd), bypass_approvals)) or 0,
+        lambda *, codex_bin, ws_url, cwd, bypass_approvals=False: native_tui_calls.append(
+            (codex_bin, ws_url, str(cwd), bypass_approvals)
+        )
+        or 0,
     )
     monkeypatch.setattr(codex_cli, "_open_session_url", lambda url: open_calls.append(url) or True)
 
@@ -151,7 +174,16 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     assert "Opening session in browser..." in result.output
     assert "Attaching..." in result.output
     assert open_calls == ["https://longhouse.test/timeline/session-123"]
-    assert native_tui_calls == [("ws://127.0.0.1:4800", str(tmp_path), False)]
+    assert bridge_calls == [
+        {
+            "session_id": "session-123",
+            "cwd": tmp_path,
+            "url": "https://longhouse.test",
+            "token": "zdt_test_token",
+            "codex_bin": "/tmp/longhouse-codex",
+        }
+    ]
+    assert native_tui_calls == [("/tmp/longhouse-codex", "ws://127.0.0.1:4800", str(tmp_path), False)]
 
 
 def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):
@@ -173,6 +205,7 @@ def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):
             source_runner_name="work-laptop",
         ),
     )
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/longhouse-codex")
     monkeypatch.setattr(
         codex_cli,
         "_start_native_codex_bridge",
@@ -183,3 +216,19 @@ def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):
 
     assert result.exit_code == 1
     assert "Codex bridge failed: engine not found" in result.output
+
+
+def test_codex_command_exits_when_no_codex_runtime_available(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    monkeypatch.setattr(
+        codex_cli,
+        "_load_api_credentials",
+        lambda **_kwargs: ("https://longhouse.test", "zdt_test_token"),
+    )
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: None)
+
+    result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "Managed Codex requires the `codex` CLI." in result.output

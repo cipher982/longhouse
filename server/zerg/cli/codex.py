@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -20,9 +21,49 @@ from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
 
+_CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
 
-def _check_codex_binary() -> str | None:
+
+def _resolve_explicit_codex_binary(candidate: str, *, source: str) -> str:
+    normalized = str(candidate or "").strip()
+    if not normalized:
+        raise _NativeBridgeError(f"{source} is empty")
+    looks_like_path = normalized.startswith((".", "~", "/")) or "/" in normalized or "\\" in normalized
+    if looks_like_path:
+        path = Path(os.path.expanduser(normalized))
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path.resolve())
+        raise _NativeBridgeError(f"{source} points to `{candidate}`, but it is not an executable file.")
+    resolved = shutil.which(normalized)
+    if resolved:
+        return resolved
+    raise _NativeBridgeError(f"{source} points to `{candidate}`, but it was not found on PATH.")
+
+
+def _resolve_codex_binary(explicit: str | None = None) -> str | None:
+    normalized = str(explicit or "").strip()
+    if normalized:
+        return _resolve_explicit_codex_binary(normalized, source="--codex-bin")
+    env_candidate = str(os.environ.get(_CODEX_BIN_ENV) or "").strip()
+    if env_candidate:
+        return _resolve_explicit_codex_binary(env_candidate, source=_CODEX_BIN_ENV)
     return shutil.which("codex")
+
+
+def _build_codex_attach_command(
+    *,
+    codex_bin: str,
+    ws_url: str,
+    bypass_approvals: bool,
+    thread_id: str | None = None,
+) -> str:
+    cmd = [codex_bin]
+    if thread_id:
+        cmd += ["resume", thread_id]
+    if bypass_approvals:
+        cmd.append("--dangerously-bypass-approvals-and-sandbox")
+    cmd += ["--enable", "tui_app_server", "--remote", ws_url]
+    return shlex.join(cmd)
 
 
 class _NativeBridgeError(Exception):
@@ -35,6 +76,7 @@ def _start_native_codex_bridge(
     cwd: Path,
     url: str,
     token: str,
+    codex_bin: str,
 ) -> tuple[str, str, str | None]:
     try:
         engine = get_engine_executable()
@@ -53,6 +95,8 @@ def _start_native_codex_bridge(
             url,
             "--token",
             token,
+            "--codex-bin",
+            codex_bin,
             "--json",
         ],
         check=False,
@@ -123,11 +167,7 @@ def _stop_native_codex_bridge(*, session_id: str) -> str | None:
     return stderr or stdout or f"codex-bridge stop exited with code {completed.returncode}"
 
 
-def _run_native_codex_tui(*, ws_url: str, cwd: Path, bypass_approvals: bool = False) -> int:
-    codex_bin = _check_codex_binary()
-    if not codex_bin:
-        typer.secho("Session launch requires the 'codex' CLI but it is not installed.", fg=typer.colors.RED)
-        raise typer.Exit(code=1)
+def _run_native_codex_tui(*, codex_bin: str, ws_url: str, cwd: Path, bypass_approvals: bool = False) -> int:
     # Connect TUI to the bridge's app-server. The TUI calls thread/start which
     # creates the thread; the bridge daemon observes the thread/started notification
     # and posts idle once it knows which thread to drive.
@@ -212,6 +252,11 @@ def codex(
         "--claude-dir",
         help="Longhouse config directory (default: ~/.claude).",
     ),
+    codex_bin: str | None = typer.Option(
+        None,
+        "--codex-bin",
+        help=f"Codex executable for managed sessions (defaults to {_CODEX_BIN_ENV} or codex on PATH).",
+    ),
     bypass_approvals: bool = typer.Option(
         False,
         "--dangerously-bypass-approvals-and-sandbox",
@@ -227,6 +272,13 @@ def codex(
         config_dir=resolved_config_dir,
         exit_code=managed_local_cli.EXIT_SETUP_FAILED,
     )
+    resolved_codex_bin = _resolve_codex_binary(codex_bin)
+    if not resolved_codex_bin:
+        typer.secho(
+            f"Managed Codex requires the `codex` CLI. Install Codex or set {_CODEX_BIN_ENV} / --codex-bin.",
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
     machine_name = get_machine_name_label()
     typer.echo(f"Longhouse: {resolved_url}")
     result = _launch_managed_local_from_api(
@@ -249,6 +301,7 @@ def codex(
             cwd=cwd,
             url=resolved_url,
             token=resolved_token,
+            codex_bin=resolved_codex_bin,
         )
     except _NativeBridgeError as exc:
         typer.secho(f"Codex bridge failed: {exc}", fg=typer.colors.RED)
@@ -262,17 +315,26 @@ def codex(
         if not _open_session_url(session_url):
             typer.secho(f"Could not open browser automatically. Visit: {session_url}", fg=typer.colors.YELLOW)
 
-    _bypass_flag = " --dangerously-bypass-approvals-and-sandbox" if bypass_approvals else ""
+    attach_cmd = _build_codex_attach_command(
+        codex_bin=resolved_codex_bin,
+        ws_url=ws_url,
+        bypass_approvals=bypass_approvals,
+    )
     if not attach:
-        typer.echo("Attach: " + f"codex{_bypass_flag} --enable tui_app_server --remote {ws_url}")
+        typer.echo(f"Attach: {attach_cmd}")
         return
     if not _interactive_stdio():
         typer.secho("Skipping auto-attach because stdin/stdout are not TTYs.", fg=typer.colors.YELLOW)
-        typer.echo("Attach: " + f"codex{_bypass_flag} --enable tui_app_server --remote {ws_url}")
+        typer.echo(f"Attach: {attach_cmd}")
         return
 
     typer.echo("Attaching...")
-    exit_code = _run_native_codex_tui(ws_url=ws_url, cwd=cwd, bypass_approvals=bypass_approvals)
+    exit_code = _run_native_codex_tui(
+        codex_bin=resolved_codex_bin,
+        ws_url=ws_url,
+        cwd=cwd,
+        bypass_approvals=bypass_approvals,
+    )
     keep_bridge_alive = exit_code != 0 and _active_turn_survived_tui_exit(state_file)
     stop_error = None if keep_bridge_alive else _stop_native_codex_bridge(session_id=result.session_id)
     if exit_code != 0:
@@ -281,10 +343,11 @@ def codex(
             state = _load_native_codex_bridge_state(state_file)
             if state is not None:
                 resume_thread_id = str(state.get("thread_id") or "").strip()
-            resume_cmd = (
-                f"codex resume {resume_thread_id}{_bypass_flag} --enable tui_app_server --remote {ws_url}"
-                if resume_thread_id
-                else f"codex{_bypass_flag} --enable tui_app_server --remote {ws_url}"
+            resume_cmd = _build_codex_attach_command(
+                codex_bin=resolved_codex_bin,
+                ws_url=ws_url,
+                bypass_approvals=bypass_approvals,
+                thread_id=resume_thread_id or None,
             )
             typer.secho(
                 "Auto-attach exited, but the managed Codex session is still running and resumable.",
