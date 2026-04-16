@@ -439,6 +439,51 @@ class SessionTurnReview(AgentsBase):
     )
 
 
+class SessionTurn(AgentsBase):
+    """Canonical per-turn timing record for managed and reconstructed sessions."""
+
+    __tablename__ = "session_turns"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    _fk_ref = "sessions.id" if AGENTS_SCHEMA is None else f"{AGENTS_SCHEMA}.sessions.id"
+    session_id = Column(
+        GUID(),
+        ForeignKey(_fk_ref, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    request_id = Column(String(64), nullable=True, index=True)
+    source_kind = Column(String(32), nullable=False)
+    timing_confidence = Column(String(20), nullable=False)
+    state = Column(String(20), nullable=False)
+    terminal_phase = Column(String(32), nullable=True)
+    error_code = Column(String(64), nullable=True)
+    user_event_id = Column(Integer, nullable=True)
+    durable_assistant_event_id = Column(Integer, nullable=True)
+    baseline_event_id = Column(Integer, nullable=True)
+    baseline_runtime_cursor = Column(Integer, nullable=True)
+    user_submitted_at = Column(DateTime(timezone=True), nullable=False)
+    send_accepted_at = Column(DateTime(timezone=True), nullable=True)
+    active_phase_observed_at = Column(DateTime(timezone=True), nullable=True)
+    terminal_at = Column(DateTime(timezone=True), nullable=True)
+    durable_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        Index(
+            "ix_session_turns_session_request",
+            "session_id",
+            "request_id",
+            unique=True,
+            postgresql_where=text("request_id IS NOT NULL"),
+            sqlite_where=text("request_id IS NOT NULL"),
+        ),
+        Index("ix_session_turns_session_order", "session_id", "user_submitted_at", "created_at", "id"),
+        Index("ix_session_turns_session_state_created", "session_id", "state", "created_at"),
+    )
+
+
 class ManagedLocalTurn(AgentsBase):
     """Per-turn shadow ledger for managed-local continuation."""
 
