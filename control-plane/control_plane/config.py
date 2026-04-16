@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     google_client_secret: str | None = None
     google_cloud_credentials_json: str | None = None
 
+    # GitHub OAuth (control plane login)
+    github_client_id: str | None = None
+    github_client_secret: str | None = None
+
     # Stripe
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None

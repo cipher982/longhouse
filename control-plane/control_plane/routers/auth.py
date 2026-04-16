@@ -1,10 +1,12 @@
-"""Auth for control plane: email+password and Google OAuth.
+"""Auth for control plane: email+password, Google OAuth, and GitHub OAuth.
 
 Flow:
   POST /auth/signup            → create user (unverified), send verification email, redirect to /verify-email
   POST /auth/login             → verify email+password, set session cookie
   GET  /auth/google            → redirect to Google consent screen
   GET  /auth/google/callback   → exchange code, upsert user (auto-verified), set session cookie
+  GET  /auth/github            → redirect to GitHub consent screen
+  GET  /auth/github/callback   → exchange code, upsert user (auto-verified), set session cookie
   GET  /auth/verify            → verify email via token, log in, redirect to dashboard
   POST /auth/resend-verification → resend verification email for logged-in unverified user
   POST /auth/reset-password-request → send password reset email (always 200)
@@ -63,6 +65,10 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 GOOGLE_USERINFO_URL = "https://www.googleapis.com/oauth2/v3/userinfo"
 GMAIL_CONNECT_SCOPES = "https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send"
+GITHUB_AUTH_URL = "https://github.com/login/oauth/authorize"
+GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
+GITHUB_USERINFO_URL = "https://api.github.com/user"
+GITHUB_USER_EMAILS_URL = "https://api.github.com/user/emails"
 HOSTED_GMAIL_STATE_MAX_AGE = 10 * 60
 LOGIN_RETURN_STATE_MAX_AGE = 10 * 60
 INSTANCE_SSO_TOKEN_MAX_AGE = 5 * 60
@@ -247,8 +253,20 @@ def _require_oauth():
         )
 
 
+def _require_github_oauth():
+    if not settings.github_client_id or not settings.github_client_secret:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="GitHub OAuth not configured",
+        )
+
+
 def _callback_url() -> str:
     return f"https://control.{settings.root_domain}/auth/google/callback"
+
+
+def _github_callback_url() -> str:
+    return f"https://control.{settings.root_domain}/auth/github/callback"
 
 
 def _gmail_callback_url() -> str:
@@ -308,15 +326,15 @@ def _append_return_to(path: str, return_to: str | None) -> str:
     return f"{path}{separator}{query}"
 
 
-def _issue_login_return_state(*, return_to: str) -> str:
-    return _encode_jwt(
-        {
-            "purpose": "control_plane_login_return",
-            "return_to": return_to,
-            "exp": int(time.time()) + LOGIN_RETURN_STATE_MAX_AGE,
-        },
-        settings.jwt_secret,
-    )
+def _issue_login_return_state(*, return_to: str | None = None) -> str:
+    """Issue a CSRF state token. Always generated; return_to is optional."""
+    payload: dict[str, Any] = {
+        "purpose": "control_plane_login_return",
+        "exp": int(time.time()) + LOGIN_RETURN_STATE_MAX_AGE,
+    }
+    if return_to:
+        payload["return_to"] = return_to
+    return _encode_jwt(payload, settings.jwt_secret)
 
 
 def _decode_login_return_state(state: str | None) -> str | None:
@@ -327,7 +345,11 @@ def _decode_login_return_state(state: str | None) -> str | None:
     if payload.get("purpose") != "control_plane_login_return":
         raise ValueError("Invalid login return state")
 
-    safe_return_to = normalize_local_return_to(str(payload.get("return_to") or ""))
+    return_to_raw = payload.get("return_to")
+    if not return_to_raw:
+        return None  # Valid CSRF nonce, no return target
+
+    safe_return_to = normalize_local_return_to(str(return_to_raw))
     if not safe_return_to:
         raise ValueError("Invalid login return target")
 
@@ -432,6 +454,50 @@ def _get_userinfo(access_token: str) -> dict[str, Any]:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to fetch user info") from exc
 
 
+def _exchange_github_code(code: str) -> dict[str, Any]:
+    """Exchange GitHub authorization code for an access token."""
+    try:
+        resp = httpx.post(
+            GITHUB_TOKEN_URL,
+            json={
+                "client_id": settings.github_client_id,
+                "client_secret": settings.github_client_secret,
+                "code": code,
+                "redirect_uri": _github_callback_url(),
+            },
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        logger.error(f"GitHub token exchange failed: {exc}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="GitHub token exchange failed") from exc
+
+
+def _get_github_email(access_token: str) -> str | None:
+    """Return the primary verified email for a GitHub user.
+
+    Always uses the /user/emails endpoint which enforces both primary and
+    verified flags. The public profile email field (/user) does not require
+    verification and must not be used for authentication.
+    """
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/vnd.github+json",
+    }
+    try:
+        emails_resp = httpx.get(GITHUB_USER_EMAILS_URL, headers=headers, timeout=10)
+        emails_resp.raise_for_status()
+        for entry in emails_resp.json():
+            if entry.get("primary") and entry.get("verified"):
+                return entry.get("email")
+        return None
+    except Exception as exc:
+        logger.error(f"GitHub userinfo fetch failed: {exc}")
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Failed to fetch GitHub user info") from exc
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -525,9 +591,8 @@ def google_login(return_to: str | None = None):
         "response_type": "code",
         "scope": "openid email profile",
         "access_type": "online",
+        "state": _issue_login_return_state(return_to=safe_return_to),
     }
-    if safe_return_to:
-        params_dict["state"] = _issue_login_return_state(return_to=safe_return_to)
 
     params = urllib.parse.urlencode(params_dict)
     return RedirectResponse(f"{GOOGLE_AUTH_URL}?{params}", status_code=302)
@@ -585,6 +650,87 @@ def google_callback(
         logger.info(f"Existing user logged in: {email}")
 
     if user and not user.email_verified:
+        user.email_verified = True
+        db.commit()
+
+    session_token = _issue_session_token(user)
+    target = return_to or f"https://control.{settings.root_domain}/dashboard"
+    response = RedirectResponse(target, status_code=302)
+    _set_session(response, session_token)
+    return response
+
+
+@router.get("/github")
+def github_login(return_to: str | None = None):
+    """Redirect to GitHub OAuth consent screen."""
+    _require_github_oauth()
+    safe_return_to = normalize_local_return_to(return_to)
+
+    params_dict = {
+        "client_id": settings.github_client_id,
+        "redirect_uri": _github_callback_url(),
+        "scope": "read:user user:email",
+        "state": _issue_login_return_state(return_to=safe_return_to),
+    }
+
+    params = urllib.parse.urlencode(params_dict)
+    return RedirectResponse(f"{GITHUB_AUTH_URL}?{params}", status_code=302)
+
+
+@router.get("/github/callback")
+def github_callback(
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Handle GitHub OAuth callback: exchange code, upsert user, redirect."""
+    _require_github_oauth()
+    try:
+        return_to = _decode_login_return_state(state)
+    except ValueError:
+        return RedirectResponse("/?error=Sign-in+session+expired", status_code=302)
+
+    if error:
+        logger.warning(f"GitHub OAuth error: {error}")
+        redirect_target = "/?error=" + urllib.parse.quote(error[:200], safe="")
+        return RedirectResponse(_append_return_to(redirect_target, return_to), status_code=302)
+
+    if not code:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing authorization code")
+
+    token_data = _exchange_github_code(code)
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="No access_token in GitHub response")
+
+    email = _get_github_email(access_token)
+    if not email:
+        return RedirectResponse("/?error=GitHub+account+has+no+verified+email", status_code=302)
+
+    email = email.strip().lower()
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        from sqlalchemy.exc import IntegrityError
+
+        try:
+            user = User(email=email, email_verified=True)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+            logger.info(f"Created new user (GitHub, verified): {email}")
+        except IntegrityError:
+            db.rollback()
+            user = db.query(User).filter(User.email == email).first()
+            logger.info(f"Concurrent signup resolved for: {email}")
+    else:
+        logger.info(f"Existing user logged in via GitHub: {email}")
+
+    if not user:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Could not resolve user account")
+
+    if not user.email_verified:
         user.email_verified = True
         db.commit()
 

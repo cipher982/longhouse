@@ -490,6 +490,9 @@ td {
 
 .google-btn svg { flex-shrink: 0; }
 
+/* GitHub Button */
+.github-btn svg { flex-shrink: 0; }
+
 
 /* =============================================================================
    Subdomain Picker
