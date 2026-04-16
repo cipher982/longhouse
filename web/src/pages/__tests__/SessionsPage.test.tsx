@@ -1136,6 +1136,41 @@ describe("SessionsPage", () => {
     expect(card).not.toHaveClass("session-card--running");
   });
 
+  it("shows managed-local inferred progress as working instead of ready", async () => {
+    mockUseAgentSessions.mockReturnValue({
+      data: {
+        sessions: [
+          makeTimelineCard({
+            ended_at: null,
+            status: "active",
+            confidence: "inferred",
+            runtime_source: "semantic",
+            presence_state: null,
+            last_live_at: "2026-03-21T12:04:00Z",
+            last_activity_at: "2026-03-21T12:04:00Z",
+            timeline_anchor_at: "2026-03-21T12:04:00Z",
+            display_phase: "Recent progress",
+            capabilities: makeCapabilities({
+              live_control_available: true,
+              host_reattach_available: true,
+            }),
+          }),
+        ],
+        total: 1,
+        has_real_sessions: true,
+      },
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    renderSessionsPage();
+
+    expect(await screen.findByText("Working")).toBeInTheDocument();
+    expect(screen.getByText(/Recent progress .* Live on laptop/)).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+  });
+
   it("does not treat a merely open session as live without runtime evidence", async () => {
     mockUseAgentSessions.mockReturnValue({
       data: {

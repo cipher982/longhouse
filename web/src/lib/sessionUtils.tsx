@@ -286,6 +286,12 @@ export function getRuntimeDisplayCopy(
       detail: "Waiting for live signal",
     };
   }
+  if (runtime.presenceState == null && runtime.heuristicActive) {
+    return {
+      headline: "Working",
+      detail: runtimePhaseLabel,
+    };
+  }
   if (runtime.presenceState === "idle" || runtime.isIdle) {
     return {
       headline: "Ready",
