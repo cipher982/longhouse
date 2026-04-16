@@ -76,6 +76,30 @@ def _start_native_codex_bridge(
     return thread_id, ws_url
 
 
+def _stop_native_codex_bridge(*, session_id: str) -> str | None:
+    try:
+        engine = get_engine_executable()
+    except RuntimeError as exc:
+        return str(exc)
+    completed = subprocess.run(
+        [
+            engine,
+            "codex-bridge",
+            "stop",
+            "--session-id",
+            session_id,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode == 0:
+        return None
+    stderr = (completed.stderr or "").strip()
+    stdout = (completed.stdout or "").strip()
+    return stderr or stdout or f"codex-bridge stop exited with code {completed.returncode}"
+
+
 def _run_native_codex_tui(*, ws_url: str, cwd: Path, bypass_approvals: bool = False) -> int:
     codex_bin = _check_codex_binary()
     if not codex_bin:
@@ -226,8 +250,15 @@ def codex(
 
     typer.echo("Attaching...")
     exit_code = _run_native_codex_tui(ws_url=ws_url, cwd=cwd, bypass_approvals=bypass_approvals)
+    stop_error = _stop_native_codex_bridge(session_id=result.session_id)
     if exit_code != 0:
         typer.secho(
-            f"Auto-attach exited with code {exit_code}. Run the printed remote resume command manually.",
+            f"Auto-attach exited with code {exit_code}. Managed bridge cleanup was "
+            + ("successful." if stop_error is None else f"not successful: {stop_error}"),
+            fg=typer.colors.YELLOW,
+        )
+    elif stop_error is not None:
+        typer.secho(
+            f"Managed bridge cleanup failed after TUI exit: {stop_error}",
             fg=typer.colors.YELLOW,
         )

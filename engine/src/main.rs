@@ -25,8 +25,8 @@ use codex_app_server_canary::{
 };
 use codex_bridge::{
     cmd_codex_bridge_attach, cmd_codex_bridge_interrupt, cmd_codex_bridge_run,
-    cmd_codex_bridge_send, cmd_codex_bridge_start, BridgeAttachConfig, BridgeInterruptConfig,
-    BridgeRunConfig, BridgeSendConfig, BridgeStartConfig,
+    cmd_codex_bridge_send, cmd_codex_bridge_start, cmd_codex_bridge_stop, BridgeAttachConfig,
+    BridgeInterruptConfig, BridgeRunConfig, BridgeSendConfig, BridgeStartConfig, BridgeStopConfig,
 };
 use config::ShipperConfig;
 use pipeline::compressor::CompressionAlgo;
@@ -454,6 +454,15 @@ enum CodexBridgeCommands {
 
     /// Interrupt the currently active turn for a managed bridge thread
     Interrupt {
+        #[arg(long)]
+        session_id: String,
+
+        #[arg(long)]
+        state_root: Option<PathBuf>,
+    },
+
+    /// Stop a running managed bridge and its local Codex app-server child
+    Stop {
         #[arg(long)]
         session_id: String,
 
@@ -896,6 +905,15 @@ fn main() -> anyhow::Result<()> {
                     state_root,
                 } => {
                     rt.block_on(cmd_codex_bridge_interrupt(BridgeInterruptConfig {
+                        session_id,
+                        state_root,
+                    }))?;
+                }
+                CodexBridgeCommands::Stop {
+                    session_id,
+                    state_root,
+                } => {
+                    rt.block_on(cmd_codex_bridge_stop(BridgeStopConfig {
                         session_id,
                         state_root,
                     }))?;
