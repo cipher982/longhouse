@@ -188,6 +188,47 @@ def test_managed_codex_launcher_disables_upstream_update_checks(monkeypatch, tmp
     ]
 
 
+def test_managed_codex_reinstall_from_current_launcher_skips_samefile_copy(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    source = tmp_path / "build" / "codex"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    source.chmod(0o755)
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
+    monkeypatch.setattr(runtime_artifacts, "resolve_longhouse_home", lambda: home / ".longhouse")
+    monkeypatch.setattr(runtime_artifacts, "_probe_executable_version", lambda path: "codex-cli 0.121.0")
+
+    first = runtime_artifacts.ensure_runtime_binary(
+        runtime_artifacts.RuntimeComponent.MANAGED_CODEX,
+        source_override=str(source),
+    )
+    second = runtime_artifacts.ensure_runtime_binary(
+        runtime_artifacts.RuntimeComponent.MANAGED_CODEX,
+        source_override=first.path,
+        overwrite=True,
+    )
+
+    assert first.path == second.path
+    assert second.installed_now is True
+
+    launcher = home / ".local" / "bin" / "longhouse-codex"
+    completed = subprocess.run(
+        [str(launcher), "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0
+    assert completed.stdout.splitlines() == [
+        "-c",
+        "check_for_update_on_startup=false",
+        "--version",
+    ]
+
+
 def test_ensure_runtime_artifact_copies_app_bundle_from_local_override(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()

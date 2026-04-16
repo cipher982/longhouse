@@ -489,8 +489,12 @@ def _ensure_managed_codex_versioned_artifact_from_binary(
     version_binary = _managed_codex_binary_path(version_dir)
     version_dir.mkdir(parents=True, exist_ok=True)
     existed_before = version_binary.exists()
+    try:
+        source_matches_installed = source_binary.exists() and version_binary.exists() and source_binary.samefile(version_binary)
+    except OSError:
+        source_matches_installed = False
 
-    if overwrite or not existed_before:
+    if (overwrite or not existed_before) and not source_matches_installed:
         _copy_local_binary(source_binary, version_binary)
 
     try:
