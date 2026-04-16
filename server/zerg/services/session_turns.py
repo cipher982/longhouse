@@ -96,7 +96,11 @@ async def execute_session_turn_write(
 ) -> T:
     ws = get_write_serializer()
     if ws.is_configured:
-        return await ws.execute(lambda turn_db: fn(turn_db), label=label)
+        return await ws.execute(
+            lambda _turn_db: run_session_turn_write(db_bind=db_bind, fn=fn),
+            label=label,
+            auto_commit=False,
+        )
     return await asyncio.to_thread(run_session_turn_write, db_bind=db_bind, fn=fn)
 
 
@@ -258,7 +262,7 @@ def mark_session_turn_failed(
     normalized_error_code = _normalize_string(error_code)
     if turn is None or normalized_error_code is None:
         return False
-    if _normalize_string(turn.state) == SESSION_TURN_STATE_DURABLE and _normalize_string(turn.error_code) == normalized_error_code:
+    if _normalize_string(turn.state) == SESSION_TURN_STATE_DURABLE:
         return False
     turn.error_code = normalized_error_code
     turn.state = SESSION_TURN_STATE_FAILED

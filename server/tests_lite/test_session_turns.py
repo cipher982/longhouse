@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime
 from datetime import timezone
@@ -22,17 +23,20 @@ from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
+from zerg.services import session_turns as session_turns_service
 from zerg.services.session_turns import SESSION_TURN_CONFIDENCE_EXACT
 from zerg.services.session_turns import SESSION_TURN_SOURCE_MANAGED_LIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import create_session_turn
+from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import get_session_turn_snapshot
 from zerg.services.session_turns import mark_session_turn_active
 from zerg.services.session_turns import mark_session_turn_failed
 from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.services.session_turns import mark_session_turn_terminal
 from zerg.services.session_turns import maybe_mark_session_turn_durable
+from zerg.services.write_serializer import WriteSerializer
 
 
 def _make_db(tmp_path):
@@ -354,3 +358,123 @@ def test_agents_store_ingest_marks_canonical_session_turn_durable(tmp_path):
         assert row.durable_assistant_event_id is not None
         assert row.durable_at is not None
         assert row.state == SESSION_TURN_STATE_DURABLE
+
+
+def test_mark_session_turn_failed_does_not_overwrite_durable_state(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        session = _seed_session(db)
+        create_session_turn(
+            db,
+            session_id=session.id,
+            request_id="req-durable",
+            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+        )
+        mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-durable")
+        db.add_all(
+            [
+                AgentEvent(
+                    session_id=session.id,
+                    role="user",
+                    content_text="continue",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+                AgentEvent(
+                    session_id=session.id,
+                    role="assistant",
+                    content_text="done",
+                    timestamp=datetime.now(timezone.utc),
+                ),
+            ]
+        )
+        db.commit()
+
+        durable_turn = maybe_mark_session_turn_durable(db, session_id=session.id)
+        assert durable_turn is not None
+        assert durable_turn.state == SESSION_TURN_STATE_DURABLE
+        assert not mark_session_turn_failed(
+            db,
+            session_id=session.id,
+            request_id="req-durable",
+            error_code="verification_timeout",
+        )
+
+        row = db.query(SessionTurn).filter(SessionTurn.request_id == "req-durable").one()
+        assert row.state == SESSION_TURN_STATE_DURABLE
+        assert row.error_code is None
+
+
+def test_execute_session_turn_write_uses_bound_database_when_serializer_is_configured(tmp_path, monkeypatch):
+    primary_engine = make_engine(f"sqlite:///{tmp_path / 'primary_turns.db'}")
+    secondary_engine = make_engine(f"sqlite:///{tmp_path / 'secondary_turns.db'}")
+    initialize_database(primary_engine)
+    initialize_database(secondary_engine)
+    PrimarySession = make_sessionmaker(primary_engine)
+    SecondarySession = make_sessionmaker(secondary_engine)
+
+    session_id = uuid4()
+    with PrimarySession() as primary_db:
+        primary_session = AgentSession(
+            id=session_id,
+            provider="claude",
+            environment="development",
+            project="zerg",
+            cwd="/Users/davidrose/git/zerg",
+            started_at=datetime.now(timezone.utc),
+            provider_session_id=str(uuid4()),
+            continuation_kind="local",
+            origin_label="cinder",
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
+            execution_home="managed_local",
+            managed_transport="claude_channel_bridge",
+            loop_mode="manual",
+        )
+        primary_db.add(primary_session)
+        primary_db.commit()
+    with SecondarySession() as secondary_db:
+        secondary_session = AgentSession(
+            id=session_id,
+            provider="claude",
+            environment="development",
+            project="zerg",
+            cwd="/Users/davidrose/git/zerg",
+            started_at=datetime.now(timezone.utc),
+            provider_session_id=str(uuid4()),
+            continuation_kind="local",
+            origin_label="cinder",
+            user_messages=0,
+            assistant_messages=0,
+            tool_calls=0,
+            execution_home="managed_local",
+            managed_transport="claude_channel_bridge",
+            loop_mode="manual",
+        )
+        secondary_db.add(secondary_session)
+        secondary_db.commit()
+
+    serializer = WriteSerializer()
+    serializer.configure(SecondarySession)
+    monkeypatch.setattr(session_turns_service, "get_write_serializer", lambda: serializer)
+
+    asyncio.run(
+        execute_session_turn_write(
+            db_bind=primary_engine,
+            label="session-turn-active",
+            fn=lambda turn_db: create_session_turn(
+                turn_db,
+                session_id=session_id,
+                request_id="req-bound-db",
+                source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
+                timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
+            ),
+        )
+    )
+
+    with PrimarySession() as primary_db:
+        assert primary_db.query(SessionTurn).filter(SessionTurn.request_id == "req-bound-db").count() == 1
+    with SecondarySession() as secondary_db:
+        assert secondary_db.query(SessionTurn).filter(SessionTurn.request_id == "req-bound-db").count() == 0
