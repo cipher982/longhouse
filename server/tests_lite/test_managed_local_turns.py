@@ -21,7 +21,6 @@ from zerg.models.agents import ManagedLocalTurn
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
-from zerg.services.managed_local_turns import attach_review_to_managed_local_turn
 from zerg.services.managed_local_turns import create_managed_local_turn
 from zerg.services.managed_local_turns import get_managed_local_turn
 from zerg.services.managed_local_turns import get_managed_local_turn_snapshot
@@ -135,13 +134,6 @@ def test_managed_local_turn_lifecycle_binds_durable_events_and_review(tmp_path):
         assert durable_turn.durable_assistant_event_id is not None
         assert durable_turn.durable_at is not None
 
-        attached = attach_review_to_managed_local_turn(
-            db,
-            session_id=session.id,
-            assistant_event_id=int(durable_turn.durable_assistant_event_id),
-            review_id=77,
-        )
-        assert attached is True
         db.commit()
 
         refreshed = get_managed_local_turn(db, session_id=session.id, request_id="req-1234")
@@ -149,7 +141,6 @@ def test_managed_local_turn_lifecycle_binds_durable_events_and_review(tmp_path):
         assert refreshed.send_accepted_at is not None
         assert refreshed.terminal_phase == "idle"
         assert refreshed.terminal_runtime_event_id == 11
-        assert refreshed.review_id == 77
 
 
 def test_managed_local_turn_durability_ignores_old_assistant_before_current_prompt(tmp_path):

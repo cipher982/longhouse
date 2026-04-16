@@ -37,7 +37,6 @@ class ManagedLocalTurnSnapshot:
     durable_user_event_id: int | None
     durable_assistant_event_id: int | None
     durable_at: datetime | None
-    review_id: int | None
     error_code: str | None
 
 
@@ -171,59 +170,6 @@ def maybe_mark_managed_local_turn_durable(db: Session, *, session_id: UUID) -> M
     return None
 
 
-def attach_review_to_managed_local_turn(
-    db: Session,
-    *,
-    session_id: UUID,
-    assistant_event_id: int,
-    review_id: int,
-) -> bool:
-    turn = (
-        db.query(ManagedLocalTurn)
-        .filter(
-            ManagedLocalTurn.session_id == session_id,
-            ManagedLocalTurn.durable_assistant_event_id == int(assistant_event_id),
-            ManagedLocalTurn.review_id.is_(None),
-        )
-        .order_by(ManagedLocalTurn.created_at.asc(), ManagedLocalTurn.id.asc())
-        .first()
-    )
-    if turn is None:
-        return False
-    turn.review_id = int(review_id)
-    db.flush()
-    return True
-
-
-def get_reviewable_managed_local_turns(
-    db: Session,
-    *,
-    session_id: UUID,
-    limit: int | None = None,
-) -> list[ManagedLocalTurn]:
-    query = (
-        db.query(ManagedLocalTurn)
-        .filter(
-            ManagedLocalTurn.session_id == session_id,
-            ManagedLocalTurn.durable_at.isnot(None),
-            ManagedLocalTurn.review_id.is_(None),
-        )
-        .order_by(ManagedLocalTurn.created_at.asc(), ManagedLocalTurn.id.asc())
-    )
-    if limit is not None:
-        query = query.limit(int(limit))
-    return query.all()
-
-
-def get_next_reviewable_managed_local_turn(
-    db: Session,
-    *,
-    session_id: UUID,
-) -> ManagedLocalTurn | None:
-    turns = get_reviewable_managed_local_turns(db, session_id=session_id, limit=1)
-    return turns[0] if turns else None
-
-
 def get_managed_local_turn(
     db: Session,
     *,
@@ -255,7 +201,6 @@ def get_managed_local_turn_snapshot(
             durable_user_event_id=int(turn.durable_user_event_id) if turn.durable_user_event_id is not None else None,
             durable_assistant_event_id=(int(turn.durable_assistant_event_id) if turn.durable_assistant_event_id is not None else None),
             durable_at=normalize_utc(turn.durable_at),
-            review_id=int(turn.review_id) if turn.review_id is not None else None,
             error_code=str(turn.error_code or "").strip() or None,
         )
 
