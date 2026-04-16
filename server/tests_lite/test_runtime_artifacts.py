@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -67,23 +68,90 @@ def test_ensure_runtime_binary_copies_managed_codex_from_local_override(monkeypa
     home.mkdir()
     source = tmp_path / "build" / "codex"
     source.parent.mkdir(parents=True, exist_ok=True)
-    source.write_text("codex")
+    source.write_text("#!/bin/sh\necho codex\n")
     source.chmod(0o755)
 
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
+    monkeypatch.setattr(runtime_artifacts, "resolve_longhouse_home", lambda: home / ".longhouse")
+    monkeypatch.setattr(runtime_artifacts, "_probe_executable_version", lambda path: "codex-cli 0.121.0")
 
     result = runtime_artifacts.ensure_runtime_binary(
         runtime_artifacts.RuntimeComponent.MANAGED_CODEX,
         source_override=str(source),
     )
 
-    destination = home / ".local" / "bin" / "longhouse-codex"
-    assert destination.exists()
-    assert destination.read_text() == "codex"
-    assert result.path == str(destination)
-    assert result.launch_path == str(destination)
+    launcher = home / ".local" / "bin" / "longhouse-codex"
+    install_root = home / ".longhouse" / "runtimes" / "codex"
+    versions = list((install_root / "versions").iterdir())
+    assert len(versions) == 1
+    installed_binary = versions[0] / "longhouse-codex"
+
+    assert launcher.exists()
+    assert runtime_artifacts.MANAGED_CODEX_LAUNCHER_MARKER in launcher.read_text()
+    assert installed_binary.read_text() == source.read_text()
+    assert (install_root / "current").resolve() == versions[0]
+    completed = subprocess.run([str(launcher)], check=False, capture_output=True, text=True)
+    assert completed.stdout.strip() == "codex"
+    assert result.path == str(launcher)
+    assert result.launch_path == str(launcher)
     assert result.installed_now is True
+
+
+def test_ensure_runtime_binary_migrates_legacy_managed_codex_install(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    launcher = home / ".local" / "bin" / "longhouse-codex"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text("#!/bin/sh\necho legacy-codex\n")
+    launcher.chmod(0o755)
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
+    monkeypatch.setattr(runtime_artifacts, "resolve_longhouse_home", lambda: home / ".longhouse")
+    monkeypatch.setattr(runtime_artifacts, "_probe_executable_version", lambda path: "codex-cli 0.120.0")
+
+    result = runtime_artifacts.ensure_runtime_binary(runtime_artifacts.RuntimeComponent.MANAGED_CODEX)
+
+    install_root = home / ".longhouse" / "runtimes" / "codex"
+    versions = list((install_root / "versions").iterdir())
+    assert len(versions) == 1
+    installed_binary = versions[0] / "longhouse-codex"
+
+    assert result.installed_now is True
+    assert runtime_artifacts.MANAGED_CODEX_LAUNCHER_MARKER in launcher.read_text()
+    assert installed_binary.read_text() == "#!/bin/sh\necho legacy-codex\n"
+    completed = subprocess.run([str(launcher)], check=False, capture_output=True, text=True)
+    assert completed.stdout.strip() == "legacy-codex"
+
+    resolved = runtime_artifacts.resolve_installed_runtime_artifact(runtime_artifacts.RuntimeComponent.MANAGED_CODEX)
+    assert resolved is not None
+    assert resolved.source == "local-runtime-managed"
+    assert resolved.path == str(launcher)
+
+
+def test_ensure_runtime_binary_reuses_versioned_managed_codex_layout(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    source = tmp_path / "build" / "codex"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("#!/bin/sh\necho codex-reuse\n")
+    source.chmod(0o755)
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
+    monkeypatch.setattr(runtime_artifacts, "resolve_longhouse_home", lambda: home / ".longhouse")
+    monkeypatch.setattr(runtime_artifacts, "_probe_executable_version", lambda path: "codex-cli 0.121.0")
+
+    first = runtime_artifacts.ensure_runtime_binary(
+        runtime_artifacts.RuntimeComponent.MANAGED_CODEX,
+        source_override=str(source),
+    )
+    second = runtime_artifacts.ensure_runtime_binary(runtime_artifacts.RuntimeComponent.MANAGED_CODEX)
+
+    assert first.installed_now is True
+    assert second.installed_now is False
+    assert second.path == str(home / ".local" / "bin" / "longhouse-codex")
 
 
 def test_ensure_runtime_artifact_copies_app_bundle_from_local_override(monkeypatch, tmp_path: Path):

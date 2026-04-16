@@ -17,9 +17,13 @@ import hashlib
 import os
 import platform
 import plistlib
+import re
+import shlex
 import shutil
 import stat
+import subprocess
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from enum import Enum
@@ -30,10 +34,14 @@ from urllib.parse import urlparse
 
 import httpx
 
+from zerg.services.longhouse_paths import resolve_longhouse_home
+
 RELEASE_REPO = "cipher982/longhouse"
 RELEASE_TAG_PREFIX = "v"
 DOWNLOAD_TIMEOUT_SECONDS = 30.0
 RELEASE_CHECKSUMS_FILENAME = "local-runtime-checksums.txt"
+MANAGED_CODEX_LAUNCHER_MARKER = "# longhouse-managed-codex-launcher"
+MANAGED_CODEX_VERSION_PATTERN = re.compile(r"(\d+\.\d+\.\d+(?:[-+._a-zA-Z0-9]+)?)")
 
 
 class RuntimeComponent(str, Enum):
@@ -129,12 +137,30 @@ class InstalledRuntimeArtifact:
 InstalledRuntimeBinary = InstalledRuntimeArtifact
 
 
+@dataclass(frozen=True)
+class VersionedExecutableLayout:
+    install_root: Path
+    versions_dir: Path
+    current_link: Path
+    launcher_path: Path
+
+
 def _local_bin_dir() -> Path:
     return Path.home() / ".local" / "bin"
 
 
 def _local_applications_dir() -> Path:
     return Path("/Applications")
+
+
+def _managed_codex_layout() -> VersionedExecutableLayout:
+    install_root = resolve_longhouse_home() / "runtimes" / "codex"
+    return VersionedExecutableLayout(
+        install_root=install_root,
+        versions_dir=install_root / "versions",
+        current_link=install_root / "current",
+        launcher_path=_local_bin_dir() / CANONICAL_BINARY_NAMES[RuntimeComponent.MANAGED_CODEX],
+    )
 
 
 def _canonical_destination(component: RuntimeComponent) -> Path:
@@ -255,6 +281,111 @@ def _release_download_info(url: str) -> tuple[str, str] | None:
     return tag, asset_name
 
 
+def _managed_codex_binary_path(version_dir: Path) -> Path:
+    return version_dir / CANONICAL_BINARY_NAMES[RuntimeComponent.MANAGED_CODEX]
+
+
+def _managed_codex_launcher_script(layout: VersionedExecutableLayout) -> str:
+    return (
+        "#!/bin/sh\n"
+        f"{MANAGED_CODEX_LAUNCHER_MARKER}\n"
+        "set -eu\n\n"
+        f"CURRENT_LINK={shlex.quote(str(layout.current_link))}\n"
+        'TARGET="$CURRENT_LINK/longhouse-codex"\n\n'
+        'if [ ! -x "$TARGET" ]; then\n'
+        '  echo "Managed Codex runtime is not installed under $CURRENT_LINK" >&2\n'
+        "  exit 1\n"
+        "fi\n\n"
+        'exec "$TARGET" "$@"\n'
+    )
+
+
+def _is_managed_codex_launcher(path: Path) -> bool:
+    try:
+        return MANAGED_CODEX_LAUNCHER_MARKER in path.read_text(errors="ignore")
+    except OSError:
+        return False
+
+
+def _install_executable_launcher(layout: VersionedExecutableLayout, script: str) -> None:
+    layout.launcher_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = layout.launcher_path.parent / f".{layout.launcher_path.name}.tmp-{os.getpid()}-{int(time.time() * 1000)}"
+    temp_path.write_text(script)
+    temp_path.chmod(0o755)
+    temp_path.replace(layout.launcher_path)
+
+
+def _switch_current_version(layout: VersionedExecutableLayout, version_dir: Path) -> None:
+    if not _managed_codex_binary_path(version_dir).exists():
+        raise RuntimeError(f"Managed Codex version is not installed under {version_dir}")
+    layout.install_root.mkdir(parents=True, exist_ok=True)
+    temp_link = layout.install_root / f".current.tmp-{os.getpid()}-{int(time.time() * 1000)}"
+    temp_link.symlink_to(version_dir)
+    temp_link.replace(layout.current_link)
+
+
+def _extract_version_token(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    match = MANAGED_CODEX_VERSION_PATTERN.search(raw)
+    if not match:
+        return None
+    token = re.sub(r"[^A-Za-z0-9._+-]+", "-", match.group(1)).strip("-")
+    return token or None
+
+
+def _probe_executable_version(binary_path: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            [str(binary_path), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    output = (completed.stdout or completed.stderr or "").strip()
+    return output or None
+
+
+def _managed_codex_version_id(binary_path: Path, source_hint: str, source_hash: str) -> str:
+    version_token = _extract_version_token(_probe_executable_version(binary_path)) or _extract_version_token(source_hint) or "unknown"
+    return f"{version_token}-{source_hash[:12]}"
+
+
+def _resolved_managed_codex_versioned_artifact() -> InstalledRuntimeArtifact | None:
+    layout = _managed_codex_layout()
+    launcher_path = layout.launcher_path
+    current_binary = _managed_codex_binary_path(layout.current_link)
+    if launcher_path.exists() and current_binary.exists() and _is_managed_codex_launcher(launcher_path):
+        return InstalledRuntimeArtifact(
+            component=RuntimeComponent.MANAGED_CODEX,
+            path=str(launcher_path),
+            launch_path=str(launcher_path),
+            source="local-runtime-managed",
+            installed_now=False,
+            kind=RuntimeArtifactKind.EXECUTABLE,
+        )
+    return None
+
+
+def _resolved_managed_codex_legacy_artifact() -> InstalledRuntimeArtifact | None:
+    legacy_path = _canonical_destination(RuntimeComponent.MANAGED_CODEX)
+    if not legacy_path.exists() or not os.access(legacy_path, os.X_OK):
+        return None
+    if _is_managed_codex_launcher(legacy_path):
+        return None
+    return InstalledRuntimeArtifact(
+        component=RuntimeComponent.MANAGED_CODEX,
+        path=str(legacy_path),
+        launch_path=str(legacy_path),
+        source="local-runtime-bin-legacy",
+        installed_now=False,
+        kind=RuntimeArtifactKind.EXECUTABLE,
+    )
+
+
 @lru_cache(maxsize=8)
 def _load_release_checksums(tag: str) -> dict[str, str]:
     url = f"https://github.com/{RELEASE_REPO}/releases/download/{tag}/{RELEASE_CHECKSUMS_FILENAME}"
@@ -300,6 +431,15 @@ def _verify_download_checksum(url: str, downloaded_path: Path) -> None:
 
 
 def resolve_installed_runtime_artifact(component: RuntimeComponent) -> InstalledRuntimeArtifact | None:
+    if component == RuntimeComponent.MANAGED_CODEX:
+        managed = _resolved_managed_codex_versioned_artifact()
+        if managed is not None:
+            return managed
+        legacy = _resolved_managed_codex_legacy_artifact()
+        if legacy is not None:
+            return legacy
+        return None
+
     for installed_path in _installed_destination_candidates(component):
         if not installed_path.exists():
             continue
@@ -331,6 +471,93 @@ def resolve_installed_runtime_artifact(component: RuntimeComponent) -> Installed
             )
 
     return None
+
+
+def _ensure_managed_codex_versioned_artifact_from_binary(
+    source_binary: Path,
+    *,
+    source_label: str,
+    overwrite: bool,
+) -> InstalledRuntimeArtifact:
+    layout = _managed_codex_layout()
+    layout.versions_dir.mkdir(parents=True, exist_ok=True)
+    layout.launcher_path.parent.mkdir(parents=True, exist_ok=True)
+
+    source_hash = _sha256_file(source_binary)
+    version_id = _managed_codex_version_id(source_binary, source_label, source_hash)
+    version_dir = layout.versions_dir / version_id
+    version_binary = _managed_codex_binary_path(version_dir)
+    version_dir.mkdir(parents=True, exist_ok=True)
+    existed_before = version_binary.exists()
+
+    if overwrite or not existed_before:
+        _copy_local_binary(source_binary, version_binary)
+
+    try:
+        current_target = layout.current_link.resolve(strict=True)
+    except OSError:
+        current_target = None
+
+    launcher_ready = layout.launcher_path.exists() and _is_managed_codex_launcher(layout.launcher_path)
+    needs_switch = current_target != version_dir
+    changed = overwrite or not existed_before or needs_switch or not launcher_ready
+
+    if needs_switch:
+        _switch_current_version(layout, version_dir)
+    if not launcher_ready or needs_switch or overwrite:
+        _install_executable_launcher(layout, _managed_codex_launcher_script(layout))
+
+    return InstalledRuntimeArtifact(
+        component=RuntimeComponent.MANAGED_CODEX,
+        path=str(layout.launcher_path),
+        launch_path=str(layout.launcher_path),
+        source=source_label,
+        installed_now=changed,
+        kind=RuntimeArtifactKind.EXECUTABLE,
+    )
+
+
+def _ensure_managed_codex_runtime_artifact(
+    *,
+    source_override: str | None = None,
+    overwrite: bool = False,
+) -> InstalledRuntimeArtifact:
+    raw_override = _resolve_source_override(RuntimeComponent.MANAGED_CODEX, source_override)
+
+    if not raw_override and not overwrite:
+        existing = _resolved_managed_codex_versioned_artifact()
+        if existing is not None:
+            return existing
+
+    install_source = raw_override
+    if not install_source:
+        legacy = _resolved_managed_codex_legacy_artifact()
+        if legacy is not None:
+            install_source = legacy.path
+        else:
+            install_source = _default_release_asset_url(RuntimeComponent.MANAGED_CODEX)
+
+    if install_source.startswith(("http://", "https://")):
+        temp_path = _download_to_temp_path(install_source)
+        try:
+            _verify_download_checksum(install_source, temp_path)
+            return _ensure_managed_codex_versioned_artifact_from_binary(
+                temp_path,
+                source_label=install_source,
+                overwrite=overwrite,
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+    source_path = Path(install_source).expanduser()
+    layout = _managed_codex_layout()
+    if source_path == layout.launcher_path and _is_managed_codex_launcher(source_path):
+        source_path = _managed_codex_binary_path(layout.current_link)
+    return _ensure_managed_codex_versioned_artifact_from_binary(
+        source_path,
+        source_label=str(source_path),
+        overwrite=overwrite,
+    )
 
 
 def _copy_local_binary(source_path: Path, destination_path: Path) -> None:
@@ -460,6 +687,12 @@ def ensure_runtime_artifact(
     3. existing engine binary already on PATH (engine only)
     4. released GitHub asset for the current Longhouse version
     """
+
+    if component == RuntimeComponent.MANAGED_CODEX:
+        return _ensure_managed_codex_runtime_artifact(
+            source_override=source_override,
+            overwrite=overwrite,
+        )
 
     raw_override = _resolve_source_override(component, source_override)
     destination_path = _canonical_destination(component)

@@ -11,6 +11,7 @@ from zerg.services.runtime_artifacts import ensure_runtime_artifact
 
 class RuntimeArtifactName(str, Enum):
     ENGINE = RuntimeComponent.ENGINE.value
+    MANAGED_CODEX = RuntimeComponent.MANAGED_CODEX.value
     DESKTOP_APP = RuntimeComponent.DESKTOP_APP.value
     DESKTOP_WINDOW = RuntimeComponent.DESKTOP_WINDOW.value
     LOCAL_HEALTH_APP = "local-health-app"
