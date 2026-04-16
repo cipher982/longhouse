@@ -23,6 +23,21 @@ const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
+const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
+    "item/agentMessage/delta",
+    "item/commandExecution/outputDelta",
+    "command/exec/outputDelta",
+    "item/fileChange/outputDelta",
+    "item/mcpToolCall/progress",
+    "item/plan/delta",
+    "item/reasoning/summaryTextDelta",
+    "item/reasoning/summaryPartAdded",
+    "item/reasoning/textDelta",
+    "turn/plan/updated",
+    "turn/diff/updated",
+    "thread/tokenUsage/updated",
+    "rawResponseItem/completed",
+];
 
 #[derive(Debug, Clone)]
 pub struct BridgeStartConfig {
@@ -1200,6 +1215,7 @@ async fn initialize_client(client: &mut RpcClient) -> Result<()> {
             },
             "capabilities": {
                 "experimentalApi": true,
+                "optOutNotificationMethods": BRIDGE_OPT_OUT_NOTIFICATION_METHODS,
             }
         }),
     )
@@ -2141,6 +2157,46 @@ mod tests {
             true,
         );
         assert_eq!(answers["color"]["answers"][0], "blue");
+    }
+
+    #[tokio::test]
+    async fn initialize_client_opts_out_of_high_volume_notifications() {
+        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<String>();
+        let (events_tx, events_rx) = mpsc::unbounded_channel();
+
+        let client = RpcClient {
+            child: None,
+            outbound: RpcOutbound::WebSocket(outbound_tx),
+            events_rx,
+            pending_methods: BTreeMap::new(),
+            next_request_id: 1,
+            ws_url: "ws://example.test".to_string(),
+        };
+
+        let initialize_task = tokio::spawn(async move {
+            let mut client = client;
+            initialize_client(&mut client).await.unwrap();
+        });
+
+        let init_payload: Value = serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(init_payload["method"], "initialize");
+        assert_eq!(
+            init_payload["params"]["capabilities"]["optOutNotificationMethods"],
+            serde_json::to_value(BRIDGE_OPT_OUT_NOTIFICATION_METHODS).unwrap()
+        );
+
+        events_tx
+            .send(StreamEvent::Rpc(json!({
+                "id": 1,
+                "result": {}
+            })))
+            .unwrap();
+
+        initialize_task.await.unwrap();
+
+        let initialized_payload: Value =
+            serde_json::from_str(&outbound_rx.recv().await.unwrap()).unwrap();
+        assert_eq!(initialized_payload["method"], "initialized");
     }
 
     #[test]
