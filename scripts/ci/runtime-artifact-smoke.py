@@ -10,6 +10,7 @@ from zerg.services.runtime_artifacts import ensure_runtime_artifact
 
 COMPONENT_CHOICES = [
     RuntimeComponent.ENGINE.value,
+    RuntimeComponent.MANAGED_CODEX.value,
     RuntimeComponent.DESKTOP_APP.value,
     RuntimeComponent.DESKTOP_WINDOW.value,
     "local-health-app",

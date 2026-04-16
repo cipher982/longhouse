@@ -30,8 +30,10 @@ jobs:
         include:
           - os: ubuntu-latest
             engine_asset: longhouse-engine-linux-x64
+            codex_asset: longhouse-codex-linux-x64
           - os: ubuntu-24.04-arm
             engine_asset: longhouse-engine-linux-arm64
+            codex_asset: longhouse-codex-linux-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -47,17 +49,25 @@ jobs:
       - name: Build engine binary
         run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
 
+      - name: Build managed Codex binary
+        run: |
+          chmod +x scripts/release/build-managed-codex.sh
+          scripts/release/build-managed-codex.sh --output "binaries/${{ matrix.codex_asset }}"
+
       - name: Collect engine binary
         run: |
           mkdir -p binaries
           cp engine/target/release/longhouse-engine "binaries/${{ matrix.engine_asset }}"
           chmod +x "binaries/${{ matrix.engine_asset }}"
+          chmod +x "binaries/${{ matrix.codex_asset }}"
 
       - name: Upload runtime artifacts
         uses: actions/upload-artifact@v6
         with:
           name: runtime-${{ matrix.engine_asset }}
-          path: binaries/${{ matrix.engine_asset }}
+          path: |
+            binaries/${{ matrix.engine_asset }}
+            binaries/${{ matrix.codex_asset }}
           retention-days: 7
 
   build-macos:
@@ -95,6 +105,11 @@ jobs:
           mkdir -p binaries
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-darwin-arm64
           chmod +x binaries/longhouse-engine-darwin-arm64
+
+      - name: Build managed Codex binary
+        run: |
+          chmod +x scripts/release/build-managed-codex.sh
+          scripts/release/build-managed-codex.sh --output binaries/longhouse-codex-darwin-arm64
 
       - name: Build macOS ambient app payload
         run: |
@@ -198,7 +213,7 @@ jobs:
           echo "enabled=true" >> "$GITHUB_OUTPUT"
           echo "profile=longhouse-notary" >> "$GITHUB_OUTPUT"
 
-      - name: Re-sign macOS engine binary for stable release
+      - name: Re-sign macOS runtime binaries for stable release
         if: ${{ steps.release_tier.outputs.tier == 'stable' && steps.macos_signing.outputs.enabled == 'true' }}
         env:
           CODESIGN_IDENTITY: ${{ steps.macos_signing.outputs.codesign_identity }}
@@ -210,6 +225,13 @@ jobs:
             --sign "$CODESIGN_IDENTITY" \
             binaries/longhouse-engine-darwin-arm64
           codesign --verify --strict --verbose=2 binaries/longhouse-engine-darwin-arm64
+          codesign \
+            --force \
+            --options runtime \
+            --timestamp \
+            --sign "$CODESIGN_IDENTITY" \
+            binaries/longhouse-codex-darwin-arm64
+          codesign --verify --strict --verbose=2 binaries/longhouse-codex-darwin-arm64
 
       - name: Package macOS desktop app bundle
         env:
@@ -577,6 +599,9 @@ jobs:
             binaries/longhouse-engine-darwin-arm64
             binaries/longhouse-engine-linux-x64
             binaries/longhouse-engine-linux-arm64
+            binaries/longhouse-codex-darwin-arm64
+            binaries/longhouse-codex-linux-x64
+            binaries/longhouse-codex-linux-arm64
             binaries/Longhouse-macos-arm64.dmg
             binaries/Longhouse-macos-arm64.zip
             binaries/local-runtime-macos-packaging.json
