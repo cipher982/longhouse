@@ -35,7 +35,7 @@ def _start_native_codex_bridge(
     cwd: Path,
     url: str,
     token: str,
-) -> tuple[str, str]:
+) -> tuple[str, str, str | None]:
     try:
         engine = get_engine_executable()
     except RuntimeError as exc:
@@ -73,7 +73,30 @@ def _start_native_codex_bridge(
         raise _NativeBridgeError("Native Codex bridge did not return ws_url")
     # thread_id may be empty at launch — the TUI creates the thread after attaching.
     thread_id = str(payload.get("thread_id") or "").strip()
-    return thread_id, ws_url
+    state_file = str(payload.get("state_file") or "").strip() or None
+    return thread_id, ws_url, state_file
+
+
+def _load_native_codex_bridge_state(state_file: str | None) -> dict[str, object] | None:
+    if not state_file:
+        return None
+    try:
+        return json.loads(Path(state_file).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _active_turn_survived_tui_exit(state_file: str | None) -> bool:
+    state = _load_native_codex_bridge_state(state_file)
+    if not state:
+        return False
+    if str(state.get("status") or "").strip() != "ready":
+        return False
+    if not str(state.get("thread_id") or "").strip():
+        return False
+    if str(state.get("active_turn_id") or "").strip():
+        return True
+    return str(state.get("last_turn_status") or "").strip() == "inProgress"
 
 
 def _stop_native_codex_bridge(*, session_id: str) -> str | None:
@@ -221,7 +244,7 @@ def codex(
     typer.echo(f"Session URL: {session_url}")
     typer.echo("Starting native Codex bridge...")
     try:
-        thread_id, ws_url = _start_native_codex_bridge(
+        thread_id, ws_url, state_file = _start_native_codex_bridge(
             session_id=result.session_id,
             cwd=cwd,
             url=resolved_url,
@@ -250,8 +273,25 @@ def codex(
 
     typer.echo("Attaching...")
     exit_code = _run_native_codex_tui(ws_url=ws_url, cwd=cwd, bypass_approvals=bypass_approvals)
-    stop_error = _stop_native_codex_bridge(session_id=result.session_id)
+    keep_bridge_alive = exit_code != 0 and _active_turn_survived_tui_exit(state_file)
+    stop_error = None if keep_bridge_alive else _stop_native_codex_bridge(session_id=result.session_id)
     if exit_code != 0:
+        if keep_bridge_alive:
+            resume_thread_id = ""
+            state = _load_native_codex_bridge_state(state_file)
+            if state is not None:
+                resume_thread_id = str(state.get("thread_id") or "").strip()
+            resume_cmd = (
+                f"codex resume {resume_thread_id}{_bypass_flag} --enable tui_app_server --remote {ws_url}"
+                if resume_thread_id
+                else f"codex{_bypass_flag} --enable tui_app_server --remote {ws_url}"
+            )
+            typer.secho(
+                "Auto-attach exited, but the managed Codex session is still running and resumable.",
+                fg=typer.colors.YELLOW,
+            )
+            typer.echo(f"Resume: {resume_cmd}")
+            return
         typer.secho(
             f"Auto-attach exited with code {exit_code}. Managed bridge cleanup was "
             + ("successful." if stop_error is None else f"not successful: {stop_error}"),
