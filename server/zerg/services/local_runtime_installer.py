@@ -18,6 +18,8 @@ from zerg.services.machine_state import write_machine_state
 from zerg.services.runtime_artifacts import InstalledRuntimeBinary
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import ensure_runtime_binary
+from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
+from zerg.services.runtime_artifacts import resolve_runtime_source_override
 from zerg.services.shipper import install_hooks
 from zerg.services.shipper import install_service
 from zerg.services.shipper import load_token
@@ -37,6 +39,7 @@ class LocalRuntimeInstallResult:
     engine_runtime: InstalledRuntimeBinary
     service_result: dict[str, str]
     hooks: HookInstallResult
+    codex_runtime: InstalledRuntimeBinary | None = None
     desktop_app_result: dict[str, str] | None = None
 
 
@@ -44,6 +47,14 @@ class LocalRuntimeInstallResult:
 class LocalRuntimeReconcileResult:
     machine_state: MachineState
     install_result: LocalRuntimeInstallResult
+
+
+def _maybe_ensure_managed_codex_runtime() -> InstalledRuntimeBinary | None:
+    if not resolve_runtime_source_override(RuntimeComponent.MANAGED_CODEX) and (
+        resolve_installed_runtime_artifact(RuntimeComponent.MANAGED_CODEX) is None
+    ):
+        return None
+    return ensure_runtime_binary(RuntimeComponent.MANAGED_CODEX)
 
 
 def _install_local_runtime_artifacts(
@@ -65,6 +76,7 @@ def _install_local_runtime_artifacts(
         save_token(token, config_dir)
 
     engine_runtime = ensure_runtime_binary(RuntimeComponent.ENGINE)
+    codex_runtime = _maybe_ensure_managed_codex_runtime()
     service_result = install_service(
         url=url,
         token=token,
@@ -100,6 +112,7 @@ def _install_local_runtime_artifacts(
     return LocalRuntimeInstallResult(
         machine_name=resolved_name,
         engine_runtime=engine_runtime,
+        codex_runtime=codex_runtime,
         service_result=service_result,
         hooks=hooks,
         desktop_app_result=desktop_app_result,

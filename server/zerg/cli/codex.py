@@ -17,6 +17,8 @@ from zerg.cli._common import build_session_url as _build_session_url
 from zerg.cli._common import interactive_stdio as _interactive_stdio
 from zerg.cli._common import load_api_credentials as _load_api_credentials
 from zerg.cli._common import open_session_url as _open_session_url
+from zerg.services.runtime_artifacts import RuntimeComponent
+from zerg.services.runtime_artifacts import resolve_installed_runtime_artifact
 from zerg.services.session_continuity import get_machine_name_label
 from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
@@ -47,6 +49,9 @@ def _resolve_codex_binary(explicit: str | None = None) -> str | None:
     env_candidate = str(os.environ.get(_CODEX_BIN_ENV) or "").strip()
     if env_candidate:
         return _resolve_explicit_codex_binary(env_candidate, source=_CODEX_BIN_ENV)
+    managed_runtime = resolve_installed_runtime_artifact(RuntimeComponent.MANAGED_CODEX)
+    if managed_runtime is not None:
+        return managed_runtime.launch_path
     return shutil.which("codex")
 
 
@@ -275,7 +280,8 @@ def codex(
     resolved_codex_bin = _resolve_codex_binary(codex_bin)
     if not resolved_codex_bin:
         typer.secho(
-            f"Managed Codex requires the `codex` CLI. Install Codex or set {_CODEX_BIN_ENV} / --codex-bin.",
+            "Managed Codex requires a Codex runtime. Install Codex, run `longhouse connect --install` "
+            f"with a managed Codex runtime configured, or set {_CODEX_BIN_ENV} / --codex-bin.",
             fg=typer.colors.RED,
         )
         raise typer.Exit(code=1)

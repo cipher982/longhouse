@@ -17,6 +17,12 @@ def _render_install_result(result: LocalRuntimeInstallResult) -> None:
         typer.secho(f"  [OK] Engine binary installed at {result.engine_runtime.path}", fg=typer.colors.GREEN)
     else:
         typer.secho(f"  [OK] Engine binary ready at {result.engine_runtime.path}", fg=typer.colors.GREEN)
+    codex_runtime = getattr(result, "codex_runtime", None)
+    if codex_runtime:
+        if codex_runtime.installed_now:
+            typer.secho(f"  [OK] Managed Codex runtime installed at {codex_runtime.path}", fg=typer.colors.GREEN)
+        else:
+            typer.secho(f"  [OK] Managed Codex runtime ready at {codex_runtime.path}", fg=typer.colors.GREEN)
     typer.secho(f"[OK] {result.service_result['message']}", fg=typer.colors.GREEN)
     typer.echo(f"  Machine Agent: {result.service_result.get('service', 'N/A')}")
     typer.echo("  Config: " f"{result.service_result.get('plist_path') or result.service_result.get('unit_path', 'N/A')}")

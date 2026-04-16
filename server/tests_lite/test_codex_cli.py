@@ -61,6 +61,20 @@ def test_resolve_codex_binary_prefers_flag_then_env(monkeypatch, tmp_path):
     assert codex_cli._resolve_codex_binary() == str(env_bin.resolve())
 
 
+def test_resolve_codex_binary_prefers_installed_managed_runtime_before_path(monkeypatch):
+    monkeypatch.delenv(codex_cli._CODEX_BIN_ENV, raising=False)
+    monkeypatch.setattr(
+        codex_cli,
+        "resolve_installed_runtime_artifact",
+        lambda component: type("Artifact", (), {"launch_path": "/tmp/longhouse-codex"})()
+        if component == codex_cli.RuntimeComponent.MANAGED_CODEX
+        else None,
+    )
+    monkeypatch.setattr(codex_cli.shutil, "which", lambda name: "/usr/local/bin/codex" if name == "codex" else None)
+
+    assert codex_cli._resolve_codex_binary() == "/tmp/longhouse-codex"
+
+
 def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path):
     fake_client = _FakeClient(
         response=_FakeResponse(
@@ -231,4 +245,4 @@ def test_codex_command_exits_when_no_codex_runtime_available(monkeypatch, tmp_pa
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 1
-    assert "Managed Codex requires the `codex` CLI." in result.output
+    assert "Managed Codex requires a Codex runtime." in result.output
