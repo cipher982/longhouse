@@ -671,8 +671,8 @@ export async function fetchAgentSessionTurns(
 ): Promise<AgentSessionTurnsListResponse> {
   const params = new URLSearchParams();
 
-  if (options.limit) params.set("limit", String(options.limit));
-  if (options.offset) params.set("offset", String(options.offset));
+  if (options.limit != null) params.set("limit", String(options.limit));
+  if (options.offset != null) params.set("offset", String(options.offset));
   if (options.order) params.set("order", options.order);
 
   const queryString = params.toString();

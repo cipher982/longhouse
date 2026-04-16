@@ -739,11 +739,15 @@ async def get_timeline_session_turns(
     order: str = Query("asc", description="Turn order: asc|desc"),
     db: Session = Depends(get_db),
 ):
+    normalized_order = str(order or "asc").strip().lower()
+    if normalized_order not in {"asc", "desc"}:
+        raise HTTPException(status_code=400, detail="order must be one of: asc, desc")
+
     return await _sessions_router.get_session_turns(
         session_id=session_id,
         limit=limit,
         offset=offset,
-        order=order,
+        order=normalized_order,
         db=db,
         _auth=None,
         _single=None,
