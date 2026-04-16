@@ -21,6 +21,7 @@ from pydantic import Field
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
+from zerg.models.agents import SessionTurn
 from zerg.services.agents_store import AgentsStore
 from zerg.services.managed_local_transport import build_managed_local_attach_command
 from zerg.services.session_capabilities import build_session_capabilities
@@ -331,6 +332,43 @@ class EventsListResponse(BaseModel):
     total: int
     branch_mode: str = Field("head", description="Branch projection mode: head|all")
     abandoned_events: int = Field(0, description="Events excluded from head projection due to rewind branches")
+
+
+class SessionTurnResponse(UTCBaseModel):
+    """Canonical public timing fields for one session turn."""
+
+    id: int = Field(..., description="Turn integer id")
+    session_id: str = Field(..., description="Owning session UUID")
+    request_id: Optional[str] = Field(None, description="Transport/control request id when available")
+    source_kind: str = Field(..., description="Timing source kind")
+    timing_confidence: str = Field(..., description="exact|partial|inferred")
+    state: str = Field(..., description="created|send_accepted|active|terminal|durable|failed")
+    terminal_phase: Optional[str] = Field(None, description="Observed terminal phase when known")
+    error_code: Optional[str] = Field(None, description="Canonical irrecoverable error code when failed")
+    user_event_id: Optional[int] = Field(None, description="Triggering durable user event id")
+    durable_assistant_event_id: Optional[int] = Field(None, description="Durable assistant event id that closed the turn")
+    baseline_event_id: Optional[int] = Field(None, description="Latest durable event id observed before the turn began")
+    baseline_runtime_cursor: Optional[int] = Field(None, description="Latest runtime cursor observed before the turn began")
+    user_submitted_at: datetime = Field(..., description="When the user prompt was accepted as a turn")
+    send_accepted_at: Optional[datetime] = Field(None, description="When transport accepted the prompt send")
+    active_phase_observed_at: Optional[datetime] = Field(None, description="When Longhouse first observed active runtime work")
+    terminal_at: Optional[datetime] = Field(None, description="When the turn reached terminal phase")
+    durable_at: Optional[datetime] = Field(None, description="When transcript durability was established")
+    created_at: Optional[datetime] = Field(None, description="Row creation timestamp")
+    updated_at: Optional[datetime] = Field(None, description="Row update timestamp")
+
+
+class SessionTurnsListResponse(BaseModel):
+    """Response for a stable per-session turn listing."""
+
+    turns: List[SessionTurnResponse]
+    total: int
+
+
+class SessionTurnEnvelopeResponse(BaseModel):
+    """Envelope for turn detail responses."""
+
+    turn: SessionTurnResponse
 
 
 class SessionProjectionItemResponse(UTCBaseModel):
@@ -734,6 +772,30 @@ def build_event_response(
         in_active_context=store.is_event_in_active_context(event, boundary) if boundary is not None else True,
         branch_id=event.branch_id,
         is_head_branch=(head_branch_id is None or event.branch_id in {None, head_branch_id}),
+    )
+
+
+def build_session_turn_response(turn: SessionTurn) -> SessionTurnResponse:
+    return SessionTurnResponse(
+        id=int(turn.id),
+        session_id=str(turn.session_id),
+        request_id=turn.request_id,
+        source_kind=turn.source_kind,
+        timing_confidence=turn.timing_confidence,
+        state=turn.state,
+        terminal_phase=turn.terminal_phase,
+        error_code=turn.error_code,
+        user_event_id=turn.user_event_id,
+        durable_assistant_event_id=turn.durable_assistant_event_id,
+        baseline_event_id=turn.baseline_event_id,
+        baseline_runtime_cursor=turn.baseline_runtime_cursor,
+        user_submitted_at=turn.user_submitted_at,
+        send_accepted_at=turn.send_accepted_at,
+        active_phase_observed_at=turn.active_phase_observed_at,
+        terminal_at=turn.terminal_at,
+        durable_at=turn.durable_at,
+        created_at=turn.created_at,
+        updated_at=turn.updated_at,
     )
 
 

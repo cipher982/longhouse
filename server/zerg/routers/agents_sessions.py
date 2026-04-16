@@ -32,6 +32,8 @@ from zerg.services.session_coordination import serialize_session_message
 from zerg.services.session_messages import create_session_message
 from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import load_runtime_state_map
+from zerg.services.session_turns import get_session_turn_by_id
+from zerg.services.session_turns import list_session_turns
 from zerg.services.session_views import ActiveSessionResponse
 from zerg.services.session_views import ActiveSessionsResponse
 from zerg.services.session_views import EventsListResponse
@@ -49,11 +51,14 @@ from zerg.services.session_views import SessionsListResponse
 from zerg.services.session_views import SessionsSummaryResponse
 from zerg.services.session_views import SessionSummaryResponse
 from zerg.services.session_views import SessionThreadResponse
+from zerg.services.session_views import SessionTurnEnvelopeResponse
+from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import WallResponse
 from zerg.services.session_views import build_active_session_response
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
+from zerg.services.session_views import build_session_turn_response
 from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import resolve_runtime_overlay
@@ -601,6 +606,72 @@ async def session_tail(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return {"session_id": str(session_id), "events": events, "total": len(events)}
+
+
+@router.get("/sessions/{session_id}/turns", response_model=SessionTurnsListResponse)
+async def get_session_turns(
+    session_id: UUID,
+    limit: int = Query(50, ge=1, le=100, description="Max turns to return"),
+    offset: int = Query(0, ge=0, description="Offset within the stable per-session turn order"),
+    order: str = Query("asc", description="Turn order: asc|desc"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionTurnsListResponse:
+    """List canonical turn timing rows for one session."""
+    store = AgentsStore(db)
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    normalized_order = str(order or "asc").strip().lower()
+    if normalized_order not in {"asc", "desc"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="order must be one of: asc, desc",
+        )
+
+    turns, total = list_session_turns(
+        db,
+        session_id=session_id,
+        limit=limit,
+        offset=offset,
+        order=normalized_order,
+    )
+    return SessionTurnsListResponse(
+        turns=[build_session_turn_response(turn) for turn in turns],
+        total=total,
+    )
+
+
+@router.get("/sessions/{session_id}/turns/{turn_id}", response_model=SessionTurnEnvelopeResponse)
+async def get_session_turn_detail(
+    session_id: UUID,
+    turn_id: int,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionTurnEnvelopeResponse:
+    """Get one canonical turn timing row for a session."""
+    store = AgentsStore(db)
+    session = store.get_session(session_id)
+    if not session:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    turn = get_session_turn_by_id(db, session_id=session_id, turn_id=turn_id)
+    if turn is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Turn {turn_id} not found for session {session_id}",
+        )
+
+    return SessionTurnEnvelopeResponse(turn=build_session_turn_response(turn))
 
 
 @router.get("/sessions/active", response_model=ActiveSessionsResponse)
