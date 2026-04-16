@@ -105,6 +105,7 @@ describe("resolveSessionRuntimeState", () => {
   });
 
   it("treats managed-local inferred progress as working instead of ready", () => {
+    // heuristicActive=true case: confidence=inferred triggers the heuristic path
     const runtime = resolveSessionRuntimeState(
       makeSession({
         ended_at: null,
@@ -115,7 +116,7 @@ describe("resolveSessionRuntimeState", () => {
         },
         status: "active",
         confidence: "inferred",
-        runtime_source: "semantic",
+        runtime_source: "managed_local_transport",
         presence_state: null,
         display_phase: "Recent progress",
       }),
@@ -126,6 +127,34 @@ describe("resolveSessionRuntimeState", () => {
     expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
       headline: "Working",
       detail: "Recent progress",
+    });
+  });
+
+  it("shows state unavailable for managed-local with no presence and no heuristic signal", () => {
+    // truthTier=managed-local but heuristicActive=false:
+    // host_reattach_available + live confidence + managed_local_transport → managed-local tier
+    // status=null avoids legacy progress status trigger, so heuristicActive stays false
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        ended_at: null,
+        capabilities: {
+          live_control_available: true,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+        },
+        status: null,
+        confidence: "live",
+        runtime_source: "managed_local_transport",
+        presence_state: null,
+        display_phase: null,
+      }),
+    );
+
+    expect(runtime.truthTier).toBe("managed-local");
+    expect(runtime.heuristicActive).toBe(false);
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "State unavailable",
+      detail: "Waiting for live signal",
     });
   });
 
