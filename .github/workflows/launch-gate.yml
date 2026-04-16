@@ -150,12 +150,16 @@ jobs:
       - name: Run disposable installer smoke (wheel build + installer onboarding + released artifacts)
         run: |
           chmod +x scripts/ci/installer-first-run.sh
-          ./scripts/ci/installer-first-run.sh \
-            --shell "${{ matrix.shell_path }}" \
-            --wheel \
-            --installer-onboard \
-            --runtime-artifact-smoke \
+          args=(
+            --shell "${{ matrix.shell_path }}"
+            --wheel
+            --installer-onboard
             --e2e-browser
+          )
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            args+=(--runtime-artifact-smoke)
+          fi
+          ./scripts/ci/installer-first-run.sh "${args[@]}"
 
       - name: Upload browser verification artifacts
         if: failure()

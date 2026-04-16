@@ -227,6 +227,48 @@ def test_onboard_in_ci_skips_service_manager_install(monkeypatch, tmp_path):
     assert install_calls == []
 
 
+def test_onboard_topology_local_skips_prompt(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(onboard_cli, "_has_command", lambda cmd: cmd == "claude")
+    monkeypatch.setattr(onboard_cli, "_has_launchd", lambda: True)
+    monkeypatch.setattr(onboard_cli, "_has_systemd", lambda: False)
+    monkeypatch.setattr(onboard_cli, "_is_server_running", lambda: (False, None))
+    monkeypatch.setattr(onboard_cli, "_check_server_health", lambda *args, **kwargs: True)
+    monkeypatch.setattr(onboard_cli, "_has_gui", lambda: False)
+    monkeypatch.setattr(onboard_cli.socket, "gethostname", lambda: "test-box")
+    monkeypatch.setattr(onboard_cli, "load_token", lambda: None)
+    monkeypatch.setattr(onboard_cli, "verify_shell_path", lambda: [])
+    monkeypatch.setattr(onboard_cli, "get_config_path", lambda: tmp_path / "config.toml")
+    monkeypatch.setattr(onboard_cli, "load_config", lambda config_path=None: config_file_cli.LonghouseConfig())
+    monkeypatch.setattr(onboard_cli, "save_loaded_config", lambda config, config_path=None: None)
+    monkeypatch.setattr(onboard_cli, "install_local_runtime", lambda **kwargs: _install_result())
+    monkeypatch.setattr(
+        onboard_cli.subprocess,
+        "run",
+        lambda args, **kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+
+    result = runner.invoke(app, ["onboard", "--topology", "local"])
+
+    assert result.exit_code == 0, result.output
+    assert "Where should your Longhouse server run?" not in result.output
+    assert "Choose" not in result.output
+
+
+def test_onboard_topology_remote_requires_url_in_noninteractive_mode(monkeypatch):
+    runner = CliRunner()
+
+    monkeypatch.setattr(onboard_cli.sys.stdin, "isatty", lambda: False)
+
+    result = runner.invoke(app, ["onboard", "--topology", "remote"])
+
+    assert result.exit_code != 0
+    assert "Invalid value:" in result.output
+    assert "requires --remote-url in noninteractive" in result.output
+
+
 def test_onboard_in_ci_can_install_services_when_explicitly_enabled(monkeypatch, tmp_path):
     runner = CliRunner()
     subprocess_calls: list[list[str]] = []
