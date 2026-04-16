@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 from cryptography.fernet import Fernet
@@ -73,6 +74,81 @@ def test_resolve_codex_binary_prefers_installed_managed_runtime_before_path(monk
     monkeypatch.setattr(codex_cli.shutil, "which", lambda name: "/usr/local/bin/codex" if name == "codex" else None)
 
     assert codex_cli._resolve_codex_binary() == "/tmp/longhouse-codex"
+
+
+def test_active_turn_survived_tui_exit_ignores_completed_rollout(tmp_path):
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        '\n'.join(
+            [
+                json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}),
+                json.dumps({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-live"}}),
+            ]
+        )
+        + '\n'
+    )
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "thread_id": "thr-live",
+                "thread_path": str(rollout),
+                "active_turn_id": "turn-live",
+                "last_turn_status": "inProgress",
+            }
+        )
+    )
+
+    assert codex_cli._active_turn_survived_tui_exit(str(state_file)) is False
+
+
+def test_active_turn_survived_tui_exit_preserves_live_turn(tmp_path):
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}) + '\n'
+    )
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "thread_id": "thr-live",
+                "thread_path": str(rollout),
+                "active_turn_id": "turn-live",
+                "last_turn_status": "inProgress",
+            }
+        )
+    )
+
+    assert codex_cli._active_turn_survived_tui_exit(str(state_file)) is True
+
+
+def test_active_turn_survived_tui_exit_checks_latest_rollout_when_active_turn_missing(tmp_path):
+    rollout = tmp_path / "rollout.jsonl"
+    rollout.write_text(
+        '\n'.join(
+            [
+                json.dumps({"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-live"}}),
+                json.dumps({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-live"}}),
+            ]
+        )
+        + '\n'
+    )
+    state_file = tmp_path / "state.json"
+    state_file.write_text(
+        json.dumps(
+            {
+                "status": "ready",
+                "thread_id": "thr-live",
+                "thread_path": str(rollout),
+                "active_turn_id": None,
+                "last_turn_status": "inProgress",
+            }
+        )
+    )
+
+    assert codex_cli._active_turn_survived_tui_exit(str(state_file)) is False
 
 
 def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path):
