@@ -169,6 +169,51 @@ def get_session_turn(
     )
 
 
+def get_session_turn_by_id(
+    db: Session,
+    *,
+    session_id: UUID,
+    turn_id: int,
+) -> SessionTurn | None:
+    normalized_turn_id = int(turn_id or 0)
+    if normalized_turn_id <= 0:
+        return None
+    return (
+        db.query(SessionTurn)
+        .filter(
+            SessionTurn.session_id == session_id,
+            SessionTurn.id == normalized_turn_id,
+        )
+        .one_or_none()
+    )
+
+
+def list_session_turns(
+    db: Session,
+    *,
+    session_id: UUID,
+    limit: int = 50,
+    offset: int = 0,
+    order: str = "asc",
+) -> tuple[list[SessionTurn], int]:
+    normalized_order = str(order or "asc").strip().lower()
+    query = db.query(SessionTurn).filter(SessionTurn.session_id == session_id)
+    total = query.count()
+
+    order_columns = (
+        SessionTurn.user_submitted_at,
+        SessionTurn.created_at,
+        SessionTurn.id,
+    )
+    if normalized_order == "desc":
+        query = query.order_by(*(column.desc() for column in order_columns))
+    else:
+        query = query.order_by(*(column.asc() for column in order_columns))
+
+    turns = query.offset(max(0, int(offset))).limit(max(1, int(limit))).all()
+    return turns, total
+
+
 def get_session_turn_snapshot(
     *,
     db_bind,
