@@ -7,11 +7,6 @@ export function useSecondClock(enabled: boolean): number {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
-    if (!enabled) return;
-    setNowMs(Date.now());
-  }, [enabled]);
-
-  useEffect(() => {
     if (!active) {
       return;
     }
