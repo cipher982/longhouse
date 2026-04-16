@@ -32,8 +32,6 @@ from zerg.services.managed_local_control import ManagedLocalTerminalResult
 from zerg.services.managed_local_turns import create_managed_local_turn
 from zerg.services.managed_local_turns import mark_managed_local_turn_send_accepted
 from zerg.services.session_continuity import session_lock_manager
-from zerg.services.session_turns import SESSION_TURN_CONFIDENCE_EXACT
-from zerg.services.session_turns import SESSION_TURN_SOURCE_MANAGED_LIVE
 from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import mark_session_turn_send_accepted
 from zerg.session_execution_home import ManagedSessionTransport
@@ -257,8 +255,6 @@ def test_managed_local_claude_dispatch_returns_json_ack(monkeypatch, tmp_path):
             assert len(canonical_rows) == 1
             assert canonical_rows[0].send_accepted_at is not None
             assert canonical_rows[0].state == "send_accepted"
-            assert canonical_rows[0].source_kind == "managed_live"
-            assert canonical_rows[0].timing_confidence == "exact"
 
             # Verify send was called with correct params
             assert len(calls) == 1
@@ -572,8 +568,6 @@ def test_managed_local_active_observer_marks_canonical_turn(monkeypatch, tmp_pat
             db,
             session_id=source_session.id,
             request_id="req-active",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         )
         mark_session_turn_send_accepted(db, session_id=source_session.id, request_id="req-active")
         db.commit()
@@ -620,8 +614,6 @@ def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(
             db,
             session_id=source_session.id,
             request_id="req-terminal",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         )
         mark_session_turn_send_accepted(db, session_id=source_session.id, request_id="req-terminal")
         create_managed_local_turn(
@@ -693,8 +685,6 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
             db,
             session_id=source_session.id,
             request_id="req-active-after-terminal",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         )
         mark_session_turn_send_accepted(db, session_id=source_session.id, request_id="req-active-after-terminal")
         db.commit()

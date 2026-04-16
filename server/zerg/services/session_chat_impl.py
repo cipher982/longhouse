@@ -61,8 +61,6 @@ from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_dura
 from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
 from zerg.services.session_capabilities import build_session_capabilities
 from zerg.services.session_continuity import session_lock_manager
-from zerg.services.session_turns import SESSION_TURN_CONFIDENCE_EXACT
-from zerg.services.session_turns import SESSION_TURN_SOURCE_MANAGED_LIVE
 from zerg.services.session_turns import create_session_turn
 from zerg.services.session_turns import execute_session_turn_write
 from zerg.services.session_turns import mark_session_turn_active
@@ -538,8 +536,6 @@ async def _dispatch_managed_local_text(
         db,
         session_id=source_session.id,
         request_id=request_id,
-        source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-        timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         baseline_event_id=baseline_event_id,
         baseline_runtime_cursor=baseline_hook_runtime_event_id,
         user_submitted_at=user_submitted_at,

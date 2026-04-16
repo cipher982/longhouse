@@ -340,8 +340,6 @@ class SessionTurnResponse(UTCBaseModel):
     id: int = Field(..., description="Turn integer id")
     session_id: str = Field(..., description="Owning session UUID")
     request_id: Optional[str] = Field(None, description="Transport/control request id when available")
-    source_kind: str = Field(..., description="Timing source kind")
-    timing_confidence: str = Field(..., description="exact|partial|inferred")
     state: str = Field(..., description="created|send_accepted|active|terminal|durable|failed")
     terminal_phase: Optional[str] = Field(None, description="Observed terminal phase when known")
     error_code: Optional[str] = Field(None, description="Canonical irrecoverable error code when failed")
@@ -780,8 +778,6 @@ def build_session_turn_response(turn: SessionTurn) -> SessionTurnResponse:
         id=int(turn.id),
         session_id=str(turn.session_id),
         request_id=turn.request_id,
-        source_kind=turn.source_kind,
-        timing_confidence=turn.timing_confidence,
         state=turn.state,
         terminal_phase=turn.terminal_phase,
         error_code=turn.error_code,

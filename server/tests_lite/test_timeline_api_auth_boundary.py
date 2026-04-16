@@ -283,8 +283,6 @@ def test_timeline_session_turns_accept_browser_session_cookie(tmp_path):
         turn = SessionTurn(
             session_id=session_id,
             request_id="req-1",
-            source_kind="managed_local",
-            timing_confidence="exact",
             state="active",
             user_submitted_at=datetime(2026, 3, 22, 22, 3, 45, tzinfo=timezone.utc),
             send_accepted_at=datetime(2026, 3, 22, 22, 3, 46, tzinfo=timezone.utc),
@@ -335,8 +333,6 @@ def test_timeline_session_turn_detail_accepts_browser_session_cookie(tmp_path):
         turn = SessionTurn(
             session_id=session_id,
             request_id="req-1",
-            source_kind="managed_local",
-            timing_confidence="exact",
             state="active",
             user_submitted_at=datetime(2026, 3, 22, 22, 3, 45, tzinfo=timezone.utc),
             send_accepted_at=datetime(2026, 3, 22, 22, 3, 46, tzinfo=timezone.utc),

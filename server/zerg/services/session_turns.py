@@ -18,14 +18,6 @@ from zerg.models.agents import SessionTurn
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import normalize_utc
 
-SESSION_TURN_SOURCE_MANAGED_LIVE = "managed_live"
-SESSION_TURN_SOURCE_IMPORTED_RECONSTRUCTED = "imported_reconstructed"
-SESSION_TURN_SOURCE_IMPORTED_PARTIAL = "imported_partial"
-
-SESSION_TURN_CONFIDENCE_EXACT = "exact"
-SESSION_TURN_CONFIDENCE_PARTIAL = "partial"
-SESSION_TURN_CONFIDENCE_INFERRED = "inferred"
-
 SESSION_TURN_STATE_CREATED = "created"
 SESSION_TURN_STATE_SEND_ACCEPTED = "send_accepted"
 SESSION_TURN_STATE_ACTIVE = "active"
@@ -41,8 +33,6 @@ class SessionTurnSnapshot:
     id: int
     session_id: UUID
     request_id: str | None
-    source_kind: str
-    timing_confidence: str
     state: str
     terminal_phase: str | None
     error_code: str | None
@@ -91,8 +81,6 @@ def create_session_turn(
     *,
     session_id: UUID,
     request_id: str | None,
-    source_kind: str,
-    timing_confidence: str,
     baseline_event_id: int | None = None,
     baseline_runtime_cursor: int | None = None,
     user_submitted_at: datetime | None = None,
@@ -112,8 +100,6 @@ def create_session_turn(
     turn = SessionTurn(
         session_id=session_id,
         request_id=request_id,
-        source_kind=source_kind or SESSION_TURN_SOURCE_MANAGED_LIVE,
-        timing_confidence=timing_confidence or SESSION_TURN_CONFIDENCE_EXACT,
         state=SESSION_TURN_STATE_CREATED,
         baseline_event_id=baseline_event_id if baseline_event_id and baseline_event_id > 0 else None,
         baseline_runtime_cursor=baseline_runtime_cursor if baseline_runtime_cursor and baseline_runtime_cursor > 0 else None,
@@ -199,8 +185,6 @@ def get_session_turn_snapshot(
             id=int(turn.id),
             session_id=session_id,
             request_id=turn.request_id,
-            source_kind=turn.source_kind or "",
-            timing_confidence=turn.timing_confidence or "",
             state=turn.state or "",
             terminal_phase=turn.terminal_phase,
             error_code=turn.error_code,

@@ -405,8 +405,6 @@ class SessionTurn(AgentsBase):
         index=True,
     )
     request_id = Column(String(64), nullable=True, index=True)
-    source_kind = Column(String(32), nullable=False)
-    timing_confidence = Column(String(20), nullable=False)
     state = Column(String(20), nullable=False)
     terminal_phase = Column(String(32), nullable=True)
     error_code = Column(String(64), nullable=True)

@@ -24,8 +24,6 @@ from zerg.services.agents_store import AgentsStore
 from zerg.services.agents_store import EventIngest
 from zerg.services.agents_store import SessionIngest
 from zerg.services import session_turns as session_turns_service
-from zerg.services.session_turns import SESSION_TURN_CONFIDENCE_EXACT
-from zerg.services.session_turns import SESSION_TURN_SOURCE_MANAGED_LIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
 from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
@@ -80,8 +78,6 @@ def test_session_turn_lifecycle_tracks_active_terminal_and_durable_events(tmp_pa
             db,
             session_id=session.id,
             request_id="req-1234",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
             baseline_event_id=0,
             baseline_runtime_cursor=9,
         )
@@ -147,16 +143,12 @@ def test_session_turn_partial_unique_request_id_allows_null_and_rejects_duplicat
                 SessionTurn(
                     session_id=session.id,
                     request_id=None,
-                    source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-                    timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
                     state="created",
                     user_submitted_at=datetime.now(timezone.utc),
                 ),
                 SessionTurn(
                     session_id=session.id,
                     request_id=None,
-                    source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-                    timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
                     state="created",
                     user_submitted_at=datetime.now(timezone.utc),
                 ),
@@ -168,8 +160,6 @@ def test_session_turn_partial_unique_request_id_allows_null_and_rejects_duplicat
             SessionTurn(
                 session_id=session.id,
                 request_id="dup-request",
-                source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-                timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
                 state="created",
                 user_submitted_at=datetime.now(timezone.utc),
             )
@@ -180,8 +170,6 @@ def test_session_turn_partial_unique_request_id_allows_null_and_rejects_duplicat
             SessionTurn(
                 session_id=session.id,
                 request_id="dup-request",
-                source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-                timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
                 state="created",
                 user_submitted_at=datetime.now(timezone.utc),
             )
@@ -200,8 +188,6 @@ def test_session_turn_durable_matching_uses_last_assistant_reply_after_user_even
             db,
             session_id=session.id,
             request_id="req-tool-turn",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         )
         mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-tool-turn")
         db.add_all(
@@ -267,8 +253,6 @@ def test_session_turn_durable_heals_timeout_style_failure_when_events_arrive(tmp
             db,
             session_id=session.id,
             request_id="req-timeout-heal",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         )
         mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-timeout-heal")
         assert mark_session_turn_failed(
@@ -313,8 +297,6 @@ def test_agents_store_ingest_marks_canonical_session_turn_durable(tmp_path):
             db,
             session_id=session.id,
             request_id="req-ingest",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
             baseline_event_id=0,
         )
         mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-ingest")
@@ -371,8 +353,6 @@ def test_mark_session_turn_failed_does_not_overwrite_durable_state(tmp_path):
             db,
             session_id=session.id,
             request_id="req-durable",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         )
         mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-durable")
         db.add_all(
@@ -417,8 +397,6 @@ def test_mark_session_turn_failed_does_not_overwrite_terminal_state(tmp_path):
             db,
             session_id=session.id,
             request_id="req-terminal",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         )
         mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-terminal")
         mark_session_turn_terminal(
@@ -451,8 +429,6 @@ def test_session_turn_milestones_are_idempotent_and_do_not_regress_state(tmp_pat
             db,
             session_id=session.id,
             request_id="req-idempotent",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         )
         accepted_at = datetime.now(timezone.utc)
         active_at = datetime.now(timezone.utc)
@@ -513,8 +489,6 @@ def test_mark_session_turn_active_does_not_revive_failed_turn(tmp_path):
             db,
             session_id=session.id,
             request_id="req-failed",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         )
         mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-failed")
         mark_session_turn_failed(
@@ -548,16 +522,12 @@ def test_session_turn_durable_matching_uses_turn_submission_windows_for_multiple
             db,
             session_id=session.id,
             request_id="req-pending-1",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
             user_submitted_at=turn1_submitted_at,
         )
         create_session_turn(
             db,
             session_id=session.id,
             request_id="req-pending-2",
-            source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-            timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
             user_submitted_at=turn2_submitted_at,
         )
         mark_session_turn_send_accepted(db, session_id=session.id, request_id="req-pending-1")
@@ -660,8 +630,6 @@ def test_execute_session_turn_write_uses_bound_database_when_serializer_is_confi
                 turn_db,
                 session_id=session_id,
                 request_id="req-bound-db",
-                source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-                timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
             ),
         )
     )
