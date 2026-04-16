@@ -1529,17 +1529,15 @@ class AgentsStore:
             )
         ingest_runtime_events(self.db, runtime_events)
 
-        if events_inserted > 0 and transcript_changed:
-            from zerg.services.session_turns import maybe_mark_session_turn_durable
-
-            maybe_mark_session_turn_durable(self.db, session_id=session_id)
-
         self.db.commit()
 
         if events_inserted > 0 and transcript_changed:
             from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
             from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
+            from zerg.services.session_turns import maybe_mark_session_turn_durable
 
+            maybe_mark_session_turn_durable(self.db, session_id=session_id)
+            self.db.commit()
             run_best_effort_managed_local_turn_write(
                 db_bind=self.db.get_bind(),
                 label="ingest_durable",
