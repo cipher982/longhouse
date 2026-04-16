@@ -36,7 +36,6 @@ from zerg.services.session_chat_impl import _authorize_live_send
 from zerg.services.session_chat_impl import _build_managed_local_chat_response
 from zerg.services.session_chat_impl import _load_session_for_continuation
 from zerg.services.session_chat_impl import _lock_scope_id_for_session
-from zerg.services.session_chat_impl import _managed_local_events_include_expected_turn  # noqa: F401 — re-exported for tests
 from zerg.services.session_chat_impl import _managed_local_launch_response
 from zerg.services.session_chat_impl import _resolve_agents_owner_id
 from zerg.services.session_continuity import session_lock_manager

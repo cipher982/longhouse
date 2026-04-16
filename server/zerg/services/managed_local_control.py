@@ -10,7 +10,6 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime
-from datetime import timezone
 from typing import Mapping
 from uuid import UUID
 
@@ -28,6 +27,7 @@ from zerg.services.presence_cache import get_presence_cache
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
+from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 
@@ -117,16 +117,8 @@ def validate_managed_local_chat_done_payload(
     return None
 
 
-def _normalize_utc_datetime(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
 def _to_utc_timestamp(value: datetime | None) -> float | None:
-    normalized = _normalize_utc_datetime(value)
+    normalized = normalize_utc(value)
     return normalized.timestamp() if normalized is not None else None
 
 
@@ -134,7 +126,7 @@ def get_managed_local_presence_updated_at(*, session_id: UUID) -> datetime | Non
     """Return the latest in-memory presence timestamp for a managed-local session."""
 
     entry = get_presence_cache().get(str(session_id))
-    return _normalize_utc_datetime(getattr(entry, "updated_at", None))
+    return normalize_utc(getattr(entry, "updated_at", None))
 
 
 def _get_newer_cached_presence_entry(
@@ -150,7 +142,7 @@ def _get_newer_cached_presence_entry(
     if entry is None:
         return None
 
-    entry_updated_at = _normalize_utc_datetime(getattr(entry, "updated_at", None))
+    entry_updated_at = normalize_utc(getattr(entry, "updated_at", None))
     baseline_ts = _to_utc_timestamp(after_updated_at if isinstance(after_updated_at, datetime) else None)
     entry_ts = _to_utc_timestamp(entry_updated_at)
     if baseline_ts is not None and (entry_ts is None or entry_ts <= baseline_ts):
@@ -273,7 +265,7 @@ async def await_managed_local_hook_phase_update(
             if phases is None or phase in phases:
                 return ManagedLocalPhaseUpdate(
                     phase=phase,
-                    occurred_at=_normalize_utc_datetime(getattr(cached, "updated_at", None)),
+                    occurred_at=normalize_utc(getattr(cached, "updated_at", None)),
                     source="presence_cache",
                 )
 
@@ -289,7 +281,7 @@ async def await_managed_local_hook_phase_update(
                 return ManagedLocalPhaseUpdate(
                     phase=phase,
                     runtime_event_id=int(getattr(event, "id", 0) or 0),
-                    occurred_at=_normalize_utc_datetime(getattr(event, "occurred_at", None)),
+                    occurred_at=normalize_utc(getattr(event, "occurred_at", None)),
                     source=str(getattr(event, "source", "") or _MANAGED_LOCAL_HOOK_RUNTIME_SOURCE),
                 )
         await asyncio.sleep(poll_interval_secs)
@@ -332,7 +324,7 @@ async def await_managed_local_turn_terminal(
                         MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
                     ),
                     runtime_event_id=0,
-                    occurred_at=_normalize_utc_datetime(getattr(cached, "updated_at", None)),
+                    occurred_at=normalize_utc(getattr(cached, "updated_at", None)),
                 )
 
         events = _fetch_managed_local_hook_runtime_events_since(
