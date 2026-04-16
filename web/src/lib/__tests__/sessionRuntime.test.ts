@@ -104,6 +104,31 @@ describe("resolveSessionRuntimeState", () => {
     });
   });
 
+  it("treats managed-local inferred progress as working instead of ready", () => {
+    const runtime = resolveSessionRuntimeState(
+      makeSession({
+        ended_at: null,
+        capabilities: {
+          live_control_available: true,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+        },
+        status: "active",
+        confidence: "inferred",
+        runtime_source: "semantic",
+        presence_state: null,
+        display_phase: "Recent progress",
+      }),
+    );
+
+    expect(runtime.truthTier).toBe("managed-local");
+    expect(runtime.heuristicActive).toBe(true);
+    expect(getRuntimeDisplayCopy(runtime, { managedLocal: true })).toEqual({
+      headline: "Working",
+      detail: "Recent progress",
+    });
+  });
+
   it("marks stale managed-local state as unavailable instead of pretending it is active", () => {
     const runtime = resolveSessionRuntimeState(
       makeSession({
