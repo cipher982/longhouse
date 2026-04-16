@@ -31,6 +31,7 @@ Uses a temporary HOME for CLI/runtime state. On macOS, the canonical app install
 Options:
   --installer <local|remote>  Installer source (default: local)
   --installer-url <url>       Remote installer URL (default: https://get.longhouse.ai/install.sh)
+  --installer-onboard         Deprecated no-op; onboarding is always part of this smoke
   --pkg-source <path>         Package source for installer (default: server for local mode)
   --upgrade-pkg-source <path> Package source to use with `longhouse upgrade`
   --expected-upgrade-version <version>
@@ -530,6 +531,9 @@ while [[ $# -gt 0 ]]; do
     --installer-url)
       INSTALLER_URL="${2:-}"
       shift 2
+      ;;
+    --installer-onboard)
+      shift
       ;;
     --pkg-source)
       PACKAGE_SOURCE="${2:-}"
