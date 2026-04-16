@@ -24,6 +24,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
+from zerg.utils.time import normalize_utc
 
 RuntimeEventKind = Literal["phase_signal", "progress_signal", "terminal_signal", "binding_signal"]
 RuntimePhase = Literal["thinking", "running", "blocked", "needs_user", "idle", "finished"]
@@ -42,16 +43,8 @@ KNOWN_PHASES = {"thinking", "running", "blocked", "needs_user", "idle", "finishe
 PRESENCE_STALE_THRESHOLD = timedelta(minutes=10)
 
 
-def _normalize_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
-
-
 def _latest_timestamp(*values: datetime | None) -> datetime | None:
-    normalized = [_normalize_utc(value) for value in values]
+    normalized = [normalize_utc(value) for value in values]
     present = [value for value in normalized if value is not None]
     return max(present) if present else None
 
@@ -123,11 +116,11 @@ class SessionRuntimeView:
 
 
 def _confidence_for_state(state: SessionRuntimeState, *, now: datetime) -> str:
-    freshness_expires_at = _normalize_utc(state.freshness_expires_at)
+    freshness_expires_at = normalize_utc(state.freshness_expires_at)
     if freshness_expires_at is not None and freshness_expires_at > now:
         return "live"
 
-    last_progress_at = _normalize_utc(state.last_progress_at)
+    last_progress_at = normalize_utc(state.last_progress_at)
     if state.terminal_state is None and last_progress_at is not None and (now - last_progress_at) <= INFERRED_PROGRESS_WINDOW:
         return "inferred"
 
@@ -187,22 +180,22 @@ def build_runtime_view(
     session: AgentSession,
     now: datetime,
 ) -> SessionRuntimeView:
-    normalized_now = _normalize_utc(now) or datetime.now(timezone.utc)
+    normalized_now = normalize_utc(now) or datetime.now(timezone.utc)
     confidence = _confidence_for_state(state, now=normalized_now)
     runtime_phase = (state.phase or "idle").strip() or "idle"
     terminal_state = (state.terminal_state or "").strip() or None
     phase_source = (state.phase_source or "fallback").strip() or "fallback"
     active_tool = (state.active_tool or "").strip() or None
-    timeline_anchor_at = _normalize_utc(state.timeline_anchor_at) or _normalize_utc(session.started_at) or normalized_now
+    timeline_anchor_at = normalize_utc(state.timeline_anchor_at) or normalize_utc(session.started_at) or normalized_now
     status = _status_for_state(
         phase=runtime_phase,
         confidence=confidence,
         terminal_state=terminal_state,
-        ended_at=_normalize_utc(session.ended_at),
+        ended_at=normalize_utc(session.ended_at),
     )
     presence_state: str | None = None
     presence_tool: str | None = None
-    presence_updated_at = _normalize_utc(state.last_runtime_signal_at)
+    presence_updated_at = normalize_utc(state.last_runtime_signal_at)
 
     if confidence == "live" and runtime_phase in KNOWN_PHASES:
         presence_state = runtime_phase
@@ -214,8 +207,8 @@ def build_runtime_view(
 
     return SessionRuntimeView(
         runtime_phase=exposed_runtime_phase or None,
-        phase_started_at=_normalize_utc(state.phase_started_at),
-        last_progress_at=_normalize_utc(state.last_progress_at),
+        phase_started_at=normalize_utc(state.phase_started_at),
+        last_progress_at=normalize_utc(state.last_progress_at),
         runtime_source=phase_source,
         terminal_state=terminal_state,
         runtime_version=int(state.runtime_version or 0),
@@ -223,7 +216,7 @@ def build_runtime_view(
         presence_state=presence_state,
         presence_tool=presence_tool,
         presence_updated_at=presence_updated_at,
-        last_live_at=_normalize_utc(state.last_live_at) or _normalize_utc(state.last_progress_at) or presence_updated_at,
+        last_live_at=normalize_utc(state.last_live_at) or normalize_utc(state.last_progress_at) or presence_updated_at,
         display_phase=_display_phase_for_state(
             phase=runtime_phase,
             active_tool=active_tool,
@@ -244,11 +237,11 @@ def build_fallback_runtime_view(
     presence: SessionPresence | None,
     now: datetime,
 ) -> SessionRuntimeView:
-    normalized_now = _normalize_utc(now) or datetime.now(timezone.utc)
-    started_at = _normalize_utc(session.started_at) or normalized_now
-    ended_at = _normalize_utc(session.ended_at)
-    progress_at = _normalize_utc(last_activity_at) or ended_at or started_at
-    presence_updated_at = _normalize_utc(presence.updated_at if presence else None)
+    normalized_now = normalize_utc(now) or datetime.now(timezone.utc)
+    started_at = normalize_utc(session.started_at) or normalized_now
+    ended_at = normalize_utc(session.ended_at)
+    progress_at = normalize_utc(last_activity_at) or ended_at or started_at
+    presence_updated_at = normalize_utc(presence.updated_at if presence else None)
 
     presence_state: str | None = None
     presence_tool: str | None = None
@@ -351,8 +344,8 @@ def resolve_runtime_overlay(
     presence = presence_map.get(session_key)
     runtime_state = runtime_state_map.get(session_key)
     if runtime_state is not None:
-        runtime_signal_at = _normalize_utc(runtime_state.last_runtime_signal_at)
-        presence_updated_at = _normalize_utc(presence.updated_at if presence is not None else None)
+        runtime_signal_at = normalize_utc(runtime_state.last_runtime_signal_at)
+        presence_updated_at = normalize_utc(presence.updated_at if presence is not None else None)
         if (
             presence_updated_at is not None
             and (now - presence_updated_at) < PRESENCE_STALE_THRESHOLD
@@ -416,7 +409,7 @@ def ingest_runtime_events(db: Session, events: list[RuntimeEventIngest]) -> Runt
                 kind=event.kind,
                 phase=event.phase,
                 tool_name=event.tool_name,
-                occurred_at=_normalize_utc(event.occurred_at),
+                occurred_at=normalize_utc(event.occurred_at),
                 freshness_ms=event.freshness_ms,
                 dedupe_key=event.dedupe_key,
                 payload_json=payload_json,
@@ -449,14 +442,14 @@ def _state_snapshot(state: SessionRuntimeState | None) -> tuple[Any, ...] | None
         state.phase,
         state.phase_source,
         state.active_tool,
-        _normalize_utc(state.phase_started_at),
-        _normalize_utc(state.last_runtime_signal_at),
-        _normalize_utc(state.last_progress_at),
-        _normalize_utc(state.last_live_at),
-        _normalize_utc(state.timeline_anchor_at),
-        _normalize_utc(state.freshness_expires_at),
+        normalize_utc(state.phase_started_at),
+        normalize_utc(state.last_runtime_signal_at),
+        normalize_utc(state.last_progress_at),
+        normalize_utc(state.last_live_at),
+        normalize_utc(state.timeline_anchor_at),
+        normalize_utc(state.freshness_expires_at),
         state.terminal_state,
-        _normalize_utc(state.terminal_at),
+        normalize_utc(state.terminal_at),
     )
 
 
@@ -465,7 +458,7 @@ def _ensure_state(db: Session, event: RuntimeEventIngest) -> SessionRuntimeState
     if state is not None:
         return state
 
-    occurred_at = _normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
     state = SessionRuntimeState(
         runtime_key=event.runtime_key,
         session_id=event.session_id,
@@ -500,7 +493,7 @@ def _phase_reanchors(prev_phase: str | None, next_phase: str) -> bool:
 def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
     state = _ensure_state(db, event)
     before = _state_snapshot(state)
-    occurred_at = _normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
+    occurred_at = normalize_utc(event.occurred_at) or datetime.now(timezone.utc)
 
     if event.session_id is not None and state.session_id != event.session_id:
         state.session_id = event.session_id
@@ -542,11 +535,11 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
         state.last_live_at = occurred_at
         state.timeline_anchor_at = occurred_at
         if state.terminal_state is not None and (
-            _normalize_utc(state.terminal_at) is None or occurred_at >= _normalize_utc(state.terminal_at)
+            normalize_utc(state.terminal_at) is None or occurred_at >= normalize_utc(state.terminal_at)
         ):
             state.terminal_state = None
             state.terminal_at = None
-        freshness_expires_at = _normalize_utc(state.freshness_expires_at)
+        freshness_expires_at = normalize_utc(state.freshness_expires_at)
         if freshness_expires_at is None or freshness_expires_at <= occurred_at or state.phase not in KNOWN_PHASES:
             if state.phase not in ATTENTION_PHASES:
                 if state.phase != "running":
@@ -568,7 +561,7 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
         state.terminal_state = terminal_state
         state.terminal_at = occurred_at
         state.timeline_anchor_at = occurred_at
-        phase_started_at = _normalize_utc(state.phase_started_at)
+        phase_started_at = normalize_utc(state.phase_started_at)
         if phase_started_at is None or phase_started_at < occurred_at:
             state.phase_started_at = occurred_at
 

@@ -16,6 +16,7 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import SessionTurn
 from zerg.services.write_serializer import get_write_serializer
+from zerg.utils.time import normalize_utc
 
 SESSION_TURN_SOURCE_MANAGED_LIVE = "managed_live"
 SESSION_TURN_SOURCE_IMPORTED_RECONSTRUCTED = "imported_reconstructed"
@@ -56,14 +57,6 @@ class SessionTurnSnapshot:
     durable_at: datetime | None
     created_at: datetime | None
     updated_at: datetime | None
-
-
-def _normalize_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
 
 def _normalize_positive_int(value: int | None) -> int | None:
@@ -143,7 +136,7 @@ def create_session_turn(
         state=SESSION_TURN_STATE_CREATED,
         baseline_event_id=_normalize_positive_int(baseline_event_id),
         baseline_runtime_cursor=_normalize_positive_int(baseline_runtime_cursor),
-        user_submitted_at=_normalize_utc(user_submitted_at) or datetime.now(timezone.utc),
+        user_submitted_at=normalize_utc(user_submitted_at) or datetime.now(timezone.utc),
     )
     db.add(turn)
     db.flush()
@@ -237,13 +230,13 @@ def get_session_turn_snapshot(
             durable_assistant_event_id=_normalize_positive_int(turn.durable_assistant_event_id),
             baseline_event_id=_normalize_positive_int(turn.baseline_event_id),
             baseline_runtime_cursor=_normalize_positive_int(turn.baseline_runtime_cursor),
-            user_submitted_at=_normalize_utc(turn.user_submitted_at) or datetime.now(timezone.utc),
-            send_accepted_at=_normalize_utc(turn.send_accepted_at),
-            active_phase_observed_at=_normalize_utc(turn.active_phase_observed_at),
-            terminal_at=_normalize_utc(turn.terminal_at),
-            durable_at=_normalize_utc(turn.durable_at),
-            created_at=_normalize_utc(turn.created_at),
-            updated_at=_normalize_utc(turn.updated_at),
+            user_submitted_at=normalize_utc(turn.user_submitted_at) or datetime.now(timezone.utc),
+            send_accepted_at=normalize_utc(turn.send_accepted_at),
+            active_phase_observed_at=normalize_utc(turn.active_phase_observed_at),
+            terminal_at=normalize_utc(turn.terminal_at),
+            durable_at=normalize_utc(turn.durable_at),
+            created_at=normalize_utc(turn.created_at),
+            updated_at=normalize_utc(turn.updated_at),
         )
 
 
@@ -264,7 +257,7 @@ def mark_session_turn_send_accepted(
             turn.user_event_id = normalized_user_event_id
         return True
 
-    turn.send_accepted_at = _normalize_utc(accepted_at) or datetime.now(timezone.utc)
+    turn.send_accepted_at = normalize_utc(accepted_at) or datetime.now(timezone.utc)
     if normalized_user_event_id is not None and turn.user_event_id is None:
         turn.user_event_id = normalized_user_event_id
     if _current_state(turn) == SESSION_TURN_STATE_CREATED:
@@ -290,7 +283,7 @@ def mark_session_turn_active(
         SESSION_TURN_STATE_DURABLE,
     }:
         return True
-    turn.active_phase_observed_at = _normalize_utc(observed_at) or datetime.now(timezone.utc)
+    turn.active_phase_observed_at = normalize_utc(observed_at) or datetime.now(timezone.utc)
     turn.state = SESSION_TURN_STATE_ACTIVE
     return True
 
@@ -314,7 +307,7 @@ def mark_session_turn_terminal(
     }:
         return True
     turn.terminal_phase = _normalize_string(phase)
-    turn.terminal_at = _normalize_utc(terminal_at) or datetime.now(timezone.utc)
+    turn.terminal_at = normalize_utc(terminal_at) or datetime.now(timezone.utc)
     turn.state = SESSION_TURN_STATE_TERMINAL
     return True
 
@@ -376,8 +369,8 @@ def maybe_mark_session_turn_durable(
         match = _match_durable_turn(
             events=events,
             user_event_id=_normalize_positive_int(turn.user_event_id),
-            submitted_after=_normalize_utc(turn.user_submitted_at),
-            submitted_before=_normalize_utc(pending_turns[idx + 1].user_submitted_at) if idx + 1 < len(pending_turns) else None,
+            submitted_after=normalize_utc(turn.user_submitted_at),
+            submitted_before=normalize_utc(pending_turns[idx + 1].user_submitted_at) if idx + 1 < len(pending_turns) else None,
         )
         if match is None:
             continue
@@ -453,7 +446,7 @@ def _event_in_turn_window(
     submitted_after: datetime | None,
     submitted_before: datetime | None,
 ) -> bool:
-    event_timestamp = _normalize_utc(getattr(event, "timestamp", None))
+    event_timestamp = normalize_utc(getattr(event, "timestamp", None))
     if event_timestamp is None:
         return True
     if submitted_after is not None and event_timestamp < submitted_after:

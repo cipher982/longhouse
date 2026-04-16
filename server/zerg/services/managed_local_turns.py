@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import ManagedLocalTurn
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
+from zerg.utils.time import normalize_utc
 
 logger = logging.getLogger(__name__)
 
@@ -38,14 +39,6 @@ class ManagedLocalTurnSnapshot:
     durable_at: datetime | None
     review_id: int | None
     error_code: str | None
-
-
-def _normalize_utc(value: datetime | None) -> datetime | None:
-    if value is None:
-        return None
-    if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
 
 
 def hash_managed_local_turn_text(text: str) -> str:
@@ -94,7 +87,7 @@ def mark_managed_local_turn_send_accepted(
     turn = _get_turn_by_request(db, session_id=session_id, request_id=request_id)
     if turn is None or turn.send_accepted_at is not None:
         return False
-    turn.send_accepted_at = _normalize_utc(accepted_at) or datetime.now(timezone.utc)
+    turn.send_accepted_at = normalize_utc(accepted_at) or datetime.now(timezone.utc)
     return True
 
 
@@ -111,7 +104,7 @@ def mark_managed_local_turn_terminal(
     if turn is None or turn.terminal_at is not None:
         return False
     turn.terminal_phase = str(phase or "").strip() or None
-    turn.terminal_at = _normalize_utc(terminal_at) or datetime.now(timezone.utc)
+    turn.terminal_at = normalize_utc(terminal_at) or datetime.now(timezone.utc)
     normalized_runtime_event_id = int(terminal_runtime_event_id or 0)
     if normalized_runtime_event_id > 0 and turn.terminal_runtime_event_id is None:
         turn.terminal_runtime_event_id = normalized_runtime_event_id
@@ -255,13 +248,13 @@ def get_managed_local_turn_snapshot(
             request_id=str(turn.request_id or ""),
             baseline_event_id=int(turn.baseline_event_id or 0),
             baseline_runtime_event_id=int(turn.baseline_runtime_event_id or 0),
-            send_accepted_at=_normalize_utc(turn.send_accepted_at),
+            send_accepted_at=normalize_utc(turn.send_accepted_at),
             terminal_phase=str(turn.terminal_phase or "").strip() or None,
-            terminal_at=_normalize_utc(turn.terminal_at),
+            terminal_at=normalize_utc(turn.terminal_at),
             terminal_runtime_event_id=(int(turn.terminal_runtime_event_id) if int(turn.terminal_runtime_event_id or 0) > 0 else None),
             durable_user_event_id=int(turn.durable_user_event_id) if turn.durable_user_event_id is not None else None,
             durable_assistant_event_id=(int(turn.durable_assistant_event_id) if turn.durable_assistant_event_id is not None else None),
-            durable_at=_normalize_utc(turn.durable_at),
+            durable_at=normalize_utc(turn.durable_at),
             review_id=int(turn.review_id) if turn.review_id is not None else None,
             error_code=str(turn.error_code or "").strip() or None,
         )
