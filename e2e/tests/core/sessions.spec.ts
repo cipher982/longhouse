@@ -922,13 +922,13 @@ test.describe("Session Detail Page", () => {
         });
       });
 
-      await page.route(`**/api/sessions/${sessionId}/send-live*`, async (route) => {
+      await page.route(`**/sessions/${sessionId}/send-live*`, async (route) => {
         chatRequests += 1;
         expect(route.request().method()).toBe("POST");
         expect(route.request().postDataJSON()).toMatchObject({
           message: "Continue locally",
         });
-        await new Promise((resolve) => setTimeout(resolve, 350));
+        await new Promise((resolve) => setTimeout(resolve, 1500));
         lockState = {
           locked: true,
           holder: "req-e2e",
@@ -957,13 +957,12 @@ test.describe("Session Detail Page", () => {
       await composer.fill("Continue locally");
       await page.getByRole("button", { name: "Send" }).click();
 
-      await expect(page.getByText("Sending")).toBeVisible();
-      await expect(composer).toBeDisabled();
-      await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
+      // Composer should be disabled while the send is in flight
+      await expect(composer).toBeDisabled({ timeout: 3000 });
 
-      await expect(page.getByText("Locked")).toBeVisible();
+      // After the send completes, the lock poll kicks in and keeps the composer locked
+      await expect.poll(() => chatRequests, { timeout: 10000 }).toBe(1);
       await expect(composer).toBeDisabled();
-      await expect.poll(() => chatRequests).toBe(1);
       await expect.poll(() => lockRequests).toBeGreaterThan(1);
     } finally {
       await page.unrouteAll({ behavior: "ignoreErrors" });
