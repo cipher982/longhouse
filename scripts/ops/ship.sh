@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-LOCK_DIR="$ROOT/.git/longhouse-ship.lock"
+GIT_COMMON_DIR="$(git -C "$ROOT" rev-parse --git-common-dir)"
+LOCK_DIR="$GIT_COMMON_DIR/longhouse-ship.lock"
 
 usage() {
   cat <<'EOF' >&2
