@@ -153,6 +153,29 @@ jobs:
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' >&2
           exit 1
 
+      - name: Wait for released CLI wheel on PyPI
+        if: ${{ github.event_name == 'release' }}
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          release_version="${RELEASE_TAG#v}"
+          deadline=$((SECONDS + 900))
+
+          while (( SECONDS < deadline )); do
+            if python3 -c 'import json, sys, urllib.request; release_version = sys.argv[1]; payload = json.load(urllib.request.urlopen("https://pypi.org/pypi/longhouse/json", timeout=10)); raise SystemExit(0 if release_version in payload.get("releases", {}) and payload["releases"][release_version] else 1)' "$release_version"
+            then
+              echo "PyPI longhouse==$release_version is available."
+              exit 0
+            fi
+
+            echo "Waiting for PyPI release longhouse==$release_version"
+            sleep 15
+          done
+
+          echo "Timed out waiting for PyPI release longhouse==$release_version." >&2
+          python3 -c 'import json, urllib.request; payload = json.load(urllib.request.urlopen("https://pypi.org/pypi/longhouse/json", timeout=10)); print("Latest PyPI versions:"); [print(version) for version in list(payload.get("releases", {}).keys())[-10:]]' >&2 || true
+          exit 1
+
       - name: Run disposable installer smoke
         run: |
           chmod +x scripts/ci/installer-first-run.sh
