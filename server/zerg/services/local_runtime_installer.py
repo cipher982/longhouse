@@ -87,10 +87,15 @@ def _install_local_runtime_artifacts(
 
     desktop_app_result = None
     if menubar:
-        desktop_app_result = install_desktop_app_service(
-            ui_url=url,
-            claude_dir=claude_dir,
-        )
+        try:
+            desktop_app_result = install_desktop_app_service(
+                ui_url=url,
+                claude_dir=claude_dir,
+            )
+        except Exception as exc:
+            # Dev/unreleased builds may 404 on the release asset — degrade
+            # gracefully rather than failing the entire install.
+            desktop_app_result = {"warning": str(exc)}
 
     return LocalRuntimeInstallResult(
         machine_name=resolved_name,
