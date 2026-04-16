@@ -293,14 +293,12 @@ def mark_session_turn_terminal(
         return False
     if turn.terminal_at is not None:
         return True
-    if turn.state in {
-        SESSION_TURN_STATE_FAILED,
-        SESSION_TURN_STATE_DURABLE,
-    }:
+    if turn.state == SESSION_TURN_STATE_DURABLE:
         return True
     turn.terminal_phase = (phase or "").strip() or None
     turn.terminal_at = normalize_utc(terminal_at) or datetime.now(timezone.utc)
-    turn.state = SESSION_TURN_STATE_TERMINAL
+    if turn.state != SESSION_TURN_STATE_FAILED:
+        turn.state = SESSION_TURN_STATE_TERMINAL
     return True
 
 
@@ -375,7 +373,7 @@ def maybe_mark_session_turn_durable(
             turn.user_event_id = int(user_event.id)
         turn.durable_assistant_event_id = int(assistant_event.id)
         turn.durable_at = datetime.now(timezone.utc)
-        if turn.error_code in {SESSION_TURN_ERROR_TURN_TIMEOUT, SESSION_TURN_ERROR_VERIFICATION_TIMEOUT}:
+        if turn.error_code:
             logger.info(
                 "Session turn %s for session %s became durable after %s",
                 str(turn.request_id or ""),
