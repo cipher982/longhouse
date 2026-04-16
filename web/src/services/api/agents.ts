@@ -154,8 +154,6 @@ export interface AgentSessionTurn {
   id: number;
   session_id: string;
   request_id: string | null;
-  source_kind: string;
-  timing_confidence: "exact" | "partial" | "inferred" | (string & {});
   state: AgentSessionTurnState | (string & {});
   terminal_phase: string | null;
   error_code: string | null;

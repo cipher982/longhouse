@@ -56,4 +56,18 @@ class UTCBaseModel(BaseModel):
     )
 
 
-__all__ = ["utc_now", "utc_now_naive", "UTCBaseModel"]
+def normalize_utc(value: datetime | None) -> datetime | None:
+    """Normalize a datetime to aware UTC.
+
+    - None → None
+    - Naive → treated as UTC
+    - Aware → converted to UTC
+    """
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+__all__ = ["utc_now", "utc_now_naive", "normalize_utc", "UTCBaseModel"]

@@ -46,8 +46,6 @@ function makeTurn(overrides: Partial<AgentSessionTurn> = {}): AgentSessionTurn {
     id: 1,
     session_id: "session-timing",
     request_id: "req-1",
-    source_kind: "managed_local",
-    timing_confidence: "exact",
     state: "active",
     terminal_phase: null,
     error_code: null,

@@ -15,8 +15,6 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
-from zerg.services.session_turns import SESSION_TURN_CONFIDENCE_EXACT
-from zerg.services.session_turns import SESSION_TURN_SOURCE_MANAGED_LIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
 from zerg.services.session_turns import SESSION_TURN_STATE_TERMINAL
@@ -86,8 +84,6 @@ def _seed_turn(
     turn = SessionTurn(
         session_id=session_id,
         request_id=request_id,
-        source_kind=SESSION_TURN_SOURCE_MANAGED_LIVE,
-        timing_confidence=SESSION_TURN_CONFIDENCE_EXACT,
         state=state,
         terminal_phase=terminal_phase,
         user_event_id=user_event_id,

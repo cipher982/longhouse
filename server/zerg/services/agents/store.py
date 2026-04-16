@@ -1532,17 +1532,10 @@ class AgentsStore:
         self.db.commit()
 
         if events_inserted > 0 and transcript_changed:
-            from zerg.services.managed_local_turns import maybe_mark_managed_local_turn_durable
-            from zerg.services.managed_local_turns import run_best_effort_managed_local_turn_write
             from zerg.services.session_turns import maybe_mark_session_turn_durable
 
             maybe_mark_session_turn_durable(self.db, session_id=session_id)
             self.db.commit()
-            run_best_effort_managed_local_turn_write(
-                db_bind=self.db.get_bind(),
-                label="ingest_durable",
-                fn=lambda turn_db: maybe_mark_managed_local_turn_durable(turn_db, session_id=session_id),
-            )
 
         logger.info(
             "Ingested session %s branch=%s rewind=%s events inserted=%s skipped=%s source_lines_inserted=%s",
