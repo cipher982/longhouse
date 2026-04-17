@@ -6,13 +6,26 @@ from playwright.async_api import async_playwright
 
 ROOT = Path(__file__).parent
 URL = f"file://{ROOT}/variants.html"
-# Default = the current finalists. Edit this list to render a subset or add new ids.
-VARIANTS = ["va", "vf", "vg", "vj", "vk"]
+# Finalists (by variants.html badge label): A/F/G/J/K.
+# The section ids are inconsistent with label letters (historical drift), so we
+# pick each section by the letter in its `.variant-label` text and write the
+# shot under the badge-letter filename. This keeps filenames and content
+# aligned even if section ids change.
+VARIANT_LABELS = ["A", "F", "G", "J", "K"]
 # Pin chromium to avoid playwright-version-vs-cached-chromium drift. If this
 # path doesn't exist on your machine, run:
 #   uv run --with "playwright==1.50.0" playwright install chromium
 # then point EXEC at one of ~/Library/Caches/ms-playwright/chromium-*/chrome-mac-arm64/Google Chrome for Testing.app/...
 EXEC = "/Users/davidrose/Library/Caches/ms-playwright/chromium-1200/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+
+
+SLUGS = {
+    "A": "timeline-primary",
+    "F": "big-phone",
+    "G": "terminal-timeline-phone",
+    "J": "scattered-consolidated",
+    "K": "max-overlap",
+}
 
 
 async def render():
@@ -22,22 +35,39 @@ async def render():
         page = await ctx.new_page()
         await page.goto(URL, wait_until="domcontentloaded")
         await page.wait_for_timeout(1500)
-        for v in VARIANTS:
-            # Scroll section into view at very top, then read bbox in viewport coords.
-            await page.evaluate(
-                "(id)=>{window.scrollTo(0,0);document.getElementById(id).scrollIntoView({block:'start',behavior:'instant'});}",
-                v,
-            )
-            await page.wait_for_timeout(500)
-            box = await page.evaluate(
-                "(id)=>{const el=document.getElementById(id);const r=el.getBoundingClientRect();return {x:r.left,y:r.top,w:r.width,h:r.height,sy:window.scrollY};}",
-                v,
-            )
-            out = ROOT / f"shot-{v}-desktop.png"
-            clip = {"x": box["x"], "y": box["y"], "width": box["w"], "height": box["h"]}
+        # Map each badge letter to the section id whose .variant-label starts with that letter.
+        label_to_id = await page.evaluate(
+            """() => {
+                const out = {};
+                document.querySelectorAll('section.variant').forEach(sec => {
+                    const lbl = sec.querySelector('.variant-label');
+                    if (!lbl) return;
+                    const m = lbl.textContent.trim().match(/^([A-Z0-9]+)/);
+                    if (m) out[m[1]] = sec.id;
+                });
+                return out;
+            }"""
+        )
+        for letter in VARIANT_LABELS:
+            sec_id = label_to_id.get(letter)
+            if not sec_id:
+                print(f"skip {letter}: no section with that label")
+                continue
+            slug = SLUGS.get(letter, "variant")
+            out = ROOT / f"shot-{letter}-{slug}.png"
             try:
-                await page.screenshot(path=str(out), clip=clip, timeout=20000)
-                print(f"wrote {out.name}  scrollY={int(box['sy'])} clipY={int(box['y'])} h={int(box['h'])}")
+                el = await page.query_selector(f"#{sec_id}")
+                if not el:
+                    print(f"skip {out.name}: element #{sec_id} not found")
+                    continue
+                await el.scroll_into_view_if_needed()
+                await page.wait_for_timeout(400)
+                await el.screenshot(
+                    path=str(out),
+                    timeout=60000,
+                    animations="disabled",
+                )
+                print(f"wrote {out.name} (section #{sec_id})")
             except Exception as e:
                 print("skip", out.name, type(e).__name__, str(e)[:80])
         await browser.close()

@@ -587,38 +587,35 @@
   }
 
   .landing-hero-device--monitor {
-    width: 95%;
-    left: 5%;
-    top: 0;
+    width: 78%;
+    left: 0;
+    top: 6%;
     z-index: 2;
     filter:
-      drop-shadow(0 18px 44px rgba(0, 0, 0, 0.62))
+      drop-shadow(0 24px 56px rgba(0, 0, 0, 0.72))
       brightness(1.06)
       contrast(1.03);
   }
 
-  .landing-hero-device--macbook {
-    width: 46%;
-    left: -3%;
-    bottom: -2%;
-    z-index: 3;
-  }
-
   .landing-hero-device--iphone {
-    width: 22%;
-    right: 1%;
-    bottom: 6%;
+    width: 34%;
+    right: 2%;
+    bottom: 0;
     z-index: 4;
+    filter: drop-shadow(0 28px 60px rgba(0, 0, 0, 0.9));
   }
 
   .landing-hero-glow {
     position: absolute;
-    inset: 0;
-    z-index: 0;
+    right: -4%;
+    top: 4%;
+    width: 46%;
+    height: 92%;
+    z-index: 1;
     pointer-events: none;
     background: radial-gradient(
-      ellipse 58% 62% at 62% 40%,
-      rgba(201, 166, 107, 0.08) 0%,
+      ellipse 52% 54% at 55% 55%,
+      rgba(201, 166, 107, 0.24) 0%,
       transparent 70%
     );
   }
@@ -644,20 +641,15 @@
     }
 
     .landing-hero-device--monitor {
-      width: 102%;
+      width: 82%;
       left: 0;
-    }
-
-    .landing-hero-device--macbook {
-      width: 48%;
-      left: -8%;
-      bottom: 0;
+      top: 8%;
     }
 
     .landing-hero-device--iphone {
-      width: 26%;
-      right: -4%;
-      bottom: 10%;
+      width: 38%;
+      right: -2%;
+      bottom: 0;
     }
   }
 
