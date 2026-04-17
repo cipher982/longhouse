@@ -529,7 +529,7 @@ def _ensure_managed_codex_versioned_artifact_from_binary(
 
 def _ensure_managed_codex_runtime_artifact(
     *,
-    source_override: str | None = None,
+    source_override: str | os.PathLike[str] | None = None,
     overwrite: bool = False,
 ) -> InstalledRuntimeArtifact:
     raw_override = _resolve_source_override(RuntimeComponent.MANAGED_CODEX, source_override)
