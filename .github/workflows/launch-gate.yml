@@ -64,10 +64,8 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            runner_label: cube-fast
           - os: macos-latest
-            runner_label: macos-latest
-    runs-on: ${{ matrix.runner_label }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     name: "launch-gate--managed-codex-build--${{ matrix.os }}"
 
