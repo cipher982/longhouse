@@ -418,7 +418,7 @@ def test_collect_local_health_recognizes_remote_tui_attach_without_resume_token(
     assert snapshot["managed_sessions"][0]["state"] == "attached"
 
 
-def test_collect_local_health_marks_missing_rollout_thread_as_degraded(monkeypatch, tmp_path: Path):
+def test_collect_local_health_does_not_flag_missing_rollout_before_first_turn(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
@@ -441,6 +441,58 @@ def test_collect_local_health_marks_missing_rollout_thread_as_degraded(monkeypat
             "status": "ready",
             "updated_at": "2026-04-17T18:02:00Z",
             "thread_path": str(rollout_path),
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 8881, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-bad-thread"},
+            {"pid": 8882, "ppid": 8881, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {
+                "pid": 8883,
+                "ppid": 8000,
+                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49888",
+            },
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "healthy"
+    assert snapshot["headline"] == "Longhouse shipping healthy"
+    assert snapshot["managed_summary"]["attached_count"] == 1
+    assert snapshot["managed_summary"]["degraded_count"] == 0
+    assert snapshot["managed_sessions"][0]["state"] == "attached"
+    assert snapshot["managed_sessions"][0]["reason_codes"] == []
+
+
+def test_collect_local_health_marks_missing_rollout_thread_as_degraded_after_turn_activity(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    rollout_path = tmp_path / "sessions" / "2026" / "04" / "17" / "rollout-missing.jsonl"
+    _write_session_binding_rows(
+        tmp_path,
+        [(str(rollout_path), "sess-bad-thread", "codex", "2026-04-17T17:30:36Z")],
+    )
+
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-bad-thread",
+        {
+            "session_id": "sess-bad-thread",
+            "pid": 8881,
+            "ws_url": "ws://127.0.0.1:49888",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "updated_at": "2026-04-17T18:02:00Z",
+            "thread_path": str(rollout_path),
+            "active_turn_id": "turn-live",
+            "last_turn_status": "inProgress",
         },
     )
     monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)

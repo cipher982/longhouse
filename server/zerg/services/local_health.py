@@ -706,6 +706,9 @@ def _collect_managed_codex_summary(
         bridge_status = _normalize_optional_string(state.get("status")) or "unknown"
         app_server = _find_bridge_child_process(process_rows, bridge_pid=bridge_pid, needle=" app-server ")
         bridge_heartbeat_at = bridge_updated_at
+        has_turn_activity = bool(
+            _normalize_optional_string(state.get("active_turn_id")) or _normalize_optional_string(state.get("last_turn_status"))
+        )
 
         if binding is None:
             orphan_bridges.append(
@@ -727,7 +730,7 @@ def _collect_managed_codex_summary(
             reason_codes.append("thread_subscription_failed")
         if binding_path and state_thread_path and binding_path != state_thread_path:
             reason_codes.append("thread_subscription_failed")
-        if state_thread_path and not Path(state_thread_path).exists():
+        if state_thread_path and not Path(state_thread_path).exists() and has_turn_activity:
             reason_codes.append("thread_subscription_failed")
         if app_server is None:
             reason_codes.append("live_control_unavailable")

@@ -1534,6 +1534,17 @@ fn pending_thread_subscription(context: &BridgeContext) -> Option<BridgeFollowup
     if context.subscribed_thread_id.as_deref() == Some(thread_id.as_str()) {
         return None;
     }
+    let path_exists = context
+        .state
+        .thread_path
+        .as_ref()
+        .map(|path| Path::new(path).exists())
+        .unwrap_or(false);
+    let has_turn_activity =
+        context.state.active_turn_id.is_some() || context.state.last_turn_status.is_some();
+    if !path_exists && !has_turn_activity {
+        return None;
+    }
     Some(BridgeFollowup::SubscribeThread {
         thread_id: thread_id.clone(),
         thread_path: context.state.thread_path.clone(),
@@ -2740,6 +2751,40 @@ mod tests {
         .await
         .unwrap();
 
+        assert_eq!(followup, None);
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-live"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some("/tmp/thread.jsonl")
+        );
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-live"));
+    }
+
+    #[tokio::test]
+    async fn process_notification_waits_for_turn_activity_before_subscribing_missing_rollout() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-live".to_string());
+        context.state.thread_path = Some("/tmp/thread.jsonl".to_string());
+        context.runtime.thread_id = Some("thr-live".to_string());
+
+        let followup = process_notification(
+            &json!({
+                "method": "turn/started",
+                "params": {
+                    "turn": {
+                        "id": "turn-live",
+                        "status": "inProgress"
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
         assert_eq!(
             followup,
             Some(BridgeFollowup::SubscribeThread {
@@ -2747,12 +2792,11 @@ mod tests {
                 thread_path: Some("/tmp/thread.jsonl".to_string()),
             })
         );
-        assert_eq!(context.state.thread_id.as_deref(), Some("thr-live"));
+        assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));
         assert_eq!(
-            context.state.thread_path.as_deref(),
-            Some("/tmp/thread.jsonl")
+            context.state.last_turn_status.as_deref(),
+            Some("inProgress")
         );
-        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-live"));
     }
 
     #[tokio::test]
