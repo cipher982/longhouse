@@ -1,11 +1,53 @@
 ---
 name: landing-hero
-description: Generate landing page hero images using real product screenshots composited by AI image models. Captures web timeline, iOS widget, and terminal references then feeds them to Gemini Pro Image for composition.
+description: Generate and ship the Longhouse landing hero using separate AI-rendered device assets plus CSS composition. Capture real product references, render each device, crop tightly, then assemble responsively in the hero.
 ---
 
-# Landing Hero Image Pipeline
+# Landing Hero Pipeline
 
-Generate premium hero images for the Longhouse landing page using **real product screenshots** composited by AI image models. The pipeline captures fresh references, feeds them to a multimodal image model, and produces a hero composition.
+The current shipping approach is **not** one giant baked hero image.
+
+The canonical workflow is:
+
+1. Capture real product references
+2. Generate **three separate device renders**
+3. Crop them tightly so the assets are honest cutouts, not giant black canvases
+4. Compose them in CSS in the landing hero
+
+This keeps the final hero responsive and tweakable. The AI renders are assets, not the final layout.
+
+## Current Canonical Output
+
+These are the production-facing hero assets:
+
+- `web/public/images/landing/device-monitor.png`
+- `web/public/images/landing/device-macbook.png`
+- `web/public/images/landing/device-iphone.png`
+
+These are assembled here:
+
+- `web/src/components/landing/HeroSection.tsx`
+- `web/src/styles/landing.css`
+
+As of April 17, 2026, the shipping hero uses:
+
+- monitor as the dominant center/right anchor
+- MacBook overlapping lower-left
+- iPhone overlapping lower-right
+- CSS positioning, not a flattened composite image
+
+## What Changed
+
+The older approach in this skill used a single AI-composited wide hero image. That was useful for concepting, but it looked too much like a pasted promo render once placed directly on the page.
+
+The better result came from splitting the composition into device-specific assets and letting CSS own:
+
+- spacing
+- overlap
+- responsive behavior
+- final visual balance
+
+Treat the old composite flow below as **reference material for generating device renders and prompts**, not as the final implementation pattern.
 
 ## The Narrative
 
@@ -16,6 +58,14 @@ Right side: Longhouse surfaces — the web timeline in a browser window, the iOS
 Connection: a golden arrow/light trail flowing from terminal to Longhouse
 
 Do NOT show "Longhouse web → Longhouse phone." That's not the pitch. The pitch is that Longhouse captures sessions from tools the user already runs.
+
+## Shipping Rules
+
+- Do not ship a single flattened hero image if the layout needs to stay responsive.
+- Prefer one image per device, then assemble in code.
+- The device assets must be tightly cropped. Empty black margins make CSS tuning lie.
+- If the monitor stand or other unwanted hardware dominates the frame, crop it out at the asset level before trying to mask it in CSS.
+- Verify both desktop and mobile with local screenshots before calling it done.
 
 ## Prerequisites
 
@@ -128,6 +178,8 @@ Tips:
 - Must use full path `/Users/davidrose/.local/bin/claude` in Terminal.app (PATH not loaded in `-sh`)
 
 ## Step 3: Compose Hero via AI Image Model
+
+Use the references below to create device-specific renders. The old composite flow still helps for prompt quality, but the current implementation should output separate monitor, laptop, and phone assets.
 
 ### Recommended: Gemini 3 Pro Image via OpenRouter
 
@@ -267,6 +319,28 @@ Common issues to check:
 - Screenshots redrawn instead of embedded (strengthen "EXACTLY as-is" language)
 - Wrong narrative (Longhouse→phone instead of terminal→Longhouse)
 - Arrow missing or wrong direction
+- Giant empty black padding around the device render
+- Monitor stand or desk surface still visible when it should be cropped away
+
+## Current Shipping Layout
+
+Current composition code lives in:
+
+- `web/src/components/landing/HeroSection.tsx`
+- `web/src/styles/landing.css`
+
+The important design decision is that the hero is a **stage**, not an image:
+
+- text column and device stage sit side-by-side on desktop
+- stage collapses below the copy on narrower widths
+- device overlap is explicit absolute positioning, not auto-sized grid overlap
+
+If you regenerate assets, keep these invariants:
+
+- monitor stays the largest element
+- MacBook remains readable at lower-left
+- iPhone stays visible at mobile widths
+- the UI should still read in dark mode against the landing background
 
 ## Model Comparison (Tested April 2026)
 
@@ -340,6 +414,6 @@ Product showcase (tabbed screenshots): `web/src/components/landing/ProductShowca
 
 ## Future Work
 
-- **Automated pipeline:** Single command that captures all three screenshots (web, widget, terminal), feeds to Gemini Pro, inspects with vision, outputs `web/public/images/landing/hero.png`. Could extend `scripts/marketing-screenshots.sh`.
-- **Production hero as React component:** CSS device frames (macOS window, iPhone) + animated SVG golden energy + real screenshots. Resolution-independent and responsive. The AI compositions are **design references** — the ship implementation should be code.
+- **Automated pipeline:** Single command that captures all three screenshots, generates three device renders, crops them, and writes `device-monitor.png`, `device-macbook.png`, and `device-iphone.png`.
+- **Production hero as React component:** Keep the current CSS-composed approach, or later replace AI hardware shells with code-native device frames plus real screenshots if the assets drift too much.
 - **Phone back workaround:** Gemini renders the iPhone's titanium back ~40% of the time. Consider post-processing or generating multiple variants and selecting the best.
