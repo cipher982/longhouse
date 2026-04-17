@@ -1,0 +1,1561 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Hero workshop</title>
+<style>
+  :root {
+    --color-brand-primary: #C9A66B;
+    --color-brand-primary-strong: #E8C88E;
+    --color-text-primary: #F3EAD9;
+    --color-text-secondary: #B5A48E;
+    --color-text-muted: #8A7A64;
+    --color-border-subtle: #2a2418;
+    --color-surface-page: #120B09;
+    --color-surface-card: #1A1410;
+    --font-display: "Iowan Old Style", "Palatino", Georgia, serif;
+    --font-base: -apple-system, "SF Pro Text", system-ui, sans-serif;
+    --font-mono: "SF Mono", "Menlo", "Monaco", monospace;
+  }
+  * { box-sizing: border-box; }
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--color-surface-page);
+    color: var(--color-text-primary);
+    font-family: var(--font-base);
+    -webkit-font-smoothing: antialiased;
+    font-smooth: always;
+  }
+  .variant {
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px dashed #2a2418;
+  }
+  .variant-label {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    z-index: 50;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: rgba(201, 166, 107, 0.15);
+    border: 1px solid rgba(201, 166, 107, 0.35);
+    color: var(--color-brand-primary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    font-family: var(--font-base);
+  }
+  .gradient-text {
+    background: linear-gradient(120deg, #f4d3a0 0%, var(--color-brand-primary) 42%, #89b8a4 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .kicker {
+    margin: 0 0 14px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--color-brand-primary);
+  }
+  .headline {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: -0.04em;
+    line-height: 1.02;
+    margin: 0 0 18px;
+  }
+  .subhead {
+    font-size: 17px;
+    line-height: 1.55;
+    color: #e7dcc9;
+    margin: 0 0 24px;
+    max-width: 36rem;
+  }
+  .install-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+  }
+  .install-cmd {
+    display: inline-flex;
+    gap: 10px;
+    align-items: center;
+    padding: 12px 16px;
+    background: rgba(10, 8, 7, 0.92);
+    border: 1px solid rgba(201, 166, 107, 0.22);
+    border-radius: 12px;
+    box-shadow: 0 0 18px rgba(201, 166, 107, 0.1), 0 8px 20px rgba(8, 7, 6, 0.3);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: #f5e6cf;
+  }
+  .install-cmd .p { color: var(--color-brand-primary); font-weight: 700; }
+  .install-mac {
+    display: inline-flex;
+    gap: 10px;
+    align-items: center;
+    padding: 12px 18px;
+    background: linear-gradient(180deg, rgba(32, 24, 20, 0.96), rgba(20, 16, 13, 0.98));
+    border: 1px solid rgba(201, 166, 107, 0.16);
+    border-radius: 12px;
+    color: var(--color-text-primary);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .install-mac svg { width: 16px; height: 20px; }
+
+  /* Shared glow */
+  .stage-glow {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(ellipse 58% 62% at 62% 40%, rgba(201, 166, 107, 0.1) 0%, transparent 70%);
+    z-index: 0;
+  }
+
+  /* ==========================================================
+     VARIANT A — Timeline-primary, devices demoted to chips
+     ========================================================== */
+  .va {
+    display: grid;
+    grid-template-columns: minmax(320px, 1fr) minmax(0, 1.25fr);
+    gap: 48px;
+    align-items: center;
+    padding: 96px 56px;
+    min-height: 680px;
+  }
+  .va .va-copy .headline { font-size: clamp(2.2rem, 4vw, 3.4rem); }
+  .va .va-stage {
+    position: relative;
+    isolation: isolate;
+  }
+  .va .va-monitor {
+    display: block;
+    width: 100%;
+    height: auto;
+    filter: drop-shadow(0 24px 60px rgba(0, 0, 0, 0.7)) brightness(1.06) contrast(1.03);
+    position: relative;
+    z-index: 2;
+  }
+  .va .va-chip-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 20px;
+    justify-content: center;
+  }
+  .va .chip {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 14px;
+    background: rgba(201, 166, 107, 0.08);
+    border: 1px solid rgba(201, 166, 107, 0.22);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--color-text-primary);
+    font-weight: 500;
+  }
+  .va .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: #89b8a4; }
+  .va .chip code { font-family: var(--font-mono); font-size: 11.5px; color: var(--color-brand-primary); }
+  .va .chip .arrow { opacity: 0.5; margin: 0 2px; }
+
+  /* ==========================================================
+     VARIANT B — Split-screen: terminal → phone (no monitor)
+     ========================================================== */
+  .vb {
+    position: relative;
+    padding: 92px 56px;
+    min-height: 680px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 48px;
+  }
+  .vb .vb-copy { max-width: 780px; text-align: center; }
+  .vb .vb-copy .headline { font-size: clamp(2.4rem, 4.4vw, 3.6rem); }
+  .vb .vb-stage {
+    position: relative;
+    width: 100%;
+    max-width: 1080px;
+    height: 360px;
+  }
+  .vb .vb-macbook {
+    position: absolute;
+    left: 0;
+    top: 10px;
+    width: 58%;
+    filter: drop-shadow(0 24px 48px rgba(0, 0, 0, 0.7));
+  }
+  .vb .vb-iphone {
+    position: absolute;
+    right: 4%;
+    bottom: -20px;
+    width: 22%;
+    filter: drop-shadow(0 24px 48px rgba(0, 0, 0, 0.7));
+    z-index: 3;
+  }
+  .vb .vb-arc {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+  .vb .vb-tag-left, .vb .vb-tag-right {
+    position: absolute;
+    font-family: var(--font-base);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    font-weight: 600;
+  }
+  .vb .vb-tag-left { left: 0; top: -10px; color: var(--color-brand-primary); }
+  .vb .vb-tag-right { right: 4%; top: -10px; color: #89b8a4; }
+
+  /* ==========================================================
+     VARIANT C — Phone-primary foreground; monitor behind; no laptop
+     ========================================================== */
+  .vc {
+    display: grid;
+    grid-template-columns: minmax(340px, 0.9fr) minmax(0, 1.3fr);
+    gap: 36px;
+    align-items: center;
+    padding: 92px 56px;
+    min-height: 680px;
+  }
+  .vc .vc-copy .headline { font-size: clamp(2.2rem, 4vw, 3.3rem); }
+  .vc .vc-stage {
+    position: relative;
+    height: 540px;
+  }
+  .vc .vc-monitor {
+    position: absolute;
+    left: -2%;
+    top: 14%;
+    width: 88%;
+    filter: drop-shadow(0 24px 48px rgba(0, 0, 0, 0.65)) brightness(0.82) saturate(0.9);
+    z-index: 1;
+  }
+  .vc .vc-phone {
+    position: absolute;
+    right: -2%;
+    bottom: -4%;
+    width: 44%;
+    filter: drop-shadow(0 32px 60px rgba(0, 0, 0, 0.85));
+    z-index: 3;
+  }
+  .vc .vc-phone-halo {
+    position: absolute;
+    right: -6%;
+    bottom: 0;
+    width: 52%;
+    height: 90%;
+    background: radial-gradient(ellipse 50% 60% at 50% 50%, rgba(201, 166, 107, 0.22) 0%, transparent 70%);
+    z-index: 2;
+    pointer-events: none;
+  }
+  .vc .vc-widget-pop {
+    position: absolute;
+    right: 30%;
+    top: 28%;
+    padding: 10px 14px;
+    border-radius: 12px;
+    background: rgba(10, 8, 7, 0.9);
+    border: 1px solid rgba(201, 166, 107, 0.28);
+    font-family: var(--font-base);
+    font-size: 11.5px;
+    color: var(--color-text-primary);
+    font-weight: 500;
+    z-index: 4;
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.5);
+    display: none; /* keep subtle, off by default */
+  }
+
+  /* ==========================================================
+     VARIANT D — Product UI hero (no device photos, in-app chrome)
+     ========================================================== */
+  .vd {
+    padding: 88px 56px 64px;
+    min-height: 680px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 36px;
+    position: relative;
+  }
+  .vd .vd-copy { max-width: 780px; text-align: center; }
+  .vd .vd-copy .headline { font-size: clamp(2.4rem, 4.4vw, 3.4rem); }
+  .vd .vd-source-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 18px;
+    margin-bottom: 10px;
+    background: rgba(10, 8, 7, 0.85);
+    border: 1px solid rgba(201, 166, 107, 0.2);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--color-text-secondary);
+  }
+  .vd .vd-source-row .src {
+    display: inline-flex; gap: 6px; align-items: center;
+    color: var(--color-text-primary);
+  }
+  .vd .vd-source-row .p { color: var(--color-brand-primary); font-weight: 700; }
+  .vd .vd-source-row .sep { color: var(--color-text-muted); }
+  .vd .vd-frame {
+    width: 100%;
+    max-width: 1120px;
+    border-radius: 14px;
+    border: 1px solid rgba(201, 166, 107, 0.2);
+    background: #0e0a08;
+    box-shadow: 0 40px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(201, 166, 107, 0.08);
+    overflow: hidden;
+  }
+  .vd .vd-frame-chrome {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: linear-gradient(180deg, rgba(32, 24, 20, 0.9), rgba(20, 16, 13, 0.98));
+    border-bottom: 1px solid rgba(201, 166, 107, 0.14);
+  }
+  .vd .vd-frame-chrome .dots { display: flex; gap: 6px; }
+  .vd .vd-frame-chrome .dot { width: 11px; height: 11px; border-radius: 50%; display: block; }
+  .vd .vd-frame-chrome .dot-r { background: #ff5f56; }
+  .vd .vd-frame-chrome .dot-y { background: #ffbd2e; }
+  .vd .vd-frame-chrome .dot-g { background: #27c93f; }
+  .vd .vd-frame-chrome .title {
+    flex: 1;
+    text-align: center;
+    font-size: 12px;
+    color: var(--color-text-muted);
+    font-weight: 500;
+  }
+  .vd .vd-frame img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+  .vd .vd-phone-peek {
+    position: absolute;
+    right: 3%;
+    bottom: -4%;
+    width: 160px;
+    filter: drop-shadow(0 24px 40px rgba(0, 0, 0, 0.7));
+    z-index: 4;
+  }
+
+  /* ==========================================================
+     VARIANT F — B with bigger phone, proper hierarchy
+     ========================================================== */
+  .vf {
+    position: relative;
+    padding: 92px 56px;
+    min-height: 720px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 40px;
+  }
+  .vf .vf-copy { max-width: 780px; text-align: center; }
+  .vf .vf-copy .headline { font-size: clamp(2.4rem, 4.4vw, 3.6rem); }
+  .vf .vf-stage {
+    position: relative;
+    width: 100%;
+    max-width: 1120px;
+    height: 440px;
+  }
+  .vf .vf-macbook {
+    position: absolute;
+    left: 2%;
+    top: 40px;
+    width: 48%;
+    filter: drop-shadow(0 24px 48px rgba(0, 0, 0, 0.7)) brightness(0.92);
+    z-index: 2;
+  }
+  .vf .vf-iphone {
+    position: absolute;
+    right: 4%;
+    bottom: -30px;
+    width: 34%;
+    filter: drop-shadow(0 32px 60px rgba(0, 0, 0, 0.85));
+    z-index: 4;
+  }
+  .vf .vf-phone-halo {
+    position: absolute;
+    right: -2%;
+    bottom: -20px;
+    width: 44%;
+    height: 100%;
+    background: radial-gradient(ellipse 50% 55% at 50% 55%, rgba(201, 166, 107, 0.22) 0%, transparent 72%);
+    z-index: 3;
+    pointer-events: none;
+  }
+  .vf .vf-arc {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+  .vf .vf-tag-left, .vf .vf-tag-right {
+    position: absolute;
+    font-family: var(--font-base);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 600;
+    z-index: 5;
+  }
+  .vf .vf-tag-left { left: 3%; top: 6px; color: var(--color-brand-primary); }
+  .vf .vf-tag-right { right: 8%; top: 6px; color: #89b8a4; }
+
+  /* ==========================================================
+     VARIANT G — Hybrid: terminal chip → timeline → phone, arc threads all three
+     ========================================================== */
+  .vg {
+    position: relative;
+    padding: 80px 48px 64px;
+    min-height: 720px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 32px;
+  }
+  .vg .vg-copy { max-width: 820px; text-align: center; }
+  .vg .vg-copy .headline { font-size: clamp(2.2rem, 4vw, 3.3rem); }
+  .vg .vg-stage {
+    position: relative;
+    width: 100%;
+    max-width: 1200px;
+    height: 460px;
+  }
+  .vg .vg-terminal {
+    position: absolute;
+    left: 1%;
+    top: 44%;
+    transform: translateY(-50%);
+    width: 18%;
+    padding: 14px 14px 16px;
+    background: rgba(10, 8, 7, 0.96);
+    border: 1px solid rgba(201, 166, 107, 0.22);
+    border-radius: 10px;
+    box-shadow: 0 24px 48px rgba(0, 0, 0, 0.7);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: #e7dcc9;
+    line-height: 1.55;
+    z-index: 3;
+  }
+  .vg .vg-terminal .t-bar {
+    display: flex; gap: 5px; margin-bottom: 10px;
+  }
+  .vg .vg-terminal .t-bar span {
+    width: 8px; height: 8px; border-radius: 50%;
+  }
+  .vg .vg-terminal .t-bar span:nth-child(1) { background: #ff5f56; }
+  .vg .vg-terminal .t-bar span:nth-child(2) { background: #ffbd2e; }
+  .vg .vg-terminal .t-bar span:nth-child(3) { background: #27c93f; }
+  .vg .vg-terminal .t-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vg .vg-terminal .t-line .p { color: var(--color-brand-primary); font-weight: 700; }
+  .vg .vg-terminal .t-line .muted { color: var(--color-text-muted); }
+  .vg .vg-monitor {
+    position: absolute;
+    left: 21%;
+    top: 6%;
+    width: 56%;
+    z-index: 2;
+    filter: drop-shadow(0 24px 56px rgba(0, 0, 0, 0.7)) brightness(1.04) contrast(1.02);
+  }
+  .vg .vg-phone {
+    position: absolute;
+    right: 2%;
+    bottom: -10px;
+    width: 26%;
+    z-index: 4;
+    filter: drop-shadow(0 32px 60px rgba(0, 0, 0, 0.85));
+  }
+  .vg .vg-phone-halo {
+    position: absolute;
+    right: -3%;
+    bottom: 0;
+    width: 34%;
+    height: 90%;
+    background: radial-gradient(ellipse 48% 55% at 55% 55%, rgba(201, 166, 107, 0.2) 0%, transparent 72%);
+    z-index: 3;
+    pointer-events: none;
+  }
+  .vg .vg-arc {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+  .vg .vg-tag-a, .vg .vg-tag-b, .vg .vg-tag-c {
+    position: absolute;
+    font-family: var(--font-base);
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 600;
+    z-index: 5;
+    color: var(--color-text-muted);
+  }
+  .vg .vg-tag-a { left: 2%; top: 10px; color: var(--color-brand-primary); }
+  .vg .vg-tag-b { left: 45%; top: 10px; transform: translateX(-50%); color: var(--color-text-primary); }
+  .vg .vg-tag-c { right: 6%; top: 10px; color: #89b8a4; }
+
+  /* ==========================================================
+     VARIANT H — Timeline + big phone, terminal promoted to install chip
+     ========================================================== */
+  .vh {
+    position: relative;
+    padding: 72px 48px 64px;
+    min-height: 760px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+  }
+  .vh .vh-copy { max-width: 860px; text-align: center; }
+  .vh .vh-copy .headline { font-size: clamp(2.4rem, 4.4vw, 3.6rem); }
+  .vh .vh-trail {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 18px;
+    margin: 4px 0 10px;
+    background: rgba(10, 8, 7, 0.85);
+    border: 1px solid rgba(201, 166, 107, 0.22);
+    border-radius: 999px;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    color: var(--color-text-secondary);
+  }
+  .vh .vh-trail .src { color: var(--color-text-primary); }
+  .vh .vh-trail .p { color: var(--color-brand-primary); font-weight: 700; }
+  .vh .vh-trail .sep { color: var(--color-text-muted); }
+  .vh .vh-trail .arrow { color: var(--color-brand-primary); font-weight: 700; }
+  .vh .vh-trail .label { color: var(--color-text-primary); font-family: var(--font-base); font-weight: 600; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; }
+  .vh .vh-stage {
+    position: relative;
+    width: 100%;
+    max-width: 1240px;
+    height: 520px;
+  }
+  .vh .vh-monitor {
+    position: absolute;
+    left: -2%;
+    top: 2%;
+    width: 72%;
+    z-index: 2;
+    filter: drop-shadow(0 28px 60px rgba(0, 0, 0, 0.7)) brightness(1.06) contrast(1.03);
+  }
+  .vh .vh-phone {
+    position: absolute;
+    right: 2%;
+    bottom: -10px;
+    width: 34%;
+    z-index: 4;
+    filter: drop-shadow(0 32px 60px rgba(0, 0, 0, 0.85));
+  }
+  .vh .vh-phone-halo {
+    position: absolute;
+    right: -3%;
+    bottom: -10px;
+    width: 42%;
+    height: 92%;
+    background: radial-gradient(ellipse 48% 55% at 55% 55%, rgba(201, 166, 107, 0.22) 0%, transparent 72%);
+    z-index: 3;
+    pointer-events: none;
+  }
+  .vh .vh-arc {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  /* ==========================================================
+     VARIANT H2 — Timeline dominant, phone tucked bottom-right
+     ========================================================== */
+  .vh2 {
+    position: relative;
+    padding: 72px 48px 56px;
+    min-height: 780px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+  }
+  .vh2 .vh2-copy { max-width: 860px; text-align: center; }
+  .vh2 .vh2-copy .headline { font-size: clamp(2.4rem, 4.4vw, 3.6rem); }
+  .vh2 .vh2-stage {
+    position: relative;
+    width: 100%;
+    max-width: 1280px;
+    height: 560px;
+  }
+  .vh2 .vh2-monitor {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 78%;
+    z-index: 2;
+    filter: drop-shadow(0 28px 60px rgba(0, 0, 0, 0.72)) brightness(1.06) contrast(1.03);
+  }
+  .vh2 .vh2-phone {
+    position: absolute;
+    right: 2%;
+    bottom: 0;
+    width: 26%;
+    z-index: 4;
+    filter: drop-shadow(0 32px 60px rgba(0, 0, 0, 0.88));
+  }
+  .vh2 .vh2-phone-halo {
+    position: absolute;
+    right: -2%;
+    bottom: -20px;
+    width: 36%;
+    height: 78%;
+    background: radial-gradient(ellipse 50% 55% at 55% 55%, rgba(201, 166, 107, 0.24) 0%, transparent 72%);
+    z-index: 3;
+    pointer-events: none;
+  }
+  .vh2 .vh2-chip-row {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    margin-top: -10px;
+  }
+  .vh2 .vh2-chip-row .chip {
+    display: inline-flex;
+    gap: 8px;
+    align-items: center;
+    padding: 8px 14px;
+    background: rgba(201, 166, 107, 0.08);
+    border: 1px solid rgba(201, 166, 107, 0.22);
+    border-radius: 999px;
+    font-size: 12px;
+    color: var(--color-text-primary);
+    font-weight: 500;
+  }
+  .vh2 .vh2-chip-row code { font-family: var(--font-mono); font-size: 11.5px; color: var(--color-brand-primary); }
+  .vh2 .vh2-chip-row .arrow { opacity: 0.45; margin: 0 2px; }
+
+  /* ==========================================================
+     VARIANT I — Infomercial "sad terminal" BEFORE → bright AFTER
+     ========================================================== */
+  .vi {
+    position: relative;
+    padding: 68px 40px 60px;
+    min-height: 780px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 28px;
+  }
+  .vi .vi-copy { max-width: 880px; text-align: center; }
+  .vi .vi-copy .headline { font-size: clamp(2.4rem, 4.4vw, 3.6rem); }
+  .vi .vi-stage {
+    position: relative;
+    width: 100%;
+    max-width: 1280px;
+    height: 560px;
+    display: grid;
+    grid-template-columns: 0.7fr 1.6fr;
+    gap: 0;
+    align-items: center;
+  }
+  /* BEFORE column */
+  .vi-before {
+    position: relative;
+    padding: 24px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    justify-content: center;
+  }
+  .vi-before-label {
+    font-family: var(--font-base);
+    font-size: 10.5px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: #6b6359;
+    font-weight: 700;
+    padding: 4px 10px;
+    border: 1px solid #3a342c;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.4);
+  }
+  .vi-terminal {
+    width: 86%;
+    max-width: 320px;
+    padding: 14px 14px 18px;
+    background: #0d0c0a;
+    border: 1px solid #2a2620;
+    border-radius: 10px;
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.6);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    line-height: 1.7;
+    color: #6a6458;
+    filter: grayscale(1) brightness(0.72) contrast(0.95);
+    transform: rotate(-3deg);
+    opacity: 0.85;
+  }
+  .vi-terminal .tbar {
+    display: flex; gap: 5px; margin-bottom: 10px;
+  }
+  .vi-terminal .tbar span {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #3a342c;
+  }
+  .vi-terminal .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #7a7265; }
+  .vi-terminal .line .p { color: #8a8072; font-weight: 700; }
+  .vi-terminal .line .err { color: #7c5c4a; }
+  .vi-terminal .line .dim { color: #524c43; }
+  .vi-before-caption {
+    font-family: var(--font-base);
+    font-size: 11px;
+    color: #776d5f;
+    text-align: center;
+    max-width: 220px;
+    line-height: 1.4;
+    font-style: italic;
+  }
+  /* Divider arrow */
+  .vi-arrow-wrap {
+    position: absolute;
+    left: 30%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .vi-arrow {
+    width: 80px;
+    height: auto;
+  }
+  .vi-arrow-label {
+    font-family: var(--font-base);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--color-brand-primary);
+    font-weight: 700;
+    padding: 3px 10px;
+    background: rgba(10,8,7,0.95);
+    border: 1px solid rgba(201,166,107,0.35);
+    border-radius: 999px;
+  }
+  /* AFTER column */
+  .vi-after {
+    position: relative;
+    height: 100%;
+  }
+  .vi-after-label {
+    position: absolute;
+    top: 6px;
+    left: 8px;
+    z-index: 5;
+    font-family: var(--font-base);
+    font-size: 10.5px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--color-brand-primary);
+    font-weight: 700;
+    padding: 4px 12px;
+    border: 1px solid rgba(201,166,107,0.45);
+    border-radius: 999px;
+    background: rgba(10,8,7,0.9);
+  }
+  .vi-monitor {
+    position: absolute;
+    left: 0;
+    top: 8%;
+    width: 82%;
+    z-index: 2;
+    filter: drop-shadow(0 28px 60px rgba(0, 0, 0, 0.72)) brightness(1.08) contrast(1.04);
+  }
+  .vi-phone {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 32%;
+    z-index: 4;
+    filter: drop-shadow(0 32px 60px rgba(0, 0, 0, 0.9));
+  }
+  .vi-phone-halo {
+    position: absolute;
+    right: -4%;
+    bottom: -20px;
+    width: 42%;
+    height: 88%;
+    background: radial-gradient(ellipse 50% 55% at 55% 55%, rgba(201, 166, 107, 0.28) 0%, transparent 72%);
+    z-index: 3;
+    pointer-events: none;
+  }
+
+  /* ==========================================================
+     VARIANT J — Scattered sessions → consolidated timeline + phone
+     ========================================================== */
+  .vj {
+    position: relative;
+    padding: 68px 40px 64px;
+    min-height: 820px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 26px;
+  }
+  .vj .vj-copy { max-width: 900px; text-align: center; }
+  .vj .vj-copy .headline { font-size: clamp(2.4rem, 4.4vw, 3.6rem); }
+  .vj .vj-stage {
+    position: relative;
+    width: 100%;
+    max-width: 1320px;
+    height: 600px;
+    display: grid;
+    grid-template-columns: 0.58fr 1.8fr;
+    gap: 0;
+    align-items: center;
+  }
+  .vj-before {
+    position: relative;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 12px;
+  }
+  .vj-before-label {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    font-family: var(--font-base);
+    font-size: 10.5px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: #6b6359;
+    font-weight: 700;
+    padding: 4px 10px;
+    border: 1px solid #3a342c;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.4);
+  }
+  .vj-pile {
+    position: relative;
+    width: 100%;
+    height: 380px;
+    filter: grayscale(1) brightness(0.72) contrast(0.9);
+    opacity: 0.85;
+  }
+  .vj-mini {
+    position: absolute;
+    width: 70%;
+    padding: 10px 12px 12px;
+    background: #0d0c0a;
+    border: 1px solid #2a2620;
+    border-radius: 8px;
+    box-shadow: 0 14px 28px rgba(0,0,0,0.6);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    line-height: 1.55;
+    color: #7a7265;
+  }
+  .vj-mini .tbar {
+    display: flex; gap: 4px; margin-bottom: 7px;
+  }
+  .vj-mini .tbar span {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #3a342c;
+  }
+  .vj-mini .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vj-mini .line .p { color: #9a8e7c; font-weight: 700; }
+  .vj-mini .line .err { color: #7c5c4a; }
+  .vj-mini .line .dim { color: #524c43; }
+  .vj-mini-1 { left: 2%; top: 4%; transform: rotate(-6deg); z-index: 1; }
+  .vj-mini-2 { left: 18%; top: 18%; transform: rotate(3deg); z-index: 2; }
+  .vj-mini-3 { left: 8%; top: 38%; transform: rotate(-2deg); z-index: 3; }
+  .vj-mini-4 { left: 24%; top: 56%; transform: rotate(5deg); z-index: 4; }
+  .vj-before-caption {
+    font-family: var(--font-base);
+    font-size: 11.5px;
+    color: #8a8072;
+    text-align: center;
+    max-width: 260px;
+    line-height: 1.45;
+    font-style: italic;
+    margin-top: 10px;
+  }
+  .vj-arrow-wrap {
+    position: absolute;
+    left: 26%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .vj-arrow {
+    width: 92px;
+    height: auto;
+  }
+  .vj-arrow-label {
+    font-family: var(--font-base);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--color-brand-primary);
+    font-weight: 700;
+    padding: 3px 12px;
+    background: rgba(10,8,7,0.95);
+    border: 1px solid rgba(201,166,107,0.4);
+    border-radius: 999px;
+  }
+  .vj-after {
+    position: relative;
+    height: 100%;
+  }
+  .vj-after-label {
+    position: absolute;
+    top: 6px;
+    left: 8px;
+    z-index: 6;
+    font-family: var(--font-base);
+    font-size: 10.5px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: var(--color-brand-primary);
+    font-weight: 700;
+    padding: 4px 12px;
+    border: 1px solid rgba(201,166,107,0.45);
+    border-radius: 999px;
+    background: rgba(10,8,7,0.9);
+  }
+  .vj-monitor {
+    position: absolute;
+    left: -2%;
+    top: 5%;
+    width: 86%;
+    z-index: 2;
+    filter: drop-shadow(0 30px 64px rgba(0, 0, 0, 0.75)) brightness(1.08) contrast(1.04);
+  }
+  .vj-phone {
+    position: absolute;
+    right: -2%;
+    bottom: -20px;
+    width: 34%;
+    z-index: 5;
+    filter: drop-shadow(0 36px 68px rgba(0, 0, 0, 0.92));
+  }
+  .vj-phone-halo {
+    position: absolute;
+    right: -6%;
+    bottom: -30px;
+    width: 46%;
+    height: 94%;
+    background: radial-gradient(ellipse 50% 55% at 55% 55%, rgba(201, 166, 107, 0.28) 0%, transparent 72%);
+    z-index: 4;
+    pointer-events: none;
+  }
+
+  /* ==========================================================
+     VARIANT K — Maximum overlap, no before: timeline + phone fused
+     ========================================================== */
+  .vk {
+    position: relative;
+    padding: 72px 40px 40px;
+    min-height: 800px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 26px;
+  }
+  .vk .vk-copy { max-width: 880px; text-align: center; }
+  .vk .vk-copy .headline { font-size: clamp(2.4rem, 4.4vw, 3.6rem); }
+  .vk .vk-stage {
+    position: relative;
+    width: 100%;
+    max-width: 1200px;
+    height: 620px;
+    margin: 0 auto;
+  }
+  .vk .vk-monitor {
+    position: absolute;
+    left: 0;
+    top: 30px;
+    width: 76%;
+    z-index: 2;
+    filter: drop-shadow(0 32px 68px rgba(0, 0, 0, 0.75)) brightness(1.08) contrast(1.04);
+  }
+  .vk .vk-phone {
+    position: absolute;
+    right: 4%;
+    top: 70px;
+    width: 34%;
+    z-index: 5;
+    filter: drop-shadow(0 40px 72px rgba(0, 0, 0, 0.95));
+  }
+  .vk .vk-phone-halo {
+    position: absolute;
+    right: -2%;
+    top: 40px;
+    width: 44%;
+    height: 90%;
+    background: radial-gradient(ellipse 50% 55% at 55% 55%, rgba(201, 166, 107, 0.3) 0%, transparent 70%);
+    z-index: 4;
+    pointer-events: none;
+  }
+
+  /* ==========================================================
+     VARIANT E — Current shipping (control)
+     ========================================================== */
+  .ve {
+    display: flex;
+    align-items: center;
+    gap: 48px;
+    padding: 92px 56px;
+    min-height: 680px;
+    position: relative;
+  }
+  .ve .ve-copy {
+    flex: 0 1 560px;
+    max-width: 600px;
+    text-align: center;
+  }
+  .ve .ve-copy .headline { font-size: clamp(2.2rem, 4vw, 3.4rem); }
+  .ve .ve-stage {
+    flex: 1 1 720px;
+    position: relative;
+    height: 460px;
+  }
+  .ve .ve-monitor {
+    position: absolute;
+    left: 5%;
+    top: 0;
+    width: 95%;
+    z-index: 2;
+    filter: drop-shadow(0 18px 44px rgba(0, 0, 0, 0.62)) brightness(1.06) contrast(1.03);
+  }
+  .ve .ve-macbook {
+    position: absolute;
+    left: -3%;
+    bottom: -2%;
+    width: 46%;
+    z-index: 3;
+    filter: drop-shadow(0 16px 40px rgba(0, 0, 0, 0.6));
+  }
+  .ve .ve-iphone {
+    position: absolute;
+    right: 1%;
+    bottom: 6%;
+    width: 22%;
+    z-index: 4;
+    filter: drop-shadow(0 16px 40px rgba(0, 0, 0, 0.6));
+  }
+</style>
+</head>
+<body>
+
+<!-- ========== VARIANT A ========== -->
+<section class="variant" id="va">
+  <span class="variant-label">A — Timeline-primary</span>
+  <div class="stage-glow"></div>
+  <div class="va">
+    <div class="va-copy">
+      <p class="kicker">Self-hosted session control</p>
+      <h1 class="headline">Mission control for your <span class="gradient-text">AI coding sessions.</span></h1>
+      <p class="subhead">One timeline for every Claude, Codex, and Gemini session. Find past work fast, inspect the raw session, and steer live work from browser, CLI, or API.</p>
+      <div class="install-row">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="va-stage">
+      <img class="va-monitor" src="../../../../web/public/images/landing/device-monitor.webp" alt="Longhouse timeline" />
+      <div class="va-chip-row">
+        <span class="chip"><span class="dot"></span><code>$ claude</code></span>
+        <span class="chip arrow">→</span>
+        <span class="chip">Captured &amp; indexed</span>
+        <span class="chip arrow">→</span>
+        <span class="chip">On every device</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT B ========== -->
+<section class="variant" id="vb">
+  <span class="variant-label">B — Terminal → Phone</span>
+  <div class="stage-glow"></div>
+  <div class="vb">
+    <div class="vb-copy">
+      <p class="kicker">Your sessions, everywhere</p>
+      <h1 class="headline">Start work in your terminal. <span class="gradient-text">Check in from anywhere.</span></h1>
+      <p class="subhead">Longhouse captures every Claude, Codex, and Gemini session on your machine — searchable from the web, controllable from your pocket.</p>
+      <div class="install-row" style="justify-content:center;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="vb-stage">
+      <span class="vb-tag-left">Where work starts</span>
+      <span class="vb-tag-right">Where it follows you</span>
+      <svg class="vb-arc" viewBox="0 0 1080 360" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="arcG" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#C9A66B" stop-opacity="0"/>
+            <stop offset="40%" stop-color="#C9A66B" stop-opacity="0.9"/>
+            <stop offset="70%" stop-color="#E8C88E" stop-opacity="0.9"/>
+            <stop offset="100%" stop-color="#89b8a4" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="M 120 200 C 400 60 720 60 960 240" stroke="url(#arcG)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+        <circle cx="960" cy="240" r="4" fill="#89b8a4"/>
+      </svg>
+      <img class="vb-macbook" src="../../../../web/public/images/landing/device-macbook.webp" alt="Terminal on MacBook" />
+      <img class="vb-iphone" src="../../../../web/public/images/landing/device-iphone.webp" alt="Longhouse widget on iPhone" />
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT C ========== -->
+<section class="variant" id="vc">
+  <span class="variant-label">C — Phone-forward</span>
+  <div class="stage-glow"></div>
+  <div class="vc">
+    <div class="vc-copy">
+      <p class="kicker">In your pocket, not just your tabs</p>
+      <h1 class="headline">Your agent sessions. <span class="gradient-text">Always one glance away.</span></h1>
+      <p class="subhead">Longhouse keeps every Claude, Codex, and Gemini session searchable on the web — and a home-screen widget away on your phone.</p>
+      <div class="install-row">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="vc-stage">
+      <div class="vc-phone-halo"></div>
+      <img class="vc-monitor" src="../../../../web/public/images/landing/device-monitor.webp" alt="Longhouse timeline" />
+      <img class="vc-phone" src="../../../../web/public/images/landing/device-iphone.webp" alt="Longhouse widget on iPhone" />
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT D ========== -->
+<section class="variant" id="vd">
+  <span class="variant-label">D — Product UI hero</span>
+  <div class="stage-glow"></div>
+  <div class="vd">
+    <div class="vd-copy">
+      <p class="kicker">Mission control for agent sessions</p>
+      <h1 class="headline">Every session you run. <span class="gradient-text">One searchable timeline.</span></h1>
+      <p class="subhead">Longhouse collects every Claude, Codex, and Gemini session from your machines — then lets you recall, inspect, and steer them from web, CLI, or phone.</p>
+      <div class="vd-source-row">
+        Sources:
+        <span class="src"><span class="p">$</span> claude</span>
+        <span class="sep">·</span>
+        <span class="src"><span class="p">$</span> codex</span>
+        <span class="sep">·</span>
+        <span class="src"><span class="p">$</span> gemini</span>
+      </div>
+      <div class="install-row" style="justify-content:center; margin-bottom: 8px;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="vd-frame">
+      <div class="vd-frame-chrome">
+        <div class="dots"><span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span></div>
+        <span class="title">longhouse.ai / timeline</span>
+      </div>
+      <img src="../../../../web/public/images/landing/timeline-preview.png" alt="Longhouse timeline" />
+    </div>
+    <img class="vd-phone-peek" src="../../../../web/public/images/landing/device-iphone.webp" alt="iOS widget" />
+  </div>
+</section>
+
+<!-- ========== VARIANT F ========== -->
+<section class="variant" id="vf">
+  <span class="variant-label">F — Terminal → BIG Phone</span>
+  <div class="stage-glow"></div>
+  <div class="vf">
+    <div class="vf-copy">
+      <p class="kicker">Your sessions, everywhere</p>
+      <h1 class="headline">Start work in your terminal. <span class="gradient-text">Check in from anywhere.</span></h1>
+      <p class="subhead">Longhouse captures every Claude, Codex, and Gemini session on your machine — searchable from the web, controllable from your pocket.</p>
+      <div class="install-row" style="justify-content:center;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="vf-stage">
+      <span class="vf-tag-left">Where work starts</span>
+      <span class="vf-tag-right">Where it follows you</span>
+      <svg class="vf-arc" viewBox="0 0 1120 440" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="arcFG" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#C9A66B" stop-opacity="0"/>
+            <stop offset="35%" stop-color="#C9A66B" stop-opacity="0.95"/>
+            <stop offset="70%" stop-color="#E8C88E" stop-opacity="0.95"/>
+            <stop offset="100%" stop-color="#89b8a4" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="M 180 260 C 480 80 780 80 990 290" stroke="url(#arcFG)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+        <circle cx="990" cy="290" r="4" fill="#89b8a4"/>
+      </svg>
+      <div class="vf-phone-halo"></div>
+      <img class="vf-macbook" src="../../../../web/public/images/landing/device-macbook.webp" alt="Terminal on MacBook" />
+      <img class="vf-iphone" src="../../../../web/public/images/landing/device-iphone.webp" alt="Longhouse widget on iPhone" />
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT G ========== -->
+<section class="variant" id="vg">
+  <span class="variant-label">G — Terminal → Timeline → Phone</span>
+  <div class="stage-glow"></div>
+  <div class="vg">
+    <div class="vg-copy">
+      <p class="kicker">Self-hosted session control</p>
+      <h1 class="headline">From your terminal, <span class="gradient-text">to your pocket.</span></h1>
+      <p class="subhead">Longhouse captures every Claude, Codex, and Gemini session — then lets you search, inspect, and steer them from browser or phone.</p>
+      <div class="install-row" style="justify-content:center;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="vg-stage">
+      <span class="vg-tag-a">Terminal</span>
+      <span class="vg-tag-b">Searchable timeline</span>
+      <span class="vg-tag-c">In your pocket</span>
+      <svg class="vg-arc" viewBox="0 0 1200 460" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="arcGG" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#C9A66B" stop-opacity="0"/>
+            <stop offset="15%" stop-color="#C9A66B" stop-opacity="0.85"/>
+            <stop offset="50%" stop-color="#E8C88E" stop-opacity="0.9"/>
+            <stop offset="85%" stop-color="#89b8a4" stop-opacity="0.85"/>
+            <stop offset="100%" stop-color="#89b8a4" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="M 130 230 C 320 70 900 70 1080 300" stroke="url(#arcGG)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+        <circle cx="130" cy="230" r="4" fill="#C9A66B"/>
+        <circle cx="1080" cy="300" r="4" fill="#89b8a4"/>
+      </svg>
+      <div class="vg-terminal">
+        <div class="t-bar"><span></span><span></span><span></span></div>
+        <div class="t-line"><span class="p">$</span> claude</div>
+        <div class="t-line"><span class="muted">›</span> implement hero…</div>
+        <div class="t-line"><span class="muted">›</span> tests passing ✓</div>
+      </div>
+      <div class="vg-phone-halo"></div>
+      <img class="vg-monitor" src="../../../../web/public/images/landing/device-monitor.webp" alt="Longhouse timeline" />
+      <img class="vg-phone" src="../../../../web/public/images/landing/device-iphone.webp" alt="Longhouse widget on iPhone" />
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT H ========== -->
+<section class="variant" id="vh">
+  <span class="variant-label">H — Timeline + Phone (terminal as chip)</span>
+  <div class="stage-glow"></div>
+  <div class="vh">
+    <div class="vh-copy">
+      <p class="kicker">Self-hosted session control</p>
+      <h1 class="headline">From your terminal, <span class="gradient-text">to your pocket.</span></h1>
+      <p class="subhead">Longhouse captures every Claude, Codex, and Gemini session — then lets you search, inspect, and steer them from browser or phone.</p>
+      <div class="vh-trail">
+        <span class="src"><span class="p">$</span> claude</span>
+        <span class="sep">·</span>
+        <span class="src"><span class="p">$</span> codex</span>
+        <span class="sep">·</span>
+        <span class="src"><span class="p">$</span> gemini</span>
+        <span class="arrow">→</span>
+        <span class="label">Timeline</span>
+        <span class="arrow">→</span>
+        <span class="label">Pocket</span>
+      </div>
+      <div class="install-row" style="justify-content:center;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="vh-stage">
+      <svg class="vh-arc" viewBox="0 0 1240 520" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="arcHG" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#C9A66B" stop-opacity="0"/>
+            <stop offset="30%" stop-color="#C9A66B" stop-opacity="0.8"/>
+            <stop offset="70%" stop-color="#89b8a4" stop-opacity="0.8"/>
+            <stop offset="100%" stop-color="#89b8a4" stop-opacity="0"/>
+          </linearGradient>
+        </defs>
+        <path d="M 820 280 C 900 180 1010 170 1120 260" stroke="url(#arcHG)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+        <circle cx="1120" cy="260" r="4" fill="#89b8a4"/>
+      </svg>
+      <div class="vh-phone-halo"></div>
+      <img class="vh-monitor" src="../../../../web/public/images/landing/device-monitor.webp" alt="Longhouse timeline" />
+      <img class="vh-phone" src="../../../../web/public/images/landing/device-iphone.webp" alt="Longhouse widget on iPhone" />
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT H2 ========== -->
+<section class="variant" id="vh2">
+  <span class="variant-label">H2 — Timeline dominant, phone accent</span>
+  <div class="stage-glow"></div>
+  <div class="vh2">
+    <div class="vh2-copy">
+      <p class="kicker">Self-hosted session control</p>
+      <h1 class="headline">One timeline for every <span class="gradient-text">AI coding session.</span></h1>
+      <p class="subhead">Longhouse captures every Claude, Codex, and Gemini session from your machines — searchable on the web, one glance away on your phone.</p>
+      <div class="install-row" style="justify-content:center;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+      <div class="vh2-chip-row">
+        <span class="chip"><code>$ claude</code></span>
+        <span class="arrow">→</span>
+        <span class="chip">Searchable timeline</span>
+        <span class="arrow">→</span>
+        <span class="chip">On your phone</span>
+      </div>
+    </div>
+    <div class="vh2-stage">
+      <div class="vh2-phone-halo"></div>
+      <img class="vh2-monitor" src="../../../../web/public/images/landing/device-monitor.webp" alt="Longhouse timeline" />
+      <img class="vh2-phone" src="../../../../web/public/images/landing/device-iphone.webp" alt="Longhouse widget on iPhone" />
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT I — Before/After infomercial ========== -->
+<section class="variant" id="vi">
+  <span class="variant-label">I — Before / After</span>
+  <div class="stage-glow"></div>
+  <div class="vi">
+    <div class="vi-copy">
+      <p class="kicker">Self-hosted session control</p>
+      <h1 class="headline">Your sessions deserve <span class="gradient-text">better than scrollback.</span></h1>
+      <p class="subhead">Longhouse captures every Claude, Codex, and Gemini session — then gives you a searchable timeline and a widget for your phone.</p>
+      <div class="install-row" style="justify-content:center;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="vi-stage">
+      <!-- BEFORE -->
+      <div class="vi-before">
+        <span class="vi-before-label">Before</span>
+        <div class="vi-terminal">
+          <div class="tbar"><span></span><span></span><span></span></div>
+          <div class="line"><span class="p">$</span> claude --resume</div>
+          <div class="line"><span class="dim">›</span> <span class="err">session not found</span></div>
+          <div class="line"><span class="p">$</span> ls ~/.claude/projects</div>
+          <div class="line"><span class="dim">-Users-me-work-api-</span></div>
+          <div class="line"><span class="dim">-Users-me-temp-</span></div>
+          <div class="line"><span class="dim">… 247 more</span></div>
+          <div class="line"><span class="p">$</span> <span class="err">grep "that prompt"</span> \</div>
+          <div class="line"><span class="dim">  ~/.claude/**/*.jsonl</span></div>
+          <div class="line"><span class="err">no matches</span></div>
+        </div>
+        <p class="vi-before-caption">Scrollback, forgotten. Good luck finding what you ran last Tuesday.</p>
+      </div>
+      <!-- ARROW -->
+      <div class="vi-arrow-wrap">
+        <svg class="vi-arrow" viewBox="0 0 80 40" fill="none">
+          <defs>
+            <linearGradient id="arrowG" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#C9A66B" stop-opacity="0"/>
+              <stop offset="40%" stop-color="#C9A66B" stop-opacity="0.95"/>
+              <stop offset="100%" stop-color="#E8C88E" stop-opacity="1"/>
+            </linearGradient>
+          </defs>
+          <path d="M 4 20 L 68 20" stroke="url(#arrowG)" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M 60 12 L 72 20 L 60 28" stroke="#E8C88E" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="vi-arrow-label">Longhouse</span>
+      </div>
+      <!-- AFTER -->
+      <div class="vi-after">
+        <span class="vi-after-label">After</span>
+        <div class="vi-phone-halo"></div>
+        <img class="vi-monitor" src="../../../../web/public/images/landing/device-monitor.webp" alt="Longhouse timeline" />
+        <img class="vi-phone" src="../../../../web/public/images/landing/device-iphone.webp" alt="Longhouse widget on iPhone" />
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT J — scattered sessions → consolidated ========== -->
+<section class="variant" id="vj">
+  <span class="variant-label">J — Scattered → Consolidated</span>
+  <div class="stage-glow"></div>
+  <div class="vj">
+    <div class="vj-copy">
+      <p class="kicker">Self-hosted session control</p>
+      <h1 class="headline">Every session in one place. <span class="gradient-text">On every device.</span></h1>
+      <p class="subhead">Longhouse pulls every Claude, Codex, and Gemini session off your machine — searchable on the web, glanceable on your phone.</p>
+      <div class="install-row" style="justify-content:center;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="vj-stage">
+      <div class="vj-before">
+        <span class="vj-before-label">Before</span>
+        <div class="vj-pile">
+          <div class="vj-mini vj-mini-1">
+            <div class="tbar"><span></span><span></span><span></span></div>
+            <div class="line"><span class="p">$</span> claude</div>
+            <div class="line"><span class="dim">› fix auth bug</span></div>
+            <div class="line"><span class="err">session closed</span></div>
+          </div>
+          <div class="vj-mini vj-mini-2">
+            <div class="tbar"><span></span><span></span><span></span></div>
+            <div class="line"><span class="p">$</span> codex</div>
+            <div class="line"><span class="dim">› refactor API</span></div>
+            <div class="line"><span class="dim">… forgotten</span></div>
+          </div>
+          <div class="vj-mini vj-mini-3">
+            <div class="tbar"><span></span><span></span><span></span></div>
+            <div class="line"><span class="p">$</span> gemini</div>
+            <div class="line"><span class="dim">› draft spec</span></div>
+            <div class="line"><span class="err">gone</span></div>
+          </div>
+          <div class="vj-mini vj-mini-4">
+            <div class="tbar"><span></span><span></span><span></span></div>
+            <div class="line"><span class="p">$</span> claude --resume</div>
+            <div class="line"><span class="err">no match</span></div>
+            <div class="line"><span class="dim">… 247 dirs</span></div>
+          </div>
+        </div>
+        <p class="vj-before-caption">Hundreds of sessions.<br/>Scattered across machines.<br/>Forgotten by tomorrow.</p>
+      </div>
+      <div class="vj-arrow-wrap">
+        <svg class="vj-arrow" viewBox="0 0 92 40" fill="none">
+          <defs>
+            <linearGradient id="arrowGJ" x1="0" y1="0" x2="1" y2="0">
+              <stop offset="0%" stop-color="#C9A66B" stop-opacity="0"/>
+              <stop offset="40%" stop-color="#C9A66B" stop-opacity="0.95"/>
+              <stop offset="100%" stop-color="#E8C88E" stop-opacity="1"/>
+            </linearGradient>
+          </defs>
+          <path d="M 4 20 L 76 20" stroke="url(#arrowGJ)" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M 68 12 L 82 20 L 68 28" stroke="#E8C88E" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="vj-arrow-label">Longhouse</span>
+      </div>
+      <div class="vj-after">
+        <span class="vj-after-label">After</span>
+        <div class="vj-phone-halo"></div>
+        <img class="vj-monitor" src="../../../../web/public/images/landing/device-monitor.webp" alt="Longhouse timeline" />
+        <img class="vj-phone" src="../../../../web/public/images/landing/device-iphone.webp" alt="Longhouse widget on iPhone" />
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT K — maximum overlap ========== -->
+<section class="variant" id="vk">
+  <span class="variant-label">K — MAX OVERLAP</span>
+  <div class="stage-glow"></div>
+  <div class="vk">
+    <div class="vk-copy">
+      <p class="kicker">Self-hosted session control</p>
+      <h1 class="headline">One timeline for every <span class="gradient-text">AI coding session.</span></h1>
+      <p class="subhead">Longhouse captures every Claude, Codex, and Gemini session from your machines — searchable on the web, one glance away on your phone.</p>
+      <div class="install-row" style="justify-content:center;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="vk-stage">
+      <div class="vk-phone-halo"></div>
+      <img class="vk-monitor" src="../../../../web/public/images/landing/device-monitor.webp" alt="Longhouse timeline" />
+      <img class="vk-phone" src="../../../../web/public/images/landing/device-iphone.webp" alt="Longhouse widget on iPhone" />
+    </div>
+  </div>
+</section>
+
+<!-- ========== VARIANT E — control ========== -->
+<section class="variant" id="ve">
+  <span class="variant-label">E — Current (control)</span>
+  <div class="stage-glow"></div>
+  <div class="ve">
+    <div class="ve-copy">
+      <p class="kicker">Self-hosted session control</p>
+      <h1 class="headline">Mission control for your <span class="gradient-text">AI coding sessions.</span></h1>
+      <p class="subhead">One timeline for Claude, Codex, and Gemini sessions. Find past work fast, inspect the raw session, and steer live work from browser, CLI, or API.</p>
+      <div class="install-row" style="justify-content:center;">
+        <span class="install-cmd"><span class="p">$</span> curl -fsSL https://get.longhouse.ai/install.sh | bash</span>
+        <a class="install-mac" href="#">
+          <svg viewBox="0 0 814 1000" fill="currentColor"><path d="M788.1 340.9c-5.8 4.5-108.2 62.2-108.2 190.5 0 148.4 130.3 200.9 134.2 202.2-.6 3.2-20.7 71.9-68.7 141.9-42.8 61.6-87.5 123.1-155.5 123.1s-85.5-39.5-164-39.5c-76.5 0-103.7 40.8-165.9 40.8s-105.6-57.8-155.5-127.4c-58.3-81.5-105.4-208.3-105.4-328 0-193.2 125.6-295.6 249.2-295.6 65.7 0 120.5 43.1 161.7 43.1 39.2 0 100.4-45.8 175.1-45.8 28.2 0 130 2.6 197 99.7zm-234.1-187.4c31.3-36.9 53.4-88.1 53.4-139.3 0-7.1-.7-14.3-1.3-20.1-51 1.9-110.7 33.9-147 75.8-28.9 32.6-57.1 84.5-57.1 136.5 0 7.8.7 15.6 1.3 18.2 2.6.6 6.4 1.3 10.3 1.3 45.8-.1 102.5-30.4 140.4-72.4z"/></svg>
+          Download for macOS
+        </a>
+      </div>
+    </div>
+    <div class="ve-stage">
+      <img class="ve-monitor" src="../../../../web/public/images/landing/device-monitor.webp" alt="Longhouse timeline" />
+      <img class="ve-macbook" src="../../../../web/public/images/landing/device-macbook.webp" alt="MacBook terminal" />
+      <img class="ve-iphone" src="../../../../web/public/images/landing/device-iphone.webp" alt="iPhone widget" />
+    </div>
+  </div>
+</section>
+
+</body>
+</html>

@@ -146,20 +146,55 @@ If you are picking a direction, workshop before editing the repo — see `## Exp
 
 ## Exploration Loop
 
-If the task is "what should the hero look like" (composition, hierarchy, narrative) instead of "fix this asset or CSS", do NOT open repo files first. The shipping HeroSection is a committed opinion — iterating on it directly is how agents end up fighting the old layout instead of exploring a new one.
+If the task is "what should the hero look like" (composition, hierarchy, narrative) — not "fix an asset or CSS" — do NOT open `HeroSection.tsx` first. The shipping hero is a committed opinion; iterating on it directly means fighting the old layout instead of exploring a new one.
 
-Use a disposable harness outside the repo:
+Use the workshop harness under this skill: `.agents/skills/landing-hero/workshop/`.
 
-1. `mkdir -p /tmp/hero-workshop` and copy the current device webps + any real product screenshot into it.
-2. Write a single `variants.html` with multiple isolated `<section>`s, each a full-bleed hero candidate using the same design tokens (`--color-brand-primary: #C9A66B`, `--color-text-primary: #F3EAD9`, `--color-surface-page: #120B09`, `--font-display: "Iowan Old Style", Palatino, Georgia, serif`). Use system fonts — pulling Google Fonts makes Playwright screenshot timeouts non-deterministic.
-3. Render each section to PNG via Playwright with `page.screenshot(clip=...)` using the element's `getBoundingClientRect`. Reset `window.scrollTo(0,0)` before every clip or the scroll state drifts and filenames stop matching content.
-4. Viewport height must exceed the variant's `min-height` or the clip will timeout. 1440×1500 @ 2x is a safe default for sections up to ~780px tall.
-5. Always view the rendered PNG via the Read tool before reporting to the user. Trust the top-left badge label in the image, not the filename.
-6. Only translate the chosen direction into `HeroSection.tsx` / `landing.css` after the user has picked one.
+- `variants.html` — isolated `<section id="v*">` hero candidates; each uses the real landing design tokens (`--color-brand-primary: #C9A66B`, `--color-text-primary: #F3EAD9`, `--color-surface-page: #120B09`, `--font-display: "Iowan Old Style", Palatino, Georgia, serif`). System fonts only — adding Google Fonts makes Playwright clip-screenshots non-deterministic.
+- `render.py` — Playwright clip-screenshot runner.
+- `shot-*.png` — finalists from the April 17, 2026 exploration pass. Variant IDs in `variants.html` (e.g. `vg`) do not always match finalist letters; trust the top-left badge label in each shot over the filename.
 
-Playwright toolchain gotcha: default `playwright` wants a chromium version that may not exist in the local cache. Pin `playwright==1.50.0` and pass `executable_path` to a known-good `chrome-mac-arm64/Google Chrome for Testing` binary under `~/Library/Caches/ms-playwright/chromium-*`.
+Finalists left tabled (user couldn't decide):
 
-This loop is for layout/story exploration. The AI image pipeline below (Step 1 onward) is for when the assets themselves need to change.
+- `shot-A-timeline-primary.png` — big timeline, phone absent. Best legibility, weakest differentiation.
+- `shot-F-big-phone.png` — MacBook + big phone + arc. Best differentiation, timeline hidden.
+- `shot-G-terminal-timeline-phone.png` — three beats in one row. Clearest story, risks reading small.
+- `shot-J-scattered-consolidated.png` — grayscale "before" pile → bright "after". Infomercial framing.
+- `shot-K-max-overlap.png` — only timeline + phone, phone covers monitor's right edge. High impact.
+
+Constraints that must survive whichever direction is picked:
+
+- iPhone widget visible at meaningful size (it's the differentiator).
+- Timeline not hidden entirely (it's the actual product surface users live in).
+- Pitch stays "sessions from CLIs you already run → Longhouse" — not "Longhouse web → Longhouse phone."
+
+### Running the harness
+
+```bash
+cd .agents/skills/landing-hero/workshop
+uv run --with "playwright==1.50.0" python render.py
+open shot-*.png
+```
+
+To add a new variant, copy an existing `<section id="v*">` in `variants.html`, give it a new id, edit composition, set `VARIANTS = ["vnew"]` in `render.py`, and re-run. Always view the rendered PNG with the Read tool before reporting back.
+
+### Gotchas
+
+- Viewport height in `render.py` must exceed the section's `min-height` or `page.screenshot(clip=...)` will timeout. 1440×1500 @ 2x is safe up to ~780px sections.
+- The runner resets `window.scrollTo(0, 0)` before each clip; don't remove that — scroll drift desyncs filenames from content.
+- Default `playwright` expects a chromium version that may not be cached. Pin `playwright==1.50.0` and point `EXEC` in `render.py` at a `chrome-mac-arm64/Google Chrome for Testing` under `~/Library/Caches/ms-playwright/chromium-*/`. If the pinned path is missing, run `uv run --with "playwright==1.50.0" playwright install chromium` and update `EXEC`.
+- Device assets resolve via `../../../../web/public/images/landing/` from the workshop folder.
+
+### Translating a pick into shipping code
+
+When the user decides, do NOT copy `variants.html` into the app. The workshop uses raw CSS; the landing uses the repo's component + token system. Treat the chosen variant as a reference and rebuild it in:
+
+- `web/src/components/landing/HeroSection.tsx`
+- `web/src/styles/landing.css`
+
+Then `make dev`, capture desktop + mobile, and verify both before shipping.
+
+This loop is for layout/story exploration. The AI image pipeline below is for when the device assets themselves need to change.
 
 ## Shipping Rules
 
