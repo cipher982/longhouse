@@ -5,16 +5,104 @@ description: Generate and ship the Longhouse landing hero using separate AI-rend
 
 # Landing Hero Pipeline
 
-The current shipping approach is **not** one giant baked hero image.
+Use this skill when the user says things like:
 
-The canonical workflow is:
+- "update the hero image"
+- "refresh the landing hero"
+- "the devices look wrong"
+- "redo the landing art"
 
-1. Capture real product references
-2. Generate **three separate device renders**
-3. Crop them tightly so the assets are honest cutouts, not giant black canvases
-4. Compose them in CSS in the landing hero
+This skill is the whole workflow. Do not invent a separate process doc or task note.
 
-This keeps the final hero responsive and tweakable. The AI renders are assets, not the final layout.
+The current shipping approach is **not** one giant baked hero image. The final product is:
+
+1. three separate device assets
+2. tightly cropped
+3. assembled in CSS in the landing hero
+
+The AI output is raw material. The hero is the composed stage in code.
+
+## Entry
+
+Assume the user wants the shipping hero updated unless they explicitly ask for concepts only.
+
+Start here:
+
+1. Inspect the current hero in `web/src/components/landing/HeroSection.tsx` and `web/src/styles/landing.css`
+2. Inspect the current device assets in `web/public/images/landing/`
+3. Bring up local dev and capture desktop + mobile screenshots
+4. Decide whether the problem is:
+   - asset quality
+   - crop/geometry
+   - CSS composition
+   - or some mix of the three
+
+## Exit
+
+You are done when all of these are true:
+
+- the hero looks intentional on desktop
+- the hero still reads on mobile
+- the three device assets are the only shipped image inputs
+- no stale legacy hero image is still referenced or lingering
+- the skill/docs do not contradict the implementation
+
+## Canonical Outputs
+
+Ship and maintain these files:
+
+- `web/public/images/landing/device-monitor.png`
+- `web/public/images/landing/device-macbook.png`
+- `web/public/images/landing/device-iphone.png`
+- `web/src/components/landing/HeroSection.tsx`
+- `web/src/styles/landing.css`
+
+## Default Workflow
+
+If the user says "update the hero image", do this exact loop:
+
+1. Inspect current state
+   - Read `HeroSection.tsx` and `landing.css`
+   - Capture local desktop + mobile screenshots
+   - Identify whether the problem is in the assets or the composition
+
+2. Refresh real references if needed
+   - timeline/browser reference
+   - terminal reference
+   - iOS widget/phone reference
+
+3. Generate or revise **separate device renders**
+   - one monitor
+   - one MacBook
+   - one iPhone
+   - do not stop at a giant flattened composite unless the user explicitly wants concept art only
+
+4. Crop the assets tightly
+   - remove dead black margins
+   - remove hardware elements that should not dominate the stage
+   - if the monitor stand is ugly, crop it out at the asset level instead of hiding it in CSS
+
+5. Compose in CSS
+   - monitor is the dominant element
+   - MacBook overlaps lower-left
+   - iPhone overlaps lower-right
+   - desktop and mobile must both be intentional
+
+6. Verify locally
+   - capture a desktop screenshot
+   - capture a mobile screenshot
+   - adjust until both hold together
+
+7. Clean up
+   - remove stale legacy hero assets that are no longer used
+   - update this skill if the process changed materially
+
+## Non-Goals
+
+- Do not ship one big promo render just because it looks good in isolation.
+- Do not keep empty-margin assets and try to compensate with increasingly weird CSS.
+- Do not create a script unless the workflow is truly deterministic and worth automating.
+- Do not leave the skill describing an old process after the implementation changes.
 
 ## Current Canonical Output
 
@@ -36,19 +124,6 @@ As of April 17, 2026, the shipping hero uses:
 - iPhone overlapping lower-right
 - CSS positioning, not a flattened composite image
 
-## What Changed
-
-The older approach in this skill used a single AI-composited wide hero image. That was useful for concepting, but it looked too much like a pasted promo render once placed directly on the page.
-
-The better result came from splitting the composition into device-specific assets and letting CSS own:
-
-- spacing
-- overlap
-- responsive behavior
-- final visual balance
-
-Treat the old composite flow below as **reference material for generating device renders and prompts**, not as the final implementation pattern.
-
 ## The Narrative
 
 The hero tells this story: **"You code in your terminal → Longhouse gives you visibility everywhere."**
@@ -66,6 +141,12 @@ Do NOT show "Longhouse web → Longhouse phone." That's not the pitch. The pitch
 - The device assets must be tightly cropped. Empty black margins make CSS tuning lie.
 - If the monitor stand or other unwanted hardware dominates the frame, crop it out at the asset level before trying to mask it in CSS.
 - Verify both desktop and mobile with local screenshots before calling it done.
+
+## Operational Notes
+
+- A script is appropriate only for something long, repetitive, and deterministic.
+- Most hero updates are not that. They are judgment-heavy asset + CSS work, so the agent should just follow this markdown workflow.
+- If you do automate part of it later, the script should support this skill, not replace it.
 
 ## Prerequisites
 
@@ -177,9 +258,9 @@ Tips:
 - The `❯` prompt, `zerg git:(main)` status bar, and bullet formatting are the real Claude Code look
 - Must use full path `/Users/davidrose/.local/bin/claude` in Terminal.app (PATH not loaded in `-sh`)
 
-## Step 3: Compose Hero via AI Image Model
+## Reference: AI Generation
 
-Use the references below to create device-specific renders. The old composite flow still helps for prompt quality, but the current implementation should output separate monitor, laptop, and phone assets.
+Use the references below to create device-specific renders. This section is reference material for generating assets. It is not the final shipping pattern by itself.
 
 ### Recommended: Gemini 3 Pro Image via OpenRouter
 
