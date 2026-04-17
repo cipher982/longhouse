@@ -17,6 +17,11 @@ Options:
 Environment overrides:
   MANAGED_CODEX_UPSTREAM_REPO  Upstream repo URL
   MANAGED_CODEX_UPSTREAM_REF   Upstream commit/tag/branch to build
+  MANAGED_CODEX_UPSTREAM_VERSION
+                              Upstream release family to stamp into the
+                              managed binary (default: 0.122.0)
+  MANAGED_CODEX_BUILD_VERSION  Full version string to stamp into the managed
+                              binary (default: <upstream>+longhouse.1)
 EOF
 }
 
@@ -24,7 +29,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 PATCH_FILE="${ROOT_DIR}/scripts/release/managed-codex.patch"
 UPSTREAM_REPO="${MANAGED_CODEX_UPSTREAM_REPO:-https://github.com/openai/codex.git}"
-UPSTREAM_REF="${MANAGED_CODEX_UPSTREAM_REF:-71174574adb09a90ebd83e2acfe284a39aaca2cf}"
+DEFAULT_UPSTREAM_REF="71174574adb09a90ebd83e2acfe284a39aaca2cf"
+DEFAULT_UPSTREAM_VERSION="0.122.0"
+UPSTREAM_REF="${MANAGED_CODEX_UPSTREAM_REF:-${DEFAULT_UPSTREAM_REF}}"
+UPSTREAM_VERSION="${MANAGED_CODEX_UPSTREAM_VERSION:-${DEFAULT_UPSTREAM_VERSION}}"
+MANAGED_BUILD_VERSION="${MANAGED_CODEX_BUILD_VERSION:-${UPSTREAM_VERSION}+longhouse.1}"
 
 OUTPUT_PATH=""
 SOURCE_DIR="${MANAGED_CODEX_SOURCE_DIR:-}"
@@ -67,6 +76,13 @@ if [[ ! -f "${PATCH_FILE}" ]]; then
   exit 1
 fi
 
+if [[ "${UPSTREAM_REF}" != "${DEFAULT_UPSTREAM_REF}" \
+  && -z "${MANAGED_CODEX_UPSTREAM_VERSION:-}" \
+  && -z "${MANAGED_CODEX_BUILD_VERSION:-}" ]]; then
+  echo "Custom MANAGED_CODEX_UPSTREAM_REF requires MANAGED_CODEX_UPSTREAM_VERSION or MANAGED_CODEX_BUILD_VERSION." >&2
+  exit 1
+fi
+
 cargo_build_release() {
   export CARGO_NET_GIT_FETCH_WITH_CLI="${CARGO_NET_GIT_FETCH_WITH_CLI:-true}"
 
@@ -88,6 +104,42 @@ cargo_build_release() {
 
   echo "Rust toolchain unavailable for cargo build --release" >&2
   exit 1
+}
+
+stamp_workspace_version() {
+  local worktree="$1"
+  local version="$2"
+  python3 - "$worktree/codex-rs/Cargo.toml" "$version" <<'PY'
+from pathlib import Path
+import sys
+
+manifest = Path(sys.argv[1])
+version = sys.argv[2]
+lines = manifest.read_text().splitlines()
+in_workspace_package = False
+replaced = False
+for index, line in enumerate(lines):
+    stripped = line.strip()
+    if stripped.startswith("[") and stripped.endswith("]"):
+        if in_workspace_package and replaced:
+            break
+        in_workspace_package = stripped == "[workspace.package]"
+        continue
+    if in_workspace_package and stripped.startswith("version"):
+        if stripped != 'version = "0.0.0"':
+            raise SystemExit(
+                f"unexpected workspace.package version line in {manifest}: {stripped!r}"
+            )
+        indent = line[: len(line) - len(line.lstrip())]
+        lines[index] = '{}version = "{}"'.format(indent, version)
+        replaced = True
+        break
+
+if not replaced:
+    raise SystemExit(f"failed to stamp workspace version in {manifest}")
+
+manifest.write_text("\n".join(lines) + "\n")
+PY
 }
 
 WORKDIR=""
@@ -116,6 +168,7 @@ fi
 
 git -C "${WORKTREE}" apply --check "${PATCH_FILE}"
 git -C "${WORKTREE}" apply "${PATCH_FILE}"
+stamp_workspace_version "${WORKTREE}" "${MANAGED_BUILD_VERSION}"
 
 cargo_build_release \
   --manifest-path "${WORKTREE}/codex-rs/Cargo.toml" \
@@ -134,6 +187,7 @@ chmod +x "${OUTPUT_PATH}"
 
 echo "Built managed Codex binary at ${OUTPUT_PATH}"
 echo "Upstream: ${UPSTREAM_REPO}@${UPSTREAM_REF}"
+echo "Managed build version: ${MANAGED_BUILD_VERSION}"
 if [[ ${KEEP_WORKDIR} -eq 1 ]]; then
   echo "Workdir: ${WORKTREE}"
 fi
