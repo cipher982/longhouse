@@ -170,6 +170,7 @@ jobs:
           INSTALLER_TEST_MENUBAR: ${{ matrix.menubar_smoke }}
         run: |
           export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
+          chmod +x "$LONGHOUSE_CODEX_SOURCE"
           chmod +x scripts/ci/installer-first-run.sh
           ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}"
 
@@ -266,5 +267,6 @@ jobs:
       - name: Rehearse install -> upgrade in disposable HOME
         run: |
           export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
+          chmod +x "$LONGHOUSE_CODEX_SOURCE"
           chmod +x scripts/qa/test-cli-upgrade.sh
           ./scripts/qa/test-cli-upgrade.sh --shell "${{ matrix.shell_path }}"
