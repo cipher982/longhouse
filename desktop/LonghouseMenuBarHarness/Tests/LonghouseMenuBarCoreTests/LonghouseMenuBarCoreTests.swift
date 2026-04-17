@@ -216,6 +216,35 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func stopManagedBridgeDryRunReturnsVisibleFeedback() throws {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-08T01:52:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse lost managed session control",
+            reasons: ["managed_session_control_degraded"],
+            suggestedActions: ["Inspect degraded managed sessions in Longhouse.app before trusting live control"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            launchReadiness: nil
+        )
+
+        let sink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+        let feedback = sink.handleStopManagedBridge(
+            sessionID: "session-123",
+            workspaceLabel: "zerg",
+            snapshot: snapshot
+        )
+
+        #expect(feedback?.style == .warning)
+        #expect(feedback?.title == "Stop dry run recorded")
+        #expect(feedback?.detail.contains("zerg") == true)
+    }
+
+    @Test
     func appLocationBlockedDryRunReturnsMoveFeedback() throws {
         let snapshot = HealthSnapshot.installLocationBlockedSnapshot(
             currentPath: "/Users/test/Applications/Longhouse.app"

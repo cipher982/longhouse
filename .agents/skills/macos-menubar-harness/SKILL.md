@@ -80,6 +80,7 @@ desktop/LonghouseMenuBarHarness/
 - For local process/session truth, model it explicitly in the snapshot contract instead of trying to infer it from `recent activity`.
 - The key menu bar states for managed sessions are: `attached`, `detached`, `degraded`, and `orphan bridge`.
 - Keep orphaned background bridges separate from managed sessions in the UI. They are an attention surface, not a normal session card.
+- Do not hide managed session/process cards behind a generic blocker state. When the machine is broken, the specific managed sessions or orphan bridges causing it must stay visible and actionable.
 - Treat `artifacts/menubar-harness/*.png` as required QA, not a side effect. Inspect the literal full-frame images before touching the installed app.
 - Do not accept “rendered successfully” or image dimensions as proof. Catch spacing, clipping, edge contact, and optical balance in the PNG stage.
 - Reinstall `Longhouse.app` only after the fixture/live PNGs look correct.

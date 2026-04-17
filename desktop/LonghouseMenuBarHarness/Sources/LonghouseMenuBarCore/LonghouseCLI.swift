@@ -2,6 +2,7 @@ import Foundation
 
 enum LonghouseCLI {
     private static let executableName = "longhouse"
+    private static let engineExecutableName = "longhouse-engine"
     private static let setupScriptName = "desktop-app-setup"
     private static let standardPathEntries = [
         "/opt/homebrew/bin",
@@ -14,15 +15,40 @@ enum LonghouseCLI {
 
     static func resolveExecutable() -> URL? {
         resolveExecutable(
+            named: executableName,
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
+            pathEnvironment: ProcessInfo.processInfo.environment["PATH"]
+        )
+    }
+
+    static func resolveEngineExecutable() -> URL? {
+        resolveExecutable(
+            named: engineExecutableName,
             homeDirectory: FileManager.default.homeDirectoryForCurrentUser,
             pathEnvironment: ProcessInfo.processInfo.environment["PATH"]
         )
     }
 
     static func resolveExecutable(homeDirectory: URL, pathEnvironment: String?) -> URL? {
+        resolveExecutable(
+            named: executableName,
+            homeDirectory: homeDirectory,
+            pathEnvironment: pathEnvironment
+        )
+    }
+
+    private static func resolveExecutable(
+        named executableName: String,
+        homeDirectory: URL,
+        pathEnvironment: String?
+    ) -> URL? {
         let fileManager = FileManager.default
 
-        for candidate in candidateURLs(homeDirectory: homeDirectory, pathEnvironment: pathEnvironment) {
+        for candidate in candidateURLs(
+            named: executableName,
+            homeDirectory: homeDirectory,
+            pathEnvironment: pathEnvironment
+        ) {
             if fileManager.isExecutableFile(atPath: candidate.path) {
                 return candidate
             }
@@ -131,6 +157,18 @@ enum LonghouseCLI {
     }
 
     private static func candidateURLs(homeDirectory: URL, pathEnvironment: String?) -> [URL] {
+        candidateURLs(
+            named: executableName,
+            homeDirectory: homeDirectory,
+            pathEnvironment: pathEnvironment
+        )
+    }
+
+    private static func candidateURLs(
+        named executableName: String,
+        homeDirectory: URL,
+        pathEnvironment: String?
+    ) -> [URL] {
         var urls: [URL] = [
             homeDirectory.appendingPathComponent(".local/bin/\(executableName)"),
             homeDirectory.appendingPathComponent("bin/\(executableName)"),
