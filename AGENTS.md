@@ -13,6 +13,8 @@ Keep the repo aligned to that story.
 
 Skills-Dir: .agents/skills
 
+Repo-local skills live in `.agents/skills/`, but Claude Code only discovers project skills through `.claude/skills/`. Keep the repo-level symlink `.claude/skills -> .agents/skills` in place or the skills will not load.
+
 ## First Principles
 
 - **Read `VISION.md` first.** It is the product and architecture north star.
