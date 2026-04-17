@@ -711,6 +711,33 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("session_turn_reviews table migration skipped (table may not exist yet)", exc_info=True)
 
+    # session_turns table migrations
+    try:
+        with engine.connect() as conn:
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_turns)"))}
+            if columns:
+                if "expected_user_text_hash" not in columns:
+                    conn.execute(text("ALTER TABLE session_turns ADD COLUMN expected_user_text_hash VARCHAR(64)"))
+                conn.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_session_turns_session_order
+                        ON session_turns(session_id, user_submitted_at, created_at, id)
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        CREATE INDEX IF NOT EXISTS ix_session_turns_session_state_created
+                        ON session_turns(session_id, state, created_at)
+                        """
+                    )
+                )
+            conn.commit()
+    except Exception:
+        logger.debug("session_turns table migration skipped (table may not exist yet)", exc_info=True)
+
     # session_tasks table migrations
     try:
         with engine.connect() as conn:
