@@ -11,7 +11,7 @@ permissions:
 jobs:
   hosted-live-qa:
     name: "hosted-live-qa"
-    runs-on: cube-deploy
+    runs-on: cube
     timeout-minutes: 25
     env:
       CONTROL_PLANE_ADMIN_TOKEN: ${{ secrets.CONTROL_PLANE_ADMIN_TOKEN }}

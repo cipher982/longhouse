@@ -9,7 +9,7 @@ on:
 
 jobs:
   debug:
-    runs-on: cube-browser
+    runs-on: cube
     steps:
     - uses: actions/checkout@v6
 

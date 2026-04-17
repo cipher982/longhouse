@@ -46,7 +46,7 @@ jobs:
   validate:
     needs: changes
     if: ${{ (needs.changes.outputs.schemas == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: cube
     name: "Validation"
 
     steps:
@@ -164,7 +164,7 @@ jobs:
   frontend-tests:
     needs: changes
     if: ${{ (needs.changes.outputs.frontend == 'true' || needs.changes.outputs.runner == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-fast
+    runs-on: cube
     name: "Frontend + runner tests"
 
     steps:
@@ -284,7 +284,7 @@ jobs:
   e2e:
     needs: changes
     if: ${{ (needs.changes.outputs.e2e == 'true' || github.event_name == 'workflow_dispatch') && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
-    runs-on: cube-browser
+    runs-on: cube
     name: "End-to-end tests"
     env:
       # E2E tests use per-backend SQLite databases (no Postgres needed)

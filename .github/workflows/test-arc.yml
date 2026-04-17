@@ -4,19 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       runner_label:
-        description: "Runner lane to test"
+        description: "Runner label to test"
         required: false
-        default: "cube-maint"
-        type: choice
-        options:
-          - cube-maint
-          - cube-fast
-          - cube-browser
-          - cube-deploy
+        default: "cube"
+        type: string
 
 jobs:
   test:
-    runs-on: ${{ inputs.runner_label || 'cube-maint' }}
+    runs-on: ${{ inputs.runner_label || 'cube' }}
     steps:
       - name: System info
         run: |
