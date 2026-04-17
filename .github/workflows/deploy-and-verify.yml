@@ -142,7 +142,7 @@ jobs:
 
   deploy-and-verify:
     name: "Deploy demo + canary + hosted live QA"
-    runs-on: cube-deploy
+    runs-on: cube
     timeout-minutes: 60
     needs: gate
     env:

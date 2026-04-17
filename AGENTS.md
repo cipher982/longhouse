@@ -138,7 +138,7 @@ Run the tier that matches the change. Do not over-test.
 ## Remote CI
 
 - Prefer GitHub Actions on cube ARC for heavy validation, browser jobs, and anything that can wait for remote feedback.
-- ARC lanes for this repo are `cube-fast`, `cube-browser`, `cube-deploy`, and `cube-maint`.
+- The self-hosted ARC label for this repo is `cube`.
 - ARC is only used by GitHub Actions for `cipher982/longhouse`. Local `make` commands and unpushed branches run on the current machine.
 - Reserve local `make test-ci`, `make test-e2e`, `make test-full`, and long Rust builds for targeted debugging, remote CI outages, or when David explicitly wants a local run.
 
