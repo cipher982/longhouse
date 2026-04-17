@@ -120,6 +120,16 @@ export function HeroSection() {
           )}
         </div>
       </div>
+
+      {/* ── Hero product image ── */}
+      <div className="landing-hero-showcase">
+        <img
+          src="/images/landing/hero.png"
+          alt="Terminal session flowing into Longhouse timeline and iOS widget"
+          className="landing-hero-showcase-img"
+          loading="eager"
+        />
+      </div>
     </section>
   );
 }
