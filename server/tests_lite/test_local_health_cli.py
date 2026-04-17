@@ -173,6 +173,38 @@ def _write_shipper_db(tmp_path: Path, rows: list[tuple[str, str, str | None, str
     conn.close()
 
 
+def _write_session_binding_rows(tmp_path: Path, rows: list[tuple[str, str, str, str]]) -> None:
+    db_path = get_agent_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS session_binding (
+            path TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO session_binding (path, session_id, provider, updated_at)
+        VALUES (?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def _write_codex_bridge_state(state_dir: Path, session_id: str, payload: dict) -> Path:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    path = state_dir / f"{session_id}.json"
+    path.write_text(json.dumps(payload))
+    return path
+
+
 def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
@@ -210,6 +242,131 @@ def test_collect_local_health_degraded_when_status_is_aging(monkeypatch, tmp_pat
     assert snapshot["health_state"] == "degraded"
     assert "engine_status_aging" in snapshot["reasons"]
     assert "aging" in snapshot["headline"].lower()
+
+
+def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    rollout_path = tmp_path / "sessions" / "2026" / "04" / "17" / "rollout-zerg.jsonl"
+    rollout_path.parent.mkdir(parents=True, exist_ok=True)
+    rollout_path.write_text("{}\n")
+    _write_session_binding_rows(
+        tmp_path,
+        [(str(rollout_path), "sess-detached", "codex", "2026-04-17T17:30:36Z")],
+    )
+
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-detached",
+        {
+            "session_id": "sess-detached",
+            "pid": 7771,
+            "ws_url": "ws://127.0.0.1:49760",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "updated_at": "2026-04-17T17:31:00Z",
+            "thread_path": str(rollout_path),
+            "last_turn_status": "completed",
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-detached"},
+            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "degraded"
+    assert snapshot["severity"] == "yellow"
+    assert snapshot["headline"] == "Managed session is running in background"
+    assert "managed_session_detached" in snapshot["reasons"]
+    assert snapshot["managed_summary"] == {
+        "attached_count": 0,
+        "detached_count": 1,
+        "degraded_count": 0,
+        "orphan_bridge_count": 0,
+        "latest_activity_at": "2026-04-17T17:31:00Z",
+    }
+    assert snapshot["managed_sessions"] == [
+        {
+            "session_id": "sess-detached",
+            "provider": "codex",
+            "workspace_label": "zerg",
+            "branch": None,
+            "state": "detached",
+            "phase": "running in background",
+            "last_activity_at": "2026-04-17T17:31:00Z",
+            "bridge_status": "ready",
+            "bridge_pid": 7771,
+            "bridge_heartbeat_at": "2026-04-17T17:31:00Z",
+            "reason_codes": [],
+        }
+    ]
+    assert snapshot["orphan_bridges"] == []
+
+
+def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-orphan",
+        {
+            "session_id": "sess-orphan",
+            "pid": 8881,
+            "ws_url": "ws://127.0.0.1:49888",
+            "cwd": "/Users/test/git/citi",
+            "status": "ready",
+            "updated_at": "2026-04-17T18:02:00Z",
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 8881, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-orphan"},
+            {"pid": 8882, "ppid": 8881, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "broken"
+    assert snapshot["severity"] == "red"
+    assert snapshot["headline"] == "Longhouse has orphaned managed sessions"
+    assert "orphaned_managed_bridge" in snapshot["reasons"]
+    assert snapshot["managed_summary"] == {
+        "attached_count": 0,
+        "detached_count": 0,
+        "degraded_count": 0,
+        "orphan_bridge_count": 1,
+        "latest_activity_at": "2026-04-17T18:02:00Z",
+    }
+    assert snapshot["managed_sessions"] == []
+    assert snapshot["orphan_bridges"] == [
+        {
+            "session_id": "sess-orphan",
+            "provider": "codex",
+            "pid": 8881,
+            "workspace_label": "citi",
+            "status": "orphan",
+            "started_at": "2026-04-17T18:02:00Z",
+            "heartbeat_at": "2026-04-17T18:02:00Z",
+            "reason_codes": ["no_managed_session_bound"],
+        }
+    ]
 
 
 def test_collect_local_health_broken_when_service_stopped_with_stuck_outbox(monkeypatch, tmp_path: Path):

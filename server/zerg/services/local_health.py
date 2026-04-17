@@ -12,6 +12,7 @@ import os
 import plistlib
 import shlex
 import sqlite3
+import subprocess
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -45,6 +46,7 @@ ACTIVITY_RECENCY_BANDS = [
     ("1-6h", timedelta(hours=6)),
 ]
 RECENT_TOUCH_LIMIT = 4
+BRIDGE_STATUS_DIR = "managed-local/codex-bridge"
 
 
 def _utc_now() -> datetime:
@@ -67,6 +69,18 @@ def _read_trimmed_file(path: Path) -> str | None:
     except OSError:
         return None
     return value or None
+
+
+def _normalize_optional_string(value: Any) -> str | None:
+    raw = str(value or "").strip()
+    return raw or None
+
+
+def _normalize_binding_path(path: str | None) -> str | None:
+    normalized = _normalize_optional_string(path)
+    if normalized is None:
+        return None
+    return str(Path(normalized).expanduser().resolve(strict=False))
 
 
 def _read_session_context(path: Path, *, max_lines: int = 6) -> tuple[str | None, str | None]:
@@ -535,6 +549,224 @@ def _collect_update_info() -> dict[str, Any]:
     }
 
 
+def _codex_bridge_state_dir(base_dir: Path) -> Path:
+    return base_dir.parent / ".claude" / BRIDGE_STATUS_DIR
+
+
+def _collect_process_rows() -> list[dict[str, Any]]:
+    try:
+        completed = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,command="],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+    except Exception:
+        return []
+
+    rows: list[dict[str, Any]] = []
+    for raw_line in completed.stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+        except ValueError:
+            continue
+        rows.append({"pid": pid, "ppid": ppid, "command": parts[2]})
+    return rows
+
+
+def _load_session_binding_rows(base_dir: Path) -> list[dict[str, str | None]]:
+    db_path = get_agent_db_path(base_dir)
+    if not db_path.exists():
+        return []
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+    except sqlite3.Error:
+        return []
+
+    try:
+        return [
+            {
+                "path": str(path or ""),
+                "session_id": str(session_id or ""),
+                "provider": str(provider or ""),
+                "updated_at": str(updated_at or ""),
+            }
+            for path, session_id, provider, updated_at in conn.execute(
+                "SELECT path, session_id, provider, updated_at FROM session_binding ORDER BY updated_at DESC"
+            )
+        ]
+    except sqlite3.Error:
+        return []
+    finally:
+        conn.close()
+
+
+def _bridge_process_exists(process_rows: list[dict[str, Any]], pid: int) -> bool:
+    return any(int(row.get("pid") or 0) == pid for row in process_rows)
+
+
+def _find_attached_codex_process(process_rows: list[dict[str, Any]], ws_url: str | None) -> dict[str, Any] | None:
+    normalized_ws_url = _normalize_optional_string(ws_url)
+    if normalized_ws_url is None:
+        return None
+
+    for row in process_rows:
+        command = str(row.get("command") or "")
+        if normalized_ws_url not in command:
+            continue
+        if " resume " not in f" {command} ":
+            continue
+        if "--remote" not in command:
+            continue
+        return row
+    return None
+
+
+def _find_bridge_child_process(
+    process_rows: list[dict[str, Any]],
+    *,
+    bridge_pid: int,
+    needle: str,
+) -> dict[str, Any] | None:
+    for row in process_rows:
+        if int(row.get("ppid") or 0) != bridge_pid:
+            continue
+        command = str(row.get("command") or "")
+        if needle in command:
+            return row
+    return None
+
+
+def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
+    rows = _load_session_binding_rows(base_dir)
+    latest: dict[str, dict[str, str | None]] = {}
+    for row in rows:
+        session_id = _normalize_optional_string(row.get("session_id"))
+        if session_id is None or session_id in latest:
+            continue
+        latest[session_id] = row
+    return latest
+
+
+def _managed_session_phase(state: dict[str, Any], normalized_state: str) -> str:
+    if normalized_state == "degraded":
+        return "needs attention"
+    if normalized_state == "detached":
+        return "running in background"
+    if state.get("active_turn_id"):
+        return "running"
+    last_turn_status = _normalize_optional_string(state.get("last_turn_status"))
+    if last_turn_status == "completed":
+        return "waiting for input"
+    return "waiting for input"
+
+
+def _collect_managed_codex_summary(
+    base_dir: Path, *, now: datetime
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    state_dir = _codex_bridge_state_dir(base_dir)
+    if not state_dir.exists():
+        return None, [], []
+
+    process_rows = _collect_process_rows()
+    binding_by_session = _binding_by_session_id(base_dir)
+    sessions: list[dict[str, Any]] = []
+    orphan_bridges: list[dict[str, Any]] = []
+    latest_activity_at: str | None = None
+
+    for path in sorted(state_dir.glob("*.json")):
+        try:
+            state = json.loads(path.read_text())
+        except Exception:
+            continue
+
+        bridge_pid = int(state.get("pid") or 0)
+        if bridge_pid <= 0 or not _bridge_process_exists(process_rows, bridge_pid):
+            continue
+
+        ws_url = _normalize_optional_string(state.get("ws_url"))
+        session_id = _normalize_optional_string(state.get("session_id"))
+        bridge_updated_at = _normalize_optional_string(state.get("updated_at"))
+        latest_activity_at = max(
+            [item for item in [latest_activity_at, bridge_updated_at] if item],
+            default=None,
+        )
+
+        attached_process = _find_attached_codex_process(process_rows, ws_url)
+        binding = binding_by_session.get(session_id or "")
+        binding_path = _normalize_binding_path(binding.get("path")) if binding else None
+        state_thread_path = _normalize_binding_path(state.get("thread_path"))
+        last_error = _normalize_optional_string(state.get("last_error"))
+        bridge_status = _normalize_optional_string(state.get("status")) or "unknown"
+        app_server = _find_bridge_child_process(process_rows, bridge_pid=bridge_pid, needle=" app-server ")
+        bridge_heartbeat_at = bridge_updated_at
+
+        if binding is None:
+            orphan_bridges.append(
+                {
+                    "session_id": session_id,
+                    "provider": "codex",
+                    "pid": bridge_pid,
+                    "workspace_label": Path(str(state.get("cwd") or "")).name or None,
+                    "status": "orphan",
+                    "started_at": bridge_updated_at,
+                    "heartbeat_at": bridge_heartbeat_at,
+                    "reason_codes": ["no_managed_session_bound"],
+                }
+            )
+            continue
+
+        reason_codes: list[str] = []
+        if last_error:
+            reason_codes.append("thread_subscription_failed")
+        if binding_path and state_thread_path and binding_path != state_thread_path:
+            reason_codes.append("thread_subscription_failed")
+        if app_server is None:
+            reason_codes.append("live_control_unavailable")
+        if bridge_status != "ready":
+            reason_codes.append("live_control_unavailable")
+
+        normalized_state = "attached" if attached_process is not None else "detached"
+        if reason_codes:
+            normalized_state = "degraded"
+
+        sessions.append(
+            {
+                "session_id": session_id,
+                "provider": "codex",
+                "workspace_label": Path(str(state.get("cwd") or "")).name or None,
+                "branch": None,
+                "state": normalized_state,
+                "phase": _managed_session_phase(state, normalized_state),
+                "last_activity_at": bridge_updated_at,
+                "bridge_status": bridge_status,
+                "bridge_pid": bridge_pid,
+                "bridge_heartbeat_at": bridge_heartbeat_at,
+                "reason_codes": reason_codes,
+            }
+        )
+
+    if not sessions and not orphan_bridges:
+        return None, [], []
+
+    managed_summary = {
+        "attached_count": sum(1 for item in sessions if item["state"] == "attached"),
+        "detached_count": sum(1 for item in sessions if item["state"] == "detached"),
+        "degraded_count": sum(1 for item in sessions if item["state"] == "degraded"),
+        "orphan_bridge_count": len(orphan_bridges),
+        "latest_activity_at": latest_activity_at,
+    }
+    return managed_summary, sessions, orphan_bridges
+
+
 def _collect_activity_summary(base_dir: Path, *, now: datetime) -> dict[str, Any]:
     db_path = get_agent_db_path(base_dir)
     summary = {
@@ -705,6 +937,7 @@ def _classify_health(
     engine_status: dict[str, Any],
     outbox: dict[str, Any],
     launch_readiness: dict[str, Any],
+    managed_summary: dict[str, Any] | None,
 ) -> tuple[str, str, str, list[str], list[str]]:
     reasons: list[str] = []
     actions: list[str] = []
@@ -728,6 +961,10 @@ def _classify_health(
     launch_reasons = [str(item) for item in list(launch_readiness.get("reasons") or [])]
     launch_actions = [str(item) for item in list(launch_readiness.get("suggested_actions") or [])]
     shipper_state_missing = "shipper_state_missing" in launch_reasons
+    managed_attached = int((managed_summary or {}).get("attached_count") or 0)
+    managed_detached = int((managed_summary or {}).get("detached_count") or 0)
+    managed_degraded = int((managed_summary or {}).get("degraded_count") or 0)
+    orphan_bridge_count = int((managed_summary or {}).get("orphan_bridge_count") or 0)
     repair_action = _repair_command(
         can_reconcile_from_state=_can_reconcile_launch_from_state(
             state_exists=bool(launch_readiness.get("state_exists")),
@@ -784,6 +1021,18 @@ def _classify_health(
         reasons.append("spool_dead")
         _with_action(actions, "Repair dead letters before trusting continuity")
 
+    if orphan_bridge_count > 0:
+        reasons.append("orphaned_managed_bridge")
+        _with_action(actions, "Stop orphaned background managed sessions from Longhouse.app")
+
+    if managed_degraded > 0:
+        reasons.append("managed_session_control_degraded")
+        _with_action(actions, "Inspect degraded managed sessions in Longhouse.app before trusting live control")
+
+    if managed_detached > 0:
+        reasons.append("managed_session_detached")
+        _with_action(actions, "Reattach or stop detached managed sessions from Longhouse.app")
+
     if outbox_count >= DEGRADED_BACKLOG_COUNT:
         reasons.append("outbox_backlog")
     if outbox_count > 0 and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS:
@@ -813,6 +1062,11 @@ def _classify_health(
     if launch_state == "broken":
         broken = True
     elif launch_state == "degraded":
+        degraded = True
+
+    if orphan_bridge_count > 0 or managed_degraded > 0:
+        broken = True
+    elif managed_detached > 0:
         degraded = True
 
     if service_status == "stopped":
@@ -877,6 +1131,10 @@ def _classify_health(
             headline = "Longhouse has dead-lettered data to repair"
         elif "engine_status_stale" in reasons:
             headline = "Longhouse local status is stale while work is pending"
+        elif "orphaned_managed_bridge" in reasons:
+            headline = "Longhouse has orphaned managed sessions"
+        elif "managed_session_control_degraded" in reasons:
+            headline = "Longhouse lost managed session control"
         return ("broken", "red", headline, reasons, actions)
 
     if degraded:
@@ -889,6 +1147,11 @@ def _classify_health(
             headline = "Longhouse local status is aging"
         elif "engine_status_aging" in reasons:
             headline = "Longhouse local status is aging"
+        elif "managed_session_detached" in reasons:
+            if managed_detached == 1 and managed_attached == 0:
+                headline = "Managed session is running in background"
+            else:
+                headline = "Managed sessions are running in background"
         return ("degraded", "yellow", headline, reasons, actions)
 
     return ("healthy", "green", "Longhouse shipping healthy", reasons, actions)
@@ -901,12 +1164,14 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
+    managed_summary, managed_sessions, orphan_bridges = _collect_managed_codex_summary(resolved_base_dir, now=now)
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,
         engine_status=engine_status,
         outbox=outbox,
         launch_readiness=launch_readiness,
+        managed_summary=managed_summary,
     )
 
     return {
@@ -921,6 +1186,9 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "engine_status": engine_status,
         "outbox": outbox,
         "activity_summary": activity_summary,
+        "managed_summary": managed_summary,
+        "managed_sessions": managed_sessions,
+        "orphan_bridges": orphan_bridges,
         "launch_readiness": launch_readiness,
         "update_info": _collect_update_info(),
         "thresholds": {
