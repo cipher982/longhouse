@@ -26,16 +26,12 @@ pub fn cmd_bench(
     );
 
     let files: Vec<PathBuf> = match level.to_uppercase().as_str() {
-        "L1" => {
-            all_files.into_iter().take(1).collect()
-        }
+        "L1" => all_files.into_iter().take(1).collect(),
         "L2" => {
             let count = (all_files.len() + 9) / 10;
             all_files.into_iter().take(count).collect()
         }
-        "L3" => {
-            all_files
-        }
+        "L3" => all_files,
         _ => {
             anyhow::bail!("Unknown level: {}. Use L1, L2, or L3", level);
         }

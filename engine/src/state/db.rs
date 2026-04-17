@@ -100,7 +100,10 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
 /// Resolve the default DB path: `~/.longhouse/agent/longhouse-shipper.db`.
 fn default_db_path() -> Result<PathBuf> {
     let path = config::get_agent_db_path()?;
-    debug_assert_eq!(path.file_name().and_then(|value| value.to_str()), Some(DB_FILENAME));
+    debug_assert_eq!(
+        path.file_name().and_then(|value| value.to_str()),
+        Some(DB_FILENAME)
+    );
     Ok(path)
 }
 
