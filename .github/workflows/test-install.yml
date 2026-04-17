@@ -57,9 +57,10 @@ jobs:
           - os: ubuntu-latest
           - os: macos-latest
     runs-on: ${{ matrix.os }}
-    # macOS hosted Rust builds for managed Codex run materially slower than Ubuntu.
-    # Revisit with deeper build caching post-launch; keep the audit path reliable now.
-    timeout-minutes: 75
+    # macOS hosted Rust builds for managed Codex are slow enough that the first
+    # cold cache-seeding run needs substantial headroom. Subsequent runs should
+    # hit the binary cache below and skip the rebuild entirely.
+    timeout-minutes: 180
     name: "managed-codex-smoke-build--${{ matrix.os }}"
 
     steps:
@@ -78,15 +79,29 @@ jobs:
           restore-keys: |
             managed-codex-cargo-${{ runner.os }}-
 
+      - name: Prepare managed Codex output directory
+        run: mkdir -p prebuilt
+
+      - name: Restore managed Codex binary cache
+        id: managed_codex_binary_cache
+        uses: actions/cache@v4
+        with:
+          path: prebuilt/longhouse-codex
+          key: managed-codex-binary-${{ runner.os }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
+
       - name: Install Linux build deps for managed Codex
         if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
+      - name: Ensure cached managed Codex binary is executable
+        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit == 'true' }}
+        run: chmod +x prebuilt/longhouse-codex
+
       - name: Build managed Codex binary for smoke reuse
+        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit != 'true' }}
         run: |
-          mkdir -p prebuilt
           chmod +x scripts/release/build-managed-codex.sh
           scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
           chmod +x prebuilt/longhouse-codex
