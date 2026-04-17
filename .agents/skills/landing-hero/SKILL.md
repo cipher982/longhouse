@@ -128,13 +128,38 @@ As of April 17, 2026, the shipping hero uses:
 
 ## The Narrative
 
-The hero tells this story: **"You code in your terminal → Longhouse gives you visibility everywhere."**
+The narrative is an unresolved product question, not a locked-in answer. Do not assert one in this skill. The current shipping hero is a trio (monitor + MacBook + iPhone) with copy that does the storytelling. Candidate directions explored April 2026:
 
-Left side: a developer's terminal (Claude Code, Codex TUI, etc.)
-Right side: Longhouse surfaces — the web timeline in a browser window, the iOS widget in a phone frame
-Connection: a golden arrow/light trail flowing from terminal to Longhouse
+- **Timeline-primary** — big timeline, phone secondary. Highest product legibility, weakest differentiation.
+- **Terminal → Phone** — MacBook left, big phone right, arc between. Strongest differentiation, hides the timeline.
+- **Terminal → Timeline → Phone** — three beats in one frame. Clearest full story, risks everything reading small.
+- **Scattered → Consolidated** — grayscale "before" pile of forgotten sessions, bright "after" stage. Infomercial energy; the before must be a *pile* (matches timeline = many cards), not one sad session (that maps to a single terminal, which is wrong).
+- **Max overlap** — two devices only (timeline + phone), phone physically covering monitor's right edge. High impact, lets copy carry the story.
 
-Do NOT show "Longhouse web → Longhouse phone." That's not the pitch. The pitch is that Longhouse captures sessions from tools the user already runs.
+Constraints that still hold regardless of direction:
+
+- The iPhone widget is a differentiator and must be visible at meaningful size.
+- The Longhouse timeline is the surface users live in. Don't hide it entirely.
+- Do not flip the pitch to "Longhouse web → Longhouse phone"; the source is sessions from CLIs the user already runs.
+
+If you are picking a direction, workshop before editing the repo — see `## Exploration Loop`.
+
+## Exploration Loop
+
+If the task is "what should the hero look like" (composition, hierarchy, narrative) instead of "fix this asset or CSS", do NOT open repo files first. The shipping HeroSection is a committed opinion — iterating on it directly is how agents end up fighting the old layout instead of exploring a new one.
+
+Use a disposable harness outside the repo:
+
+1. `mkdir -p /tmp/hero-workshop` and copy the current device webps + any real product screenshot into it.
+2. Write a single `variants.html` with multiple isolated `<section>`s, each a full-bleed hero candidate using the same design tokens (`--color-brand-primary: #C9A66B`, `--color-text-primary: #F3EAD9`, `--color-surface-page: #120B09`, `--font-display: "Iowan Old Style", Palatino, Georgia, serif`). Use system fonts — pulling Google Fonts makes Playwright screenshot timeouts non-deterministic.
+3. Render each section to PNG via Playwright with `page.screenshot(clip=...)` using the element's `getBoundingClientRect`. Reset `window.scrollTo(0,0)` before every clip or the scroll state drifts and filenames stop matching content.
+4. Viewport height must exceed the variant's `min-height` or the clip will timeout. 1440×1500 @ 2x is a safe default for sections up to ~780px tall.
+5. Always view the rendered PNG via the Read tool before reporting to the user. Trust the top-left badge label in the image, not the filename.
+6. Only translate the chosen direction into `HeroSection.tsx` / `landing.css` after the user has picked one.
+
+Playwright toolchain gotcha: default `playwright` wants a chromium version that may not exist in the local cache. Pin `playwright==1.50.0` and pass `executable_path` to a known-good `chrome-mac-arm64/Google Chrome for Testing` binary under `~/Library/Caches/ms-playwright/chromium-*`.
+
+This loop is for layout/story exploration. The AI image pipeline below (Step 1 onward) is for when the assets themselves need to change.
 
 ## Shipping Rules
 
