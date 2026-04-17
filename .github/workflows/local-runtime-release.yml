@@ -55,17 +55,44 @@ jobs:
       - name: Build engine binary
         run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
 
+      - name: Restore managed Codex cargo dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
+          restore-keys: |
+            managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-
+            managed-codex-cargo-${{ runner.os }}-
+
+      - name: Prepare managed Codex cache directory
+        run: mkdir -p prebuilt
+
+      - name: Restore managed Codex binary cache
+        id: managed_codex_binary_cache
+        uses: actions/cache@v4
+        with:
+          path: prebuilt/longhouse-codex
+          key: managed-codex-binary-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
+
       - name: Build managed Codex binary
+        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit != 'true' }}
         run: |
           chmod +x scripts/release/build-managed-codex.sh
-          scripts/release/build-managed-codex.sh --output "binaries/${{ matrix.codex_asset }}"
+          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
+
+      - name: Stage managed Codex release asset
+        run: |
+          mkdir -p binaries
+          cp prebuilt/longhouse-codex "binaries/${{ matrix.codex_asset }}"
+          chmod +x "binaries/${{ matrix.codex_asset }}"
 
       - name: Collect engine binary
         run: |
           mkdir -p binaries
           cp engine/target/release/longhouse-engine "binaries/${{ matrix.engine_asset }}"
           chmod +x "binaries/${{ matrix.engine_asset }}"
-          chmod +x "binaries/${{ matrix.codex_asset }}"
 
       - name: Upload runtime artifacts
         uses: actions/upload-artifact@v6
@@ -112,10 +139,37 @@ jobs:
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-darwin-arm64
           chmod +x binaries/longhouse-engine-darwin-arm64
 
+      - name: Restore managed Codex cargo dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
+          restore-keys: |
+            managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-
+            managed-codex-cargo-${{ runner.os }}-
+
+      - name: Prepare managed Codex cache directory
+        run: mkdir -p prebuilt
+
+      - name: Restore managed Codex binary cache
+        id: managed_codex_binary_cache
+        uses: actions/cache@v4
+        with:
+          path: prebuilt/longhouse-codex
+          key: managed-codex-binary-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
+
       - name: Build managed Codex binary
+        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit != 'true' }}
         run: |
           chmod +x scripts/release/build-managed-codex.sh
-          scripts/release/build-managed-codex.sh --output binaries/longhouse-codex-darwin-arm64
+          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
+
+      - name: Stage managed Codex release asset
+        run: |
+          cp prebuilt/longhouse-codex binaries/longhouse-codex-darwin-arm64
+          chmod +x binaries/longhouse-codex-darwin-arm64
 
       - name: Build macOS ambient app payload
         run: |
