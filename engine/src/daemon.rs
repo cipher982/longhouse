@@ -208,7 +208,8 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
     let mut heartbeat_timer = tokio::time::interval(heartbeat_interval);
     heartbeat_timer.tick().await; // consume first immediate tick
-    let mut local_status_timer = tokio::time::interval(Duration::from_secs(LOCAL_STATUS_INTERVAL_SECS));
+    let mut local_status_timer =
+        tokio::time::interval(Duration::from_secs(LOCAL_STATUS_INTERVAL_SECS));
 
     let mut outbox_timer = tokio::time::interval(Duration::from_secs(1));
     outbox_timer.tick().await; // consume first immediate tick

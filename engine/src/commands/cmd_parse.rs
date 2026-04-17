@@ -5,7 +5,12 @@ use std::time::Instant;
 
 use crate::pipeline::compressor::{self, CompressionAlgo};
 
-pub fn cmd_parse(path: &PathBuf, offset: u64, dump_events: bool, compress: bool) -> anyhow::Result<()> {
+pub fn cmd_parse(
+    path: &PathBuf,
+    offset: u64,
+    dump_events: bool,
+    compress: bool,
+) -> anyhow::Result<()> {
     let start = Instant::now();
 
     let file_size = std::fs::metadata(path)?.len();

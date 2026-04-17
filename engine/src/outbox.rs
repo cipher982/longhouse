@@ -571,7 +571,10 @@ mod tests {
         assert_eq!(kept, 0, "stale dot-files must not be kept for retry");
         assert!(!stale_no_ext.exists(), ".tmp.STALE1 must be deleted");
         assert!(!stale_with_ext.exists(), ".tmp.STALE2.json must be deleted");
-        assert!(fresh_tmp.exists(), "fresh in-progress .tmp must be left alone");
+        assert!(
+            fresh_tmp.exists(),
+            "fresh in-progress .tmp must be left alone"
+        );
 
         server.abort();
         let logged = paths.lock().unwrap().clone();
