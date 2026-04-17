@@ -54,6 +54,9 @@ export function AppScreenshotFrame({
           alt={alt}
           onLoad={() => setLoaded(true)}
           onError={() => setError(true)}
+          loading="lazy"
+          decoding="async"
+          fetchPriority="low"
           style={{ opacity: loaded ? 1 : 0 }}
         />
       </div>

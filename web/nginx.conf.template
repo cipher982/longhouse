@@ -61,10 +61,16 @@ http {
             try_files $uri =404;
         }
 
-        # Static assets with caching
-        location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg)$ {
+        # Hashed build assets can be cached aggressively.
+        location ^~ /assets/ {
             expires 1y;
             add_header Cache-Control "public, immutable";
+        }
+
+        # Frontend images/fonts are version-stable enough to cache, but not immutable.
+        location ~* \.(png|jpg|jpeg|gif|ico|svg|webp|avif|woff|woff2)$ {
+            expires 1d;
+            add_header Cache-Control "public, max-age=86400, stale-while-revalidate=604800";
         }
 
         # HTML should always revalidate so new bundles are picked up promptly.
