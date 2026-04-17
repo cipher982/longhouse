@@ -304,6 +304,7 @@ struct ProviderComparisonRows: View {
 
 struct ManagedSessionEntry: Identifiable {
     let id: String
+    let sessionID: String?
     let provider: String
     let workspace: String
     let branch: String?
@@ -311,18 +312,22 @@ struct ManagedSessionEntry: Identifiable {
     let stateColor: Color
     let ageLabel: String
     let detail: String
+    let stopAction: (() -> Void)?
 
     init(
         id: String,
+        sessionID: String?,
         provider: String,
         workspace: String,
         branch: String?,
         stateLabel: String,
         stateColor: Color,
         ageLabel: String,
-        detail: String
+        detail: String,
+        stopAction: (() -> Void)? = nil
     ) {
         self.id = id
+        self.sessionID = sessionID
         self.provider = provider
         self.workspace = workspace
         self.branch = branch
@@ -330,6 +335,7 @@ struct ManagedSessionEntry: Identifiable {
         self.stateColor = stateColor
         self.ageLabel = ageLabel
         self.detail = detail
+        self.stopAction = stopAction
     }
 }
 
@@ -382,6 +388,16 @@ private struct ManagedSessionRow: View {
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.primary)
                     .monospacedDigit()
+
+                if let stopAction = entry.stopAction {
+                    inlineActionButton(
+                        systemImage: "xmark.circle",
+                        tint: entry.stateColor,
+                        accessibilityLabel: "Stop managed session"
+                    ) {
+                        stopAction()
+                    }
+                }
             }
 
             Text("\(HealthSnapshot.providerDisplayName(entry.provider)) · \(entry.detail)")
@@ -395,11 +411,13 @@ private struct ManagedSessionRow: View {
 
 struct BackgroundBridgeEntry: Identifiable {
     let id: String
+    let sessionID: String?
     let provider: String
     let workspace: String
     let statusLabel: String
     let ageLabel: String
     let detail: String
+    let stopAction: (() -> Void)?
 }
 
 struct BackgroundBridgeList: View {
@@ -441,6 +459,16 @@ private struct BackgroundBridgeRow: View {
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.primary)
                     .monospacedDigit()
+
+                if let stopAction = entry.stopAction {
+                    inlineActionButton(
+                        systemImage: "xmark.circle",
+                        tint: .red,
+                        accessibilityLabel: "Stop background bridge"
+                    ) {
+                        stopAction()
+                    }
+                }
             }
 
             Text("\(HealthSnapshot.providerDisplayName(entry.provider)) bridge · \(entry.detail)")
@@ -450,6 +478,24 @@ private struct BackgroundBridgeRow: View {
         }
         .padding(.vertical, 8)
     }
+}
+
+@MainActor
+private func inlineActionButton(
+    systemImage: String,
+    tint: Color,
+    accessibilityLabel: String,
+    action: @escaping () -> Void
+) -> some View {
+    Button(action: action) {
+        Image(systemName: systemImage)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(tint)
+            .frame(width: 22, height: 22)
+            .contentShape(Rectangle())
+    }
+    .buttonStyle(.plain)
+    .accessibilityLabel(Text(accessibilityLabel))
 }
 
 private struct ProviderComparisonRow: View {

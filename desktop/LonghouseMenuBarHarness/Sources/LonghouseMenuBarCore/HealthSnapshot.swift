@@ -1017,6 +1017,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
 }
 
 public struct OrphanBridgeSnapshot: Codable, Equatable, Identifiable, Sendable {
+    public let sessionId: String?
     public let provider: String?
     public let pid: Int?
     public let workspaceLabel: String?

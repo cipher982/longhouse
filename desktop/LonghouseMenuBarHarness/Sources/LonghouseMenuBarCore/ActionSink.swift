@@ -5,6 +5,7 @@ public enum HarnessAction: String, Codable {
     case refresh
     case runDoctor
     case repairInstall
+    case stopManagedBridge
     case openLogs
     case openLonghouse
     case copyDiagnostics
@@ -45,6 +46,24 @@ public struct HealthActionFeedback: Equatable {
 public protocol HealthActionSink {
     @discardableResult
     func handle(_ action: HarnessAction, snapshot: HealthSnapshot) -> HealthActionFeedback?
+
+    @discardableResult
+    func handleStopManagedBridge(
+        sessionID: String,
+        workspaceLabel: String?,
+        snapshot: HealthSnapshot
+    ) -> HealthActionFeedback?
+}
+
+public extension HealthActionSink {
+    @discardableResult
+    func handleStopManagedBridge(
+        sessionID: String,
+        workspaceLabel: String?,
+        snapshot: HealthSnapshot
+    ) -> HealthActionFeedback? {
+        nil
+    }
 }
 
 public struct SpyHealthActionSink: HealthActionSink {
@@ -61,13 +80,7 @@ public struct SpyHealthActionSink: HealthActionSink {
     }
 
     public func handle(_ action: HarnessAction, snapshot: HealthSnapshot) -> HealthActionFeedback? {
-        let record = ActionRecord(
-            action: action.rawValue,
-            headline: snapshot.headline,
-            collectedAt: snapshot.collectedAt ?? "",
-            loggedAt: ISO8601DateFormatter().string(from: Date())
-        )
-        append(record: record)
+        appendActionRecord(action: action.rawValue, snapshot: snapshot, target: nil)
 
         guard effectMode == .live else {
             return dryRunFeedback(for: action, snapshot: snapshot)
@@ -91,6 +104,13 @@ public struct SpyHealthActionSink: HealthActionSink {
             )
         case .repairInstall:
             return startRepair(snapshot: snapshot)
+        case .stopManagedBridge:
+            return feedback(
+                for: action,
+                style: .warning,
+                title: "No managed bridge selected",
+                detail: "Use the stop control on a specific managed session or background bridge."
+            )
         case .openLonghouse:
             if let resolvedURL = resolveLonghouseURL(snapshot: snapshot) {
                 if NSWorkspace.shared.open(resolvedURL) {
@@ -166,6 +186,44 @@ public struct SpyHealthActionSink: HealthActionSink {
         }
     }
 
+    public func handleStopManagedBridge(
+        sessionID: String,
+        workspaceLabel: String?,
+        snapshot: HealthSnapshot
+    ) -> HealthActionFeedback? {
+        let label = (workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        appendActionRecord(
+            action: HarnessAction.stopManagedBridge.rawValue,
+            snapshot: snapshot,
+            target: sessionID
+        )
+
+        guard effectMode == .live else {
+            return feedback(
+                for: .stopManagedBridge,
+                style: .warning,
+                title: "Stop dry run recorded",
+                detail: "The harness logged a stop request for \(label.isEmpty ? sessionID : label) without touching the bridge."
+            )
+        }
+
+        if startStopManagedBridge(sessionID: sessionID) != nil {
+            return feedback(
+                for: .stopManagedBridge,
+                style: .info,
+                title: "Stop requested",
+                detail: "Longhouse asked the local bridge for \(label.isEmpty ? sessionID : label) to stop in the background."
+            )
+        }
+
+        return feedback(
+            for: .stopManagedBridge,
+            style: .failure,
+            title: "Stop could not start",
+            detail: "Longhouse could not start `longhouse-engine codex-bridge stop --session-id \(sessionID)` on this Mac."
+        )
+    }
+
     func resolveLonghouseURL(snapshot: HealthSnapshot) -> URL? {
         if let uiURL {
             return uiURL
@@ -201,6 +259,17 @@ public struct SpyHealthActionSink: HealthActionSink {
         try? handle.write(contentsOf: Data(line.utf8))
     }
 
+    private func appendActionRecord(action: String, snapshot: HealthSnapshot, target: String?) {
+        let record = ActionRecord(
+            action: action,
+            target: target,
+            headline: snapshot.headline,
+            collectedAt: snapshot.collectedAt ?? "",
+            loggedAt: ISO8601DateFormatter().string(from: Date())
+        )
+        append(record: record)
+    }
+
     private func startBundledSetup() -> URL? {
         guard let invocation = LonghouseCLI.setupInvocation() else {
             return nil
@@ -219,6 +288,22 @@ public struct SpyHealthActionSink: HealthActionSink {
         return startBackgroundProcess(
             launchPath: invocation.launchPath,
             arguments: invocation.arguments
+        )
+    }
+
+    private func startStopManagedBridge(sessionID: String) -> URL? {
+        guard let executable = LonghouseCLI.resolveEngineExecutable() else {
+            return nil
+        }
+
+        return startBackgroundProcess(
+            launchPath: executable.path,
+            arguments: [
+                "codex-bridge",
+                "stop",
+                "--session-id",
+                sessionID,
+            ]
         )
     }
 
@@ -403,6 +488,13 @@ public struct SpyHealthActionSink: HealthActionSink {
             )
         case .refresh:
             return nil
+        case .stopManagedBridge:
+            return feedback(
+                for: action,
+                style: .warning,
+                title: "Stop dry run recorded",
+                detail: "The harness logged a managed bridge stop request without touching the live bridge."
+            )
         }
     }
 
@@ -418,6 +510,7 @@ public struct SpyHealthActionSink: HealthActionSink {
 
 private struct ActionRecord: Codable {
     let action: String
+    let target: String?
     let headline: String
     let collectedAt: String
     let loggedAt: String

@@ -135,6 +135,9 @@ public struct MenuBarPanelView: View {
                 if isHealthy {
                     healthySurface
                 } else {
+                    if snapshot.hasManagedRuntimeTruth {
+                        managedRuntimeSurface
+                    }
                     blockerSection
                     runbookSection
                     issueActions
@@ -269,23 +272,7 @@ public struct MenuBarPanelView: View {
 
             sectionDivider.padding(.horizontal, 4)
 
-            PanelSection(title: "Managed now", trailing: snapshot.managedSummaryLabel) {
-                if managedSessionEntries.isEmpty {
-                    Text("No managed Claude or Codex sessions are running on this Mac.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.secondary)
-                } else {
-                    ManagedSessionList(entries: managedSessionEntries)
-                }
-            }
-
-            if !backgroundBridgeEntries.isEmpty {
-                sectionDivider.padding(.horizontal, 4)
-
-                PanelSection(title: "Background bridges", trailing: "\(backgroundBridgeEntries.count)") {
-                    BackgroundBridgeList(entries: backgroundBridgeEntries)
-                }
-            }
+            managedRuntimeSurface
 
             sectionDivider.padding(.horizontal, 4)
 
@@ -326,6 +313,28 @@ public struct MenuBarPanelView: View {
                     entries: snapshot.providerCountsToday,
                     totalCount: Int(snapshot.sessionsTodayLabel) ?? snapshot.providerCountsToday.map(\.count).reduce(0, +)
                 )
+            }
+        }
+    }
+
+    private var managedRuntimeSurface: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            PanelSection(title: "Managed now", trailing: snapshot.managedSummaryLabel) {
+                if managedSessionEntries.isEmpty {
+                    Text("No managed Claude or Codex sessions are running on this Mac.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                } else {
+                    ManagedSessionList(entries: managedSessionEntries)
+                }
+            }
+
+            if !backgroundBridgeEntries.isEmpty {
+                sectionDivider.padding(.horizontal, 4)
+
+                PanelSection(title: "Background bridges", trailing: "\(backgroundBridgeEntries.count)") {
+                    BackgroundBridgeList(entries: backgroundBridgeEntries)
+                }
             }
         }
     }
@@ -386,13 +395,15 @@ public struct MenuBarPanelView: View {
 
             return ManagedSessionEntry(
                 id: session.id,
+                sessionID: session.sessionId,
                 provider: provider.isEmpty ? "unknown" : provider,
                 workspace: workspace.isEmpty ? HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider) : workspace,
                 branch: (session.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : session.branch,
                 stateLabel: managedStateTitle(normalizedState),
                 stateColor: managedStateColor(normalizedState),
                 ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
-                detail: managedSessionDetail(session)
+                detail: managedSessionDetail(session),
+                stopAction: managedStopAction(for: session)
             )
         }
     }
@@ -405,11 +416,52 @@ public struct MenuBarPanelView: View {
 
             return BackgroundBridgeEntry(
                 id: bridge.id,
+                sessionID: bridge.sessionId,
                 provider: provider.isEmpty ? "unknown" : provider,
                 workspace: workspace.isEmpty ? "Detached workspace" : workspace,
                 statusLabel: status.isEmpty ? "orphan" : status,
                 ageLabel: snapshot.compactTimestampLabel(bridge.heartbeatAt ?? bridge.startedAt, relativeTo: presentationDate),
-                detail: orphanBridgeDetail(bridge)
+                detail: orphanBridgeDetail(bridge),
+                stopAction: orphanBridgeStopAction(for: bridge)
+            )
+        }
+    }
+
+    private func managedStopAction(for session: ManagedSessionSnapshot) -> (() -> Void)? {
+        guard session.normalizedState != "attached",
+              let sessionID = session.sessionId,
+              !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+
+        let workspace = session.workspaceLabel
+        return {
+            setFeedback(
+                actionSink.handleStopManagedBridge(
+                    sessionID: sessionID,
+                    workspaceLabel: workspace,
+                    snapshot: snapshot
+                )
+            )
+        }
+    }
+
+    private func orphanBridgeStopAction(for bridge: OrphanBridgeSnapshot) -> (() -> Void)? {
+        guard let sessionID = bridge.sessionId,
+              !sessionID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            return nil
+        }
+
+        let workspace = bridge.workspaceLabel
+        return {
+            setFeedback(
+                actionSink.handleStopManagedBridge(
+                    sessionID: sessionID,
+                    workspaceLabel: workspace,
+                    snapshot: snapshot
+                )
             )
         }
     }
