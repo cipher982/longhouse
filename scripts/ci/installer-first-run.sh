@@ -199,6 +199,42 @@ wait_for_health() {
   return 1
 }
 
+onboard_supports_flag() {
+  local flag="$1"
+  longhouse onboard --help 2>/dev/null | grep -Fq -- "$flag"
+}
+
+run_onboard_quickstart() {
+  local log_path="$1"
+  local -a cmd=(longhouse onboard)
+
+  if onboard_supports_flag "--topology"; then
+    cmd+=(--topology local --no-browser --port "$PORT")
+  else
+    cmd+=(--quick --no-browser --port "$PORT")
+    if onboard_supports_flag "--no-demo"; then
+      cmd+=(--no-demo)
+    fi
+  fi
+
+  log "🧭 Onboarding command: ${cmd[*]}"
+  "${cmd[@]}" | tee "$log_path"
+}
+
+resolve_device_token_path() {
+  local candidate=""
+  for candidate in \
+    "$HOME/.longhouse/machine/device-token" \
+    "$HOME/.claude/longhouse-device-token"
+  do
+    if [[ -s "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 wait_for_down() {
   local url="$1"
   local name="$2"
@@ -822,7 +858,7 @@ fi
 
 log "🧭 Running local quickstart..."
 ONBOARD_LOG="$(mktemp -t longhouse-onboard.XXXXXX.log)"
-longhouse onboard --topology local --no-browser --port "$PORT" | tee "$ONBOARD_LOG"
+run_onboard_quickstart "$ONBOARD_LOG"
 rm -f "$ONBOARD_LOG"
 
 log "🔌 Verifying local runtime install..."
@@ -877,9 +913,8 @@ fi
 log "🔐 Creating local device token for demo server..."
 longhouse auth --url "http://127.0.0.1:${DEMO_PORT}" --device installer-smoke --force >/dev/null
 
-TOKEN_PATH="$HOME/.longhouse/machine/device-token"
-if [[ ! -s "$TOKEN_PATH" ]]; then
-  fail "Device token file missing after local auth: $TOKEN_PATH"
+if ! TOKEN_PATH="$(resolve_device_token_path)"; then
+  fail "Device token file missing after local auth in supported locations (~/.longhouse/machine/device-token or ~/.claude/longhouse-device-token)"
 fi
 DEMO_DEVICE_TOKEN="$(tr -d '\n' < "$TOKEN_PATH")"
 

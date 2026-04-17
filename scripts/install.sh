@@ -163,6 +163,76 @@ install_longhouse() {
     fi
 }
 
+resolve_longhouse_cli_version() {
+    if ! has_command longhouse; then
+        return 1
+    fi
+
+    local version_line version
+    version_line="$(longhouse --version 2>/dev/null || true)"
+    version="$(printf '%s\n' "$version_line" | awk '{print $2}' | tr -d '\r')"
+    if [[ -z "$version" ]]; then
+        return 1
+    fi
+    printf '%s\n' "${version#v}"
+}
+
+download_and_install_macos_app_release_asset() {
+    local cli_version="$1"
+    local asset_name=""
+    local asset_url=""
+    local tmp_dir=""
+    local archive_path=""
+    local extracted_app=""
+
+    case "$(uname -m)" in
+        arm64|aarch64)
+            asset_name="Longhouse-macos-arm64.zip"
+            ;;
+        *)
+            error "Direct Longhouse.app fallback is only defined for Apple Silicon Macs"
+            return 1
+            ;;
+    esac
+
+    asset_url="https://github.com/cipher982/longhouse/releases/download/v${cli_version}/${asset_name}"
+    tmp_dir="$(mktemp -d)"
+    archive_path="$tmp_dir/$asset_name"
+    extracted_app="$tmp_dir/Longhouse.app"
+
+    info "Falling back to release asset install for Longhouse.app (${asset_name})"
+    info "Release tag: v${cli_version}"
+
+    if ! curl -fL "$asset_url" -o "$archive_path"; then
+        rm -rf "$tmp_dir"
+        error "Could not download Longhouse.app release asset from $asset_url"
+        return 1
+    fi
+
+    if ! ditto -x -k "$archive_path" "$tmp_dir"; then
+        rm -rf "$tmp_dir"
+        error "Could not extract Longhouse.app release asset"
+        return 1
+    fi
+
+    if [[ ! -d "$extracted_app" ]]; then
+        rm -rf "$tmp_dir"
+        error "Release asset did not contain Longhouse.app"
+        return 1
+    fi
+
+    rm -rf "/Applications/Longhouse.app"
+    if ! ditto "$extracted_app" "/Applications/Longhouse.app"; then
+        rm -rf "$tmp_dir"
+        error "Could not copy Longhouse.app into /Applications"
+        return 1
+    fi
+
+    rm -rf "$tmp_dir"
+    success "Longhouse.app installed in /Applications"
+    return 0
+}
+
 # Install Longhouse.app into /Applications on macOS
 install_macos_app() {
     if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -176,17 +246,35 @@ install_macos_app() {
         exit 1
     fi
 
-    local install_output=""
-    if install_output=$(longhouse runtime-artifact-install desktop-app 2>&1); then
-        success "Longhouse.app installed in /Applications"
-        if [[ -n "$install_output" ]]; then
-            printf '%s\n' "$install_output"
+    if longhouse runtime-artifact-install desktop-app --help >/dev/null 2>&1; then
+        local install_output=""
+        if install_output=$(longhouse runtime-artifact-install desktop-app 2>&1); then
+            success "Longhouse.app installed in /Applications"
+            if [[ -n "$install_output" ]]; then
+                printf '%s\n' "$install_output"
+            fi
+            return 0
         fi
+
+        printf '%s\n' "$install_output" >&2
+        error "Could not install Longhouse.app into /Applications"
+        exit 1
+    fi
+
+    local cli_version=""
+    if ! cli_version="$(resolve_longhouse_cli_version)"; then
+        error "Could not determine installed Longhouse CLI version for app fallback"
+        exit 1
+    fi
+
+    if download_and_install_macos_app_release_asset "$cli_version"; then
         return 0
     fi
 
+    local install_output=""
+    install_output="$(longhouse --version 2>&1 || true)"
     printf '%s\n' "$install_output" >&2
-    error "Could not install Longhouse.app into /Applications"
+    error "Could not install Longhouse.app into /Applications via CLI or release fallback"
     exit 1
 }
 
