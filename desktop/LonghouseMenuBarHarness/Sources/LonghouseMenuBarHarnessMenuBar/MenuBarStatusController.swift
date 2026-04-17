@@ -134,7 +134,7 @@ final class MenuBarStatusController: NSObject {
         }
 
         button.image = MenuBarBrandIcon.image(attentionColor: statusItemAttentionColor())
-        let tooltip = statusItemAttentionLabel() ?? "Longhouse"
+        let tooltip = statusItemAttentionLabel() ?? store.snapshot?.statusItemSummaryLabel ?? "Longhouse"
         button.toolTip = tooltip
         button.setAccessibilityLabel(tooltip)
     }
@@ -143,7 +143,20 @@ final class MenuBarStatusController: NSObject {
         if store.loadError != nil {
             return .systemRed
         }
-        guard let snapshot = store.snapshot, snapshot.needsMenuBarAttention else {
+        guard let snapshot = store.snapshot else {
+            return nil
+        }
+        if let managedSeverity = snapshot.managedAttentionSeverity {
+            switch managedSeverity {
+            case .yellow:
+                return .systemOrange
+            case .red:
+                return .systemRed
+            case .green, .gray:
+                break
+            }
+        }
+        guard snapshot.needsMenuBarAttention else {
             return nil
         }
         switch snapshot.parsedSeverity {
@@ -163,7 +176,7 @@ final class MenuBarStatusController: NSObject {
         guard let snapshot = store.snapshot, snapshot.needsMenuBarAttention else {
             return nil
         }
-        return "Longhouse needs attention: \(snapshot.ambientStatusLabel)"
+        return snapshot.statusItemSummaryLabel
     }
 
     private func installEventMonitors(for generation: UInt64) {

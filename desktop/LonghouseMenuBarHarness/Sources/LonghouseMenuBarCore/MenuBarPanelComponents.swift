@@ -302,6 +302,156 @@ struct ProviderComparisonRows: View {
     }
 }
 
+struct ManagedSessionEntry: Identifiable {
+    let id: String
+    let provider: String
+    let workspace: String
+    let branch: String?
+    let stateLabel: String
+    let stateColor: Color
+    let ageLabel: String
+    let detail: String
+
+    init(
+        id: String,
+        provider: String,
+        workspace: String,
+        branch: String?,
+        stateLabel: String,
+        stateColor: Color,
+        ageLabel: String,
+        detail: String
+    ) {
+        self.id = id
+        self.provider = provider
+        self.workspace = workspace
+        self.branch = branch
+        self.stateLabel = stateLabel
+        self.stateColor = stateColor
+        self.ageLabel = ageLabel
+        self.detail = detail
+    }
+}
+
+struct ManagedSessionList: View {
+    let entries: [ManagedSessionEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                ManagedSessionRow(entry: entry)
+
+                if index < entries.count - 1 {
+                    sectionDivider
+                }
+            }
+        }
+    }
+}
+
+private struct ManagedSessionRow: View {
+    let entry: ManagedSessionEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Circle()
+                    .fill(providerColor(entry.provider))
+                    .frame(width: 7, height: 7)
+
+                Text(entry.workspace)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+
+                if let branch = entry.branch,
+                   !branch.isEmpty {
+                    Text("/ \(branch)")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+
+                Spacer(minLength: 8)
+
+                statePill(title: entry.stateLabel.uppercased(), color: entry.stateColor)
+
+                Text(entry.ageLabel)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+                    .monospacedDigit()
+            }
+
+            Text("\(HealthSnapshot.providerDisplayName(entry.provider)) · \(entry.detail)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
+struct BackgroundBridgeEntry: Identifiable {
+    let id: String
+    let provider: String
+    let workspace: String
+    let statusLabel: String
+    let ageLabel: String
+    let detail: String
+}
+
+struct BackgroundBridgeList: View {
+    let entries: [BackgroundBridgeEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                BackgroundBridgeRow(entry: entry)
+
+                if index < entries.count - 1 {
+                    sectionDivider
+                }
+            }
+        }
+    }
+}
+
+private struct BackgroundBridgeRow: View {
+    let entry: BackgroundBridgeEntry
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Circle()
+                    .fill(providerColor(entry.provider))
+                    .frame(width: 7, height: 7)
+
+                Text(entry.workspace)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                statePill(title: entry.statusLabel.uppercased(), color: .red)
+
+                Text(entry.ageLabel)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundStyle(Color.primary)
+                    .monospacedDigit()
+            }
+
+            Text("\(HealthSnapshot.providerDisplayName(entry.provider)) bridge · \(entry.detail)")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 8)
+    }
+}
+
 private struct ProviderComparisonRow: View {
     let provider: String
     let count: Int
@@ -402,6 +552,18 @@ func subtleChip(title: String, tint: Color = Color.secondary) -> some View {
         .background(
             Capsule(style: .continuous)
                 .fill(Color.white.opacity(0.05))
+        )
+}
+
+func statePill(title: String, color: Color) -> some View {
+    Text(title)
+        .font(.system(size: 9, weight: .bold, design: .monospaced))
+        .foregroundStyle(color)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(color.opacity(0.14))
         )
 }
 

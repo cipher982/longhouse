@@ -50,6 +50,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let engineStatus: EngineStatusSnapshot?
     public let outbox: OutboxSnapshot?
     public let activitySummary: ActivitySummarySnapshot?
+    public let managedSummary: ManagedSummarySnapshot?
+    public let managedSessions: [ManagedSessionSnapshot]?
+    public let orphanBridges: [OrphanBridgeSnapshot]?
     public let launchReadiness: LaunchReadinessSnapshot?
 
     public init(
@@ -64,6 +67,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         engineStatus: EngineStatusSnapshot?,
         outbox: OutboxSnapshot?,
         activitySummary: ActivitySummarySnapshot?,
+        managedSummary: ManagedSummarySnapshot? = nil,
+        managedSessions: [ManagedSessionSnapshot]? = nil,
+        orphanBridges: [OrphanBridgeSnapshot]? = nil,
         launchReadiness: LaunchReadinessSnapshot?
     ) {
         self.schemaVersion = schemaVersion
@@ -77,6 +83,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.engineStatus = engineStatus
         self.outbox = outbox
         self.activitySummary = activitySummary
+        self.managedSummary = managedSummary
+        self.managedSessions = managedSessions
+        self.orphanBridges = orphanBridges
         self.launchReadiness = launchReadiness
     }
 
@@ -122,6 +131,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var needsMenuBarAttention: Bool {
+        if managedNeedsAttention {
+            return true
+        }
         if isInstallLocationBlocked || isSetupRequired {
             return true
         }
@@ -351,6 +363,96 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             .filter { !($0.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     }
 
+    public var currentManagedSessions: [ManagedSessionSnapshot] {
+        managedSessions ?? []
+    }
+
+    public var currentOrphanBridges: [OrphanBridgeSnapshot] {
+        orphanBridges ?? []
+    }
+
+    public var attachedManagedCount: Int {
+        managedSummary?.attachedCount ?? currentManagedSessions.filter { $0.normalizedState == "attached" }.count
+    }
+
+    public var detachedManagedCount: Int {
+        managedSummary?.detachedCount ?? currentManagedSessions.filter { $0.normalizedState == "detached" }.count
+    }
+
+    public var degradedManagedCount: Int {
+        managedSummary?.degradedCount ?? currentManagedSessions.filter { $0.normalizedState == "degraded" }.count
+    }
+
+    public var orphanBridgeCount: Int {
+        managedSummary?.orphanBridgeCount ?? currentOrphanBridges.count
+    }
+
+    public var hasManagedRuntimeTruth: Bool {
+        managedSummary != nil || !currentManagedSessions.isEmpty || !currentOrphanBridges.isEmpty
+    }
+
+    public var managedAttentionSeverity: HarnessSeverity? {
+        if orphanBridgeCount > 0 || degradedManagedCount > 0 {
+            return .red
+        }
+        if detachedManagedCount > 0 {
+            return .yellow
+        }
+        return nil
+    }
+
+    public var managedNeedsAttention: Bool {
+        managedAttentionSeverity != nil
+    }
+
+    public var managedSummaryLabel: String {
+        if !hasManagedRuntimeTruth {
+            return "No managed sessions"
+        }
+
+        var parts: [String] = []
+        if attachedManagedCount > 0 {
+            parts.append(Self.countLabel(attachedManagedCount, singular: "attached", plural: "attached"))
+        }
+        if detachedManagedCount > 0 {
+            parts.append(Self.countLabel(detachedManagedCount, singular: "detached", plural: "detached"))
+        }
+        if degradedManagedCount > 0 {
+            parts.append(Self.countLabel(degradedManagedCount, singular: "degraded", plural: "degraded"))
+        }
+        if orphanBridgeCount > 0 {
+            parts.append(Self.countLabel(orphanBridgeCount, singular: "orphan bridge", plural: "orphan bridges"))
+        }
+        return parts.isEmpty ? "No managed sessions" : parts.joined(separator: " · ")
+    }
+
+    public var managedHeaderChipLabel: String? {
+        guard hasManagedRuntimeTruth else {
+            return nil
+        }
+        if orphanBridgeCount > 0 {
+            return Self.countLabel(orphanBridgeCount, singular: "orphan bridge", plural: "orphan bridges").uppercased()
+        }
+        if degradedManagedCount > 0 {
+            return Self.countLabel(degradedManagedCount, singular: "degraded", plural: "degraded").uppercased()
+        }
+        if detachedManagedCount > 0 {
+            return Self.countLabel(detachedManagedCount, singular: "detached", plural: "detached").uppercased()
+        }
+        if attachedManagedCount > 0 {
+            return Self.countLabel(attachedManagedCount, singular: "attached", plural: "attached").uppercased()
+        }
+        return "NO MANAGED SESSIONS"
+    }
+
+    public var statusItemSummaryLabel: String {
+        let base = managedNeedsAttention ? "Longhouse needs attention" : "Longhouse \(ambientStatusLabel.lowercased())"
+        guard hasManagedRuntimeTruth else {
+            return base
+        }
+        return "\(base) · \(managedSummaryLabel)"
+    }
+
     public func recentTouchAgeLabel(_ touch: ActivityTouchSnapshot, relativeTo referenceDate: Date) -> String {
         guard let raw = touch.lastUpdated,
               let parsed = Self.parseISO8601(raw) else {
@@ -554,6 +656,9 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         if recent > 0 {
             parts.append("\(recent) active")
         }
+        if hasManagedRuntimeTruth {
+            parts.append(managedSummaryLabel)
+        }
         if launchValueLabel != "Unavailable" {
             parts.append(launchValueLabel)
         }
@@ -681,6 +786,22 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return formatter.localizedString(for: date, relativeTo: referenceDate)
     }
 
+    public func relativeTimestampLabel(_ raw: String?, relativeTo referenceDate: Date) -> String {
+        guard let raw,
+              let parsed = Self.parseISO8601(raw) else {
+            return "Unknown"
+        }
+        return Self.relativeLabel(for: parsed, relativeTo: referenceDate)
+    }
+
+    public func compactTimestampLabel(_ raw: String?, relativeTo referenceDate: Date) -> String {
+        guard let raw,
+              let parsed = Self.parseISO8601(raw) else {
+            return "-"
+        }
+        return Self.compactRelativeLabel(for: parsed, relativeTo: referenceDate)
+    }
+
     static func providerDisplayName(_ raw: String) -> String {
         switch raw.lowercased() {
         case "claude":
@@ -714,6 +835,28 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
                 .replacingOccurrences(of: "-", with: " ")
                 .capitalized
         }
+    }
+
+    public static func humanizeManagedReason(_ raw: String) -> String {
+        switch raw {
+        case "no_managed_session_bound":
+            return "No managed session bound"
+        case "bridge_heartbeat_stale":
+            return "Bridge heartbeat stale"
+        case "thread_subscription_failed":
+            return "Transcript shipping stalled"
+        case "live_control_unavailable":
+            return "Live control unavailable"
+        default:
+            return humanizeReason(raw)
+        }
+    }
+
+    private static func countLabel(_ count: Int, singular: String, plural: String? = nil) -> String {
+        if count == 1 {
+            return "1 \(singular)"
+        }
+        return "\(count) \(plural ?? "\(singular)s")"
     }
 
     public static func setupRequiredSnapshot(detail: String? = nil) -> HealthSnapshot {
@@ -841,6 +984,53 @@ public struct OutboxSnapshot: Codable, Equatable, Sendable {
     public let path: String?
     public let fileCount: Int?
     public let oldestAgeSeconds: Int?
+}
+
+public struct ManagedSummarySnapshot: Codable, Equatable, Sendable {
+    public let attachedCount: Int?
+    public let detachedCount: Int?
+    public let degradedCount: Int?
+    public let orphanBridgeCount: Int?
+    public let latestActivityAt: String?
+}
+
+public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable {
+    public let sessionId: String?
+    public let provider: String?
+    public let workspaceLabel: String?
+    public let branch: String?
+    public let state: String?
+    public let phase: String?
+    public let lastActivityAt: String?
+    public let bridgeStatus: String?
+    public let bridgePid: Int?
+    public let bridgeHeartbeatAt: String?
+    public let reasonCodes: [String]?
+
+    public var id: String {
+        sessionId ?? "\(provider ?? "unknown")-\(workspaceLabel ?? "workspace")-\(lastActivityAt ?? "never")"
+    }
+
+    public var normalizedState: String {
+        state?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "unknown"
+    }
+}
+
+public struct OrphanBridgeSnapshot: Codable, Equatable, Identifiable, Sendable {
+    public let provider: String?
+    public let pid: Int?
+    public let workspaceLabel: String?
+    public let status: String?
+    public let startedAt: String?
+    public let heartbeatAt: String?
+    public let reasonCodes: [String]?
+
+    public var id: String {
+        if let pid {
+            return "bridge-\(pid)"
+        }
+        return "\(provider ?? "unknown")-\(workspaceLabel ?? "workspace")-\(startedAt ?? "unknown")"
+    }
 }
 
 public struct ActivitySummarySnapshot: Codable, Equatable, Sendable {

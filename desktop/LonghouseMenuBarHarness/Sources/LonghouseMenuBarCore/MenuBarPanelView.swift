@@ -188,14 +188,20 @@ public struct MenuBarPanelView: View {
                         label: displayHeadline
                     )
 
-                HStack(spacing: 8) {
-                    statusChip(
-                        title: snapshot.ambientStatusLabel.uppercased(),
-                        color: snapshot.parsedSeverity.accentColor,
-                        identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
-                    )
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        statusChip(
+                            title: snapshot.ambientStatusLabel.uppercased(),
+                            color: snapshot.parsedSeverity.accentColor,
+                            identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
+                        )
 
-                    subtleChip(title: "Updated \(snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate))")
+                        subtleChip(title: "Updated \(snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate))")
+                    }
+
+                    if let managedChip = snapshot.managedHeaderChipLabel {
+                        subtleChip(title: managedChip, tint: managedChipTint)
+                    }
                 }
 
                 Text(snapshot.missionSummaryLabel(relativeTo: presentationDate))
@@ -259,6 +265,26 @@ public struct MenuBarPanelView: View {
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
+            }
+
+            sectionDivider.padding(.horizontal, 4)
+
+            PanelSection(title: "Managed now", trailing: snapshot.managedSummaryLabel) {
+                if managedSessionEntries.isEmpty {
+                    Text("No managed Claude or Codex sessions are running on this Mac.")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                } else {
+                    ManagedSessionList(entries: managedSessionEntries)
+                }
+            }
+
+            if !backgroundBridgeEntries.isEmpty {
+                sectionDivider.padding(.horizontal, 4)
+
+                PanelSection(title: "Background bridges", trailing: "\(backgroundBridgeEntries.count)") {
+                    BackgroundBridgeList(entries: backgroundBridgeEntries)
+                }
             }
 
             sectionDivider.padding(.horizontal, 4)
@@ -350,6 +376,112 @@ public struct MenuBarPanelView: View {
                 age: snapshot.recentTouchAgeLabel(touch, relativeTo: presentationDate)
             )
         }
+    }
+
+    private var managedSessionEntries: [ManagedSessionEntry] {
+        snapshot.currentManagedSessions.map { session in
+            let workspace = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let provider = (session.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedState = session.normalizedState
+
+            return ManagedSessionEntry(
+                id: session.id,
+                provider: provider.isEmpty ? "unknown" : provider,
+                workspace: workspace.isEmpty ? HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider) : workspace,
+                branch: (session.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : session.branch,
+                stateLabel: managedStateTitle(normalizedState),
+                stateColor: managedStateColor(normalizedState),
+                ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
+                detail: managedSessionDetail(session)
+            )
+        }
+    }
+
+    private var backgroundBridgeEntries: [BackgroundBridgeEntry] {
+        snapshot.currentOrphanBridges.map { bridge in
+            let workspace = (bridge.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let provider = (bridge.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let status = (bridge.status ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+            return BackgroundBridgeEntry(
+                id: bridge.id,
+                provider: provider.isEmpty ? "unknown" : provider,
+                workspace: workspace.isEmpty ? "Detached workspace" : workspace,
+                statusLabel: status.isEmpty ? "orphan" : status,
+                ageLabel: snapshot.compactTimestampLabel(bridge.heartbeatAt ?? bridge.startedAt, relativeTo: presentationDate),
+                detail: orphanBridgeDetail(bridge)
+            )
+        }
+    }
+
+    private func managedStateTitle(_ normalizedState: String) -> String {
+        switch normalizedState {
+        case "attached":
+            return "Attached"
+        case "detached":
+            return "Detached"
+        case "degraded":
+            return "Degraded"
+        default:
+            return "Unknown"
+        }
+    }
+
+    private func managedStateColor(_ normalizedState: String) -> Color {
+        switch normalizedState {
+        case "attached":
+            return Color(red: 0.17, green: 0.70, blue: 0.39)
+        case "detached":
+            return Color(red: 0.90, green: 0.67, blue: 0.16)
+        case "degraded":
+            return Color(red: 0.86, green: 0.29, blue: 0.23)
+        default:
+            return Color.secondary
+        }
+    }
+
+    private func managedSessionDetail(_ session: ManagedSessionSnapshot) -> String {
+        var parts: [String] = []
+        let phase = (session.phase ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !phase.isEmpty {
+            parts.append(phase.replacingOccurrences(of: "_", with: " ").capitalized)
+        }
+
+        parts.append(contentsOf: (session.reasonCodes ?? []).prefix(1).map { HealthSnapshot.humanizeManagedReason($0) })
+
+        if parts.isEmpty {
+            switch session.normalizedState {
+            case "attached":
+                parts.append("Live control path present")
+            case "detached":
+                parts.append("Managed session still running in background")
+            case "degraded":
+                parts.append("Bridge is running but not trustworthy")
+            default:
+                parts.append("Managed session state unknown")
+            }
+        }
+
+        let heartbeat = snapshot.compactTimestampLabel(session.bridgeHeartbeatAt, relativeTo: presentationDate)
+        if heartbeat != "-" {
+            parts.append("heartbeat \(heartbeat)")
+        }
+
+        return parts.joined(separator: " · ")
+    }
+
+    private func orphanBridgeDetail(_ bridge: OrphanBridgeSnapshot) -> String {
+        var parts = (bridge.reasonCodes ?? []).prefix(2).map { HealthSnapshot.humanizeManagedReason($0) }
+        if parts.isEmpty {
+            parts.append("No managed session bound")
+        }
+
+        let heartbeat = snapshot.compactTimestampLabel(bridge.heartbeatAt, relativeTo: presentationDate)
+        if heartbeat != "-" {
+            parts.append("heartbeat \(heartbeat)")
+        }
+
+        return parts.joined(separator: " · ")
     }
 
     private var queueBoardValue: String {
@@ -574,6 +706,13 @@ public struct MenuBarPanelView: View {
             return .orange
         }
         return snapshot.parsedSeverity == .green ? Color.primary : snapshot.parsedSeverity.accentColor
+    }
+
+    private var managedChipTint: Color {
+        if let severity = snapshot.managedAttentionSeverity {
+            return severity.accentColor
+        }
+        return Color.secondary
     }
 
     private var primaryInstallActionTitle: String {

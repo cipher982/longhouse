@@ -12,6 +12,8 @@ shift || true
 mkdir -p "$ARTIFACT_DIR"
 
 usage() {
+  local fixture_names
+  fixture_names="$(find "$PKG_PATH/Fixtures" -maxdepth 1 -name '*.json' -print | sed 's#.*/##' | sed 's#\\.json$##' | sort | sed 's/^/  /')"
   cat <<'EOF'
 Usage:
   scripts/qa/menubar-harness.sh test
@@ -29,10 +31,8 @@ Usage:
   scripts/qa/menubar-harness.sh menubar-live
 
 Fixtures:
-  healthy
-  degraded
-  broken
 EOF
+  printf '%s\n' "$fixture_names"
 }
 
 require_tool() {
@@ -314,18 +314,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 artifact_dir = Path(sys.argv[1])
+pngs = sorted(str(path) for path in artifact_dir.glob("*.png"))
 manifest = {
     "generated_at": datetime.now(timezone.utc).isoformat(),
     "artifacts": {
-        "healthy_png": str(artifact_dir / "healthy.png"),
-        "degraded_png": str(artifact_dir / "degraded.png"),
-        "broken_png": str(artifact_dir / "broken.png"),
-        "live_png": str(artifact_dir / "live.png"),
         "window_smoke_log": str(artifact_dir / "window-smoke-actions.jsonl"),
         "menubar_smoke_log": str(artifact_dir / "menubar-smoke-actions.jsonl"),
         "xcuitest_log": str(artifact_dir / "xcuitest.log"),
         "xcuitest_result_bundle": str(artifact_dir / "LonghouseMenuBarWindowHost.xcresult"),
     },
+    "png_snapshots": pngs,
 }
 path = artifact_dir / "manifest.json"
 path.write_text(json.dumps(manifest, indent=2) + "\n")
@@ -375,9 +373,10 @@ case "$cmd" in
     ;;
   render-fixtures)
     app_bin="$(build_app_binary)"
-    capture_window_render "$app_bin" "$(fixture_path healthy)" "$ARTIFACT_DIR/healthy.png"
-    capture_window_render "$app_bin" "$(fixture_path degraded)" "$ARTIFACT_DIR/degraded.png"
-    capture_window_render "$app_bin" "$(fixture_path broken)" "$ARTIFACT_DIR/broken.png"
+    while IFS= read -r fixture_json; do
+      fixture_name="$(basename "$fixture_json" .json)"
+      capture_window_render "$app_bin" "$fixture_json" "$ARTIFACT_DIR/${fixture_name}.png"
+    done < <(find "$PKG_PATH/Fixtures" -maxdepth 1 -name '*.json' -print | sort)
     ;;
   smoke)
     fixture="${1:-healthy}"
