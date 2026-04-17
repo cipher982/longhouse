@@ -121,14 +121,27 @@ export function HeroSection() {
         </div>
       </div>
 
-      {/* ── Hero product image ── */}
-      <div className="landing-hero-showcase">
+      {/* ── Hero device showcase ── */}
+      <div className="landing-hero-devices">
         <img
-          src="/images/landing/hero.png"
-          alt="Terminal session flowing into Longhouse timeline and iOS widget"
-          className="landing-hero-showcase-img"
+          src="/images/landing/device-macbook.png"
+          alt="Claude Code terminal session in a MacBook"
+          className="landing-hero-device landing-hero-device--macbook"
           loading="eager"
         />
+        <img
+          src="/images/landing/device-monitor.png"
+          alt="Longhouse timeline in a Pro Display"
+          className="landing-hero-device landing-hero-device--monitor"
+          loading="eager"
+        />
+        <img
+          src="/images/landing/device-iphone.png"
+          alt="Longhouse iOS widget on iPhone"
+          className="landing-hero-device landing-hero-device--iphone"
+          loading="eager"
+        />
+        <div className="landing-hero-glow" aria-hidden="true" />
       </div>
     </section>
   );
