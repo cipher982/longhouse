@@ -329,4 +329,5 @@ def test_codex_command_exits_when_no_codex_runtime_available(monkeypatch, tmp_pa
     result = runner.invoke(app, ["codex", "--cwd", str(tmp_path)])
 
     assert result.exit_code == 1
-    assert "Managed Codex runtime is not installed." in result.output
+    assert "Managed Codex runtime is not installed yet." in result.output
+    assert "longhouse onboard" in result.output

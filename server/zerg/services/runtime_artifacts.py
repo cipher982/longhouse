@@ -38,7 +38,8 @@ from zerg.services.longhouse_paths import resolve_longhouse_home
 
 RELEASE_REPO = "cipher982/longhouse"
 RELEASE_TAG_PREFIX = "v"
-DOWNLOAD_TIMEOUT_SECONDS = 30.0
+# Runtime artifacts can exceed tens of MB; keep onboarding tolerant of slower links.
+DOWNLOAD_TIMEOUT_SECONDS = 120.0
 RELEASE_CHECKSUMS_FILENAME = "local-runtime-checksums.txt"
 MANAGED_CODEX_LAUNCHER_MARKER = "# longhouse-managed-codex-launcher"
 MANAGED_CODEX_VERSION_PATTERN = re.compile(r"(\d+\.\d+\.\d+(?:[-+._a-zA-Z0-9]+)?)")
