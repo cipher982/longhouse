@@ -251,5 +251,6 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Managed Codex runtime pinning should go through `--codex-source` on `longhouse connect --install` / `longhouse onboard`; `LONGHOUSE_CODEX_SOURCE` is the lower-level escape hatch, not the primary operator path.
 - Managed Codex bridge state can be stale after startup `thread/resume failed: no rollout found`; if that happens, trust the thread rollout JSONL plus `~/.codex/log/codex-tui.log` over bridge `last_turn_status` for whether the turn actually completed.
 - macOS menu bar work is latency-sensitive: open from cached/loading state, refresh off the main thread, keep `local-health` internal-only, and require PNG harness plus live installed-app capture QA before ship.
+- Menu bar process/session truth should be modeled explicitly, not inferred from `recent activity`; fixture-first states like `attached`, `detached`, `degraded`, and `orphan bridge` are the right harness loop before wiring live data.
 - Timeline scroll performance is fragile: hover prefetch, card hover transitions, and decorative shell animations can steal raster budget during active scroll and should be suppressed when scrolling.
 - `/api/threads/{id}/runs` needs direct backend coverage. Dead runtime imports can survive broad suites and only surface in hosted chat smoke.

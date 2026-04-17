@@ -19,6 +19,8 @@ The inner loop is:
 5. window-host app
 6. menu-bar-host app
 
+For menu bar/dashboard information architecture work, treat the harness as a **mini product surface**, not a screenshot tool. Start by deciding which user-facing states must be obvious at a glance, then encode those as fixtures before touching live data.
+
 ## Commands
 
 ```bash
@@ -45,6 +47,11 @@ Typical files:
 - `healthy.png`
 - `degraded.png`
 - `broken.png`
+- `managed-attached.png`
+- `managed-detached.png`
+- `managed-degraded.png`
+- `orphan-bridges.png`
+- `machine-broken.png`
 - `live.png`
 - `window-smoke-actions.jsonl`
 - `menubar-smoke-actions.jsonl`
@@ -70,6 +77,9 @@ desktop/LonghouseMenuBarHarness/
 - Keep the shared UI in `LonghouseMenuBarCore`.
 - Prefer adding accessibility identifiers at the shared view layer.
 - Use fixture PNGs first when changing layout or state presentation.
+- For local process/session truth, model it explicitly in the snapshot contract instead of trying to infer it from `recent activity`.
+- The key menu bar states for managed sessions are: `attached`, `detached`, `degraded`, and `orphan bridge`.
+- Keep orphaned background bridges separate from managed sessions in the UI. They are an attention surface, not a normal session card.
 - Treat `artifacts/menubar-harness/*.png` as required QA, not a side effect. Inspect the literal full-frame images before touching the installed app.
 - Do not accept “rendered successfully” or image dimensions as proof. Catch spacing, clipping, edge contact, and optical balance in the PNG stage.
 - Reinstall `Longhouse.app` only after the fixture/live PNGs look correct.
@@ -78,3 +88,22 @@ desktop/LonghouseMenuBarHarness/
 - Use live PNG/window/menubar runs only after the fixture loop is stable.
 - Reuse the existing `longhouse local-health --json` contract. Do not teach the Swift code to parse launchd directly.
 - Use `make test-install-macos-ambient` when changing the unified install path, launchd wiring, or menu bar runtime packaging.
+
+## Recommended Iteration Loop For New States
+
+1. Write down the user-facing states first.
+   - Example: `managed-attached`, `managed-detached`, `managed-degraded`, `orphan-bridges`, `machine-broken`
+2. Add or update fixture JSON in `desktop/LonghouseMenuBarHarness/Fixtures/`.
+3. Extend the shared snapshot contract in `Sources/LonghouseMenuBarCore/HealthSnapshot.swift`.
+4. Render all fixtures:
+   ```bash
+   make menubar-harness-fixtures
+   ```
+5. Inspect the actual PNGs in `artifacts/menubar-harness/`.
+6. Only after the fixtures read well, check `make menubar-harness-window` or `make menubar-harness-menubar`.
+
+## Product Guidance
+
+- The menu bar should answer: **what Longhouse-owned things are alive on this Mac right now, and do I need to do anything?**
+- Prefer explicit session/process truth over passive telemetry summaries.
+- Use the menu bar for small, high-confidence actions (`reattach`, `stop`, `open`) and escalate to the full app for heavier workflows.
