@@ -1459,52 +1459,37 @@ async fn process_notification(
     let mut followup = None;
     match method {
         "thread/started" => {
-            // Capture the thread created by the TUI (first time only).
-            if context.state.thread_id.is_none() {
-                let thread_id = extract_string(&params, &["thread", "id"]);
-                let thread_path = extract_string(&params, &["thread", "path"]);
-                if let Some(ref id) = thread_id {
-                    context.state.thread_id = thread_id.clone();
-                    context.state.thread_path = thread_path.clone();
-                    context.runtime.thread_id = thread_id.clone();
-                    context.subscribed_thread_id = None;
-                    write_state_file(&context.state_file, &context.state)?;
-
-                    // Seed session_binding so the daemon ships with the managed session ID.
-                    if let Some(ref tp) = thread_path {
-                        match resolve_bridge_agent_db_path(config.longhouse_home.as_deref())
-                            .and_then(|db_path| crate::state::db::open_db(Some(&db_path)))
-                        {
-                            Ok(conn) => {
-                                let sb = crate::state::session_binding::SessionBinding::new(&conn);
-                                let canonical = std::fs::canonicalize(tp)
-                                    .unwrap_or_else(|_| PathBuf::from(tp))
-                                    .to_string_lossy()
-                                    .to_string();
-                                if let Err(e) =
-                                    sb.bind(&canonical, &context.state.session_id, "codex")
-                                {
-                                    eprintln!("[codex-bridge] session_binding seed failed: {e}");
-                                }
-                            }
-                            Err(e) => eprintln!("[codex-bridge] open shipper DB for binding: {e}"),
-                        }
+            let previous_thread_id = context.state.thread_id.clone();
+            if adopt_thread_identity(
+                config,
+                context,
+                extract_notification_thread_id(&params),
+                extract_notification_thread_path(&params),
+                false,
+            )? {
+                emit_runtime_updates(
+                    context,
+                    vec![context.runtime_tracker.current_phase_update()],
+                )
+                .await;
+                if let Some(id) = context.state.thread_id.as_deref() {
+                    if previous_thread_id.as_deref() != Some(id) {
+                        eprintln!("[codex-bridge] TUI thread candidate: {id}");
                     }
-
-                    emit_runtime_updates(
-                        context,
-                        vec![context.runtime_tracker.current_phase_update()],
-                    )
-                    .await;
-                    eprintln!("[codex-bridge] TUI thread captured: {id}");
-                    followup = Some(BridgeFollowup::SubscribeThread {
-                        thread_id: id.clone(),
-                        thread_path,
-                    });
                 }
+            }
+            if followup.is_none() {
+                followup = pending_thread_subscription(context);
             }
         }
         "turn/started" | "item/started" | "item/completed" | "thread/status/changed" => {
+            let _ = adopt_thread_identity(
+                config,
+                context,
+                extract_notification_thread_id(&params),
+                extract_notification_thread_path(&params),
+                false,
+            )?;
             if method == "turn/started" {
                 context.state.active_turn_id = extract_string(&params, &["turn", "id"]);
                 context.state.last_turn_status = extract_string(&params, &["turn", "status"]);
@@ -1558,6 +1543,141 @@ fn pending_thread_subscription(context: &BridgeContext) -> Option<BridgeFollowup
 fn is_retryable_thread_subscription_error(error_text: &str) -> bool {
     error_text.contains("no rollout found for thread id")
         || (error_text.contains("failed to load rollout") && error_text.contains("is empty"))
+}
+
+fn extract_notification_thread_id(params: &Value) -> Option<String> {
+    extract_string(params, &["thread", "id"])
+        .or_else(|| extract_string(params, &["threadId"]))
+        .or_else(|| extract_string(params, &["thread_id"]))
+}
+
+fn extract_notification_thread_path(params: &Value) -> Option<String> {
+    extract_string(params, &["thread", "path"])
+        .or_else(|| extract_string(params, &["threadPath"]))
+        .or_else(|| extract_string(params, &["thread_path"]))
+        .or_else(|| extract_string(params, &["path"]))
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value.and_then(|raw| {
+        let trimmed = raw.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
+fn normalize_binding_path(path: &str) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| PathBuf::from(path))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn sync_thread_binding(
+    config: &BridgeRunConfig,
+    old_path: Option<&str>,
+    new_path: Option<&str>,
+    session_id: &str,
+) {
+    let old_canonical = old_path.map(normalize_binding_path);
+    let new_canonical = new_path.map(normalize_binding_path);
+    if old_canonical == new_canonical {
+        return;
+    }
+
+    match resolve_bridge_agent_db_path(config.longhouse_home.as_deref())
+        .and_then(|db_path| crate::state::db::open_db(Some(&db_path)))
+    {
+        Ok(conn) => {
+            let sb = crate::state::session_binding::SessionBinding::new(&conn);
+            if let Some(old) = old_canonical.as_deref() {
+                if let Err(e) = sb.unbind(old) {
+                    eprintln!("[codex-bridge] session_binding clear failed: {e}");
+                }
+            }
+            if let Some(new) = new_canonical.as_deref() {
+                if let Err(e) = sb.bind(new, session_id, "codex") {
+                    eprintln!("[codex-bridge] session_binding seed failed: {e}");
+                }
+            }
+        }
+        Err(e) => eprintln!("[codex-bridge] open shipper DB for binding: {e}"),
+    }
+}
+
+fn thread_subscription_locked(context: &BridgeContext) -> bool {
+    matches!(
+        (
+            context.state.thread_id.as_deref(),
+            context.subscribed_thread_id.as_deref(),
+        ),
+        (Some(thread_id), Some(subscribed_thread_id)) if thread_id == subscribed_thread_id
+    )
+}
+
+fn adopt_thread_identity(
+    config: &BridgeRunConfig,
+    context: &mut BridgeContext,
+    next_id: Option<String>,
+    next_path: Option<String>,
+    allow_replace_locked: bool,
+) -> Result<bool> {
+    let next_id = normalize_optional_string(next_id);
+    let next_path = normalize_optional_string(next_path);
+    if next_id.is_none() && next_path.is_none() {
+        return Ok(false);
+    }
+
+    let current_id = context.state.thread_id.clone();
+    let current_path = context.state.thread_path.clone();
+    let locked = thread_subscription_locked(context);
+
+    let should_replace_id = match next_id.as_deref() {
+        Some(next_id) => match current_id.as_deref() {
+            None => true,
+            Some(current_id) if current_id == next_id => false,
+            Some(_) if allow_replace_locked => true,
+            Some(_) => !locked,
+        },
+        None => false,
+    };
+
+    let mut desired_id = current_id.clone();
+    let mut desired_path = current_path.clone();
+
+    if should_replace_id {
+        desired_id = next_id.clone();
+        desired_path = next_path.clone();
+    } else if let Some(next_path) = next_path.clone() {
+        let path_belongs_to_current_thread =
+            next_id.is_none() || current_id.as_deref() == next_id.as_deref();
+        let can_replace_locked_path = allow_replace_locked || !locked || current_path.is_none();
+        if path_belongs_to_current_thread
+            && can_replace_locked_path
+            && desired_path.as_deref() != Some(next_path.as_str())
+        {
+            desired_path = Some(next_path);
+        }
+    }
+
+    if desired_id == current_id && desired_path == current_path {
+        return Ok(false);
+    }
+
+    let old_path = current_path.clone();
+    context.state.thread_id = desired_id.clone();
+    context.state.thread_path = desired_path.clone();
+    context.runtime.thread_id = desired_id.clone();
+    if desired_id != current_id {
+        context.subscribed_thread_id = None;
+    }
+    sync_thread_binding(
+        config,
+        old_path.as_deref(),
+        desired_path.as_deref(),
+        &context.state.session_id,
+    );
+    write_state_file(&context.state_file, &context.state)?;
+    Ok(true)
 }
 
 impl CodexRuntimeTracker {
@@ -2010,8 +2130,22 @@ async fn handle_bridge_followup(
                 .await
                 {
                     Ok(response) => {
+                        let resume_thread = response.get("thread").cloned().unwrap_or(Value::Null);
+                        let resume_thread_id = extract_string(&resume_thread, &["id"])
+                            .or_else(|| context.state.thread_id.clone())
+                            .or_else(|| Some(thread_id.clone()));
+                        let resume_thread_path = extract_string(&resume_thread, &["path"])
+                            .or_else(|| context.state.thread_path.clone())
+                            .or_else(|| thread_path.clone());
+                        let _ = adopt_thread_identity(
+                            config,
+                            context,
+                            resume_thread_id,
+                            resume_thread_path,
+                            true,
+                        )?;
                         apply_thread_resume_snapshot(context, &response).await?;
-                        context.subscribed_thread_id = Some(thread_id);
+                        context.subscribed_thread_id = context.state.thread_id.clone();
                         return Ok(());
                     }
                     Err(err) => {
@@ -2130,7 +2264,7 @@ mod tests {
             session_source: None,
             machine_name: Some("test-box".to_string()),
             auto_approve: true,
-            longhouse_home: None,
+            longhouse_home: Some(temp.path().to_path_buf()),
             state_file: temp.path().join("bridge-state.json"),
             log_file: temp.path().join("bridge.log"),
         }
@@ -2619,6 +2753,83 @@ mod tests {
             Some("/tmp/thread.jsonl")
         );
         assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-live"));
+    }
+
+    #[tokio::test]
+    async fn process_notification_replaces_unsubscribed_thread_candidate_from_turn_started() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-bad".to_string());
+        context.state.thread_path = Some("/tmp/bad-thread.jsonl".to_string());
+        context.runtime.thread_id = Some("thr-bad".to_string());
+
+        let db_path = resolve_bridge_agent_db_path(Some(temp.path())).unwrap();
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let binding = crate::state::session_binding::SessionBinding::new(&conn);
+        binding
+            .bind(
+                &normalize_binding_path("/tmp/bad-thread.jsonl"),
+                &context.state.session_id,
+                "codex",
+            )
+            .unwrap();
+
+        let followup = process_notification(
+            &json!({
+                "method": "turn/started",
+                "params": {
+                    "threadId": "thr-live",
+                    "turn": {
+                        "id": "turn-live",
+                        "status": "inProgress"
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            followup,
+            Some(BridgeFollowup::SubscribeThread {
+                thread_id: "thr-live".to_string(),
+                thread_path: None,
+            })
+        );
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-live"));
+        assert_eq!(context.state.thread_path, None);
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-live"));
+        assert_eq!(binding.get("/tmp/bad-thread.jsonl").unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn adopt_thread_identity_does_not_replace_locked_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-live".to_string());
+        context.state.thread_path = Some("/tmp/thread-live.jsonl".to_string());
+        context.runtime.thread_id = Some("thr-live".to_string());
+        context.subscribed_thread_id = Some("thr-live".to_string());
+
+        let changed = adopt_thread_identity(
+            &config,
+            &mut context,
+            Some("thr-other".to_string()),
+            Some("/tmp/thread-other.jsonl".to_string()),
+            false,
+        )
+        .unwrap();
+
+        assert!(!changed);
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-live"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some("/tmp/thread-live.jsonl")
+        );
     }
 
     #[tokio::test]
