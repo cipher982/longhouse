@@ -64,9 +64,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            runner_label: cube-fast
           - os: macos-latest
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+            runner_label: macos-latest
+    runs-on: ${{ matrix.runner_label }}
+    timeout-minutes: 45
     name: "launch-gate--managed-codex-build--${{ matrix.os }}"
 
     steps:
@@ -77,6 +79,16 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore managed Codex cargo dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: managed-codex-cargo-${{ runner.os }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
+          restore-keys: |
+            managed-codex-cargo-${{ runner.os }}-
 
       - name: Install Linux build deps for managed Codex
         if: ${{ runner.os == 'Linux' }}
