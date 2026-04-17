@@ -191,69 +191,64 @@ else:
     print("No image in response. Keys:", list(msg.keys()))
 ```
 
-### The Prompt
+### The Prompt (v34 "editorial-wide" — locked-in winner)
 
-The winning prompt (v21) emphasizes DYNAMISM and uses all three real screenshots. The golden energy is the hero element, not the devices.
+The winning style is **editorial product photography** — three devices with generous spacing on an ultra-dark surface, as if shot for a premium tech magazine. The #1 priority is **screenshot legibility** — every screen must be sharp, clear, and readable. The interfaces sell the product, not the lighting.
 
 ```
 Three real product screenshots attached:
-1. A REAL Claude Code terminal session — actual screenshot of the CLI running
-2. The Longhouse web timeline dashboard
-3. An iOS home screen widget for Longhouse
+1. A real Claude Code terminal session — dark terminal, colored text
+2. The Longhouse web timeline dashboard — dark UI, session cards
+3. An iOS home screen widget — small widget with session summaries
 
-Create a dramatic hero image with golden energy flowing between these three real screens.
+Create a wide editorial product photograph. Three Apple devices arranged with
+generous spacing on an ultra-dark surface, as if photographed for a premium
+tech magazine.
 
-LEFT: The FIRST screenshot inside a MacBook Pro laptop. Large, filling left third.
-Use it EXACTLY as-is.
+LEFT THIRD: FIRST screenshot inside a MacBook Pro laptop. Screen faces the
+viewer with slight perspective. The terminal content is CLEARLY VISIBLE —
+every line of code sharp and legible. Cool-toned lighting.
 
-CENTER (largest): The SECOND screenshot inside a large Apple monitor with Safari
-browser chrome.
+CENTER THIRD: SECOND screenshot inside an Apple Pro Display XDR on its
+aluminum stand. Front-facing, largest device. The Longhouse timeline UI is
+the star — session cards, dates, labels all crisp and readable. Warm golden
+ambient lighting.
 
-RIGHT: The THIRD screenshot inside an iPhone 15 Pro, TOUCHSCREEN GLASS FACING
-THE VIEWER. We must see the widget content on the screen.
+RIGHT THIRD: THIRD screenshot inside an iPhone 15 Pro, TOUCHSCREEN GLASS
+FACING THE VIEWER. Widget content visible on screen. Warm lighting matching
+the monitor.
 
-GOLDEN ENERGY connecting all three — thick, luminous, explosive:
-- Burst from center, streams wrapping around devices
-- Motion blur, sparkle particles, volumetric glow
-- Light reflects off device surfaces
-- Feels like data flowing from the coding terminal into the Longhouse ecosystem
+A delicate golden thread of light arcs between all three devices at desk level.
 
-The story: your AI coding agent works in the terminal (left) → Longhouse captures
-and surfaces it on web (center) and phone (right).
+CRITICAL: Embed ALL THREE screenshots EXACTLY as-is. The UI on EVERY screen
+must be SHARP, CLEAR, and LEGIBLE. This is product photography — the
+interfaces are what sell. No artistic blur, no atmospheric haze, no obscuring.
 
-Dark cinematic lighting. Premium. Apple keynote quality.
-
-CRITICAL: Embed ALL THREE screenshots pixel-perfect. Do not modify any content.
+Background: nearly black. Lighting is dramatic but controlled — illuminates
+screens and device edges only. Premium, clean, editorial.
 ```
 
-### Winning Style: Before/After Contrast (v22–v24)
+### Why v34 Wins
 
-The best hero direction is an **infomercial before/after** — desaturated terminal on the left, vibrant Longhouse on the right, golden flow connecting them. Three proven variants:
+Through 34 iterations, these are the key learnings:
 
-- **v22 "infomercial"**: Old chunky laptop (grayscale) → modern monitor+phone (warm). Strongest color contrast. Golden cable along desk.
-- **v23 "grounded"**: Same desk, realistic photography. Laptop (cool tones) → monitor+phone (warm ambient). Most photorealistic.
-- **v24 "split-tone"**: Clear cool-blue left half vs warm-amber right half. Muted laptop → golden-lit monitor+phone. Best tonal split, cleanest composition.
+- **"Editorial product photography"** framing gets Gemini to prioritize screenshot fidelity over mood
+- **"Nearly front-facing with slight perspective"** is the sweet spot — enough angle for depth, flat enough for legibility
+- **"Generous spacing"** prevents device overlap that obscures screens
+- **"The interfaces are what sell"** explicitly tells the model not to sacrifice clarity for atmosphere
+- **Cool-toned left / warm-toned right** creates the before→after narrative without heavy-handed grading
+- **"Delicate golden thread at desk level"** keeps the connecting element subtle and grounded
 
-All three use the same core prompt structure:
-1. LEFT = terminal screenshot inside a laptop, DESATURATED/cool-graded
-2. RIGHT = timeline in monitor + widget in phone, WARM/vibrant, golden-lit
-3. Golden light trail connecting left→right (subtle, not explosive)
-4. Dark background, the golden trail provides warmth to the right side only
-
-Key contrast language to include in prompts:
-- "DESATURATED, slightly grayscale tones" / "cool blue-gray tones" for the left
-- "FULL RICH COLOR" / "warm amber tones, vivid" / "golden-lit" for the right
-- "The golden trail is the ONLY warm element on the left side"
-
-### Prompt Engineering Rules (Learned from 24 iterations)
+### Prompt Engineering Rules (Learned from 34 iterations)
 
 - **"EXACTLY as-is"** for every provided screenshot — without this, the model redraws UI
-- **"SCREEN FACING THE VIEWER" / "TOUCHSCREEN GLASS FACING"** for the phone — it renders the titanium back ~40% of the time regardless, but this helps
-- **Golden energy must be described as the HERO element** — if you describe it as a "thin line" or "subtle arc" the result looks like static mockups on a canvas. Use words like "explosive", "thick streams", "volumetric glow", "wrapping around devices"
-- **Describe Claude Code accurately** — it has a `❯` chevron prompt, colored tool pills, dimmed thinking text, and a status bar. NOT a green-text retro terminal
+- **"TOUCHSCREEN GLASS FACING THE VIEWER"** for the phone — it renders the titanium back ~40% of the time regardless, but this helps
+- **"SHARP, CLEAR, and LEGIBLE"** must appear in the prompt — the model defaults to atmospheric blur without it
+- **Describe the composition as product photography, not art** — "editorial", "tech magazine", "product photograph" produce clearer results than "cinematic", "dramatic", "hero image"
 - **Three input images >> two** — passing the real terminal screenshot eliminates the biggest source of fabrication
-- **"Staggered" or "V-shape" layouts** produce more dynamic compositions than inline rows
-- **Cinematic/explosive framing** works better than "clean/minimal" for landing page impact
+- **Generous spacing > tight grouping** — overlapping devices cause screen occlusion
+- **Front-facing > angled** for screen readability, but slight perspective adds depth
+- **Describe Claude Code accurately** — it has a `❯` chevron prompt, colored tool pills, dimmed thinking text, and a status bar. NOT a green-text retro terminal
 
 ### Using MCP image-hub instead
 

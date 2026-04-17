@@ -564,6 +564,33 @@
     border-radius: var(--radius-sm);
   }
 
+  /* ── Hero Showcase Image ── */
+
+  .landing-hero-showcase {
+    max-width: 1100px;
+    width: 100%;
+    margin: var(--space-10) auto 0;
+    animation: landing-fadeInUp 0.8s ease-out 0.2s both;
+  }
+
+  .landing-hero-showcase-img {
+    width: 100%;
+    height: auto;
+    display: block;
+    mask-image: linear-gradient(
+      to bottom,
+      black 0%,
+      black 70%,
+      transparent 100%
+    );
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      black 0%,
+      black 70%,
+      transparent 100%
+    );
+  }
+
   .landing-code-block {
     margin: 0;
     padding: var(--space-4) var(--space-5);
