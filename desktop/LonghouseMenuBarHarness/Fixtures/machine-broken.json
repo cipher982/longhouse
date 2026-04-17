@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-04-17T18:35:00Z",
+  "health_state": "broken",
+  "severity": "red",
+  "headline": "Longhouse engine service is stopped",
+  "reasons": [
+    "service_stopped",
+    "outbox_stuck"
+  ],
+  "suggested_actions": [
+    "Run: longhouse connect --install",
+    "Inspect logs: ~/.longhouse/agent/logs/engine.log.*"
+  ],
+  "service": {
+    "platform": "macos",
+    "status": "stopped",
+    "service_name": "com.longhouse.shipper",
+    "service_file": "/Users/davidrose/Library/LaunchAgents/com.longhouse.shipper.plist",
+    "log_path": "/Users/davidrose/.longhouse/agent/logs/engine.log.*"
+  },
+  "engine_status": {
+    "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
+    "exists": true,
+    "fresh": false,
+    "age_seconds": 600,
+    "payload": {
+      "version": "0.1.0",
+      "daemon_pid": 24653,
+      "last_ship_at": "2026-04-17T18:24:00Z",
+      "spool_pending_count": 14,
+      "spool_dead_count": 1,
+      "parse_error_count_1h": 1,
+      "consecutive_ship_failures": 6,
+      "disk_free_bytes": 1073741824,
+      "is_offline": true,
+      "recent_dead_letters": [],
+      "last_updated": "2026-04-17T18:24:00Z"
+    },
+    "error": null
+  },
+  "outbox": {
+    "path": "/Users/davidrose/.longhouse/agent/outbox",
+    "file_count": 6,
+    "oldest_age_seconds": 412
+  },
+  "activity_summary": {
+    "path": "/Users/davidrose/.longhouse/agent/longhouse-shipper.db",
+    "exists": true,
+    "error": null,
+    "sessions_today": 27,
+    "sessions_recent": 0,
+    "provider_counts_today": {
+      "claude": 14,
+      "codex": 12,
+      "gemini": 1
+    },
+    "latest_activity_at": "2026-04-17T18:24:00Z",
+    "recent_window_minutes": 15
+  },
+  "managed_summary": null,
+  "managed_sessions": [],
+  "orphan_bridges": [],
+  "launch_readiness": {
+    "state": "ready",
+    "headline": "Managed launch configuration looks coherent",
+    "reasons": [],
+    "suggested_actions": [],
+    "stored_url": "https://david010.longhouse.ai",
+    "machine_name": "cinder",
+    "service_machine_name": "cinder",
+    "runner": {
+      "path": "/Users/davidrose/.config/longhouse/runner.env",
+      "exists": true,
+      "error": null,
+      "runner_name": "cinder",
+      "runner_id": null,
+      "runner_urls": [
+        "https://david010.longhouse.ai"
+      ],
+      "install_mode": "desktop"
+    }
+  }
+}

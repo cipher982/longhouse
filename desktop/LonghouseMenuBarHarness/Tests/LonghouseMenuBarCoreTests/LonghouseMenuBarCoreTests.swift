@@ -600,6 +600,60 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.recentTouchTitle(snapshot.recentTouches[0]) == "Claude")
     }
 
+    @Test
+    func decodesManagedDetachedFixture() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/managed-detached.json")
+
+        let snapshot = try FixtureHealthSnapshotSource(fileURL: fixtureURL).load()
+
+        #expect(snapshot.attachedManagedCount == 1)
+        #expect(snapshot.detachedManagedCount == 1)
+        #expect(snapshot.orphanBridgeCount == 0)
+        #expect(snapshot.managedNeedsAttention == true)
+        #expect(snapshot.managedSummaryLabel == "1 attached · 1 detached")
+        #expect(snapshot.currentManagedSessions.count == 2)
+    }
+
+    @Test
+    func orphanBridgesPromoteMenuBarAttention() throws {
+        let data = Data("""
+        {
+          "health_state": "healthy",
+          "severity": "green",
+          "headline": "Longhouse shipping healthy",
+          "reasons": [],
+          "suggested_actions": [],
+          "managed_summary": {
+            "attached_count": 0,
+            "detached_count": 0,
+            "degraded_count": 0,
+            "orphan_bridge_count": 1,
+            "latest_activity_at": "2026-04-17T18:35:00Z"
+          },
+          "orphan_bridges": [
+            {
+              "provider": "codex",
+              "workspace_label": "zerg",
+              "status": "orphan",
+              "started_at": "2026-04-17T18:20:00Z",
+              "heartbeat_at": "2026-04-17T18:34:40Z",
+              "reason_codes": ["no_managed_session_bound"]
+            }
+          ]
+        }
+        """.utf8)
+
+        let snapshot = try HealthSnapshotDecoder.decode(data: data)
+
+        #expect(snapshot.needsMenuBarAttention == true)
+        #expect(snapshot.statusItemSummaryLabel.contains("1 orphan bridge"))
+        #expect(snapshot.managedAttentionSeverity == .red)
+    }
+
     private func makeFakeHomeDirectory() throws -> URL {
         let tempDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
