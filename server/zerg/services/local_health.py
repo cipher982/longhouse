@@ -622,8 +622,6 @@ def _find_attached_codex_process(process_rows: list[dict[str, Any]], ws_url: str
         command = str(row.get("command") or "")
         if normalized_ws_url not in command:
             continue
-        if " resume " not in f" {command} ":
-            continue
         if "--remote" not in command:
             continue
         return row
@@ -728,6 +726,8 @@ def _collect_managed_codex_summary(
         if last_error:
             reason_codes.append("thread_subscription_failed")
         if binding_path and state_thread_path and binding_path != state_thread_path:
+            reason_codes.append("thread_subscription_failed")
+        if state_thread_path and not Path(state_thread_path).exists():
             reason_codes.append("thread_subscription_failed")
         if app_server is None:
             reason_codes.append("live_control_unavailable")
