@@ -226,7 +226,26 @@ Dark cinematic lighting. Premium. Apple keynote quality.
 CRITICAL: Embed ALL THREE screenshots pixel-perfect. Do not modify any content.
 ```
 
-### Prompt Engineering Rules (Learned from 21 iterations)
+### Winning Style: Before/After Contrast (v22–v24)
+
+The best hero direction is an **infomercial before/after** — desaturated terminal on the left, vibrant Longhouse on the right, golden flow connecting them. Three proven variants:
+
+- **v22 "infomercial"**: Old chunky laptop (grayscale) → modern monitor+phone (warm). Strongest color contrast. Golden cable along desk.
+- **v23 "grounded"**: Same desk, realistic photography. Laptop (cool tones) → monitor+phone (warm ambient). Most photorealistic.
+- **v24 "split-tone"**: Clear cool-blue left half vs warm-amber right half. Muted laptop → golden-lit monitor+phone. Best tonal split, cleanest composition.
+
+All three use the same core prompt structure:
+1. LEFT = terminal screenshot inside a laptop, DESATURATED/cool-graded
+2. RIGHT = timeline in monitor + widget in phone, WARM/vibrant, golden-lit
+3. Golden light trail connecting left→right (subtle, not explosive)
+4. Dark background, the golden trail provides warmth to the right side only
+
+Key contrast language to include in prompts:
+- "DESATURATED, slightly grayscale tones" / "cool blue-gray tones" for the left
+- "FULL RICH COLOR" / "warm amber tones, vivid" / "golden-lit" for the right
+- "The golden trail is the ONLY warm element on the left side"
+
+### Prompt Engineering Rules (Learned from 24 iterations)
 
 - **"EXACTLY as-is"** for every provided screenshot — without this, the model redraws UI
 - **"SCREEN FACING THE VIEWER" / "TOUCHSCREEN GLASS FACING"** for the phone — it renders the titanium back ~40% of the time regardless, but this helps
