@@ -51,9 +51,9 @@ You are done when all of these are true:
 
 Ship and maintain these files:
 
-- `web/public/images/landing/device-monitor.png`
-- `web/public/images/landing/device-macbook.png`
-- `web/public/images/landing/device-iphone.png`
+- `web/public/images/landing/device-monitor.webp`
+- `web/public/images/landing/device-macbook.webp`
+- `web/public/images/landing/device-iphone.webp`
 - `web/src/components/landing/HeroSection.tsx`
 - `web/src/styles/landing.css`
 
@@ -77,10 +77,12 @@ If the user says "update the hero image", do this exact loop:
    - one iPhone
    - do not stop at a giant flattened composite unless the user explicitly wants concept art only
 
-4. Crop the assets tightly
+4. Crop and compress the assets for shipping
    - remove dead black margins
    - remove hardware elements that should not dominate the stage
    - if the monitor stand is ugly, crop it out at the asset level instead of hiding it in CSS
+   - resize/compress to the smallest format that still holds up visually in the composed hero
+   - prefer modern formats like WebP for shipped device assets unless there is a clear reason not to
 
 5. Compose in CSS
    - monitor is the dominant element
@@ -108,9 +110,9 @@ If the user says "update the hero image", do this exact loop:
 
 These are the production-facing hero assets:
 
-- `web/public/images/landing/device-monitor.png`
-- `web/public/images/landing/device-macbook.png`
-- `web/public/images/landing/device-iphone.png`
+- `web/public/images/landing/device-monitor.webp`
+- `web/public/images/landing/device-macbook.webp`
+- `web/public/images/landing/device-iphone.webp`
 
 These are assembled here:
 
@@ -139,6 +141,7 @@ Do NOT show "Longhouse web → Longhouse phone." That's not the pitch. The pitch
 - Do not ship a single flattened hero image if the layout needs to stay responsive.
 - Prefer one image per device, then assemble in code.
 - The device assets must be tightly cropped. Empty black margins make CSS tuning lie.
+- The shipped device assets must also be compressed aggressively enough that the landing page stays fast.
 - If the monitor stand or other unwanted hardware dominates the frame, crop it out at the asset level before trying to mask it in CSS.
 - Verify both desktop and mobile with local screenshots before calling it done.
 

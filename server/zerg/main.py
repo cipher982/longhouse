@@ -78,6 +78,19 @@ def _get_frontend_dist_path() -> tuple[Path | None, str]:
 
 FRONTEND_DIST_DIR, FRONTEND_SOURCE = _get_frontend_dist_path()
 
+
+def _frontend_static_cache_control(static_file: Path, frontend_dist_dir: Path) -> str:
+    """Return cache headers for a concrete frontend static file."""
+    try:
+        rel = static_file.relative_to(frontend_dist_dir).as_posix()
+    except ValueError:
+        rel = static_file.name
+
+    if rel.startswith("assets/"):
+        return "public, max-age=31536000, immutable"
+
+    return "public, max-age=86400, stale-while-revalidate=604800"
+
 # --- Router imports ---
 from zerg.constants import AUTOMATIONS_PREFIX
 from zerg.constants import MODELS_PREFIX
@@ -397,7 +410,7 @@ if FRONTEND_DIST_DIR is not None:
             if static_file.is_relative_to(_frontend_dist_resolved) and static_file.is_file():
                 return FileResponse(
                     static_file,
-                    headers={"Cache-Control": "no-store"},
+                    headers={"Cache-Control": _frontend_static_cache_control(static_file, _frontend_dist_resolved)},
                 )
         except (ValueError, OSError):
             pass

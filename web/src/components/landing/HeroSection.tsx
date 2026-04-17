@@ -124,22 +124,34 @@ export function HeroSection() {
       {/* ── Hero device showcase ── */}
       <div className="landing-hero-devices">
         <img
-          src="/images/landing/device-macbook.png"
+          src="/images/landing/device-macbook.webp"
           alt="Claude Code terminal session in a MacBook"
           className="landing-hero-device landing-hero-device--macbook"
-          loading="eager"
+          width={1160}
+          height={830}
+          loading="lazy"
+          fetchPriority="low"
+          decoding="async"
         />
         <img
-          src="/images/landing/device-monitor.png"
+          src="/images/landing/device-monitor.webp"
           alt="Longhouse timeline in a Pro Display"
           className="landing-hero-device landing-hero-device--monitor"
+          width={1294}
+          height={650}
           loading="eager"
+          fetchPriority="high"
+          decoding="async"
         />
         <img
-          src="/images/landing/device-iphone.png"
+          src="/images/landing/device-iphone.webp"
           alt="Longhouse iOS widget on iPhone"
           className="landing-hero-device landing-hero-device--iphone"
-          loading="eager"
+          width={520}
+          height={704}
+          loading="lazy"
+          fetchPriority="low"
+          decoding="async"
         />
         <div className="landing-hero-glow" aria-hidden="true" />
       </div>
