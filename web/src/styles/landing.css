@@ -332,11 +332,13 @@
     display: flex;
     align-items: center;
     justify-content: center;
+    gap: min(5vw, var(--space-10));
     padding: calc(var(--space-16) + var(--space-8)) min(var(--space-6), 4vw) var(--space-12);
     position: relative;
   }
 
   .landing-hero-content {
+    flex: 0 1 640px;
     max-width: 720px;
     width: 100%;
     text-align: center;
@@ -564,31 +566,99 @@
     border-radius: var(--radius-sm);
   }
 
-  /* ── Hero Showcase Image ── */
+  /* ── Hero Device Showcase ── */
 
-  .landing-hero-showcase {
-    max-width: 1100px;
+  .landing-hero-devices {
+    position: relative;
+    flex: 1 1 720px;
+    min-width: 0;
+    max-width: 820px;
     width: 100%;
-    margin: var(--space-10) auto 0;
+    height: clamp(320px, 34vw, 500px);
+    margin-top: 0;
     animation: landing-fadeInUp 0.8s ease-out 0.2s both;
   }
 
-  .landing-hero-showcase-img {
-    width: 100%;
+  .landing-hero-device {
+    position: absolute;
     height: auto;
-    display: block;
-    mask-image: linear-gradient(
-      to bottom,
-      black 0%,
-      black 70%,
-      transparent 100%
+    max-width: none;
+    filter: drop-shadow(0 16px 40px rgba(0, 0, 0, 0.6));
+  }
+
+  .landing-hero-device--monitor {
+    width: 95%;
+    left: 5%;
+    top: 0;
+    z-index: 2;
+    filter:
+      drop-shadow(0 18px 44px rgba(0, 0, 0, 0.62))
+      brightness(1.06)
+      contrast(1.03);
+  }
+
+  .landing-hero-device--macbook {
+    width: 46%;
+    left: -3%;
+    bottom: -2%;
+    z-index: 3;
+  }
+
+  .landing-hero-device--iphone {
+    width: 22%;
+    right: 1%;
+    bottom: 6%;
+    z-index: 4;
+  }
+
+  .landing-hero-glow {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      ellipse 58% 62% at 62% 40%,
+      rgba(201, 166, 107, 0.08) 0%,
+      transparent 70%
     );
-    -webkit-mask-image: linear-gradient(
-      to bottom,
-      black 0%,
-      black 70%,
-      transparent 100%
-    );
+  }
+
+  @media (width <= 1120px) {
+    .landing-hero {
+      flex-direction: column;
+    }
+
+    .landing-hero-devices {
+      flex: none;
+      max-width: 820px;
+      height: clamp(320px, 55vw, 470px);
+      margin-top: var(--space-4);
+    }
+  }
+
+  @media (width <= 768px) {
+    .landing-hero-devices {
+      max-width: 420px;
+      height: clamp(220px, 70vw, 300px);
+      margin-top: calc(var(--space-4) * -1);
+    }
+
+    .landing-hero-device--monitor {
+      width: 102%;
+      left: 0;
+    }
+
+    .landing-hero-device--macbook {
+      width: 48%;
+      left: -8%;
+      bottom: 0;
+    }
+
+    .landing-hero-device--iphone {
+      width: 26%;
+      right: -4%;
+      bottom: 10%;
+    }
   }
 
   .landing-code-block {
