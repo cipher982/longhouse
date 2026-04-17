@@ -721,10 +721,17 @@ if [[ "$INSTALLER_MODE" == "local" && -x "$ROOT_DIR/engine/target/release/longho
 fi
 
 if [[ "$INSTALLER_MODE" == "local" ]]; then
-  LONGHOUSE_CODEX_BINARY_SOURCE="$HOME/.longhouse-managed-codex-source/longhouse-codex"
-  mkdir -p "$(dirname "$LONGHOUSE_CODEX_BINARY_SOURCE")"
-  build_managed_codex_binary "$LONGHOUSE_CODEX_BINARY_SOURCE" >/dev/null
-  export LONGHOUSE_CODEX_SOURCE="$LONGHOUSE_CODEX_BINARY_SOURCE"
+  if [[ -n "${LONGHOUSE_CODEX_SOURCE:-}" ]]; then
+    if [[ ! -f "$LONGHOUSE_CODEX_SOURCE" ]]; then
+      fail "Configured LONGHOUSE_CODEX_SOURCE does not exist: $LONGHOUSE_CODEX_SOURCE"
+    fi
+    log "♻️  Reusing configured managed Codex binary: $LONGHOUSE_CODEX_SOURCE"
+  else
+    LONGHOUSE_CODEX_BINARY_SOURCE="$HOME/.longhouse-managed-codex-source/longhouse-codex"
+    mkdir -p "$(dirname "$LONGHOUSE_CODEX_BINARY_SOURCE")"
+    build_managed_codex_binary "$LONGHOUSE_CODEX_BINARY_SOURCE" >/dev/null
+    export LONGHOUSE_CODEX_SOURCE="$LONGHOUSE_CODEX_BINARY_SOURCE"
+  fi
   env_vars+=("LONGHOUSE_CODEX_SOURCE=$LONGHOUSE_CODEX_SOURCE")
 fi
 

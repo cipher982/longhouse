@@ -58,7 +58,48 @@ on:
   workflow_dispatch: {}
 
 jobs:
+  managed-codex-smoke-binary:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    name: "launch-gate--managed-codex-build--${{ matrix.os }}"
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          fetch-depth: 1
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build deps for managed Codex
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev
+
+      - name: Build managed Codex binary for smoke reuse
+        run: |
+          mkdir -p prebuilt
+          chmod +x scripts/release/build-managed-codex.sh
+          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
+          chmod +x prebuilt/longhouse-codex
+
+      - name: Upload managed Codex smoke artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: launch-gate-managed-codex-${{ matrix.os }}
+          path: prebuilt/longhouse-codex
+          retention-days: 1
+
   installer-first-run:
+    needs: managed-codex-smoke-binary
     strategy:
       fail-fast: false
       matrix:
@@ -176,9 +217,19 @@ jobs:
           python3 -c 'import json, urllib.request; payload = json.load(urllib.request.urlopen("https://pypi.org/pypi/longhouse/json", timeout=10)); print("Latest PyPI versions:"); [print(version) for version in list(payload.get("releases", {}).keys())[-10:]]' >&2 || true
           exit 1
 
+      - name: Download prebuilt managed Codex
+        if: ${{ github.event_name != 'release' }}
+        uses: actions/download-artifact@v5
+        with:
+          name: launch-gate-managed-codex-${{ matrix.os }}
+          path: ${{ runner.temp }}/managed-codex
+
       - name: Run disposable installer smoke
         run: |
           chmod +x scripts/ci/installer-first-run.sh
+          if [[ "${{ github.event_name }}" != "release" ]]; then
+            export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
+          fi
           args=(
             --shell "${{ matrix.shell_path }}"
             --installer-onboard
@@ -201,6 +252,7 @@ jobs:
           path: /tmp/installer-browser-verify-failure.png
 
   onboarding-funnel:
+    needs: managed-codex-smoke-binary
     runs-on: ubuntu-latest
     timeout-minutes: 30
     name: "launch-gate--onboarding-funnel"
@@ -243,8 +295,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libcap-dev
 
+      - name: Download prebuilt managed Codex
+        uses: actions/download-artifact@v5
+        with:
+          name: launch-gate-managed-codex-ubuntu-latest
+          path: ${{ runner.temp }}/managed-codex
+
       - name: Run launch gate locally
-        run: make launch-gate-local
+        run: |
+          export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
+          make launch-gate-local
 
       - name: Upload onboarding artifacts
         if: failure()
