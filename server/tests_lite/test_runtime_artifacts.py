@@ -63,6 +63,10 @@ def test_ensure_runtime_binary_copies_window_host_from_local_override(monkeypatc
     assert result.installed_now is True
 
 
+def test_extract_version_token_accepts_build_metadata():
+    assert runtime_artifacts._extract_version_token("codex-cli 0.122.0+longhouse.1") == "0.122.0+longhouse.1"
+
+
 def test_ensure_runtime_binary_copies_managed_codex_from_local_override(monkeypatch, tmp_path: Path):
     home = tmp_path / "home"
     home.mkdir()
@@ -95,6 +99,31 @@ def test_ensure_runtime_binary_copies_managed_codex_from_local_override(monkeypa
     assert completed.stdout.strip() == "codex"
     assert result.path == str(launcher)
     assert result.launch_path == str(launcher)
+    assert result.installed_now is True
+
+
+def test_ensure_runtime_binary_accepts_pathlike_managed_codex_override(monkeypatch, tmp_path: Path):
+    home = tmp_path / "home"
+    home.mkdir()
+    source = tmp_path / "build" / "codex"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("#!/bin/sh\necho codex-pathlike\n")
+    source.chmod(0o755)
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
+    monkeypatch.setattr(runtime_artifacts, "resolve_longhouse_home", lambda: home / ".longhouse")
+    monkeypatch.setattr(runtime_artifacts, "_probe_executable_version", lambda path: "codex-cli 0.122.0+longhouse.1")
+
+    result = runtime_artifacts.ensure_runtime_binary(
+        runtime_artifacts.RuntimeComponent.MANAGED_CODEX,
+        source_override=source,
+    )
+
+    launcher = home / ".local" / "bin" / "longhouse-codex"
+    completed = subprocess.run([str(launcher)], check=False, capture_output=True, text=True)
+    assert completed.stdout.strip() == "codex-pathlike"
+    assert result.path == str(launcher)
     assert result.installed_now is True
 
 

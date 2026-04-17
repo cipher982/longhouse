@@ -663,11 +663,14 @@ def _install_artifact_from_remote_source(
         temp_path.unlink(missing_ok=True)
 
 
-def _resolve_source_override(component: RuntimeComponent, source_override: str | None) -> str:
+def _resolve_source_override(
+    component: RuntimeComponent,
+    source_override: str | os.PathLike[str] | None,
+) -> str:
     candidates = [source_override, os.getenv(DEFAULT_SOURCE_ENV_VARS[component])]
     candidates.extend(os.getenv(env_var) for env_var in LEGACY_SOURCE_ENV_VARS.get(component, ()))
     for candidate in candidates:
-        raw = (candidate or "").strip()
+        raw = os.fspath(candidate).strip() if candidate is not None else ""
         if raw:
             return raw
     return ""
@@ -676,7 +679,7 @@ def _resolve_source_override(component: RuntimeComponent, source_override: str |
 def resolve_runtime_source_override(
     component: RuntimeComponent,
     *,
-    source_override: str | None = None,
+    source_override: str | os.PathLike[str] | None = None,
 ) -> str:
     """Return the configured source override for a runtime component, if any."""
 
@@ -686,7 +689,7 @@ def resolve_runtime_source_override(
 def ensure_runtime_artifact(
     component: RuntimeComponent,
     *,
-    source_override: str | None = None,
+    source_override: str | os.PathLike[str] | None = None,
     overwrite: bool = False,
 ) -> InstalledRuntimeArtifact:
     """Ensure a runtime artifact is available locally and return its paths.
@@ -749,7 +752,7 @@ def ensure_runtime_artifact(
 def ensure_runtime_binary(
     component: RuntimeComponent,
     *,
-    source_override: str | None = None,
+    source_override: str | os.PathLike[str] | None = None,
     overwrite: bool = False,
 ) -> InstalledRuntimeBinary:
     artifact = ensure_runtime_artifact(

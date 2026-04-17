@@ -860,6 +860,41 @@ async fn stop_via_ipc(sock_path: &Path) -> Result<()> {
 }
 
 #[cfg(unix)]
+fn parse_stop_ipc_response(response_buf: &[u8]) -> Result<()> {
+    if response_buf.is_empty() || response_buf.iter().all(u8::is_ascii_whitespace) {
+        // A stop request can race with the bridge tearing its IPC server down.
+        // In that case the client sees a clean EOF instead of a JSON payload,
+        // but the bridge is already exiting as requested. Treat that as
+        // success so wrapper cleanup does not emit a fake error on normal
+        // shutdown.
+        return Ok(());
+    }
+
+    let response: Value = match serde_json::from_slice(response_buf) {
+        Ok(value) => value,
+        Err(err) => {
+            if !response_buf.ends_with(b"\n") {
+                // The bridge writes newline-terminated JSON responses. If the
+                // socket closes mid-response during shutdown, prefer a clean
+                // exit over surfacing a fake cleanup failure.
+                return Ok(());
+            }
+            return Err(err).context("parsing IPC response");
+        }
+    };
+
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        let error = response
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown IPC error");
+        bail!("daemon IPC error: {error}");
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
 async fn stop_via_ipc_inner(sock_path: &Path) -> Result<()> {
     let mut stream = tokio::net::UnixStream::connect(sock_path)
         .await
@@ -874,17 +909,7 @@ async fn stop_via_ipc_inner(sock_path: &Path) -> Result<()> {
 
     let mut response_buf = Vec::new();
     stream.read_to_end(&mut response_buf).await?;
-    let response: Value = serde_json::from_slice(&response_buf).context("parsing IPC response")?;
-
-    if response.get("ok").and_then(Value::as_bool) != Some(true) {
-        let error = response
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown IPC error");
-        bail!("daemon IPC error: {error}");
-    }
-
-    Ok(())
+    parse_stop_ipc_response(&response_buf)
 }
 
 #[cfg(unix)]
@@ -2403,6 +2428,23 @@ mod tests {
         let state = Path::new("/tmp/codex-bridge/session-42.json");
         let sock = ipc_socket_path(state);
         assert_eq!(sock, Path::new("/tmp/codex-bridge/session-42.sock"));
+    }
+
+    #[test]
+    fn parse_stop_ipc_response_accepts_clean_eof() {
+        assert!(parse_stop_ipc_response(&[]).is_ok());
+    }
+
+    #[test]
+    fn parse_stop_ipc_response_accepts_truncated_shutdown_reply() {
+        assert!(parse_stop_ipc_response(br#"{"ok":true"#).is_ok());
+    }
+
+    #[test]
+    fn parse_stop_ipc_response_rejects_error_payload() {
+        let err = parse_stop_ipc_response(br#"{"ok":false,"error":"boom"}"#)
+            .expect_err("error payload should fail");
+        assert!(err.to_string().contains("daemon IPC error: boom"));
     }
 
     #[test]
