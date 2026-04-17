@@ -31,14 +31,13 @@ export function HeroSection() {
         <p className="landing-hero-kicker">Self-hosted session control</p>
 
         <h1 className="landing-hero-headline">
-          Mission control for your{" "}
-          <span className="gradient-text">AI coding sessions.</span>
+          One timeline for every{" "}
+          <span className="gradient-text">AI coding session.</span>
         </h1>
 
         <p className="landing-hero-subhead">
-          One timeline for Claude, Codex, and Gemini sessions. Find past work
-          fast, inspect the raw session, and keep a control path when you
-          launch through Longhouse. Claude is strongest today.
+          Longhouse captures every Claude, Codex, and Gemini session from your
+          machines — searchable on the web, one glance away on your phone.
         </p>
 
         {/* ── Install paths ── */}
@@ -124,16 +123,6 @@ export function HeroSection() {
       {/* ── Hero device showcase ── */}
       <div className="landing-hero-devices">
         <img
-          src="/images/landing/device-macbook.webp"
-          alt="Claude Code terminal session in a MacBook"
-          className="landing-hero-device landing-hero-device--macbook"
-          width={1160}
-          height={830}
-          loading="lazy"
-          fetchPriority="low"
-          decoding="async"
-        />
-        <img
           src="/images/landing/device-monitor.webp"
           alt="Longhouse timeline in a Pro Display"
           className="landing-hero-device landing-hero-device--monitor"
@@ -149,8 +138,8 @@ export function HeroSection() {
           className="landing-hero-device landing-hero-device--iphone"
           width={520}
           height={704}
-          loading="lazy"
-          fetchPriority="low"
+          loading="eager"
+          fetchPriority="high"
           decoding="async"
         />
         <div className="landing-hero-glow" aria-hidden="true" />
