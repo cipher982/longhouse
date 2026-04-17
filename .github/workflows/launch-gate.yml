@@ -94,7 +94,7 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcap-dev
+          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
       - name: Build managed Codex binary for smoke reuse
         run: |
@@ -155,7 +155,7 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcap-dev
+          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
       - name: Wait for released runtime artifacts
         if: ${{ github.event_name == 'release' }}
@@ -305,7 +305,7 @@ jobs:
       - name: Install Linux build deps for managed Codex
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libcap-dev
+          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
 
       - name: Download prebuilt managed Codex
         uses: actions/download-artifact@v5
