@@ -66,7 +66,9 @@ jobs:
           - os: ubuntu-latest
           - os: macos-latest
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # macOS hosted Rust builds for managed Codex run materially slower than Ubuntu.
+    # Revisit with deeper build caching post-launch; keep the audit path reliable now.
+    timeout-minutes: 75
     name: "launch-gate--managed-codex-build--${{ matrix.os }}"
 
     steps:
