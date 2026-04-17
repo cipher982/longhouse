@@ -44,6 +44,44 @@ on:
         type: boolean
 
 jobs:
+  managed-codex-smoke-binary:
+    if: ${{ github.event_name != 'schedule' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    name: "managed-codex-smoke-build--${{ matrix.os }}"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build deps for managed Codex
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcap-dev
+
+      - name: Build managed Codex binary for smoke reuse
+        run: |
+          mkdir -p prebuilt
+          chmod +x scripts/release/build-managed-codex.sh
+          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
+          chmod +x prebuilt/longhouse-codex
+
+      - name: Upload managed Codex smoke artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: installer-smoke-managed-codex-${{ matrix.os }}
+          path: prebuilt/longhouse-codex
+          retention-days: 1
+
   runtime-packaging-macos:
     if: ${{ github.event_name != 'schedule' }}
     runs-on: macos-latest
@@ -65,6 +103,7 @@ jobs:
           path: artifacts/runtime-packaging
 
   installer-first-run-local:
+    needs: managed-codex-smoke-binary
     if: ${{ github.event_name != 'schedule' }}
     strategy:
       fail-fast: false
@@ -110,10 +149,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libcap-dev
 
+      - name: Download prebuilt managed Codex
+        uses: actions/download-artifact@v5
+        with:
+          name: installer-smoke-managed-codex-${{ matrix.os }}
+          path: ${{ runner.temp }}/managed-codex
+
       - name: Run disposable installer smoke
         env:
           INSTALLER_TEST_MENUBAR: ${{ matrix.menubar_smoke }}
         run: |
+          export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
           chmod +x scripts/ci/installer-first-run.sh
           ./scripts/ci/installer-first-run.sh --shell "${{ matrix.shell_path }}"
 
@@ -157,6 +203,7 @@ jobs:
             --runtime-artifact-smoke
 
   installer-upgrade-local:
+    needs: managed-codex-smoke-binary
     if: ${{ github.event_name != 'schedule' }}
     strategy:
       fail-fast: false
@@ -200,7 +247,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libcap-dev
 
+      - name: Download prebuilt managed Codex
+        uses: actions/download-artifact@v5
+        with:
+          name: installer-smoke-managed-codex-${{ matrix.os }}
+          path: ${{ runner.temp }}/managed-codex
+
       - name: Rehearse install -> upgrade in disposable HOME
         run: |
+          export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
           chmod +x scripts/qa/test-cli-upgrade.sh
           ./scripts/qa/test-cli-upgrade.sh --shell "${{ matrix.shell_path }}"
