@@ -725,6 +725,10 @@ if [[ "$INSTALLER_MODE" == "local" ]]; then
     if [[ ! -f "$LONGHOUSE_CODEX_SOURCE" ]]; then
       fail "Configured LONGHOUSE_CODEX_SOURCE does not exist: $LONGHOUSE_CODEX_SOURCE"
     fi
+    chmod +x "$LONGHOUSE_CODEX_SOURCE" 2>/dev/null || true
+    if [[ ! -x "$LONGHOUSE_CODEX_SOURCE" ]]; then
+      fail "Configured LONGHOUSE_CODEX_SOURCE is not executable: $LONGHOUSE_CODEX_SOURCE"
+    fi
     log "♻️  Reusing configured managed Codex binary: $LONGHOUSE_CODEX_SOURCE"
   else
     LONGHOUSE_CODEX_BINARY_SOURCE="$HOME/.longhouse-managed-codex-source/longhouse-codex"

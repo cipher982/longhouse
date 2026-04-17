@@ -239,6 +239,7 @@ jobs:
           chmod +x scripts/ci/installer-first-run.sh
           if [[ "${{ github.event_name }}" != "release" ]]; then
             export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
+            chmod +x "$LONGHOUSE_CODEX_SOURCE"
           fi
           args=(
             --shell "${{ matrix.shell_path }}"
@@ -314,6 +315,7 @@ jobs:
       - name: Run launch gate locally
         run: |
           export LONGHOUSE_CODEX_SOURCE="${RUNNER_TEMP}/managed-codex/longhouse-codex"
+          chmod +x "$LONGHOUSE_CODEX_SOURCE"
           make launch-gate-local
 
       - name: Upload onboarding artifacts
