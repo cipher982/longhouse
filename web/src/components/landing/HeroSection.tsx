@@ -37,8 +37,8 @@ export function HeroSection() {
 
         <p className="landing-hero-subhead">
           One timeline for Claude, Codex, and Gemini sessions. Find past work
-          fast, inspect the raw session, and steer live work from browser, CLI,
-          or API.
+          fast, inspect the raw session, and keep a control path when you
+          launch through Longhouse. Claude is strongest today.
         </p>
 
         {/* ── Install paths ── */}
