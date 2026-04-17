@@ -13,6 +13,7 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::text::truncate_tail_chars;
@@ -877,6 +878,9 @@ fn parse_stop_ipc_response(response_buf: &[u8]) -> Result<()> {
                 // The bridge writes newline-terminated JSON responses. If the
                 // socket closes mid-response during shutdown, prefer a clean
                 // exit over surfacing a fake cleanup failure.
+                warn!(
+                    "codex-bridge stop IPC response ended without newline; treating shutdown race as success"
+                );
                 return Ok(());
             }
             return Err(err).context("parsing IPC response");
@@ -2438,6 +2442,11 @@ mod tests {
     #[test]
     fn parse_stop_ipc_response_accepts_truncated_shutdown_reply() {
         assert!(parse_stop_ipc_response(br#"{"ok":true"#).is_ok());
+    }
+
+    #[test]
+    fn parse_stop_ipc_response_accepts_complete_success_payload() {
+        assert!(parse_stop_ipc_response(b"{\"ok\":true}\n").is_ok());
     }
 
     #[test]
