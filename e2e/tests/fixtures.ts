@@ -40,14 +40,33 @@ function shouldInjectCommisHeader(requestUrl: string): boolean {
 }
 
 async function installCommisHeaderRouting(context: BrowserContext, commisId: string): Promise<void> {
+  const continueRoute = async (
+    route: import("@playwright/test").Route,
+    overrides?: { headers?: Record<string, string> },
+  ): Promise<void> => {
+    try {
+      if (overrides) {
+        await route.continue(overrides);
+      } else {
+        await route.continue();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Route is already handled")) {
+        return;
+      }
+      throw error;
+    }
+  };
+
   await context.route('**/*', async route => {
     const request = route.request();
     if (!shouldInjectCommisHeader(request.url())) {
-      await route.continue();
+      await continueRoute(route);
       return;
     }
 
-    await route.continue({
+    await continueRoute(route, {
       headers: {
         ...request.headers(),
         'X-Test-Commis': commisId,
