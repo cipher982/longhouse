@@ -1,6 +1,6 @@
 """Longhouse MCP server for CLI agent integration.
 
-Exposes Longhouse continuity capabilities (session search, recall, insights, notifications)
+Exposes Longhouse continuity capabilities (session search, recall, notifications)
 as MCP tools that Claude Code and other agents can call over stdio.
 
 Usage:
