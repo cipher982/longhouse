@@ -298,64 +298,6 @@ def create_server(api_url: str, api_token: str | None = None) -> FastMCP:
         )
 
     # ------------------------------------------------------------------
-    # Tool: log_insight
-    # ------------------------------------------------------------------
-    @server.tool()
-    async def log_insight(
-        insight_type: str,
-        title: str,
-        description: str | None = None,
-        project: str | None = None,
-        origin: str | None = None,
-        severity: str = "info",
-        confidence: float | None = None,
-        session_id: str | None = None,
-        tags: list[str] | None = None,
-    ) -> str:
-        """Log a learning, pattern, failure, or improvement insight.
-
-        Deduplicates by title+project: if an insight with the same title and
-        project exists within the last 7 days, updates confidence and appends
-        to observations instead of creating a duplicate.
-
-        Args:
-            insight_type: Type of insight: pattern, failure, improvement, learning.
-            title: Short summary of the insight.
-            description: Detailed explanation (optional).
-            project: Project name (optional).
-            origin: Origin label for the insight, e.g. hindsight (optional).
-            severity: Severity level: info, warning, critical (default info).
-            confidence: Confidence score 0.0-1.0 (optional).
-            session_id: UUID of the source session (optional).
-            tags: List of tags for categorization (optional).
-        """
-        payload: dict = {
-            "insight_type": insight_type,
-            "title": title,
-            "severity": severity,
-        }
-        if description is not None:
-            payload["description"] = description
-        if project is not None:
-            payload["project"] = project
-        if origin is not None:
-            payload["origin"] = origin
-        if confidence is not None:
-            payload["confidence"] = confidence
-        if session_id is not None:
-            payload["session_id"] = session_id
-        if tags is not None:
-            payload["tags"] = tags
-
-        try:
-            resp = await client.post("/api/insights", json=payload)
-            if resp.status_code not in (200, 201):
-                return json.dumps({"error": f"API returned {resp.status_code}", "detail": resp.text[:500]})
-            return resp.text
-        except Exception as exc:
-            return _format_error(exc, api_url)
-
-    # ------------------------------------------------------------------
     # Tool: recall
     # ------------------------------------------------------------------
     @server.tool()
