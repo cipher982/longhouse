@@ -54,6 +54,8 @@ from zerg.services.session_views import SessionThreadResponse
 from zerg.services.session_views import SessionTurnEnvelopeResponse
 from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
+from zerg.services.session_views import StartupContextItemResponse
+from zerg.services.session_views import StartupContextResponse
 from zerg.services.session_views import WallResponse
 from zerg.services.session_views import build_active_session_response
 from zerg.services.session_views import build_event_response
@@ -62,6 +64,12 @@ from zerg.services.session_views import build_session_turn_response
 from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import resolve_runtime_overlay
+from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_DAYS_BACK
+from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_LIMIT
+from zerg.services.startup_context import STARTUP_CONTEXT_MAX_DAYS_BACK
+from zerg.services.startup_context import STARTUP_CONTEXT_MAX_LIMIT
+from zerg.services.startup_context import load_startup_context_items
+from zerg.services.startup_context import render_startup_context
 from zerg.utils.server_timing import ServerTimingRecorder
 from zerg.utils.time import UTCBaseModel
 
@@ -489,6 +497,68 @@ async def list_sessions(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list sessions",
+        )
+
+
+@router.get("/sessions/startup-context", response_model=StartupContextResponse)
+async def get_startup_context(
+    project: str = Query(..., description="Project name to get startup continuity for"),
+    limit: int = Query(
+        STARTUP_CONTEXT_DEFAULT_LIMIT,
+        ge=1,
+        le=STARTUP_CONTEXT_MAX_LIMIT,
+        description="Max recent sessions to include",
+    ),
+    days_back: int = Query(
+        STARTUP_CONTEXT_DEFAULT_DAYS_BACK,
+        ge=1,
+        le=STARTUP_CONTEXT_MAX_DAYS_BACK,
+        description="Days to look back for recent project activity",
+    ),
+    db: Session = Depends(get_db),
+    _auth: object = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> StartupContextResponse:
+    """Return a small project-scoped continuity block for session-start hooks."""
+
+    if isinstance(_auth, ManagedLocalHookToken):
+        if project != _auth.project:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Managed-local hook token requires a matching project filter",
+            )
+
+    try:
+        items = load_startup_context_items(
+            db,
+            project=project,
+            limit=limit,
+            days_back=days_back,
+        )
+        return StartupContextResponse(
+            project=str(project).strip(),
+            session_count=len(items),
+            items=[
+                StartupContextItemResponse(
+                    session_id=item.session_id,
+                    thread_root_session_id=item.thread_root_session_id,
+                    provider=item.provider,
+                    started_at=item.started_at,
+                    age=item.age,
+                    summary_title=item.summary_title,
+                    summary=item.summary,
+                )
+                for item in items
+            ],
+            startup_context=render_startup_context(project, items),
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to build startup context")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to build startup context",
         )
 
 

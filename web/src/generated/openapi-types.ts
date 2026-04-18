@@ -3309,6 +3309,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/sessions/startup-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Startup Context
+         * @description Return a small project-scoped continuity block for session-start hooks.
+         */
+        get: operations["get_startup_context_agents_sessions_startup_context_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/summary": {
         parameters: {
             query?: never;
@@ -7589,6 +7609,74 @@ export interface components {
              * @description Updated SKILL.md content
              */
             content?: string | null;
+        };
+        /**
+         * StartupContextItemResponse
+         * @description One recent session summary for startup continuity injection.
+         */
+        StartupContextItemResponse: {
+            /**
+             * Session Id
+             * @description Session UUID
+             */
+            session_id: string;
+            /**
+             * Thread Root Session Id
+             * @description Logical thread root UUID
+             */
+            thread_root_session_id: string;
+            /**
+             * Provider
+             * @description Session provider
+             */
+            provider: string;
+            /**
+             * Started At
+             * Format: date-time
+             * @description Session start time
+             */
+            started_at: string;
+            /**
+             * Age
+             * @description Human-readable recency label
+             */
+            age: string;
+            /**
+             * Summary Title
+             * @description Short session title
+             */
+            summary_title: string;
+            /**
+             * Summary
+             * @description Sanitized summary text
+             */
+            summary: string;
+        };
+        /**
+         * StartupContextResponse
+         * @description Response envelope for startup continuity context.
+         */
+        StartupContextResponse: {
+            /**
+             * Project
+             * @description Project label used for lookup
+             */
+            project: string;
+            /**
+             * Session Count
+             * @description Number of sessions included in the context
+             */
+            session_count: number;
+            /**
+             * Items
+             * @description Recent project sessions used for continuity
+             */
+            items: components["schemas"]["StartupContextItemResponse"][];
+            /**
+             * Startup Context
+             * @description Rendered context block for provider hook injection
+             */
+            startup_context?: string | null;
         };
         /**
          * SuperAdminStatusResponse
@@ -13899,6 +13987,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_startup_context_agents_sessions_startup_context_get: {
+        parameters: {
+            query: {
+                /** @description Project name to get startup continuity for */
+                project: string;
+                /** @description Max recent sessions to include */
+                limit?: number;
+                /** @description Days to look back for recent project activity */
+                days_back?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartupContextResponse"];
                 };
             };
             /** @description Validation Error */

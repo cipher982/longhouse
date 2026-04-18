@@ -174,8 +174,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
 
 def _replace_engine_path(script_text: str, engine_path: Path) -> str:
     return re.sub(
-        r'^ENGINE="[^"]*"$',
-        f'ENGINE="{engine_path}"',
+        r'^([ \t]*)ENGINE="[^"]*"$',
+        lambda match: f'{match.group(1)}ENGINE="{engine_path}"',
         script_text,
         flags=re.MULTILINE,
     )

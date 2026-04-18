@@ -8,7 +8,7 @@ Primary entry point for downstream consumers:
 
 Lower-level (used by summarize_events internally):
 
-- :func:`quick_summary` — 2-4 sentence summary for briefings and digests
+- :func:`quick_summary` — 2-4 sentence summary for startup continuity and digests
 """
 
 from __future__ import annotations
@@ -183,7 +183,7 @@ async def quick_summary(
     client: AsyncOpenAI,
     model: str = "glm-4.7",
 ) -> SessionSummary:
-    """Generate a 2-4 sentence summary. For briefings and digests.
+    """Generate a 2-4 sentence summary. For startup continuity and digests.
 
     Args:
         transcript: Cleaned session transcript.

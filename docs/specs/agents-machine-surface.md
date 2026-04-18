@@ -1,7 +1,7 @@
 # Agents Machine Surface
 
 Status: Active canon
-Last updated: 2026-04-02
+Last updated: 2026-04-18
 
 ## Goal
 
@@ -11,7 +11,7 @@ This is the surface agents, CLIs, scripts, CI jobs, and background automations s
 
 ## Rules
 
-- `/api/agents/*` is the canonical machine namespace for session archive, coordination, search/recall, briefing, reflection, and message flows.
+- `/api/agents/*` is the canonical machine namespace for session archive, coordination, search/recall, startup continuity, and message flows.
 - CLI commands should sit directly on top of these routes.
 - MCP tools should sit on top of the same routes or the same service layer.
 - Browser routes may reuse the same response models or service helpers, but machine clients should not depend on browser-owned endpoints.
@@ -106,6 +106,7 @@ Current delivery model:
 
 ### Continuity and project context
 
+- `GET /api/agents/sessions/startup-context`
 - `GET /api/agents/recall`
 
 ## Browser Relationship

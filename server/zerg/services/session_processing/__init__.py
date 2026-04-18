@@ -1,7 +1,7 @@
 """Session processing module — clean, structured processing of AgentEvent data.
 
 This module centralizes session event processing that's used by multiple consumers
-(daily digest, memory summarizer, session briefing). It does NOT touch databases —
+(daily digest, memory summarizer, startup continuity). It does NOT touch databases —
 callers pass in event data, module processes and returns results.
 
 Public API:
