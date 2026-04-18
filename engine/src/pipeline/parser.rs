@@ -1909,12 +1909,13 @@ fn extract_text_from_raw_content(raw_json: &str) -> Option<String> {
     // Array of content parts
     if trimmed.starts_with('[') {
         #[derive(Deserialize)]
-        struct TextPart {
+        struct ToolResultPart {
             r#type: Option<String>,
             text: Option<String>,
+            tool_name: Option<String>,
         }
 
-        if let Ok(parts) = serde_json::from_str::<Vec<TextPart>>(trimmed) {
+        if let Ok(parts) = serde_json::from_str::<Vec<ToolResultPart>>(trimmed) {
             let mut texts = Vec::new();
             for part in &parts {
                 if part.r#type.as_deref() == Some("text") {
@@ -1923,10 +1924,50 @@ fn extract_text_from_raw_content(raw_json: &str) -> Option<String> {
                     }
                 }
             }
-            if texts.is_empty() {
-                return None;
+            if !texts.is_empty() {
+                return Some(texts.join("\n"));
             }
-            return Some(texts.join("\n"));
+
+            let image_count = parts
+                .iter()
+                .filter(|part| part.r#type.as_deref() == Some("image"))
+                .count();
+            if image_count > 0 {
+                return Some(if image_count == 1 {
+                    "[image result]".to_string()
+                } else {
+                    format!("[{} image results]", image_count)
+                });
+            }
+
+            let tool_refs: Vec<String> = parts
+                .iter()
+                .filter(|part| part.r#type.as_deref() == Some("tool_reference"))
+                .filter_map(|part| part.tool_name.as_ref().cloned())
+                .collect();
+            if !tool_refs.is_empty() {
+                let preview = tool_refs.iter().take(3).cloned().collect::<Vec<_>>().join(", ");
+                let suffix = if tool_refs.len() > 3 {
+                    format!(", +{} more", tool_refs.len() - 3)
+                } else {
+                    String::new()
+                };
+                return Some(format!("[tool references: {}{}]", preview, suffix));
+            }
+
+            let mut part_types: Vec<String> = Vec::new();
+            for part in &parts {
+                if let Some(part_type) = part.r#type.as_ref() {
+                    if !part_types.iter().any(|existing| existing == part_type) {
+                        part_types.push(part_type.clone());
+                    }
+                }
+            }
+            if !part_types.is_empty() {
+                return Some(format!("[non-text tool result: {}]", part_types.join(", ")));
+            }
+
+            return Some("[non-text tool result]".to_string());
         }
     }
 
@@ -2088,6 +2129,48 @@ mod tests {
         assert_eq!(
             result.events[0].tool_output_text.as_deref(),
             Some("file contents here")
+        );
+    }
+
+    #[test]
+    fn test_tool_result_image_content_emits_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "test-session.jsonl",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"t-image","content":[{"type":"image","source":{"type":"base64","data":"abc123"}}]}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::Tool);
+        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("t-image"));
+        assert_eq!(
+            result.events[0].tool_output_text.as_deref(),
+            Some("[image result]")
+        );
+    }
+
+    #[test]
+    fn test_tool_result_tool_references_emit_placeholder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = make_jsonl_file(
+            dir.path(),
+            "test-session.jsonl",
+            &[
+                r#"{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"t-search","content":[{"type":"tool_reference","tool_name":"TaskCreate"},{"type":"tool_reference","tool_name":"TaskUpdate"},{"type":"tool_reference","tool_name":"TaskList"}]}]}}"#,
+            ],
+        );
+
+        let result = parse_session_file(&path, 0).unwrap();
+        assert_eq!(result.events.len(), 1);
+        assert_eq!(result.events[0].role, Role::Tool);
+        assert_eq!(result.events[0].tool_call_id.as_deref(), Some("t-search"));
+        assert_eq!(
+            result.events[0].tool_output_text.as_deref(),
+            Some("[tool references: TaskCreate, TaskUpdate, TaskList]")
         );
     }
 

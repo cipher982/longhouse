@@ -14,6 +14,7 @@ Strategy
 
 Fixtures are sanitised real-world session files (no PII):
 - ``1dd6c481-....jsonl``   — Claude Code JSONL format
+- ``9f0c3c8e-....jsonl``   — Claude non-text tool results
 - ``gemini_session.json``  — Gemini CLI JSON format
 - ``019a4bea-....jsonl``   — Codex CLI JSONL format
 - ``gemini_drift.json``    — Gemini with object-typed content (schema drift)
@@ -52,6 +53,7 @@ ENGINE_BIN = REPO_ROOT / "engine" / "target" / _cargo_profile / "longhouse-engin
 
 # Fixture filenames.
 CLAUDE_FIXTURE = "1dd6c481-7d7b-498a-b492-c33c917889b9.jsonl"
+CLAUDE_NON_TEXT_TOOL_RESULTS_FIXTURE = "9f0c3c8e-0b6e-4c2d-9b93-5ab2ebf3e101.jsonl"
 GEMINI_FIXTURE = "gemini_session.json"
 GEMINI_DRIFT_FIXTURE = "gemini_drift.json"
 GEMINI_TOOL_RESULTS_FIXTURE = "gemini_tool_results.json"
@@ -59,6 +61,7 @@ CODEX_FIXTURE = "019a4bea-3f39-7fe1-b132-6c14579e806c.jsonl"
 
 # Expected session IDs — must match the fixture files exactly.
 CLAUDE_SESSION_ID = "1dd6c481-7d7b-498a-b492-c33c917889b9"
+CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID = "9f0c3c8e-0b6e-4c2d-9b93-5ab2ebf3e101"
 GEMINI_SESSION_ID = "5053c934-f66d-4fea-96af-f95181de5986"
 GEMINI_DRIFT_SESSION_ID = "d1f7b8a2-3e4c-4f56-a789-012345678901"
 GEMINI_TOOL_RESULTS_SESSION_ID = "f2b84f4d-9149-4ed8-8d65-9dc0b6b0fbe2"
@@ -292,6 +295,46 @@ class TestClaudeShipping:
         events_before = _get_events(server, CLAUDE_SESSION_ID)
         _ship(CLAUDE_FIXTURE, server, "claude", tmp_path / "engine2.db")
         events_after = _get_events(server, CLAUDE_SESSION_ID)
+        assert len(events_after) == len(events_before), (
+            f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
+        )
+
+
+class TestClaudeNonTextToolResults:
+    def test_tool_results_are_persisted_for_non_text_payloads(self, server, tmp_path):
+        _ship(CLAUDE_NON_TEXT_TOOL_RESULTS_FIXTURE, server, "claude", tmp_path / "engine.db")
+        session = _get_session(server, CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID)
+        assert session is not None, "Claude non-text tool-results session not found after shipping"
+        assert session["provider"] == "claude"
+
+        events = _get_events(server, CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID)
+        assert len(events) == 4, f"Expected exactly 4 events, got {len(events)}"
+
+        results = [e for e in events if e["role"] == "tool"]
+        assert len(results) == 2, f"Expected 2 tool result events, got {len(results)}"
+
+        outputs = {e["tool_call_id"]: e.get("tool_output_text") for e in results}
+        assert outputs["toolu_bdrk_01IMG"] == "[image result]"
+        assert outputs["toolu_bdrk_01REF"] == "[tool references: TaskCreate, TaskUpdate, TaskList]"
+
+    def test_tool_call_id_pairing_survives_non_text_payloads(self, server, tmp_path):
+        events = _get_events(server, CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID)
+        assistants = [
+            e for e in events
+            if e["role"] == "assistant" and e.get("tool_name")
+        ]
+        tools = [e for e in events if e["role"] == "tool"]
+
+        assistant_ids = {e.get("tool_call_id") for e in assistants if e.get("tool_call_id")}
+        tool_ids = {e.get("tool_call_id") for e in tools if e.get("tool_call_id")}
+
+        assert assistant_ids == {"toolu_bdrk_01IMG", "toolu_bdrk_01REF"}
+        assert tool_ids == assistant_ids
+
+    def test_reship_is_idempotent(self, server, tmp_path):
+        events_before = _get_events(server, CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID)
+        _ship(CLAUDE_NON_TEXT_TOOL_RESULTS_FIXTURE, server, "claude", tmp_path / "engine2.db")
+        events_after = _get_events(server, CLAUDE_NON_TEXT_TOOL_RESULTS_SESSION_ID)
         assert len(events_after) == len(events_before), (
             f"Re-ship created duplicates: {len(events_before)} → {len(events_after)}"
         )

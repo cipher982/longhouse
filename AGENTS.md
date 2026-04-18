@@ -256,3 +256,4 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Timeline scroll performance is fragile: hover prefetch, card hover transitions, and decorative shell animations can steal raster budget during active scroll and should be suppressed when scrolling.
 - `/api/threads/{id}/runs` needs direct backend coverage. Dead runtime imports can survive broad suites and only surface in hosted chat smoke.
 - iOS auth boundary fixes cannot rely on `WKNavigationDelegate` alone; React/SPA transitions to `/login` can bypass network navigation, so the shell must also observe in-page history changes before web login leaks into the app.
+- Claude `tool_result` payloads are not guaranteed to be text. Image blocks and `tool_reference` arrays still need a synthetic `role=tool` event during ingest or the timeline/iOS surfaces will show phantom running tool calls.
