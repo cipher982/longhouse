@@ -123,7 +123,7 @@ export function HeroSection() {
       {/* ── Hero device showcase ── */}
       <div className="landing-hero-devices">
         <img
-          src="/images/landing/device-monitor.webp"
+          src="/images/landing/device-monitor.webp?v=2"
           alt="Longhouse timeline in a Pro Display"
           className="landing-hero-device landing-hero-device--monitor"
           width={1294}
@@ -133,7 +133,7 @@ export function HeroSection() {
           decoding="async"
         />
         <img
-          src="/images/landing/device-iphone.webp"
+          src="/images/landing/device-iphone.webp?v=2"
           alt="Longhouse iOS widget on iPhone"
           className="landing-hero-device landing-hero-device--iphone"
           width={520}
