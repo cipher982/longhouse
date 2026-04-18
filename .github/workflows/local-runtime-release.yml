@@ -666,3 +666,80 @@ jobs:
             binaries/Longhouse-macos-arm64.zip
             binaries/local-runtime-macos-packaging.json
             binaries/local-runtime-checksums.txt
+
+  verify-install-from-release:
+    name: "verify-install-from-release--${{ matrix.os }}"
+    needs:
+      - release
+    if: ${{ github.event.release.tag_name != '' || inputs.tag_name != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install longhouse wheel from the published release
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          gh release download "$RELEASE_TAG" \
+            --pattern 'longhouse-*-py3-none-any.whl' \
+            --dir "$work" \
+            --repo "${{ github.repository }}"
+          wheel="$(ls "$work"/longhouse-*-py3-none-any.whl | head -1)"
+          echo "Installing $wheel"
+          uv tool install --force --no-cache "$wheel"
+
+      - name: Verify installed CLI version matches release tag
+        run: |
+          set -euo pipefail
+          expected="${RELEASE_TAG#v}"
+          actual="$(longhouse --version 2>&1 | tail -1 | awk '{print $NF}')"
+          echo "expected=$expected actual=$actual"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "CLI version mismatch: expected $expected, got $actual" >&2
+            exit 1
+          fi
+
+      - name: Fetch engine binary from the same release via the installed wheel
+        env:
+          LONGHOUSE_SKIP_UPDATE_NOTIFIER: '1'
+        run: |
+          set -euo pipefail
+          tmp_home="$(mktemp -d)"
+          export HOME="$tmp_home"
+          # Drive the wheel's own runtime-artifact fetcher. This proves the
+          # engine URL derived from the wheel's version resolves to a real
+          # asset on this release.
+          uv tool run --from longhouse python - <<'PY'
+          from zerg.services.runtime_artifacts import ensure_runtime_binary, RuntimeComponent
+          result = ensure_runtime_binary(RuntimeComponent.ENGINE)
+          print("engine path:", result.path)
+          print("installed_now:", result.installed_now)
+          PY
+
+      - name: Assert engine binary is executable
+        run: |
+          set -euo pipefail
+          engine="$HOME/.longhouse/runtimes/engine/longhouse-engine"
+          if [[ ! -x "$engine" ]]; then
+            echo "engine binary missing or not executable at $engine" >&2
+            ls -la "$HOME/.longhouse/runtimes/engine" || true
+            exit 1
+          fi
+          "$engine" --version
