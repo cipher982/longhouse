@@ -235,12 +235,134 @@ private struct AssistantBubble: View {
     let event: SessionEvent
 
     var body: some View {
-        Text(event.contentText ?? "")
-            .font(.callout)
-            .textSelection(.enabled)
+        MarkdownText(event.contentText ?? "")
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
             .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+/// Lightweight markdown renderer for assistant prose. Splits on fenced code
+/// blocks, then applies inline markdown (bold/italic/code/links) via
+/// AttributedString. Headings (## / #) and list bullets are styled manually.
+private struct MarkdownText: View {
+    let raw: String
+    init(_ raw: String) { self.raw = raw }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                switch block {
+                case .code(let text):
+                    Text(text)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.primary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 6))
+                case .heading(let level, let text):
+                    Text(inlineMarkdown(text))
+                        .font(level == 1 ? .title3.weight(.bold) : .callout.weight(.semibold))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                case .bullet(let text):
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("•").font(.callout).foregroundStyle(.secondary)
+                        Text(inlineMarkdown(text))
+                            .font(.callout)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                case .paragraph(let text):
+                    Text(inlineMarkdown(text))
+                        .font(.callout)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+    }
+
+    private enum Block {
+        case paragraph(String)
+        case heading(Int, String)
+        case bullet(String)
+        case code(String)
+    }
+
+    private var blocks: [Block] {
+        var out: [Block] = []
+        let lines = raw.components(separatedBy: "\n")
+        var i = 0
+        var paragraphBuffer: [String] = []
+
+        func flushParagraph() {
+            guard !paragraphBuffer.isEmpty else { return }
+            let joined = paragraphBuffer.joined(separator: "\n")
+            if !joined.trimmingCharacters(in: .whitespaces).isEmpty {
+                out.append(.paragraph(joined))
+            }
+            paragraphBuffer.removeAll()
+        }
+
+        while i < lines.count {
+            let line = lines[i]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                flushParagraph()
+                var code: [String] = []
+                i += 1
+                while i < lines.count {
+                    let inner = lines[i]
+                    if inner.trimmingCharacters(in: .whitespaces).hasPrefix("```") { break }
+                    code.append(inner)
+                    i += 1
+                }
+                out.append(.code(code.joined(separator: "\n")))
+                i += 1
+                continue
+            }
+
+            if trimmed.hasPrefix("## ") {
+                flushParagraph()
+                out.append(.heading(2, String(trimmed.dropFirst(3))))
+                i += 1
+                continue
+            }
+            if trimmed.hasPrefix("# ") {
+                flushParagraph()
+                out.append(.heading(1, String(trimmed.dropFirst(2))))
+                i += 1
+                continue
+            }
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") {
+                flushParagraph()
+                out.append(.bullet(String(trimmed.dropFirst(2))))
+                i += 1
+                continue
+            }
+            if trimmed.isEmpty {
+                flushParagraph()
+                i += 1
+                continue
+            }
+            paragraphBuffer.append(line)
+            i += 1
+        }
+        flushParagraph()
+        return out
+    }
+
+    private func inlineMarkdown(_ text: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(
+            interpretedSyntax: .inlineOnlyPreservingWhitespace
+        )
+        if let attr = try? AttributedString(markdown: text, options: options) {
+            return attr
+        }
+        return AttributedString(text)
     }
 }
 
