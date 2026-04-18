@@ -1,11 +1,10 @@
 """Tests for public origin helpers.
 
-These helpers drive CORS defaults and funnel origin checks.
+These helpers drive CORS defaults.
 """
 
 from zerg.config import AppMode
 from zerg.config import Settings
-from zerg.config import get_funnel_allowed_hosts
 from zerg.config import get_public_origins
 from zerg.config import resolve_cors_origins
 
@@ -95,9 +94,3 @@ def test_public_origins_from_site_and_api():
 def test_resolve_cors_origins_prefers_explicit_env():
     settings = _make_settings(allowed_cors_origins="https://a.com, https://b.com")
     assert resolve_cors_origins(settings) == ["https://a.com", "https://b.com"]
-
-
-def test_funnel_hosts_from_public_site():
-    settings = _make_settings(public_site_url="https://longhouse.ai")
-    hosts = get_funnel_allowed_hosts(settings)
-    assert "longhouse.ai" in hosts
