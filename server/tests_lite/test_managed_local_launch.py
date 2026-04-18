@@ -193,6 +193,44 @@ def test_this_device_launch_creates_native_claude_session(monkeypatch, tmp_path)
     assert presence.state == "idle"
 
 
+def test_this_device_launch_uses_token_device_id_for_runner_lookup(monkeypatch, tmp_path):
+    from zerg.services import managed_local_launcher
+
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        user, runner = _seed_user_and_runner(db)
+        device_token = SimpleNamespace(owner_id=user.id, device_id="cinder")
+        client, api_app = _make_device_client(db, device_token)
+        monkeypatch.setattr(
+            managed_local_launcher,
+            "get_runner_connection_manager",
+            lambda: SimpleNamespace(is_online=lambda *_args: True),
+        )
+
+        try:
+            response = client.post(
+                "/api/sessions/managed-local/this-device",
+                json={
+                    "cwd": "/tmp/demo",
+                    "provider": "claude",
+                    "display_name": "Demo session",
+                    "machine_name": "cinder.local",
+                    "native_claude_channels_available": True,
+                },
+            )
+        finally:
+            api_app.dependency_overrides = {}
+
+        payload = response.json()
+        session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
+
+    assert response.status_code == 200, response.text
+    assert payload["source_runner_name"] == "cinder"
+    assert session.source_runner_id == runner.id
+    assert session.device_id == "cinder"
+
+
 def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
     from zerg.services import managed_local_launcher
 
