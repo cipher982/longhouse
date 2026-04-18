@@ -75,12 +75,15 @@ jobs:
         env:
           IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/longhouse-runtime
           HEAD_SHA: ${{ needs.gate.outputs.head_sha }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           {
             echo "tags<<EOF"
             echo "${IMAGE_NAME}:${HEAD_SHA}"
             if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
               echo "${IMAGE_NAME}:${GITHUB_REF_NAME}"
+            elif [[ "${GITHUB_REF_TYPE}" == "branch" && "${GITHUB_REF_NAME}" == "$DEFAULT_BRANCH" ]]; then
+              echo "${IMAGE_NAME}:latest"
             fi
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
