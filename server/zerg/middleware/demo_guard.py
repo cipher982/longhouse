@@ -20,7 +20,6 @@ _ALLOWED_POST_PREFIXES: tuple[str, ...] = (
     "/api/agents/demo",
     "/api/system/seed-demo-sessions",
     "/api/auth/",
-    "/api/waitlist",
 )
 
 _SAFE_METHODS: frozenset[str] = frozenset({b"GET", b"HEAD", b"OPTIONS"})

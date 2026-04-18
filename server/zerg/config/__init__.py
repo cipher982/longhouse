@@ -356,26 +356,6 @@ def resolve_cors_origins(settings: Settings) -> list[str]:
     return ["http://localhost:30080"]
 
 
-def get_funnel_allowed_hosts(settings: Settings) -> set[str]:
-    """Return allowed funnel hosts based on public origins or explicit CORS."""
-    # Prefer explicit CORS origins if set (most authoritative)
-    origins = _split_csv(settings.allowed_cors_origins)
-    if not origins:
-        origins = get_public_origins(settings)
-
-    hosts = _origin_hosts(origins)
-    if hosts:
-        return hosts
-
-    # Legacy fallback (kept to avoid hard failures if config is missing)
-    return {
-        "longhouse.ai",
-        "www.longhouse.ai",
-        "localhost",
-        "127.0.0.1",
-    }
-
-
 def validate_public_origin_config(settings: Settings, cors_origins: list[str]) -> list[str]:
     """Return warnings when public origin config is missing or inconsistent."""
     warnings: list[str] = []

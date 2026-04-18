@@ -40,7 +40,6 @@ from .trigger import Trigger
 from .trigger_config import TriggerConfig
 from .types import GUID
 from .user import User
-from .waitlist import WaitlistEntry
 from .work import Insight
 
 __all__ = [
@@ -65,7 +64,6 @@ __all__ = [
     "ThreadMessage",
     "Trigger",
     "User",
-    "WaitlistEntry",
     "CommisBarrier",
     "RefreshSession",
     # Remaining models (still in models.py)

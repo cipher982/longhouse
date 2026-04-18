@@ -124,7 +124,6 @@ from zerg.routers.email_config import router as email_config_router
 from zerg.routers.email_webhooks_pubsub import router as pubsub_webhook_router
 from zerg.routers.fiche_config import router as fiche_config_router
 from zerg.routers.fiches import router as fiches_router
-from zerg.routers.funnel import router as funnel_router
 from zerg.routers.health import router as health_router
 from zerg.routers.health import set_health_app_ref
 from zerg.routers.heartbeat import router as heartbeat_router
@@ -152,7 +151,6 @@ from zerg.routers.timeline import router as timeline_router
 from zerg.routers.traces import router as traces_router
 from zerg.routers.triggers import router as triggers_router
 from zerg.routers.users import router as users_router
-from zerg.routers.waitlist import router as waitlist_router
 from zerg.routers.websocket import router as websocket_router
 from zerg.services.public_downloads import PublicDownloadUnavailable
 from zerg.services.public_downloads import download_macos_desktop_app_response
@@ -271,8 +269,6 @@ api_app.include_router(ops_beacon_router)
 api_app.include_router(fiche_config_router)
 api_app.include_router(automation_connectors_router)
 api_app.include_router(account_connectors_router)
-api_app.include_router(funnel_router)
-api_app.include_router(waitlist_router)
 api_app.include_router(traces_router)
 api_app.include_router(reliability_router)
 api_app.include_router(skills_router)
