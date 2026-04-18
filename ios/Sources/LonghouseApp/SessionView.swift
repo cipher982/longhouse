@@ -213,6 +213,8 @@ private struct TimelineItemView: View {
             ToolRow(call: call, result: result, isExpanded: isExpanded, sessionEnded: sessionEnded, onToggle: onToggle)
         case .orphanTool(let event):
             ToolRow(call: event, result: event, isExpanded: isExpanded, sessionEnded: sessionEnded, onToggle: onToggle, orphan: true)
+        case .passiveGroup(let calls):
+            PassiveGroupRow(calls: calls, isExpanded: isExpanded, onToggle: onToggle)
         }
     }
 }
@@ -504,6 +506,82 @@ private struct ToolRow: View {
         let max = 2000
         if text.count <= max { return text }
         return String(text.prefix(max)) + "\n… (truncated)"
+    }
+}
+
+/// Collapsed row for a run of passive tool calls within a turn. Shows a
+/// one-line summary like `Read × 3, Grep × 2` and expands to a list of the
+/// individual calls. Cuts scroll noise on Claude sessions where ~80% of
+/// calls are passive reads/searches.
+private struct PassiveGroupRow: View {
+    let calls: [PassiveCall]
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    private var tallyText: String {
+        var counts: [(String, Int)] = []
+        for passive in calls {
+            let name = passive.call.toolName ?? "Tool"
+            if let idx = counts.firstIndex(where: { $0.0 == name }) {
+                counts[idx].1 += 1
+            } else {
+                counts.append((name, 1))
+            }
+        }
+        return counts.map { "\($0.0) × \($0.1)" }.joined(separator: ", ")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onToggle) {
+                HStack(spacing: 8) {
+                    Image(systemName: "eye")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                    Text("Explored")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(tallyText)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 4)
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider().padding(.horizontal, 10)
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(calls) { passive in
+                        HStack(spacing: 6) {
+                            Text(passive.call.toolName ?? "Tool")
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.primary)
+                            let summary = TimelineBuilder.inputSummary(for: passive.call)
+                            if !summary.isEmpty {
+                                Text(summary)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+        }
+        .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }
 }
 
