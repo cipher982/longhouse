@@ -11,7 +11,7 @@ This is the surface agents, CLIs, scripts, CI jobs, and background automations s
 
 ## Rules
 
-- `/api/agents/*` is the canonical machine namespace for session archive, coordination, search/recall, startup continuity, and message flows.
+- `/api/agents/*` is the canonical machine namespace for session archive, coordination, search/recall, and message flows.
 - CLI commands should sit directly on top of these routes.
 - MCP tools should sit on top of the same routes or the same service layer.
 - Browser routes may reuse the same response models or service helpers, but machine clients should not depend on browser-owned endpoints.
@@ -104,10 +104,12 @@ Current delivery model:
 - non-live sessions can still poll the durable inbox
 - wall entries now surface `pending_inbound_messages` so agents can see which sessions already have unacknowledged inbound work
 
-### Continuity and project context
+### Project context
 
-- `GET /api/agents/sessions/startup-context`
 - `GET /api/agents/recall`
+- `GET /api/agents/sessions/startup-context` — consumed by the opt-in
+  [startup-continuity lab](../../labs/startup-continuity/README.md); not part
+  of the launch promise
 
 ## Browser Relationship
 

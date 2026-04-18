@@ -1,28 +1,27 @@
 """Claude Code and Codex hook installation and shared workspace MCP helpers.
 
 Installs provider hook scripts and injects hook configuration into
-``~/.claude/settings.json`` and ``~/.codex/hooks.json`` so Longhouse can:
-
-- write presence and binding events locally without network calls in the hot path
-- inject a small startup continuity block on fresh session start
+``~/.claude/settings.json`` and ``~/.codex/hooks.json`` so Longhouse can
+write presence and binding events locally without network calls in the hot
+path.
 
 Claude hooks (via settings.json):
 
 - **longhouse-hook.sh** (SessionStart, Stop, UserPromptSubmit, PreToolUse,
   PostToolUse, PermissionRequest, Notification):
   Writes presence events to a local outbox directory
-  (``~/.longhouse/agent/outbox/``) as small JSON files (<2ms, no network) for
-  non-startup events. On SessionStart it also performs one bounded best-effort
-  API read to fetch startup continuity for the current project and injects it
-  as silent additional context.
+  (``~/.longhouse/agent/outbox/``) as small JSON files (<2ms, no network) and
+  seeds session binding for the daemon.
 
 Codex hooks (via hooks.json):
 
 - **longhouse-codex-hook.sh** (SessionStart, UserPromptSubmit, Stop):
-  Uses the same pattern: local outbox writes for hot-path presence, plus one
-  bounded startup-context fetch on fresh SessionStart. Codex has fewer hook
-  events than Claude (no PreToolUse/PostToolUse), so tool-level granularity is
-  not available there.
+  Same pattern as Claude. Codex has fewer hook events (no
+  PreToolUse/PostToolUse), so tool-level granularity is not available there.
+
+Startup continuity injection (fetching recent project context on
+SessionStart) is not part of the default hook. See
+``labs/startup-continuity/`` for the opt-in installer that adds it.
 
 Usage:
     from zerg.services.shipper.hooks import install_hooks
@@ -52,13 +51,11 @@ logger = logging.getLogger(__name__)
 
 HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse unified Claude hook — startup continuity + presence outbox + binding
+# Longhouse unified Claude hook — presence outbox + session binding seed
 # Installed by: longhouse connect --install
 # Registered on: SessionStart, Stop, UserPromptSubmit, PreToolUse,
 #                PostToolUse, PostToolUseFailure, PermissionRequest, Notification
-# SessionStart: best-effort bounded fetch of /api/agents/sessions/startup-context
-#               and inject the result as silent additional context.
-# Other events: local-only presence outbox write + session binding seed.
+# All events: local-only presence outbox write + session binding seed.
 INPUT=$(cat)
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
@@ -67,62 +64,19 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 # Parse all fields in a single jq call using unit-separator (\\x1f) as delimiter.
 # @tsv would split on spaces inside field values; \\x1f is safe for paths/tool names.
-IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE SOURCE <<< "$(
+IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE <<< "$(
   printf '%s' "$INPUT" | jq -r '[
     (.hook_event_name // ""),
     (.session_id // ""),
     (.tool_name // ""),
     (.cwd // ""),
     (.transcript_path // ""),
-    (.notification_type // ""),
-    (.source // "")
+    (.notification_type // "")
   ] | join("\\u001f")'
 )"
 
 MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-}"
 [ -n "$MANAGED_SESSION_ID" ] && SESSION_ID="$MANAGED_SESSION_ID"
-STARTUP_OUTPUT=""
-
-build_startup_context_output() {
-  [[ "$EVENT" == "SessionStart" ]] || return 0
-  [[ "$SOURCE" == "startup" ]] || return 0
-  [[ -n "$CWD" ]] || return 0
-
-  REPO_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null | tr -d '\r')
-  if [[ -n "$REPO_ROOT" ]]; then
-    PROJECT=$(basename "$REPO_ROOT")
-  else
-    PROJECT=$(basename "$CWD")
-  fi
-  [[ -n "$PROJECT" ]] || return 0
-
-  TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
-  URL="${LONGHOUSE_HOOK_URL:-}"
-  if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]; then
-    TOKEN_FILE="$LONGHOUSE_HOME/machine/device-token"
-    STATE_FILE="$LONGHOUSE_HOME/machine/state.json"
-    [[ -f "$TOKEN_FILE" ]] || return 0
-    [[ -f "$STATE_FILE" ]] || return 0
-    TOKEN=$(tr -d '[:space:]' < "$TOKEN_FILE")
-    URL=$(jq -r '.runtime_url // empty' "$STATE_FILE" 2>/dev/null | tr -d '[:space:]')
-    [[ -n "$URL" ]] || return 0
-  fi
-
-  PROJECT_ENC=$(
-    python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$PROJECT" 2>/dev/null \
-      || printf '%s' "$PROJECT"
-  )
-  RESPONSE=$(curl -sf --max-time 5 \\
-    -H "X-Agents-Token: $TOKEN" \\
-    "${URL}/api/agents/sessions/startup-context?project=${PROJECT_ENC}&limit=5" 2>/dev/null) || return 0
-
-  CONTEXT=$(printf '%s' "$RESPONSE" | jq -r '.startup_context // empty' 2>/dev/null)
-  [[ -n "$CONTEXT" ]] || return 0
-
-  STARTUP_OUTPUT=$(jq -nc --arg msg "$CONTEXT" '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}}' 2>/dev/null) || STARTUP_OUTPUT=""
-}
-
-build_startup_context_output
 
 FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"
 HINDSIGHT_ROOT="__HINDSIGHT_ROOT__"
@@ -175,10 +129,6 @@ if [[ -n "$STATE" ]] && [[ -n "$SESSION_ID" ]]; then
   write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
 fi
 
-if [[ -n "$STARTUP_OUTPUT" ]]; then
-  printf '%s\\n' "$STARTUP_OUTPUT"
-fi
-
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
 # instead?" prompt, which interrupts the session.
 exit 0
@@ -190,23 +140,20 @@ exit 0
 
 CODEX_HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse Codex hook — startup continuity + presence outbox + binding
+# Longhouse Codex hook — presence outbox + session binding seed
 # Installed by: longhouse connect --install
 # Registered on: SessionStart, UserPromptSubmit, Stop (via ~/.codex/hooks.json)
-# SessionStart: best-effort bounded fetch of /api/agents/sessions/startup-context
-#               and inject the result as silent additional context.
-# Other events: local-only presence outbox write + session binding seed.
+# All events: local-only presence outbox write + session binding seed.
 INPUT=$(cat)
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
 # Codex command hooks use snake_case field names.
-IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT SOURCE <<< "$(
+IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT <<< "$(
   printf '%s' "$INPUT" | jq -r '[
     (.hook_event_name // ""),
     (.session_id // ""),
     (.cwd // ""),
-    (.transcript_path // ""),
-    (.source // "")
+    (.transcript_path // "")
   ] | join("\\u001f")'
 )"
 
@@ -217,48 +164,6 @@ if [ -n "$MANAGED_SESSION_ID" ]; then
 else
   SID="$CODEX_SESSION_ID"
 fi
-STARTUP_OUTPUT=""
-
-build_startup_context_output() {
-  [[ "$EVENT" == "SessionStart" ]] || return 0
-  [[ "$SOURCE" == "startup" ]] || return 0
-  [[ -n "$CWD" ]] || return 0
-
-  REPO_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null | tr -d '\r')
-  if [[ -n "$REPO_ROOT" ]]; then
-    PROJECT=$(basename "$REPO_ROOT")
-  else
-    PROJECT=$(basename "$CWD")
-  fi
-  [[ -n "$PROJECT" ]] || return 0
-
-  TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
-  URL="${LONGHOUSE_HOOK_URL:-}"
-  if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]; then
-    TOKEN_FILE="$LONGHOUSE_HOME/machine/device-token"
-    STATE_FILE="$LONGHOUSE_HOME/machine/state.json"
-    [[ -f "$TOKEN_FILE" ]] || return 0
-    [[ -f "$STATE_FILE" ]] || return 0
-    TOKEN=$(tr -d '[:space:]' < "$TOKEN_FILE")
-    URL=$(jq -r '.runtime_url // empty' "$STATE_FILE" 2>/dev/null | tr -d '[:space:]')
-    [[ -n "$URL" ]] || return 0
-  fi
-
-  PROJECT_ENC=$(
-    python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$PROJECT" 2>/dev/null \
-      || printf '%s' "$PROJECT"
-  )
-  RESPONSE=$(curl -sf --max-time 5 \\
-    -H "X-Agents-Token: $TOKEN" \\
-    "${URL}/api/agents/sessions/startup-context?project=${PROJECT_ENC}&limit=5" 2>/dev/null) || return 0
-
-  CONTEXT=$(printf '%s' "$RESPONSE" | jq -r '.startup_context // empty' 2>/dev/null)
-  [[ -n "$CONTEXT" ]] || return 0
-
-  STARTUP_OUTPUT=$(jq -nc --arg msg "$CONTEXT" '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}}' 2>/dev/null) || STARTUP_OUTPUT=""
-}
-
-build_startup_context_output
 
 write_presence_outbox() {
   payload="$1"
@@ -288,10 +193,6 @@ if [[ -n "$STATE" ]] && [[ -n "$SID" ]]; then
   if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
     "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" --provider codex >/dev/null 2>&1 || true
   fi
-fi
-
-if [[ -n "$STARTUP_OUTPUT" ]]; then
-  printf '%s\\n' "$STARTUP_OUTPUT"
 fi
 
 exit 0
@@ -446,8 +347,8 @@ def install_hooks(
     6. Write ``settings.json`` back.
 
     Args:
-        url: Longhouse API URL (used for logging and by SessionStart startup
-             continuity fetches; hot-path presence still goes via outbox only).
+        url: Longhouse API URL (used for logging only; hot-path presence writes
+             go through the local outbox, not the network).
         token: Unused legacy arg retained for compatibility.
         claude_dir: Override for Claude config directory.
 
@@ -523,8 +424,7 @@ def install_hooks(
     stop_list = hooks_obj.get("Stop", [])
     hooks_obj["Stop"] = _merge_hooks_for_event(stop_list, stop_entry)
 
-    # Lifecycle events: sync. SessionStart may perform one bounded continuity
-    # fetch; other lifecycle events stay local-only (outbox write <2ms).
+    # Lifecycle events: sync, local-only (outbox write <2ms).
     for event in (
         "SessionStart",
         "UserPromptSubmit",
