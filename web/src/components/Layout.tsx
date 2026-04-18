@@ -4,7 +4,6 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useAuthMethods } from "../lib/auth";
 import { requestNativeAuth } from "../lib/nativeAuthBridge";
-import { useShelf } from "../lib/useShelfState";
 import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useApiHealth } from "../lib/apiHealth";
 import { useBodyScrollLock } from "../hooks/useBodyScrollLock";
@@ -15,14 +14,13 @@ import { useConfirm } from "./confirm";
 import { fetchRunnerStatus } from "../services/api";
 import { SwarmLogo } from "./SwarmLogo";
 import "../styles/layout.css";
-import { SidebarIcon, XIcon } from "./icons";
+import { XIcon } from "./icons";
 import { getNavItems } from "./navigation/navItems";
 
 const RUNNER_STATUS_INITIAL_DELAY_MS = 2_500;
 
 function WelcomeHeader() {
   const { user, logout } = useAuth();
-  const { isShelfOpen, toggleShelf } = useShelf();
   const location = useLocation();
   const navigate = useNavigate();
   const confirm = useConfirm();
@@ -62,11 +60,6 @@ function WelcomeHeader() {
     refs: [userMenuRef],
     onClickOutside: closeUserMenu,
   });
-
-  // Only show the shelf toggle on routes that actually render the thread sidebar.
-  const shouldShowShelfToggle =
-    location.pathname === "/chat" ||
-    /^\/automations\/[^/]+\/thread(?:\/|$)/.test(location.pathname);
 
   // Generate user initials from display name or email
   const getUserInitials = (user: { display_name?: string | null; email: string } | null) => {
@@ -198,18 +191,6 @@ function WelcomeHeader() {
       </nav>
 
       <div className="header-actions">
-        {shouldShowShelfToggle && (
-          <button
-            id="shelf-toggle-btn"
-            className="header-button shelf-toggle"
-            aria-label="Toggle thread panel"
-            aria-controls="thread-sidebar"
-            aria-expanded={isShelfOpen}
-            onClick={toggleShelf}
-          >
-            <SidebarIcon />
-          </button>
-        )}
         <div className="user-menu-container" ref={userMenuRef}>
           <div
             className="avatar-badge"

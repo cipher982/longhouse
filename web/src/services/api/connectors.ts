@@ -17,49 +17,6 @@ export type {
   AccountConnectorStatus,
 };
 
-// Automation-level connectors
-export async function fetchAutomationConnectors(automationId: number): Promise<ConnectorStatus[]> {
-  return request<ConnectorStatus[]>(`/automations/${automationId}/connectors`);
-}
-
-export async function configureAutomationConnector(
-  automationId: number,
-  payload: ConnectorConfigureRequest
-): Promise<ConnectorSuccessResponse> {
-  return request<ConnectorSuccessResponse>(`/automations/${automationId}/connectors`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function testAutomationConnectorBeforeSave(
-  automationId: number,
-  payload: ConnectorTestRequest
-): Promise<ConnectorTestResponse> {
-  return request<ConnectorTestResponse>(`/automations/${automationId}/connectors/test`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function testAutomationConnector(
-  automationId: number,
-  connectorType: string
-): Promise<ConnectorTestResponse> {
-  return request<ConnectorTestResponse>(`/automations/${automationId}/connectors/${connectorType}/test`, {
-    method: "POST",
-  });
-}
-
-export async function deleteAutomationConnector(
-  automationId: number,
-  connectorType: string
-): Promise<void> {
-  return request<void>(`/automations/${automationId}/connectors/${connectorType}`, {
-    method: "DELETE",
-  });
-}
-
 // Account-level connectors
 export async function fetchAccountConnectors(): Promise<AccountConnectorStatus[]> {
   return request<AccountConnectorStatus[]>(`/account/connectors/`);

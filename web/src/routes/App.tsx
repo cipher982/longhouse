@@ -1,4 +1,3 @@
-import { lazy, Suspense } from "react";
 import { useRoutes, Outlet, Navigate, useLocation } from "react-router-dom";
 import Layout from "../components/Layout";
 import LandingPage from "../pages/LandingPage";
@@ -15,28 +14,17 @@ import DocsConfigurationPage from "../pages/docs/ConfigurationPage";
 import ChangelogPage from "../pages/ChangelogPage";
 import PrivacyPage from "../pages/PrivacyPage";
 import SecurityPage from "../pages/SecurityPage";
-import AutomationsPage from "../pages/AutomationsPage";
 import ProfilePage from "../pages/ProfilePage";
 import SettingsPage from "../pages/SettingsPage";
 import IntegrationsPage from "../pages/IntegrationsPage";
-import ContactsPage from "../pages/ContactsPage";
 import DevicesPage from "../pages/DevicesPage";
-import KnowledgeSourcesPage from "../pages/KnowledgeSourcesPage";
 import AdminPage from "../pages/AdminPage";
 import RunnersPage from "../pages/RunnersPage";
 import RunnerDetailPage from "../pages/RunnerDetailPage";
-import TraceExplorerPage from "../pages/TraceExplorerPage";
-import ReliabilityPage from "../pages/ReliabilityPage";
 import SessionsPage from "../pages/SessionsPage";
 import SessionDetailPage from "../pages/SessionDetailPage";
 import DemoBanner from "../components/DemoBanner";
-import { Spinner } from "../components/ui";
 import { AuthGuard } from "../lib/auth";
-
-// Lazy-loaded pages (heavy dependencies - reduces initial bundle by ~700KB)
-const ChatPage = lazy(() => import("../pages/ChatPage"));
-const SwarmOpsPage = lazy(() => import("../pages/SwarmOpsPage"));
-import { ShelfProvider } from "../lib/useShelfState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import {
   usePerformanceMonitoring,
@@ -48,25 +36,14 @@ type RoutingConfig = {
   singleTenant: boolean;
 };
 
-// Loading fallback for lazy-loaded pages
-function PageLoader() {
-  return (
-    <div className="page-loader">
-      <Spinner size="lg" className="page-loader-spinner" />
-    </div>
-  );
-}
-
 // Authenticated app wrapper - wraps all authenticated routes with a single instance
 // This prevents remounting Layout/StatusFooter/WebSocket on navigation
 function AuthenticatedApp() {
   return (
     <AuthGuard clientId={config.googleClientId}>
-      <ShelfProvider>
-        <Layout>
-          <Outlet />
-        </Layout>
-      </ShelfProvider>
+      <Layout>
+        <Outlet />
+      </Layout>
     </AuthGuard>
   );
 }
@@ -74,12 +51,12 @@ function AuthenticatedApp() {
 // Demo app wrapper — Layout with DemoBanner, no AuthGuard
 function DemoApp() {
   return (
-    <ShelfProvider>
+    <>
       <DemoBanner />
       <Layout>
         <Outlet />
       </Layout>
-    </ShelfProvider>
+    </>
   );
 }
 
@@ -88,30 +65,7 @@ function LandingAliasRedirect() {
   return <Navigate to={{ pathname: "/", search: location.search }} replace />;
 }
 
-export function resolveLegacyForumRedirect(search: string): {
-  pathname: string;
-  search?: string;
-} {
-  const params = new URLSearchParams(search);
-  const sessionId = params.get("session");
-  const shouldResume = params.get("chat") === "true";
-
-  if (sessionId) {
-    return {
-      pathname: `/timeline/${sessionId}`,
-      search: shouldResume ? "?resume=1" : "",
-    };
-  }
-
-  return { pathname: "/timeline" };
-}
-
-function LegacyForumRedirect() {
-  const location = useLocation();
-  return <Navigate to={resolveLegacyForumRedirect(location.search)} replace />;
-}
-
-export function buildAppRoutes({ demoMode, singleTenant }: RoutingConfig) {
+export function buildAppRoutes({ demoMode, singleTenant: _singleTenant }: RoutingConfig) {
   // Public reference pages — shared by demo and normal modes
   const publicInfoRoutes = [
     {
@@ -251,46 +205,6 @@ export function buildAppRoutes({ demoMode, singleTenant }: RoutingConfig) {
                   ]
                 : []),
               {
-                path: "/automations",
-                element: (
-                  <ErrorBoundary>
-                    <AutomationsPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/dashboard",
-                element: <Navigate to="/automations" replace />,
-              },
-              {
-                path: "/forum",
-                element: (
-                  <ErrorBoundary>
-                    <LegacyForumRedirect />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/runs",
-                element: (
-                  <ErrorBoundary>
-                    <Suspense fallback={<PageLoader />}>
-                      <SwarmOpsPage />
-                    </Suspense>
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/automations/:automationId/thread/:threadId?",
-                element: (
-                  <ErrorBoundary>
-                    <Suspense fallback={<PageLoader />}>
-                      <ChatPage />
-                    </Suspense>
-                  </ErrorBoundary>
-                ),
-              },
-              {
                 path: "/profile",
                 element: (
                   <ErrorBoundary>
@@ -311,22 +225,6 @@ export function buildAppRoutes({ demoMode, singleTenant }: RoutingConfig) {
                 element: (
                   <ErrorBoundary>
                     <IntegrationsPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/settings/knowledge",
-                element: (
-                  <ErrorBoundary>
-                    <KnowledgeSourcesPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/settings/contacts",
-                element: (
-                  <ErrorBoundary>
-                    <ContactsPage />
                   </ErrorBoundary>
                 ),
               },
@@ -359,30 +257,6 @@ export function buildAppRoutes({ demoMode, singleTenant }: RoutingConfig) {
                 element: (
                   <ErrorBoundary>
                     <RunnerDetailPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/traces",
-                element: (
-                  <ErrorBoundary>
-                    <TraceExplorerPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/traces/:traceId",
-                element: (
-                  <ErrorBoundary>
-                    <TraceExplorerPage />
-                  </ErrorBoundary>
-                ),
-              },
-              {
-                path: "/reliability",
-                element: (
-                  <ErrorBoundary>
-                    <ReliabilityPage />
                   </ErrorBoundary>
                 ),
               },
