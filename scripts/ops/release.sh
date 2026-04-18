@@ -45,6 +45,18 @@ if [[ "$BRANCH" != "main" ]]; then
   exit 1
 fi
 
+# Shared-worktree guard: another agent may have committed to local main without
+# pushing. Refuse to release until local main == origin/main so we only release
+# commits that exist on origin and that the user can see in GitHub.
+git -C "$ROOT" fetch --quiet origin main
+LOCAL_HEAD="$(git -C "$ROOT" rev-parse HEAD)"
+REMOTE_HEAD="$(git -C "$ROOT" rev-parse origin/main)"
+if [[ "$LOCAL_HEAD" != "$REMOTE_HEAD" ]]; then
+  echo "Local main ($LOCAL_HEAD) does not match origin/main ($REMOTE_HEAD)." >&2
+  echo "Push (or discard) local work before releasing — this guards against sweeping another agent's WIP into the release." >&2
+  exit 1
+fi
+
 if git -C "$ROOT" rev-parse --verify --quiet "refs/tags/$VERSION" >/dev/null; then
   echo "Tag $VERSION already exists locally. Pick a new version." >&2
   exit 1
@@ -87,7 +99,13 @@ BUMP_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 echo "Bump commit: ${BUMP_SHA:0:10}"
 
 echo "Pushing bump commit to main..."
-git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"
+# Race-safe: only push if origin/main hasn't moved since the clean check above.
+# If another agent pushed in between, bail out so they can land and we retry.
+if ! git -C "$ROOT" push origin "$BUMP_SHA:refs/heads/main"; then
+  echo "Push failed — another commit likely landed on origin/main. Rewind and retry:" >&2
+  echo "  git reset --hard origin/main && make release VERSION=$VERSION" >&2
+  exit 1
+fi
 
 echo "Creating GitHub release $VERSION (this triggers publish.yml + local-runtime-release.yml)..."
 PREV_TAG="$(git -C "$ROOT" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1 || true)"
