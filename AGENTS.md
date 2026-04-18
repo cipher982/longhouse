@@ -37,6 +37,7 @@ Use these nouns consistently. Do not say just "the daemon" without clarifying wh
 - **Runtime Host**: the main Longhouse backend product runtime: FastAPI API, bundled web UI, and database-backed state. In self-host mode this is what `longhouse serve` runs. In hosted mode we run it for the user.
 - **Machine Agent**: the Rust engine (`longhouse-engine`). It drains local hook outbox files, ships events, retries spool, writes `~/.claude/engine-status.json`, and emits heartbeats. It is the shipping path.
 - **Desktop App**: macOS `Longhouse.app`. Native local status/setup/repair/menu bar surface. It is not the Runtime Host and not the Machine Agent.
+- **iOS App**: native SwiftUI client for viewing and replying to sessions plus a home-screen widget. Read/steer-only client — does not host a Runtime or run an engine. Always connects to a hosted instance.
 - **Runner**: optional WebSocket command executor for remote execution on user-owned machines.
 - **CLI / Package Layer**: the current delivery and orchestration layer. PyPI `longhouse` installs the CLI plus Runtime Host entrypoint and manages Machine Agent/Desktop App installation. Treat this as first-class for agents and power users, but not the desired human product boundary.
 
@@ -54,6 +55,7 @@ The Machine Agent runs where work happens. The Runtime Host runs where durabilit
 Install channels:
 
 - **Mac human happy path**: `Longhouse.app`.
+- **iOS**: built from `ios/` via Xcode; no public distribution yet (personal install via Xcode build-and-run).
 - **Agent/headless/power-user**: `uv tool install longhouse`, PyPI, or `curl | bash`.
 - **Canonical repair seam**: `longhouse connect --install`.
 
@@ -62,6 +64,7 @@ Boundary rules:
 - The Machine Agent is always on the user's dev machine(s).
 - The Runtime Host is on the user's always-on box (self-hosted) or our infra (hosted). On a laptop it is trial-mode only.
 - The Desktop App is the macOS status surface. It must never become a dead wrapper around hidden CLI assumptions.
+- The iOS App is a pure client. It never ships sessions, never hosts a runtime, and never runs an engine — it talks to an existing hosted instance (today: david010).
 
 ## Communication
 
@@ -127,6 +130,7 @@ Run the tier that matches the change. Do not over-test.
 - `make test-engine` for `engine/`
 - `make test-control-plane` for `control-plane/`
 - `make test-runner` for `runner/`
+- For `ios/` changes: run the Xcode `Longhouse` scheme tests via `xcodebuild ... test` (or the in-editor test action). There is no `make` target for iOS.
 - `make test-e2e` for UI changes and before push when runtime behavior changed
 - `make test-ci` before push
 - `make test-full` only for broad pre-deploy verification
@@ -192,7 +196,8 @@ If you touch a secondary area, either simplify it toward the core story or expla
 
 - `make dev` is interactive.
 - After local runtime changes (engine, hooks, `connect`, desktop app/menu bar), run `make dogfood-refresh` to reinstall the real local runtime from current repo source. DMG drag-install is release transport, not the daily dogfood loop.
-- CLI-only changes (`server/zerg/cli/`) don't need the full Rust rebuild — run `cd server && uv tool install -e .` directly (~5s vs ~60s for `make dogfood-refresh`).
+- Python-CLI-only changes under `server/zerg/cli/` skip the Rust rebuild — `cd server && uv tool install -e .` is ~5s vs ~60s for `make dogfood-refresh`. This is a narrow shortcut; it does not apply to engine, hooks, connect, desktop app, or iOS.
+- **iOS app changes** (`ios/`) are pure Swift — no `make` target, no dogfood-refresh, no install step. An Xcode rebuild/run is the whole loop. The iOS app has no runtime or engine to reinstall.
 - Heavy local validation can saturate the laptop. Prefer GitHub ARC for `make test-ci`, `make test-e2e`, `make test-full`, long `cargo` builds, and heavy installer/menu bar paths unless local debugging is the point.
 - Local SQLite dev DB is `~/.longhouse/dev.db` unless `DATABASE_URL` overrides it.
 - `AGENTS.md` is canonical. `CLAUDE.md` is a symlink.
@@ -224,6 +229,7 @@ Separate release paths:
 - Self-installed CLI and `Longhouse.app` users only update on a published `vX.Y.Z` release.
 - `longhouse upgrade` / `uv tool upgrade longhouse` updates the CLI; some upgrades still need `longhouse connect --install`.
 - macOS app packaging smoke runs on push, but real app distribution is release-only.
+- **iOS app**: no push-triggered release. `git push` does not deploy iOS. Personal install today is Xcode build-and-run; there is no TestFlight or App Store distribution yet.
 
 Extra rules:
 
@@ -257,3 +263,5 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - `/api/threads/{id}/runs` needs direct backend coverage. Dead runtime imports can survive broad suites and only surface in hosted chat smoke.
 - iOS auth boundary fixes cannot rely on `WKNavigationDelegate` alone; React/SPA transitions to `/login` can bypass network navigation, so the shell must also observe in-page history changes before web login leaks into the app.
 - Claude `tool_result` payloads are not guaranteed to be text. Image blocks and `tool_reference` arrays still need a synthetic `role=tool` event during ingest or the timeline/iOS surfaces will show phantom running tool calls.
+- iOS timeline pairing mirrors the web pairing logic (`ios/Sources/Shared/TimelineBuilder.swift` ↔ `web/.../timelineModel.ts`): assistant-with-tool_name + role=tool paired on `tool_call_id`. If you change pairing rules on one side, change the other — otherwise mobile and web disagree on what "one row" means.
+- iOS treats any tool call older than 1hr or inside an ended session as "dropped" rather than "running", because real ingest still occasionally loses `role=tool` events (Bedrock orphan rate ~9% when last checked). Don't rip this client-side guardrail out until the ingest side is fixed.
