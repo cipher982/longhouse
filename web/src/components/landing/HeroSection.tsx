@@ -133,11 +133,11 @@ export function HeroSection() {
           decoding="async"
         />
         <img
-          src="/images/landing/device-iphone.webp?v=2"
+          src="/images/landing/device-iphone.webp?v=3"
           alt="Longhouse iOS widget on iPhone"
           className="landing-hero-device landing-hero-device--iphone"
-          width={520}
-          height={704}
+          width={234}
+          height={420}
           loading="eager"
           fetchPriority="high"
           decoding="async"
