@@ -54,6 +54,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let managedSessions: [ManagedSessionSnapshot]?
     public let orphanBridges: [OrphanBridgeSnapshot]?
     public let launchReadiness: LaunchReadinessSnapshot?
+    public let updateInfo: UpdateInfoSnapshot?
 
     public init(
         schemaVersion: Int?,
@@ -70,7 +71,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         managedSummary: ManagedSummarySnapshot? = nil,
         managedSessions: [ManagedSessionSnapshot]? = nil,
         orphanBridges: [OrphanBridgeSnapshot]? = nil,
-        launchReadiness: LaunchReadinessSnapshot?
+        launchReadiness: LaunchReadinessSnapshot?,
+        updateInfo: UpdateInfoSnapshot? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.collectedAt = collectedAt
@@ -87,6 +89,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.managedSessions = managedSessions
         self.orphanBridges = orphanBridges
         self.launchReadiness = launchReadiness
+        self.updateInfo = updateInfo
     }
 
     public var parsedSeverity: HarnessSeverity {
@@ -443,6 +446,16 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return Self.countLabel(attachedManagedCount, singular: "attached", plural: "attached").uppercased()
         }
         return "NO MANAGED SESSIONS"
+    }
+
+    public var updateAvailableChipLabel: String? {
+        guard let updateInfo, updateInfo.shouldNudge else {
+            return nil
+        }
+        if let latest = updateInfo.latestVersion, !latest.isEmpty {
+            return "UPDATE \(latest)"
+        }
+        return "UPDATE AVAILABLE"
     }
 
     public var statusItemSummaryLabel: String {
@@ -984,6 +997,20 @@ public struct OutboxSnapshot: Codable, Equatable, Sendable {
     public let path: String?
     public let fileCount: Int?
     public let oldestAgeSeconds: Int?
+}
+
+public struct UpdateInfoSnapshot: Codable, Equatable, Sendable {
+    public let installedVersion: String?
+    public let latestVersion: String?
+    public let updateAvailable: Bool?
+    public let upgradeCommand: String?
+    public let checkedAt: String?
+    public let supported: Bool?
+    public let reason: String?
+
+    public var shouldNudge: Bool {
+        (updateAvailable ?? false) && (supported ?? false)
+    }
 }
 
 public struct ManagedSummarySnapshot: Codable, Equatable, Sendable {

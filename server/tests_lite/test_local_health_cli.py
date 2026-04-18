@@ -900,19 +900,20 @@ def test_local_health_menubar_uses_prebuilt_binary_when_installed(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# local-health keeps a compatibility update_info payload without using stale
-# CLI-only update cache as truth for the machine bundle.
+# local-health surfaces the CLI update cache as bundle update state. The CLI's
+# upgrade path now reconciles engine + Codex automatically, so CLI version is
+# a faithful proxy for the local runtime bundle.
 # ---------------------------------------------------------------------------
 
 
 def _write_update_cache(
-    tmp_path: Path,
+    longhouse_home: Path,
     *,
     update_available: bool,
     installed: str = "0.1.8",
     latest: str = "0.1.9",
 ) -> Path:
-    tmp_path.mkdir(parents=True, exist_ok=True)
+    longhouse_home.mkdir(parents=True, exist_ok=True)
     cache = {
         "checked_at": "2026-04-11T10:00:00+00:00",
         "installed_version": installed,
@@ -924,50 +925,65 @@ def _write_update_cache(
         "package_name": "longhouse",
         "error": None,
     }
-    path = tmp_path / "update-check.json"
+    path = longhouse_home / "update-check.json"
     path.write_text(json.dumps(cache))
     return path
 
 
-def test_collect_local_health_disables_update_info_even_when_cli_update_cache_exists(monkeypatch, tmp_path: Path):
+def test_collect_local_health_surfaces_update_info_from_cli_cache(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
-    monkeypatch.setattr("zerg.cli.update_manager.current_installed_version", lambda: "0.1.11")
+    longhouse_home = tmp_path / ".longhouse"
+    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+    monkeypatch.setattr("zerg.cli.update_manager.current_installed_version", lambda: "0.1.8")
     _write_engine_status(tmp_path, age_seconds=5)
-    _write_update_cache(tmp_path, update_available=True, installed="0.1.8", latest="0.1.9")
+    _write_update_cache(longhouse_home, update_available=True, installed="0.1.8", latest="0.1.9")
 
     snapshot = local_health_service.collect_local_health(tmp_path)
 
     assert snapshot["update_info"] == {
-        "installed_version": "0.1.11",
-        "latest_version": None,
-        "update_available": False,
-        "upgrade_command": None,
-        "checked_at": None,
-        "supported": False,
-        "reason": "bundle_versioning_not_implemented",
+        "installed_version": "0.1.8",
+        "latest_version": "0.1.9",
+        "update_available": True,
+        "upgrade_command": "uv tool upgrade longhouse",
+        "checked_at": "2026-04-11T10:00:00+00:00",
+        "supported": True,
+        "reason": None,
     }
 
 
-def test_update_info_present_in_json_cli_output_as_disabled_compat_payload(monkeypatch, tmp_path: Path):
+def test_collect_local_health_ignores_stale_update_cache_when_version_moved(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    longhouse_home = tmp_path / ".longhouse"
+    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+    # Already on 0.1.11 but cache still reflects a 0.1.8 check — do not nag.
     monkeypatch.setattr("zerg.cli.update_manager.current_installed_version", lambda: "0.1.11")
-    _write_engine_status(tmp_path / ".longhouse", age_seconds=5)
+    _write_engine_status(tmp_path, age_seconds=5)
+    _write_update_cache(longhouse_home, update_available=True, installed="0.1.8", latest="0.1.9")
 
-    _write_update_cache(tmp_path / ".longhouse", update_available=True)
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["update_info"]["update_available"] is False
+    assert snapshot["update_info"]["installed_version"] == "0.1.11"
+    assert snapshot["update_info"]["supported"] is True
+
+
+def test_update_info_present_in_json_cli_output(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    longhouse_home = tmp_path / ".longhouse"
+    monkeypatch.setenv("LONGHOUSE_HOME", str(longhouse_home))
+    monkeypatch.setattr("zerg.cli.update_manager.current_installed_version", lambda: "0.1.8")
+    _write_engine_status(tmp_path / ".longhouse", age_seconds=5)
+    _write_update_cache(longhouse_home, update_available=True)
 
     runner = CliRunner()
     result = runner.invoke(app, ["local-health", "--json", "--claude-dir", str(tmp_path / ".claude")])
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert payload["update_info"] == {
-        "installed_version": "0.1.11",
-        "latest_version": None,
-        "update_available": False,
-        "upgrade_command": None,
-        "checked_at": None,
-        "supported": False,
-        "reason": "bundle_versioning_not_implemented",
-    }
+    assert payload["update_info"]["update_available"] is True
+    assert payload["update_info"]["latest_version"] == "0.1.9"
+    assert payload["update_info"]["upgrade_command"] == "uv tool upgrade longhouse"
+    assert payload["update_info"]["supported"] is True

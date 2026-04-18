@@ -523,12 +523,13 @@ def _collect_service(base_dir: Path) -> dict[str, Any]:
 
 
 def _collect_update_info() -> dict[str, Any]:
-    """Return a compatibility update payload without claiming bundle coherence.
+    """Surface the background CLI update cache as bundle update state.
 
-    local-health no longer reports PyPI-based "update available" state because
-    that only reflects the CLI package, not the full CLI+engine+app bundle.
-    Keep the key present so older JSON consumers do not break while making the
-    unsupported state explicit.
+    Since `longhouse upgrade` now reconciles engine + Codex automatically
+    (see update_manager._reconcile_runtime_after_upgrade), the CLI's installed
+    version is a faithful proxy for the local runtime bundle. Consumers (menu
+    bar, doctor, JSON consumers) can rely on `update_available` and
+    `upgrade_command` to show a nudge.
     """
     installed_version: str | None = None
     try:
@@ -538,14 +539,32 @@ def _collect_update_info() -> dict[str, Any]:
     except Exception:
         installed_version = None
 
+    try:
+        from zerg.cli.update_manager import load_update_cache
+
+        cache = load_update_cache()
+    except Exception:
+        cache = None
+
+    if cache is None or (installed_version and cache.installed_version != installed_version):
+        return {
+            "installed_version": installed_version,
+            "latest_version": None,
+            "update_available": False,
+            "upgrade_command": None,
+            "checked_at": None,
+            "supported": True,
+            "reason": None,
+        }
+
     return {
-        "installed_version": installed_version,
-        "latest_version": None,
-        "update_available": False,
-        "upgrade_command": None,
-        "checked_at": None,
-        "supported": False,
-        "reason": "bundle_versioning_not_implemented",
+        "installed_version": installed_version or cache.installed_version,
+        "latest_version": cache.latest_version,
+        "update_available": bool(cache.update_available),
+        "upgrade_command": cache.upgrade_command,
+        "checked_at": cache.checked_at,
+        "supported": True,
+        "reason": cache.error,
     }
 
 
