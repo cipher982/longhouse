@@ -17,7 +17,8 @@ struct SessionView: View {
         }
         .navigationTitle(viewModel.detail?.displayTitle ?? fallbackTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: sessionId) { await viewModel.load(sessionId: sessionId, appState: appState) }
+        .task(id: sessionId) { await viewModel.start(sessionId: sessionId, appState: appState) }
+        .onDisappear { viewModel.stop() }
         .refreshable { await viewModel.reload(sessionId: sessionId, appState: appState) }
     }
 
@@ -26,7 +27,7 @@ struct SessionView: View {
             if viewModel.isInitialLoading {
                 ProgressView().controlSize(.large)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if let error = viewModel.errorMessage, viewModel.events.isEmpty {
+            } else if let error = viewModel.errorMessage, viewModel.items.isEmpty {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
                     Text(error).multilineTextAlignment(.center).foregroundStyle(.secondary)
@@ -37,7 +38,7 @@ struct SessionView: View {
                 }
                 .padding()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if viewModel.events.isEmpty {
+            } else if viewModel.items.isEmpty {
                 ContentUnavailableView(
                     "No messages yet",
                     systemImage: "bubble.left.and.bubble.right"
@@ -45,19 +46,24 @@ struct SessionView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 12) {
+                        LazyVStack(alignment: .leading, spacing: 10) {
                             if let detail = viewModel.detail {
                                 SessionHeader(detail: detail)
                             }
-                            ForEach(viewModel.events) { event in
-                                EventBubble(event: event).id(event.id)
+                            ForEach(viewModel.items, id: \.id) { item in
+                                TimelineItemView(
+                                    item: item,
+                                    isExpanded: viewModel.isExpanded(item.id),
+                                    onToggle: { viewModel.toggleExpanded(item.id) }
+                                )
+                                .id(item.id)
                             }
                         }
                         .padding(.horizontal)
                         .padding(.vertical, 12)
                     }
-                    .onChange(of: viewModel.events.count) { _, _ in
-                        if let last = viewModel.events.last {
+                    .onChange(of: viewModel.items.count) { _, _ in
+                        if let last = viewModel.items.last {
                             withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                         }
                     }
@@ -69,12 +75,10 @@ struct SessionView: View {
     @ViewBuilder
     private var composer: some View {
         if let detail = viewModel.detail {
-            if detail.capabilities.liveControlAvailable {
-                composerField(enabled: true)
-            } else if detail.capabilities.replyToLiveSessionAvailable {
+            if detail.capabilities.liveControlAvailable || detail.capabilities.replyToLiveSessionAvailable {
                 composerField(enabled: true)
             } else {
-                unmanagedFooter(detail: detail)
+                unmanagedFooter()
             }
         }
     }
@@ -102,7 +106,7 @@ struct SessionView: View {
         .background(.bar)
     }
 
-    private func unmanagedFooter(detail: SessionDetail) -> some View {
+    private func unmanagedFooter() -> some View {
         HStack {
             Image(systemName: "info.circle")
                 .foregroundStyle(.secondary)
@@ -125,6 +129,8 @@ struct SessionView: View {
         }
     }
 }
+
+// MARK: - Header
 
 private struct SessionHeader: View {
     let detail: SessionDetail
@@ -158,8 +164,7 @@ private struct PresenceBadge: View {
             Circle().fill(color).frame(width: 8, height: 8)
             Text(label).font(.caption.weight(.medium))
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 8).padding(.vertical, 4)
         .background(color.opacity(0.15), in: Capsule())
         .foregroundStyle(color)
     }
@@ -189,75 +194,219 @@ private struct PresenceBadge: View {
     }
 }
 
-private struct EventBubble: View {
-    let event: SessionEvent
+// MARK: - Timeline items
+
+private struct TimelineItemView: View {
+    let item: TimelineItem
+    let isExpanded: Bool
+    let onToggle: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(roleLabel)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(roleColor)
-            if let text = event.contentText, !text.isEmpty {
-                Text(text)
-                    .font(.callout)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else if let tool = event.toolName {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(tool).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                    if let output = event.toolOutputText, !output.isEmpty {
-                        Text(output.prefix(400) + (output.count > 400 ? "…" : ""))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(8)
-                    }
-                }
-            }
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(background, in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    private var roleLabel: String {
-        switch event.role {
-        case "user": return "You"
-        case "assistant": return "Assistant"
-        case "tool": return event.toolName ?? "Tool"
-        case "system": return "System"
-        default: return event.role.capitalized
-        }
-    }
-
-    private var roleColor: Color {
-        switch event.role {
-        case "user": return .blue
-        case "assistant": return .primary
-        case "tool": return .purple
-        default: return .secondary
-        }
-    }
-
-    private var background: Color {
-        switch event.role {
-        case "user": return Color.blue.opacity(0.10)
-        case "tool": return Color.purple.opacity(0.08)
-        default: return Color(.secondarySystemBackground)
+        switch item {
+        case .user(let event):
+            UserBubble(event: event)
+        case .assistant(let event):
+            AssistantBubble(event: event)
+        case .tool(let call, let result):
+            ToolRow(call: call, result: result, isExpanded: isExpanded, onToggle: onToggle)
+        case .orphanTool(let event):
+            ToolRow(call: event, result: event, isExpanded: isExpanded, onToggle: onToggle, orphan: true)
         }
     }
 }
 
+private struct UserBubble: View {
+    let event: SessionEvent
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 40)
+            Text(event.contentText ?? "")
+                .font(.callout)
+                .textSelection(.enabled)
+                .padding(10)
+                .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 12))
+                .frame(alignment: .trailing)
+        }
+    }
+}
+
+private struct AssistantBubble: View {
+    let event: SessionEvent
+
+    var body: some View {
+        Text(event.contentText ?? "")
+            .font(.callout)
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct ToolRow: View {
+    let call: SessionEvent
+    let result: SessionEvent?
+    let isExpanded: Bool
+    let onToggle: () -> Void
+    var orphan: Bool = false
+
+    private var summary: String { TimelineBuilder.inputSummary(for: call) }
+    private var toolName: String { call.toolName ?? (orphan ? "Tool" : "Tool") }
+    private var isPending: Bool { result == nil && !orphan }
+    private var durationText: String? {
+        guard let result else { return nil }
+        return TimelineBuilder.durationSeconds(call: call, result: result).map(TimelineBuilder.formatDuration)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: onToggle) {
+                HStack(spacing: 8) {
+                    Image(systemName: icon)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                    Text(toolName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    if !summary.isEmpty {
+                        Text(summary)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer(minLength: 4)
+                    if isPending {
+                        ProgressView().controlSize(.mini)
+                    } else if let durationText {
+                        Text(durationText)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.tertiary)
+                    }
+                    Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+            .buttonStyle(.plain)
+
+            if isExpanded {
+                Divider().padding(.horizontal, 10)
+                VStack(alignment: .leading, spacing: 8) {
+                    if !summary.isEmpty || call.toolInputJSON != nil {
+                        SectionLabel("Input")
+                        Text(inputBody)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    if let output = result?.toolOutputText, !output.isEmpty {
+                        SectionLabel("Output")
+                        Text(truncate(output))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else if isPending {
+                        Text("Running…").font(.caption).foregroundStyle(.tertiary)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+        }
+        .background(Color.purple.opacity(0.06), in: RoundedRectangle(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(
+                    isPending ? Color.purple.opacity(0.4) : Color.clear,
+                    style: StrokeStyle(lineWidth: 1, dash: [3, 3])
+                )
+        )
+    }
+
+    private var icon: String {
+        switch call.toolName {
+        case "Bash": return "terminal"
+        case "Grep", "Glob": return "magnifyingglass"
+        case "Read": return "doc.text"
+        case "Edit", "Write", "NotebookEdit": return "pencil"
+        case "Task": return "square.stack.3d.up"
+        case "WebFetch", "WebSearch": return "globe"
+        default: return "wrench.adjustable"
+        }
+    }
+
+    private var inputBody: String {
+        if let json = call.toolInputJSON, !json.isEmpty {
+            return prettyJSON(json)
+        }
+        return summary
+    }
+
+    private func prettyJSON(_ value: [String: JSONValue]) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let data = try? encoder.encode(value),
+           let str = String(data: data, encoding: .utf8) {
+            return str
+        }
+        return summary
+    }
+
+    private func truncate(_ text: String) -> String {
+        let max = 2000
+        if text.count <= max { return text }
+        return String(text.prefix(max)) + "\n… (truncated)"
+    }
+}
+
+private struct SectionLabel: View {
+    let text: String
+    init(_ text: String) { self.text = text }
+    var body: some View {
+        Text(text.uppercased())
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.tertiary)
+            .tracking(0.5)
+    }
+}
+
+// MARK: - ViewModel
+
 @MainActor
 final class SessionViewModel: ObservableObject {
     @Published var detail: SessionDetail?
-    @Published var events: [SessionEvent] = []
+    @Published var items: [TimelineItem] = []
     @Published var errorMessage: String?
     @Published var isInitialLoading = true
     @Published var isSending = false
 
-    func load(sessionId: String, appState: AppState) async {
-        if !isInitialLoading { return }
-        await reload(sessionId: sessionId, appState: appState)
+    private var expandedIds: Set<String> = []
+    private var pollTask: Task<Void, Never>?
+
+    func isExpanded(_ id: String) -> Bool { expandedIds.contains(id) }
+
+    func toggleExpanded(_ id: String) {
+        if expandedIds.contains(id) { expandedIds.remove(id) } else { expandedIds.insert(id) }
+        objectWillChange.send()
+    }
+
+    func start(sessionId: String, appState: AppState) async {
+        if isInitialLoading {
+            await reload(sessionId: sessionId, appState: appState)
+        }
+        startPollingIfActive(sessionId: sessionId, appState: appState)
+    }
+
+    func stop() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     func reload(sessionId: String, appState: AppState) async {
@@ -271,7 +420,7 @@ final class SessionViewModel: ObservableObject {
             async let eventsTask = api.sessionEvents(id: sessionId)
             let (detail, events) = try await (detailTask, eventsTask)
             self.detail = detail
-            self.events = events
+            self.items = TimelineBuilder.build(events: events)
             self.errorMessage = nil
         } catch LonghouseAPIError.notAuthenticated {
             errorMessage = "Session expired."
@@ -279,6 +428,7 @@ final class SessionViewModel: ObservableObject {
             errorMessage = "Couldn't load session: \(error.localizedDescription)"
         }
         isInitialLoading = false
+        startPollingIfActive(sessionId: sessionId, appState: appState)
     }
 
     func send(text: String, sessionId: String, appState: AppState) async -> Bool {
@@ -287,13 +437,49 @@ final class SessionViewModel: ObservableObject {
         defer { isSending = false }
         do {
             try await api.sendLive(id: sessionId, text: text)
-            // Re-pull events after send so the user sees their message land.
-            async let eventsTask = api.sessionEvents(id: sessionId)
-            self.events = (try? await eventsTask) ?? self.events
+            if let events = try? await api.sessionEvents(id: sessionId) {
+                self.items = TimelineBuilder.build(events: events)
+            }
             return true
         } catch {
             errorMessage = "Send failed: \(error.localizedDescription)"
             return false
         }
+    }
+
+    private func startPollingIfActive(sessionId: String, appState: AppState) {
+        pollTask?.cancel()
+        guard shouldPoll else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_500_000_000)
+                if Task.isCancelled { break }
+                await self?.pollTick(sessionId: sessionId, appState: appState)
+            }
+        }
+    }
+
+    private func pollTick(sessionId: String, appState: AppState) async {
+        guard let api = LonghouseAPI(host: appState.serverURL) else { return }
+        async let detailTask = api.sessionDetail(id: sessionId)
+        async let eventsTask = api.sessionEvents(id: sessionId)
+        if let detail = try? await detailTask {
+            self.detail = detail
+        }
+        if let events = try? await eventsTask {
+            self.items = TimelineBuilder.build(events: events)
+        }
+        if !shouldPoll {
+            pollTask?.cancel()
+            pollTask = nil
+        }
+    }
+
+    private var shouldPoll: Bool {
+        guard let detail else { return false }
+        let active: Set<String> = ["running", "thinking", "working", "needs_user", "blocked", "active"]
+        if let presence = detail.presenceState, active.contains(presence) { return true }
+        if let status = detail.status, active.contains(status) { return true }
+        return false
     }
 }
