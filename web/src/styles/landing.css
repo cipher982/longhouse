@@ -598,11 +598,11 @@
   }
 
   .landing-hero-device--iphone {
-    width: 34%;
+    width: 42%;
     right: 2%;
     bottom: 0;
     z-index: 4;
-    filter: drop-shadow(0 28px 60px rgba(0, 0, 0, 0.9));
+    filter: drop-shadow(-18px 12px 28px rgba(0, 0, 0, 0.55));
   }
 
   .landing-hero-glow {
@@ -647,8 +647,8 @@
     }
 
     .landing-hero-device--iphone {
-      width: 38%;
-      right: -2%;
+      width: 46%;
+      right: 2%;
       bottom: 0;
     }
   }
