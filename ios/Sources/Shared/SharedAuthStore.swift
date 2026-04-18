@@ -103,6 +103,44 @@ enum SharedAuthStore {
         deleteKeychainData(account: cookieStorageKey(for: serverURL))
     }
 
+    /// Load keychain-persisted cookies into `HTTPCookieStorage.shared` so
+    /// `URLSession.shared` auto-attaches them to every request. Call on
+    /// launch and after any auth flow.
+    static func primeSharedCookieStorage(for serverURL: String) {
+        let cookies = managedCookies(for: serverURL)
+        for cookie in cookies {
+            HTTPCookieStorage.shared.setCookie(cookie)
+        }
+    }
+
+    /// Snapshot cookies currently in `HTTPCookieStorage.shared` back into the
+    /// keychain so the widget extension can see them. Call after any request
+    /// that mutates auth cookies (`/api/auth/refresh`, `/api/auth/google`, etc.).
+    static func captureCookiesFromSharedStorage(for serverURL: String) {
+        guard let host = normalizedHost(for: serverURL) else { return }
+        let cookies = (HTTPCookieStorage.shared.cookies ?? []).filter {
+            managedCookieNames.contains($0.name) && domainMatches($0.domain, host: host)
+        }
+        setManagedCookies(cookies, for: serverURL)
+        if let session = cookies.first(where: { $0.name == sessionCookieName }) {
+            KeychainHelper.saveAuthToken("\(session.name)=\(session.value)")
+        } else {
+            KeychainHelper.deleteAuthToken()
+        }
+    }
+
+    /// Remove auth cookies from `HTTPCookieStorage.shared` on sign-out or
+    /// server switch. Keychain cookies are cleared separately via
+    /// `clearManagedCookies(for:)`.
+    static func removeSharedCookieStorage(for serverURL: String) {
+        guard let host = normalizedHost(for: serverURL) else { return }
+        for cookie in HTTPCookieStorage.shared.cookies ?? [] {
+            if managedCookieNames.contains(cookie.name) && domainMatches(cookie.domain, host: host) {
+                HTTPCookieStorage.shared.deleteCookie(cookie)
+            }
+        }
+    }
+
     static func cookieHeader(for serverURL: String) -> String? {
         let cookies = managedCookies(for: serverURL)
         guard !cookies.isEmpty else {

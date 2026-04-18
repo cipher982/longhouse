@@ -42,22 +42,18 @@ final class AppState: ObservableObject {
     @Published var isValidating = true
     @Published var authError: String?
     @Published var hostedAuthAttemptURL: String?
-    /// Path to load after a forced re-login (e.g. /timeline/abc-123).
-    /// Set by the web shell when handing auth back to native login.
-    /// Cleared after use so normal logins still land on /timeline.
-    @Published var postLoginPath: String = "/timeline"
 
     init() {
         self.serverURL = KeychainHelper.loadServerURL() ?? ""
         if !self.serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             SharedAuthStore.saveServerURL(self.serverURL)
+            SharedAuthStore.primeSharedCookieStorage(for: self.serverURL)
         }
     }
 
     func restoreSession() async {
         isValidating = true
         hostedAuthAttemptURL = nil
-        postLoginPath = "/timeline"
         SharedAuthStore.saveServerURL(serverURL)
         if serverURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             isAuthenticated = false
@@ -67,16 +63,15 @@ final class AppState: ObservableObject {
             return
         }
 
-        var session = await BrowserSessionStore.webKitSession(for: serverURL)
-        if !session.hasCookies {
-            await BrowserSessionStore.syncSharedCookiesToWebKit(for: serverURL)
-            session = await BrowserSessionStore.webKitSession(for: serverURL)
-        }
+        SharedAuthStore.primeSharedCookieStorage(for: serverURL)
+        let cookies = SharedAuthStore.managedCookies(for: serverURL)
+        let hasRefresh = cookies.contains(where: { $0.name == SharedAuthStore.refreshCookieName })
+        let hasSession = cookies.contains(where: { $0.name == SharedAuthStore.sessionCookieName })
 
         let result: SessionRestoreResult
-        if session.refreshCookie != nil {
+        if hasRefresh {
             result = await refreshBrowserSession()
-        } else if session.sessionCookie != nil {
+        } else if hasSession {
             result = await verifyBrowserSession()
         } else {
             result = .unauthenticated
@@ -86,10 +81,8 @@ final class AppState: ObservableObject {
         case .authenticated:
             isAuthenticated = true
             authError = nil
-            await BrowserSessionStore.persistAccessTokenFromWebKit(for: serverURL)
         case .indeterminate:
-            isAuthenticated = session.hasCookies
-            await BrowserSessionStore.persistAccessTokenFromWebKit(for: serverURL)
+            isAuthenticated = hasSession || hasRefresh
         case .unauthenticated:
             await clearLocalSession()
         }
@@ -105,16 +98,15 @@ final class AppState: ObservableObject {
             isValidating = false
             return false
         }
-        await BrowserSessionStore.syncSharedCookiesToWebKit(for: serverURL)
-        let session = await BrowserSessionStore.webKitSession(for: serverURL)
-        let isSignedIn = session.hasCookies
+
+        SharedAuthStore.captureCookiesFromSharedStorage(for: serverURL)
+        let isSignedIn = SharedAuthStore.hasManagedCookies(for: serverURL)
 
         if isSignedIn {
-            await BrowserSessionStore.persistAccessTokenFromWebKit(for: serverURL)
             authError = nil
         } else {
             KeychainHelper.deleteAuthToken()
-            authError = "Signed in, but failed to restore the browser session"
+            authError = "Signed in, but failed to restore the session"
         }
 
         isAuthenticated = isSignedIn
@@ -135,9 +127,11 @@ final class AppState: ObservableObject {
         authError = nil
 
         if previousURL != trimmed, !previousURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            await BrowserSessionStore.clearAll(for: previousURL)
+            SharedAuthStore.clearManagedCookies(for: previousURL)
+            SharedAuthStore.removeSharedCookieStorage(for: previousURL)
             KeychainHelper.deleteAuthToken()
         }
+        SharedAuthStore.primeSharedCookieStorage(for: trimmed)
     }
 
     func exchangeHostedSSOToken(_ ssoToken: String) async -> Bool {
@@ -145,8 +139,6 @@ final class AppState: ObservableObject {
             authError = "Invalid server URL"
             return false
         }
-
-        await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -184,7 +176,8 @@ final class AppState: ObservableObject {
         hostedAuthAttemptURL = nil
 
         if !previousURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            await BrowserSessionStore.clearAll(for: previousURL)
+            SharedAuthStore.clearManagedCookies(for: previousURL)
+            SharedAuthStore.removeSharedCookieStorage(for: previousURL)
         }
 
         KeychainHelper.deleteAuthToken()
@@ -209,9 +202,11 @@ final class AppState: ObservableObject {
 
         Task {
             if previousURL != trimmed {
-                await BrowserSessionStore.clearAll(for: previousURL)
+                SharedAuthStore.clearManagedCookies(for: previousURL)
+                SharedAuthStore.removeSharedCookieStorage(for: previousURL)
                 KeychainHelper.deleteAuthToken()
             }
+            SharedAuthStore.primeSharedCookieStorage(for: trimmed)
             await restoreSession()
         }
     }
@@ -220,15 +215,6 @@ final class AppState: ObservableObject {
         Task {
             await signOutLocallyAndRemotely()
         }
-    }
-
-    /// Called by the web shell when the browser session is no longer usable.
-    /// Stores a safe tenant return_to path when available, then hands auth back
-    /// to the native shell instead of rendering a web login surface in WKWebView.
-    func signOutAndReturnToLogin(postLoginPath requestedPostLoginPath: String? = nil) async {
-        let trimmedPath = requestedPostLoginPath?.trimmingCharacters(in: .whitespacesAndNewlines)
-        postLoginPath = (trimmedPath?.isEmpty == false ? trimmedPath : nil) ?? LonghouseWebNavigation.defaultPostLoginPath
-        await signOutLocallyAndRemotely()
     }
 
     private enum SessionRestoreResult {
@@ -242,8 +228,6 @@ final class AppState: ObservableObject {
             return .unauthenticated
         }
 
-        await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
-
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 8
@@ -255,7 +239,7 @@ final class AppState: ObservableObject {
             }
 
             if http.statusCode == 200 {
-                await BrowserSessionStore.syncSharedCookiesToWebKit(for: serverURL)
+                SharedAuthStore.captureCookiesFromSharedStorage(for: serverURL)
                 return .authenticated
             }
             return http.statusCode == 401 ? .unauthenticated : .indeterminate
@@ -268,8 +252,6 @@ final class AppState: ObservableObject {
         guard let url = URL(string: "\(serverURL)/api/auth/verify") else {
             return .unauthenticated
         }
-
-        await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
 
         var request = URLRequest(url: url)
         request.timeoutInterval = 5
@@ -290,33 +272,24 @@ final class AppState: ObservableObject {
     }
 
     private func signOutLocallyAndRemotely() async {
-        // Sync cookies to the shared store NOW, before clearing the WebKit store.
-        // The fire-and-forget logout POST uses URLSession.shared which reads from
-        // the shared store — if we clear first, the refresh cookie is gone and the
-        // server cannot revoke the session.
-        await BrowserSessionStore.syncWebKitCookiesToShared(for: serverURL)
+        // Fire-and-forget the server logout while cookies are still present.
+        if let url = URL(string: "\(serverURL)/api/auth/logout") {
+            var request = URLRequest(url: url)
+            request.httpMethod = "POST"
+            request.timeoutInterval = 5
+            _ = try? await URLSession.shared.data(for: request)
+        }
 
-        // Clear local state immediately — don't wait on the network call.
         GIDSignIn.sharedInstance.signOut()
         await clearLocalSession()
         authError = nil
         isValidating = false
         WidgetCenter.shared.reloadAllTimelines()
-
-        // Fire-and-forget the server logout. Cookies are already in URLSession.shared
-        // from the sync above, so the refresh cookie will be present in the request.
-        if let url = URL(string: "\(serverURL)/api/auth/logout") {
-            Task {
-                var request = URLRequest(url: url)
-                request.httpMethod = "POST"
-                request.timeoutInterval = 5
-                _ = try? await URLSession.shared.data(for: request)
-            }
-        }
     }
 
     private func clearLocalSession() async {
-        await BrowserSessionStore.clearAll(for: serverURL)
+        SharedAuthStore.clearManagedCookies(for: serverURL)
+        SharedAuthStore.removeSharedCookieStorage(for: serverURL)
         KeychainHelper.deleteAuthToken()
         isAuthenticated = false
     }
