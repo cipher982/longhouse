@@ -70,7 +70,7 @@ class ManagedLocalThisDeviceLaunchRequest(BaseModel):
     loop_mode: SessionLoopMode = Field(SessionLoopMode.MANUAL, description="manual | assist | autopilot")
     machine_name: str | None = Field(
         None,
-        description="Optional local Longhouse machine label override used to resolve this device's runner",
+        description="Optional local Longhouse machine label override stored on the launched session",
     )
     native_claude_channels_available: bool | None = Field(
         None,
@@ -184,8 +184,10 @@ async def launch_managed_local_this_device(
     """Start a managed local AI agent session on the calling machine's connected runner."""
 
     owner_id = _resolve_agents_owner_id(db, device_token)
-    machine_name = (body.machine_name or "").strip() or str(getattr(device_token, "device_id", "") or "").strip()
-    if not machine_name:
+    token_device_id = str(getattr(device_token, "device_id", "") or "").strip()
+    machine_name = (body.machine_name or "").strip() or token_device_id
+    runner_target = token_device_id or machine_name
+    if not runner_target:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Could not determine this device name")
 
     try:
@@ -193,7 +195,7 @@ async def launch_managed_local_this_device(
             db,
             ManagedLocalLaunchParams(
                 owner_id=owner_id,
-                runner_target=machine_name,
+                runner_target=runner_target,
                 cwd=body.cwd,
                 provider=body.provider,
                 project=body.project,
