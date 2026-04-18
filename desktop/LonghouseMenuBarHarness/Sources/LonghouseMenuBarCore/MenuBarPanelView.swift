@@ -205,6 +205,10 @@ public struct MenuBarPanelView: View {
                     if let managedChip = snapshot.managedHeaderChipLabel {
                         subtleChip(title: managedChip, tint: managedChipTint)
                     }
+
+                    if let updateChip = snapshot.updateAvailableChipLabel {
+                        subtleChip(title: updateChip, tint: .yellow)
+                    }
                 }
 
                 Text(snapshot.missionSummaryLabel(relativeTo: presentationDate))
