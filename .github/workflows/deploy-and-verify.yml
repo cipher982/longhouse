@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       deploy_verify: ${{ steps.decide.outputs.deploy_verify }}
+      runtime_image: ${{ steps.decide.outputs.runtime_image }}
     steps:
       - uses: actions/checkout@v6
         if: ${{ github.event_name == 'push' }}
@@ -36,8 +37,10 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
             echo "deploy_verify=${{ steps.filter.outputs.deploy_verify }}" >> "$GITHUB_OUTPUT"
+            echo "runtime_image=${{ steps.filter.outputs.runtime_image }}" >> "$GITHUB_OUTPUT"
           else
             echo "deploy_verify=true" >> "$GITHUB_OUTPUT"
+            echo "runtime_image=true" >> "$GITHUB_OUTPUT"
           fi
 
   gate:
@@ -68,16 +71,20 @@ jobs:
           IMAGE_TAG=""
 
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            PREDECESSOR_SHA="${{ github.event.before }}"
-            if [[ "$PREDECESSOR_SHA" =~ ^0+$ ]]; then
-              PREDECESSOR_SHA=""
-            fi
+          PREDECESSOR_SHA="${{ github.event.before }}"
+          if [[ "$PREDECESSOR_SHA" =~ ^0+$ ]]; then
+            PREDECESSOR_SHA=""
+          fi
           else
             IMAGE_TAG="${{ github.event.inputs.runtime_image_tag || '' }}"
           fi
 
           if [[ -z "$IMAGE_TAG" ]]; then
-            IMAGE_TAG="$HEAD_SHA"
+            if [[ "${{ needs.changes.outputs.runtime_image }}" == "true" ]]; then
+              IMAGE_TAG="$HEAD_SHA"
+            else
+              IMAGE_TAG="latest"
+            fi
           fi
 
           {
@@ -88,6 +95,10 @@ jobs:
             echo "runtime_image_tag=$IMAGE_TAG"
             echo "runtime_image_ref=ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG"
           } >> "$GITHUB_OUTPUT"
+
+          if [[ "${{ needs.changes.outputs.runtime_image }}" != "true" ]]; then
+            echo "::notice::No runtime image changes detected; reusing ghcr.io/${{ github.repository_owner }}/longhouse-runtime:$IMAGE_TAG for deploy/QA."
+          fi
 
       - name: Detect frontend-only change
         id: scope
@@ -130,7 +141,7 @@ jobs:
           github_token: ${{ github.token }}
 
       - name: Wait for runtime image publish
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' && needs.changes.outputs.runtime_image == 'true' }}
         uses: ./.github/actions/wait-for-ci
         with:
           head_sha: ${{ steps.meta.outputs.head_sha }}
