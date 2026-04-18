@@ -458,6 +458,14 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "UPDATE AVAILABLE"
     }
 
+    public var installedVersionLabel: String? {
+        guard let installed = updateInfo?.installedVersion,
+              !installed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return nil
+        }
+        return installed.hasPrefix("v") ? installed : "v\(installed)"
+    }
+
     public var statusItemSummaryLabel: String {
         let base = managedNeedsAttention ? "Longhouse needs attention" : "Longhouse \(ambientStatusLabel.lowercased())"
         guard hasManagedRuntimeTruth else {
