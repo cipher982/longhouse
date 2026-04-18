@@ -1,6 +1,6 @@
 """Execute reflection actions — create insights, merge observations, stamp sessions.
 
-Works with the existing insight dedup logic in the insights router/model.
+Keeps the remaining insight dedup logic local to the reflection pipeline.
 """
 
 from __future__ import annotations
@@ -75,8 +75,8 @@ def execute_actions(
 def _create_insight(db: Session, action: dict) -> tuple[str | None, bool]:
     """Create a new insight, using dedup logic to prevent duplicates.
 
-    Dedup logic mirrors routers/insights.py POST endpoint — if either changes,
-    update the other. Consider extracting to shared helper if this diverges.
+    The public insight write route has been removed, so keep one canonical
+    dedup path here until a second writer exists.
 
     Returns (insight_id, is_new) — insight_id is always set when title is valid,
     is_new is True only when a brand new insight was created (not deduped).

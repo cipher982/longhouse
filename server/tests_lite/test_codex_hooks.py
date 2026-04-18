@@ -258,11 +258,30 @@ def test_install_hooks_skips_codex_when_not_installed(tmp_path, monkeypatch):
     assert not codex_hooks_json.exists()
 
 
-def test_install_hooks_points_session_start_at_longhouse_machine_state(tmp_path, monkeypatch):
+def test_install_hooks_removes_deprecated_claude_session_start_hook(tmp_path, monkeypatch):
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
 
     claude_dir = tmp_path / ".claude"
     claude_dir.mkdir(parents=True)
+    hooks_dir = claude_dir / "hooks"
+    hooks_dir.mkdir(parents=True)
+
+    session_start_script = hooks_dir / "longhouse-session-start.sh"
+    session_start_script.write_text("#!/bin/bash\nexit 0\n")
+
+    settings_json = claude_dir / "settings.json"
+    settings_json.write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {"hooks": [{"type": "command", "command": str(session_start_script), "async": False, "timeout": 5}]},
+                        {"hooks": [{"type": "command", "command": "/usr/local/bin/custom-session-start.sh", "async": False, "timeout": 5}]},
+                    ]
+                }
+            }
+        )
+    )
 
     install_hooks(
         url="http://localhost:8080",
@@ -270,12 +289,12 @@ def test_install_hooks_points_session_start_at_longhouse_machine_state(tmp_path,
         engine_path="/usr/bin/longhouse-engine",
     )
 
-    session_start_script = claude_dir / "hooks" / "longhouse-session-start.sh"
-    content = session_start_script.read_text()
+    assert not session_start_script.exists()
 
-    assert f'{tmp_path / ".longhouse"}' in content
-    assert "machine/device-token" in content
-    assert "machine/state.json" in content
+    data = json.loads(settings_json.read_text())
+    session_start = data["hooks"]["SessionStart"]
+    assert len(session_start) == 1
+    assert "/usr/local/bin/custom-session-start.sh" in session_start[0]["hooks"][0]["command"]
 
 
 def test_install_hooks_points_lifecycle_hooks_at_longhouse_agent_state(tmp_path, monkeypatch):

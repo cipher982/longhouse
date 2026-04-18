@@ -645,7 +645,7 @@ def inject_agents_md(
         [
             "",
             "This workspace was provisioned by Longhouse for commis (background agent) execution.",
-            "Longhouse MCP tools (session search, recall, insights, Oikos callbacks) are auto-configured in .claude/settings.json.",
+            "Longhouse MCP tools (session search/detail, recall, wall/peers/tail, Oikos callbacks) are auto-configured in .claude/settings.json.",
         ]
     )
     sections.append("\n".join(longhouse_lines))

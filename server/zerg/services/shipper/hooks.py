@@ -14,9 +14,6 @@ Claude hooks (via settings.json):
   to /api/agents/presence. On Stop, also seeds the session_binding table
   so the daemon ships with the correct managed session ID. All
   registrations use async: False — no banners.
-- **longhouse-session-start.sh** (SessionStart): On fresh session startup,
-  queries Longhouse for recent sessions in the current project and injects
-  a system message with context. Runs once per session (sync is acceptable).
 
 Codex hooks (via hooks.json):
 
@@ -139,50 +136,6 @@ write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
 exit 0
 """
 
-SESSION_START_HOOK_SCRIPT = """\
-#!/bin/bash
-# Longhouse SessionStart hook — injects recent session summaries on startup
-# Installed by: longhouse connect --install
-INPUT=$(cat)
-CWD=$(echo "$INPUT" | jq -r '.cwd // empty')
-SOURCE=$(echo "$INPUT" | jq -r '.source // empty')
-
-# Only fire on fresh session start (not resume/compact)
-if [[ "$SOURCE" != "startup" ]]; then exit 0; fi
-
-PROJECT=$(basename "$CWD")
-if [[ -z "$PROJECT" ]]; then exit 0; fi
-
-LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
-TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
-URL="${LONGHOUSE_HOOK_URL:-}"
-if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]; then
-  TOKEN_FILE="$LONGHOUSE_HOME/machine/device-token"
-  STATE_FILE="$LONGHOUSE_HOME/machine/state.json"
-  if [[ ! -f "$TOKEN_FILE" ]] || [[ ! -f "$STATE_FILE" ]]; then exit 0; fi
-  TOKEN=$(cat "$TOKEN_FILE" | tr -d '[:space:]')
-  URL=$(jq -r '.runtime_url // empty' "$STATE_FILE" 2>/dev/null | tr -d '[:space:]')
-  [[ -z "$URL" ]] && exit 0
-fi
-
-# URL-encode the project name so paths with spaces or special chars work.
-PROJECT_ENC=$(
-  python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$PROJECT" 2>/dev/null \\
-    || printf '%s' "$PROJECT"
-)
-
-RESPONSE=$(curl -sf --max-time 5 \\
-  -H "X-Agents-Token: $TOKEN" \\
-  "${URL}/api/agents/briefing?project=${PROJECT_ENC}&limit=5" 2>/dev/null)
-if [[ $? -ne 0 ]] || [[ -z "$RESPONSE" ]]; then exit 0; fi
-
-BRIEFING=$(echo "$RESPONSE" | jq -r '.briefing // empty')
-if [[ -z "$BRIEFING" ]]; then exit 0; fi
-
-jq -nc --arg msg "$BRIEFING" '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}}'
-exit 0
-"""
-
 # ---------------------------------------------------------------------------
 # Codex hook script template
 # ---------------------------------------------------------------------------
@@ -256,17 +209,15 @@ exit 0
 _HOOK_MARKER = "longhouse-"
 
 
-def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict, dict]:
+def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
     """Build hook entry dicts with resolved script paths.
 
-    Returns (stop_entry, lifecycle_entry, session_start_entry):
+    Returns (stop_entry, lifecycle_entry):
     - stop_entry: unified script for Stop (sync, local write/bind — not a banner)
     - lifecycle_entry: unified script for UserPromptSubmit/PreToolUse/PostToolUse
       (sync — local outbox write only)
-    - session_start_entry: session-start script (sync network call, once per session)
     """
     hook_path = str(hooks_dir / "longhouse-hook.sh")
-    session_start_path = str(hooks_dir / "longhouse-session-start.sh")
 
     # Stop: sync — hook does local session binding and presence delivery setup.
     # The daemon handles transcript shipping via its file watcher.
@@ -281,17 +232,7 @@ def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict, dict]:
             {"type": "command", "command": hook_path, "async": False, "timeout": 5},
         ],
     }
-    session_start_entry = {
-        "hooks": [
-            {
-                "type": "command",
-                "command": session_start_path,
-                "async": False,
-                "timeout": 5,
-            }
-        ],
-    }
-    return stop_entry, lifecycle_entry, session_start_entry
+    return stop_entry, lifecycle_entry
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +296,11 @@ def _merge_hooks_for_event(
     return result
 
 
+def _remove_longhouse_hooks_for_event(existing_entries: list[dict]) -> list[dict]:
+    """Drop Longhouse-owned hook entries while preserving user hooks."""
+    return [entry for entry in existing_entries if not _is_longhouse_hook(entry)]
+
+
 def _read_settings(settings_path: Path) -> dict:
     """Read and parse settings.json, returning an empty dict if file is absent.
 
@@ -403,17 +349,16 @@ def install_hooks(
 
     Steps performed:
     1. Create ``~/.claude/hooks/`` directory.
-    2. Write ``longhouse-ship.sh`` and ``longhouse-session-start.sh``
-       with executable permissions.
+    2. Write ``longhouse-hook.sh`` with executable permissions.
     3. Read ``~/.claude/settings.json`` (or start with ``{}``).
     4. Upsert Longhouse hook entries into the ``hooks`` object.
-    5. Write ``settings.json`` back.
+    5. Remove deprecated Longhouse SessionStart briefing hooks.
+    6. Write ``settings.json`` back.
 
     Args:
         url: Longhouse API URL (used only for logging; the unified hook
              does not read it at runtime — presence goes via outbox).
-        token: Device token (unused by this function; the session-start
-               hook reads Longhouse-owned machine state at runtime).
+        token: Unused legacy arg retained for compatibility.
         claude_dir: Override for Claude config directory.
 
     Returns:
@@ -461,23 +406,13 @@ def install_hooks(
             engine_path,
         )
     )
-    session_start_script_content = SESSION_START_HOOK_SCRIPT.replace(
-        "__LONGHOUSE_HOME__",
-        _shell_double_quote(str(longhouse_home)),
-    )
-
     hook_script = hooks_dir / "longhouse-hook.sh"
     hook_script.write_text(hook_script_content)
     hook_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
     actions.append(f"Wrote {hook_script}")
 
-    session_start_script = hooks_dir / "longhouse-session-start.sh"
-    session_start_script.write_text(session_start_script_content)
-    session_start_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
-    actions.append(f"Wrote {session_start_script}")
-
     # Remove deprecated hook scripts (superseded by longhouse-hook.sh).
-    for deprecated in ("longhouse-ship.sh", "longhouse-presence.sh"):
+    for deprecated in ("longhouse-ship.sh", "longhouse-presence.sh", "longhouse-session-start.sh"):
         deprecated_path = hooks_dir / deprecated
         if deprecated_path.exists():
             deprecated_path.unlink()
@@ -491,7 +426,7 @@ def install_hooks(
     # ------------------------------------------------------------------
     # 4. Merge hook entries (using resolved absolute paths)
     # ------------------------------------------------------------------
-    stop_entry, lifecycle_entry, session_start_entry = _make_hook_entries(hooks_dir)
+    stop_entry, lifecycle_entry = _make_hook_entries(hooks_dir)
     hooks_obj = settings.setdefault("hooks", {})
 
     # Stop: async (ship is long-running; sync Stop hooks always show "hook feedback" in Claude)
@@ -511,17 +446,22 @@ def install_hooks(
         event_list = raw if isinstance(raw, list) else []
         hooks_obj[event] = _merge_hooks_for_event(event_list, lifecycle_entry)
 
-    # SessionStart hook (shows recent sessions — sync network call, once per session)
+    # Remove deprecated Longhouse SessionStart hooks that used the deleted
+    # /api/agents/briefing surface. Preserve any user-owned SessionStart hooks.
     session_start_list = hooks_obj.get("SessionStart", [])
-    hooks_obj["SessionStart"] = _merge_hooks_for_event(session_start_list, session_start_entry)
+    if isinstance(session_start_list, list):
+        cleaned_session_start = _remove_longhouse_hooks_for_event(session_start_list)
+        if cleaned_session_start:
+            hooks_obj["SessionStart"] = cleaned_session_start
+        else:
+            hooks_obj.pop("SessionStart", None)
 
     # ------------------------------------------------------------------
     # 5. Write settings back
     # ------------------------------------------------------------------
     _write_settings(settings_path, settings)
     actions.append(
-        f"Updated {settings_path} with Stop, UserPromptSubmit, PreToolUse, "
-        "PostToolUse, PermissionRequest, Notification, and SessionStart hooks"
+        f"Updated {settings_path} with Stop, UserPromptSubmit, PreToolUse, " "PostToolUse, PermissionRequest, and Notification hooks"
     )
 
     logger.info("Installed Longhouse hooks in %s", config_dir)

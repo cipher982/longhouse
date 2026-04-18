@@ -8,7 +8,6 @@ models.  Both the ``agents`` and ``timeline`` router families import from here
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime
 from datetime import timezone
 from typing import Any
@@ -537,52 +536,6 @@ class RecallResponse(BaseModel):
     total: int
 
 
-_BRIEFING_MARKER_RE = re.compile(
-    r"\[(?:BEGIN|END)\s+SESSION\s+NOTES[^\]]*\]",
-    re.IGNORECASE,
-)
-
-
-class BriefingResponse(BaseModel):
-    """Response for the briefing endpoint."""
-
-    project: str
-    session_count: int
-    briefing: Optional[str] = None
-
-
-class ReflectRequest(BaseModel):
-    """Request body for triggering reflection."""
-
-    project: Optional[str] = Field(None, description="Project to reflect on (None = all)")
-    window_hours: int = Field(24, ge=1, le=168, description="Hours to look back")
-
-
-class ReflectionRunResponse(UTCBaseModel):
-    """Response for a single reflection run."""
-
-    run_id: str
-    project: Optional[str] = None
-    status: str = "completed"
-    session_count: int = 0
-    insights_created: int = 0
-    insights_merged: int = 0
-    insights_skipped: int = 0
-    model: Optional[str] = None
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    error: Optional[str] = None
-
-
-class ReflectionListResponse(BaseModel):
-    """Response for reflection run history."""
-
-    runs: List[ReflectionRunResponse]
-    total: int
-
-
 class CleanupRequest(BaseModel):
     """Request for test cleanup."""
 
@@ -822,8 +775,3 @@ def format_age(dt: datetime) -> str:
     if weeks == 1:
         return "1w ago"
     return f"{weeks}w ago"
-
-
-def sanitize_briefing_field(value: str) -> str:
-    """Strip control markers from user-sourced text to prevent boundary escape."""
-    return _BRIEFING_MARKER_RE.sub("", value).strip()

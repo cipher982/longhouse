@@ -209,11 +209,9 @@ Fast operator checks before attempting to wire the GitHub secrets:
 
 If there is no local Developer ID identity or notary profile yet, the trust lane is blocked on Apple credential provisioning, not repo code.
 
-Helper scripts for the attended Apple setup flow:
-
-- `scripts/release/macos-create-developer-id-csr.sh`
-- `scripts/release/macos-build-developer-id-p12.sh`
-- `scripts/release/macos-set-github-trust-secrets.sh`
+Apple credential provisioning is currently an attended/manual operator flow.
+Keep the one-off CSR, p12, and GitHub secret setup notes outside the repo, then
+verify local identities and notary profiles with the commands above.
 
 The shell installer should not know asset naming rules itself forever. The long-term goal is that the CLI/runtime layer owns artifact resolution while the shell script stays thin, and the macOS app path should reuse the same runtime layer instead of forking its own artifact logic.
 
