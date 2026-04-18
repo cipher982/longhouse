@@ -10,6 +10,7 @@ ARCHIVE_PATH="$ARTIFACT_DIR/Longhouse-macos-arm64.zip"
 DISK_IMAGE_PATH="$ARTIFACT_DIR/Longhouse-macos-arm64.dmg"
 MANIFEST_PATH="$ARTIFACT_DIR/manifest.json"
 MOUNT_POINT=""
+FIXTURE_PATH="$ROOT_DIR/desktop/LonghouseMenuBarHarness/Fixtures/healthy.json"
 
 log() {
   printf '%s\n' "$*"
@@ -151,6 +152,39 @@ manifest = {
 with open(manifest_path, "w", encoding="utf-8") as fh:
     json.dump(manifest, fh, indent=2)
     fh.write("\n")
+PY
+
+log "🚦 Launching packaged app smoke..."
+python3 - <<'PY' "$APP_PATH" "$FIXTURE_PATH"
+import subprocess
+import sys
+from pathlib import Path
+
+app_path = Path(sys.argv[1])
+fixture_path = Path(sys.argv[2])
+executable = app_path / "Contents" / "MacOS" / "Longhouse"
+if not executable.exists():
+    raise SystemExit(f"Missing packaged executable: {executable}")
+
+completed = subprocess.run(
+    [
+        str(executable),
+        "--input",
+        str(fixture_path),
+        "--quit-after",
+        "1",
+    ],
+    capture_output=True,
+    text=True,
+    timeout=10,
+)
+if completed.returncode != 0:
+    raise SystemExit(
+        "Packaged app launch smoke failed:\n"
+        f"exit={completed.returncode}\n"
+        f"stdout={completed.stdout}\n"
+        f"stderr={completed.stderr}"
+    )
 PY
 
 cleanup

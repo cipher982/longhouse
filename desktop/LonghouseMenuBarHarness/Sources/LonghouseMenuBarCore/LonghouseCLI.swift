@@ -113,7 +113,10 @@ enum LonghouseCLI {
     }
 
     static func setupInvocation() -> (launchPath: String, arguments: [String])? {
-        setupInvocation(resourceBundle: .module)
+        guard let scriptURL = LonghouseResourceLocator.url(forResource: setupScriptName, withExtension: "sh") else {
+            return nil
+        }
+        return ("/bin/zsh", [scriptURL.path])
     }
 
     static func setupInvocation(resourceBundle: Bundle) -> (launchPath: String, arguments: [String])? {
