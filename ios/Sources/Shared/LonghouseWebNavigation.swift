@@ -9,6 +9,13 @@ enum LonghouseWebNavigationDecision: Equatable {
 enum LonghouseWebNavigation {
     static let defaultPostLoginPath = "/timeline"
 
+    static func postLoginPath(fromReturnTo rawReturnTo: String?) -> String {
+        guard let rawReturnTo else {
+            return defaultPostLoginPath
+        }
+        return sanitizePostLoginPath(rawReturnTo)
+    }
+
     static func decision(for requestURL: URL?, serverURL: String) -> LonghouseWebNavigationDecision {
         guard let requestURL,
               let serverHost = normalizedHost(from: URL(string: serverURL)?.host),
@@ -42,7 +49,7 @@ enum LonghouseWebNavigation {
             return defaultPostLoginPath
         }
 
-        return sanitizePostLoginPath(rawReturnTo)
+        return postLoginPath(fromReturnTo: rawReturnTo)
     }
 
     private static func sanitizePostLoginPath(_ raw: String) -> String {

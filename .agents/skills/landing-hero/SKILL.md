@@ -321,9 +321,51 @@ Tips:
 - The `❯` prompt, `zerg git:(main)` status bar, and bullet formatting are the real Claude Code look
 - Must use full path `/Users/davidrose/.local/bin/claude` in Terminal.app (PATH not loaded in `-sh`)
 
-## Reference: AI Generation
+## Solo-Device 0→1 Pipeline (recommended default)
 
-Use the references below to create device-specific renders. This section is reference material for generating assets. It is not the final shipping pattern by itself.
+For a single shipping device asset (e.g. `device-iphone.webp`), the 0→1 path is:
+
+```bash
+cd .agents/skills/landing-hero/workshop
+python3 build_iphone_asset.py              # preview only
+python3 build_iphone_asset.py --ship       # write device-iphone.webp
+```
+
+Pipeline inside the script:
+
+1. **Widget source of truth** — renders `widget-medium.png` via `scripts/widget-snapshot` (Swift tool mirrors `ios/Sources/LonghouseWidget/SessionsWidgetView.swift`). Tomorrow the widget UI changes → re-run, widget re-snapshots from source.
+2. **Solo iPhone render** — Gemini 3 Pro Image (OpenRouter) with the widget PNG as the only reference image. Prompt is "single iPhone, TOUCHSCREEN FACING VIEWER, display the attached widget EXACTLY AS-IS, PURE BLACK #000000 BACKGROUND (no gradient, no floor, no spill)". ~$0.14/call, ~15s.
+3. **webp encode** — `magick -resize 1024x -quality 88`. No `-trim` (produces stair-stepping on gradient edges). Gemini output is already tightly cropped.
+
+### CSS compositing (critical)
+
+The phone asset ships on a **pure black bg** and composites via `mix-blend-mode: screen` over the hero background. With `screen`, any pure-black pixel becomes invisible (screen(0, X) = X), and only the lit phone remains. Rules:
+
+- **`.landing-hero-device--iphone { mix-blend-mode: screen; }`** — required. Without it, the black matte shows as a rectangle against the hero's warmer charcoal.
+- **Do NOT add `filter: drop-shadow(...)` to a full-opaque-bg image.** drop-shadow paints a shadow around every non-transparent pixel, including the entire black background rectangle. The shadow creates a visible frame. Either use a true alpha cutout + drop-shadow, or skip the shadow (current approach — phone's own rim light carries it).
+- **Asset intrinsic dimensions** in `<img width height>` must match the generated asset (1024×1526 currently), not the old tiny thumbnail. Wrong aspect causes layout-reservation mismatch on load.
+
+**Key learning (April 18, 2026):** Gemini 3 Pro nails legible widget text on the first call about 90% of the time when given a solo-device prompt + real widget PNG reference. The multi-device composed hero prompt is where text fabrication shows up — too many UI elements competing for token budget.
+
+**Output resolution floor:** ship ≥ 1024px wide. CSS scales iPhone to ~42% of hero width (~600px rendered at desktop 1440px). Smaller source assets blur catastrophically at that scale factor — this is what made the old `device-iphone.webp` look hallucinated.
+
+### Text-fix fallback (opt-in, unreliable)
+
+If Gemini's first pass has garbled text, you can try Nano Banana Pro on Replicate with `--text-fix`. **Caveat:** in testing it often reinvents the entire image (e.g. adds a laptop + monitor + desk scene even when told "keep everything exactly the same"). Re-roll Gemini 2-3 times before reaching for text-fix.
+
+### Anti-patterns (burned a day learning these)
+
+1. **Do NOT crop a solo phone out of a wide 3-device composition.** You get ~520×704 (the raw) or ~234×420 (after tight crop) — both blur at hero scale. Generate the phone solo from the start.
+2. **Do NOT use general-purpose upscalers (Clarity, Real-ESRGAN) to "fix" hallucinated text.** They sharpen garbage into confidently-wrong garbage. Upscalers can't read.
+3. **Do NOT build multi-stage "blank phone → AI paste widget" pipelines.** Multi-image edit models (Qwen, Seedream) route the paste to whichever screen has the biggest canvas, regardless of prompt. Even "iPhone only" directives fail when a monitor is in the scene.
+4. **Do NOT run `magick -trim` on Gemini output.** The transparent/gradient edges produce stair-stepping artifacts. Gemini already crops tight.
+5. **Do NOT ask Nano Banana Pro to "edit only the text" on a photo.** It treats any edit prompt as a creative license to reinvent the scene. For text-only surgery, the tooling isn't there yet.
+6. **Do NOT ship a phone asset with a floor/gradient/vignette background.** Mid-gray pixels can't be dissolved by `mix-blend-mode: screen` — they'll always show a matte. Force a uniform #000000 bg in the prompt.
+7. **Do NOT combine `drop-shadow` CSS filter with a full-bg (non-alpha) image.** Shadow paints around the whole rectangle, defeating the composite. Remove the shadow or move to a true alpha cutout.
+
+## Reference: Multi-Device Composed Hero
+
+Use the references below to create the wide 3-device composed hero (the legacy approach — kept for reference, but prefer the solo-device pipeline above for individual assets). This section is reference material for generating assets. It is not the final shipping pattern by itself.
 
 ### Recommended: Gemini 3 Pro Image via OpenRouter
 

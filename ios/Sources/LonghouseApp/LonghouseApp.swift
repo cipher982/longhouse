@@ -43,7 +43,7 @@ final class AppState: ObservableObject {
     @Published var authError: String?
     @Published var hostedAuthAttemptURL: String?
     /// Path to load after a forced re-login (e.g. /timeline/abc-123).
-    /// Set by the WebView delegate when intercepting a /login redirect.
+    /// Set by the web shell when handing auth back to native login.
     /// Cleared after use so normal logins still land on /timeline.
     @Published var postLoginPath: String = "/timeline"
 
@@ -222,11 +222,12 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Called by the WebView delegate when the web app redirects to /login.
+    /// Called by the web shell when the browser session is no longer usable.
     /// Stores a safe tenant return_to path when available, then hands auth back
     /// to the native shell instead of rendering a web login surface in WKWebView.
-    func signOutAndReturnToLogin(interceptedURL: URL? = nil) async {
-        postLoginPath = LonghouseWebNavigation.postLoginPath(from: interceptedURL, serverURL: serverURL)
+    func signOutAndReturnToLogin(postLoginPath requestedPostLoginPath: String? = nil) async {
+        let trimmedPath = requestedPostLoginPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        postLoginPath = (trimmedPath?.isEmpty == false ? trimmedPath : nil) ?? LonghouseWebNavigation.defaultPostLoginPath
         await signOutLocallyAndRemotely()
     }
 

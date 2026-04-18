@@ -57,6 +57,22 @@ struct LonghouseWebNavigationTests {
     }
 
     @Test
+    func preservesExplicitNativeAuthReturnTo() {
+        #expect(
+            LonghouseWebNavigation.postLoginPath(fromReturnTo: "/timeline/abc?view=compact#notes") ==
+                "/timeline/abc?view=compact#notes"
+        )
+    }
+
+    @Test
+    func rejectsAuthReturnToFromExplicitNativeAuthBridge() {
+        #expect(
+            LonghouseWebNavigation.postLoginPath(fromReturnTo: "/auth/logout") ==
+                LonghouseWebNavigation.defaultPostLoginPath
+        )
+    }
+
+    @Test
     func routesOtherCrossOriginNavigationToExternalBrowser() throws {
         let url = try #require(URL(string: "https://example.com/docs"))
 

@@ -11,7 +11,8 @@
  */
 
 import { config } from "./config";
-import { buildLoginUrl } from "./loginRedirect";
+import { replaceWithLoginUrl } from "./loginRedirect";
+import { requestNativeAuth } from "./nativeAuthBridge";
 
 // ---------------------------------------------------------------------------
 // Single-flight mutex
@@ -84,9 +85,12 @@ export async function fetchWithRefresh(
 
   const refreshed = await refreshAccessToken();
   if (!refreshed) {
-    // Refresh failed — session is dead. Redirect to /login preserving the current page.
+    // Refresh failed — session is dead. Hand auth back to the native shell
+    // when available; otherwise fall back to the browser login route.
     const returnTo = window.location.pathname + window.location.search + window.location.hash;
-    window.location.replace(buildLoginUrl(returnTo));
+    if (!requestNativeAuth(returnTo)) {
+      replaceWithLoginUrl(returnTo);
+    }
     return response;
   }
 
