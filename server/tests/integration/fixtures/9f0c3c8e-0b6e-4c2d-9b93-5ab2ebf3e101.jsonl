@@ -1,0 +1,4 @@
+{"type":"assistant","uuid":"a1","timestamp":"2026-01-01T00:00:01Z","message":{"content":[{"type":"tool_use","id":"toolu_bdrk_01IMG","name":"Read","input":{"file_path":"/tmp/screenshot.png"}}]}}
+{"type":"user","uuid":"u1","timestamp":"2026-01-01T00:00:02Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_bdrk_01IMG","content":[{"type":"image","source":{"type":"base64","data":"abc123"}}]}]}}
+{"type":"assistant","uuid":"a2","timestamp":"2026-01-01T00:00:03Z","message":{"content":[{"type":"tool_use","id":"toolu_bdrk_01REF","name":"ToolSearch","input":{"query":"select:TaskCreate,TaskUpdate,TaskList"}}]}}
+{"type":"user","uuid":"u2","timestamp":"2026-01-01T00:00:04Z","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_bdrk_01REF","content":[{"type":"tool_reference","tool_name":"TaskCreate"},{"type":"tool_reference","tool_name":"TaskUpdate"},{"type":"tool_reference","tool_name":"TaskList"}]}]}}

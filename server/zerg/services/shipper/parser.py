@@ -228,12 +228,37 @@ def _extract_tool_results(
             # Content can be string or list
             if isinstance(result_content, list):
                 parts = []
+                image_count = 0
+                tool_refs: list[str] = []
+                part_types: list[str] = []
                 for part in result_content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         parts.append(part.get("text", ""))
+                        continue
+                    if isinstance(part, dict):
+                        part_type = str(part.get("type") or "object")
+                        if part_type == "image":
+                            image_count += 1
+                        elif part_type == "tool_reference":
+                            tool_name = part.get("tool_name")
+                            if isinstance(tool_name, str) and tool_name:
+                                tool_refs.append(tool_name)
+                        if part_type not in part_types:
+                            part_types.append(part_type)
                     elif isinstance(part, str):
                         parts.append(part)
                 result_text = "\n".join(parts) or None
+                if not result_text:
+                    if image_count > 0:
+                        result_text = "[image result]" if image_count == 1 else f"[{image_count} image results]"
+                    elif tool_refs:
+                        preview = ", ".join(tool_refs[:3])
+                        suffix = f", +{len(tool_refs) - 3} more" if len(tool_refs) > 3 else ""
+                        result_text = f"[tool references: {preview}{suffix}]"
+                    elif part_types:
+                        result_text = f"[non-text tool result: {', '.join(part_types)}]"
+                    else:
+                        result_text = "[non-text tool result]"
             else:
                 result_text = str(result_content) if result_content else None
 
