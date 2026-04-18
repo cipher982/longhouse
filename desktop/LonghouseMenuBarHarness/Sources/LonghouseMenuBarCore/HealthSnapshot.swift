@@ -458,12 +458,19 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         return "UPDATE AVAILABLE"
     }
 
-    public var installedVersionLabel: String? {
+    public var installedVersionLabel: String {
         guard let installed = updateInfo?.installedVersion,
               !installed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return nil
+            return "v?"
         }
         return installed.hasPrefix("v") ? installed : "v\(installed)"
+    }
+
+    public var hasResolvedInstalledVersion: Bool {
+        guard let installed = updateInfo?.installedVersion else {
+            return false
+        }
+        return !installed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     public var statusItemSummaryLabel: String {

@@ -221,12 +221,19 @@ public struct MenuBarPanelView: View {
                         .foregroundStyle(Color.secondary)
                         .tracking(0.9)
 
-                    if let versionLabel = snapshot.installedVersionLabel {
-                        Text(versionLabel)
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(Color.secondary.opacity(0.7))
-                            .tracking(0.6)
-                    }
+                    Text(snapshot.installedVersionLabel)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(
+                            snapshot.hasResolvedInstalledVersion
+                                ? Color.secondary.opacity(0.7)
+                                : Color.orange
+                        )
+                        .tracking(0.6)
+                        .help(
+                            snapshot.hasResolvedInstalledVersion
+                                ? "Installed Longhouse version"
+                                : "Longhouse could not determine its installed version — reinstall or run longhouse connect --install"
+                        )
                 }
 
                 Text(displayHeadline)
