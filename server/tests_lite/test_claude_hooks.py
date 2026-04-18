@@ -19,13 +19,13 @@ def test_claude_hook_writes_presence_to_outbox():
     assert 'write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true' in HOOK_SCRIPT
 
 
-def test_claude_hook_supports_startup_context_injection():
-    assert 'LONGHOUSE_HOOK_URL' in HOOK_SCRIPT
-    assert 'LONGHOUSE_HOOK_TOKEN' in HOOK_SCRIPT
-    assert 'git -C "$CWD" rev-parse --show-toplevel' in HOOK_SCRIPT
-    assert '/api/agents/sessions/startup-context' in HOOK_SCRIPT
-    assert '"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}' in HOOK_SCRIPT
-    assert '(.source // "")' in HOOK_SCRIPT
+def test_claude_hook_does_not_inject_startup_context_by_default():
+    # Startup continuity injection lives in labs/startup-continuity, not the
+    # default install. The default hook must stay observation-only.
+    assert '/api/agents/sessions/startup-context' not in HOOK_SCRIPT
+    assert 'LONGHOUSE_HOOK_URL' not in HOOK_SCRIPT
+    assert 'LONGHOUSE_HOOK_TOKEN' not in HOOK_SCRIPT
+    assert 'hookSpecificOutput' not in HOOK_SCRIPT
 
 
 def test_claude_hook_hot_path_stays_local_only():

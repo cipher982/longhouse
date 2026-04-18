@@ -15,7 +15,6 @@ def test_codex_hook_script_template_has_required_markers():
     assert "hook_event_name" in CODEX_HOOK_SCRIPT, "must read Codex snake_case hook event input"
     assert "session_id" in CODEX_HOOK_SCRIPT, "must read Codex session ID"
     assert "transcript_path" in CODEX_HOOK_SCRIPT, "must read transcript path"
-    assert '(.source // "")' in CODEX_HOOK_SCRIPT, "must read startup source for fresh-session gating"
     assert 'LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"' in CODEX_HOOK_SCRIPT
     assert "prs." in CODEX_HOOK_SCRIPT, "must use prs.*.json outbox naming"
     assert ".tmp." in CODEX_HOOK_SCRIPT, "must use atomic tmp write pattern"
@@ -38,12 +37,13 @@ def test_codex_hook_script_has_managed_session_id_support():
     assert '--arg provider "codex"' in CODEX_HOOK_SCRIPT, "must stamp Codex presence events with provider=codex"
 
 
-def test_codex_hook_supports_startup_context_injection():
-    assert 'LONGHOUSE_HOOK_URL' in CODEX_HOOK_SCRIPT
-    assert 'LONGHOUSE_HOOK_TOKEN' in CODEX_HOOK_SCRIPT
-    assert 'git -C "$CWD" rev-parse --show-toplevel' in CODEX_HOOK_SCRIPT
-    assert '/api/agents/sessions/startup-context' in CODEX_HOOK_SCRIPT
-    assert '"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}' in CODEX_HOOK_SCRIPT
+def test_codex_hook_does_not_inject_startup_context_by_default():
+    # Startup continuity injection lives in labs/startup-continuity, not the
+    # default install. The default hook must stay observation-only.
+    assert '/api/agents/sessions/startup-context' not in CODEX_HOOK_SCRIPT
+    assert 'LONGHOUSE_HOOK_URL' not in CODEX_HOOK_SCRIPT
+    assert 'LONGHOUSE_HOOK_TOKEN' not in CODEX_HOOK_SCRIPT
+    assert 'hookSpecificOutput' not in CODEX_HOOK_SCRIPT
 
 
 def test_codex_hook_hot_path_stays_local_only():
