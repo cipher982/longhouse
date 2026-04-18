@@ -165,6 +165,7 @@ def test_upgrade_command_runs_uv_tool_upgrade_and_records_metadata(monkeypatch, 
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(update_manager.subprocess, "run", fake_run)
+    monkeypatch.setattr(update_manager, "_reconcile_runtime_after_upgrade", lambda: None)
 
     result = runner.invoke(app, ["upgrade"])
 
@@ -216,6 +217,7 @@ def test_upgrade_command_rewrites_stale_metadata_from_runtime_probe(monkeypatch,
             package_ref="/Users/davidrose/git/zerg/server",
         ),
     )
+    monkeypatch.setattr(update_manager, "_reconcile_runtime_after_upgrade", lambda: None)
 
     result = runner.invoke(app, ["upgrade"])
 
@@ -255,6 +257,7 @@ def test_upgrade_command_override_source_reinstalls_from_custom_package(monkeypa
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(update_manager.subprocess, "run", fake_run)
+    monkeypatch.setattr(update_manager, "_reconcile_runtime_after_upgrade", lambda: None)
 
     result = runner.invoke(app, ["upgrade", "--package-source", "/tmp/longhouse-0.1.7.whl"])
 
@@ -268,6 +271,90 @@ def test_upgrade_command_override_source_reinstalls_from_custom_package(monkeypa
     assert metadata_payload.install_source == "custom"
     assert metadata_payload.package_ref == "/tmp/longhouse-0.1.7.whl"
     assert metadata_payload.installed_version == "0.1.7"
+
+
+def test_upgrade_command_invokes_connect_install_after_pypi_bump(monkeypatch, tmp_path):
+    runner = CliRunner()
+    runner_home = tmp_path / "home"
+    runner_home.mkdir()
+    monkeypatch.setenv("HOME", str(runner_home))
+    monkeypatch.setattr(
+        update_manager,
+        "detect_install_metadata",
+        lambda: update_manager.InstallMetadata(
+            install_method="uv",
+            install_source="pypi",
+            package_name="longhouse",
+            channel="stable",
+            installed_version="0.1.5",
+            installed_at="2026-04-07T00:00:00+00:00",
+            last_upgrade_at="2026-04-07T00:00:00+00:00",
+        ),
+    )
+    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.6")
+    monkeypatch.setattr(
+        update_manager,
+        "_probe_installed_distribution",
+        lambda package_name="longhouse": update_manager.DistributionInstallProbe(install_method="uv"),
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, check=False):
+        calls.append(list(cmd))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(update_manager.subprocess, "run", fake_run)
+    monkeypatch.setattr(update_manager, "_resolve_longhouse_entrypoint", lambda: "/usr/local/bin/longhouse")
+
+    result = runner.invoke(app, ["upgrade"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        ["uv", "tool", "upgrade", "longhouse"],
+        ["/usr/local/bin/longhouse", "connect", "--install"],
+    ]
+
+
+def test_upgrade_skips_runtime_reconcile_when_entrypoint_missing(monkeypatch, tmp_path):
+    runner = CliRunner()
+    runner_home = tmp_path / "home"
+    runner_home.mkdir()
+    monkeypatch.setenv("HOME", str(runner_home))
+    monkeypatch.setattr(
+        update_manager,
+        "detect_install_metadata",
+        lambda: update_manager.InstallMetadata(
+            install_method="uv",
+            install_source="pypi",
+            package_name="longhouse",
+            channel="stable",
+            installed_version="0.1.5",
+            installed_at="2026-04-07T00:00:00+00:00",
+            last_upgrade_at="2026-04-07T00:00:00+00:00",
+        ),
+    )
+    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.6")
+    monkeypatch.setattr(
+        update_manager,
+        "_probe_installed_distribution",
+        lambda package_name="longhouse": update_manager.DistributionInstallProbe(install_method="uv"),
+    )
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, check=False):
+        calls.append(list(cmd))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(update_manager.subprocess, "run", fake_run)
+    monkeypatch.setattr(update_manager, "_resolve_longhouse_entrypoint", lambda: None)
+
+    result = runner.invoke(app, ["upgrade"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [["uv", "tool", "upgrade", "longhouse"]]
+    assert "longhouse connect --install" in result.output
 
 
 def test_record_install_command_writes_metadata(monkeypatch, tmp_path):

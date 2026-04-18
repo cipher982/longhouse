@@ -558,8 +558,53 @@ def upgrade_command(
         package_ref=package_ref,
     )
     typer.secho(f"Longhouse {updated_metadata.installed_version} is installed.", fg=typer.colors.GREEN)
-    typer.echo("If launcher, hook, or engine behavior changed, run: longhouse connect --install")
+
+    _reconcile_runtime_after_upgrade()
+
+
+def _reconcile_runtime_after_upgrade() -> None:
+    """Refresh engine, Codex, hooks, and desktop app from the newly installed CLI.
+
+    Runs `longhouse connect --install` as a subprocess so the upgraded package is
+    loaded in a fresh interpreter. If the machine has never been connected, the
+    reconcile raises and we surface a short hint instead of forcing config.
+    """
+
+    longhouse_bin = _resolve_longhouse_entrypoint()
+    if longhouse_bin is None:
+        typer.echo("Skipping runtime refresh: could not locate the longhouse entrypoint.")
+        typer.echo("Run: longhouse connect --install")
+        return
+
+    typer.echo("Refreshing engine, Codex, hooks, and desktop app...")
+    completed = subprocess.run(
+        [longhouse_bin, "connect", "--install"],
+        check=False,
+    )
+    if completed.returncode != 0:
+        typer.secho(
+            "Runtime refresh failed; CLI is upgraded but engine/Codex may be stale.",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo("Re-run when ready: longhouse connect --install")
+        return
+
     typer.echo("Verify with: longhouse doctor")
+
+
+def _resolve_longhouse_entrypoint() -> str | None:
+    """Return the filesystem path of the installed `longhouse` CLI entrypoint."""
+
+    candidate = sys.argv[0] if sys.argv else ""
+    if candidate and Path(candidate).name.startswith("longhouse"):
+        resolved = Path(candidate).resolve()
+        if resolved.exists():
+            return str(resolved)
+
+    from shutil import which
+
+    discovered = which("longhouse")
+    return discovered
 
 
 def record_install_command(
