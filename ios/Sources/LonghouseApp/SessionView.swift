@@ -54,6 +54,7 @@ struct SessionView: View {
                                 TimelineItemView(
                                     item: item,
                                     isExpanded: viewModel.isExpanded(item.id),
+                                    sessionActive: viewModel.isSessionActive,
                                     onToggle: { viewModel.toggleExpanded(item.id) }
                                 )
                                 .id(item.id)
@@ -199,6 +200,7 @@ private struct PresenceBadge: View {
 private struct TimelineItemView: View {
     let item: TimelineItem
     let isExpanded: Bool
+    let sessionActive: Bool
     let onToggle: () -> Void
 
     var body: some View {
@@ -208,9 +210,9 @@ private struct TimelineItemView: View {
         case .assistant(let event):
             AssistantBubble(event: event)
         case .tool(let call, let result):
-            ToolRow(call: call, result: result, isExpanded: isExpanded, onToggle: onToggle)
+            ToolRow(call: call, result: result, isExpanded: isExpanded, sessionActive: sessionActive, onToggle: onToggle)
         case .orphanTool(let event):
-            ToolRow(call: event, result: event, isExpanded: isExpanded, onToggle: onToggle, orphan: true)
+            ToolRow(call: event, result: event, isExpanded: isExpanded, sessionActive: sessionActive, onToggle: onToggle, orphan: true)
         }
     }
 }
@@ -370,12 +372,15 @@ private struct ToolRow: View {
     let call: SessionEvent
     let result: SessionEvent?
     let isExpanded: Bool
+    let sessionActive: Bool
     let onToggle: () -> Void
     var orphan: Bool = false
 
     private var summary: String { TimelineBuilder.inputSummary(for: call) }
     private var toolName: String { call.toolName ?? (orphan ? "Tool" : "Tool") }
-    private var isPending: Bool { result == nil && !orphan }
+    /// Only treat missing result as "running" when the session is actively
+    /// working. Otherwise a missing result is just a dropped/incomplete row.
+    private var isPending: Bool { result == nil && !orphan && sessionActive }
     private var durationText: String? {
         guard let result else { return nil }
         return TimelineBuilder.durationSeconds(call: call, result: result).map(TimelineBuilder.formatDuration)
@@ -597,7 +602,9 @@ final class SessionViewModel: ObservableObject {
         }
     }
 
-    private var shouldPoll: Bool {
+    private var shouldPoll: Bool { isSessionActive }
+
+    var isSessionActive: Bool {
         guard let detail else { return false }
         let active: Set<String> = ["running", "thinking", "working", "needs_user", "blocked", "active"]
         if let presence = detail.presenceState, active.contains(presence) { return true }
