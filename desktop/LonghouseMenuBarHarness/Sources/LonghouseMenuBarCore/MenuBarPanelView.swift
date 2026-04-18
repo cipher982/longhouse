@@ -215,10 +215,19 @@ public struct MenuBarPanelView: View {
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("LONGHOUSE APP")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.secondary)
-                    .tracking(0.9)
+                HStack(spacing: 6) {
+                    Text("LONGHOUSE APP")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.secondary)
+                        .tracking(0.9)
+
+                    if let versionLabel = snapshot.installedVersionLabel {
+                        Text(versionLabel)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Color.secondary.opacity(0.7))
+                            .tracking(0.6)
+                    }
+                }
 
                 Text(displayHeadline)
                     .font(.system(size: 20, weight: .semibold))
