@@ -10,17 +10,20 @@ public enum SnapshotRefreshReason: Sendable {
 @MainActor
 public final class SnapshotStore: ObservableObject {
     public static let historyRetentionMinutes = 30
+    public static let bootGraceSeconds: TimeInterval = 10
 
     @Published public private(set) var snapshot: HealthSnapshot?
     @Published public private(set) var history: [SnapshotHistorySample]
     @Published public private(set) var loadError: String?
     @Published public private(set) var isInitialLoading: Bool
     @Published public private(set) var isManualRefreshActive: Bool
+    @Published public private(set) var isBooting: Bool
     @Published public private(set) var presentationDate: Date
     @Published public private(set) var feedback: HealthActionFeedback?
 
     private let source: any HealthSnapshotSource
     private var refreshTask: Task<Void, Never>?
+    private var bootGraceTask: Task<Void, Never>?
     private var activeRefreshReason: SnapshotRefreshReason?
     private var queuedManualRefresh = false
     private var presentationTimer: Timer?
@@ -33,9 +36,12 @@ public final class SnapshotStore: ObservableObject {
         self.history = []
         self.isInitialLoading = false
         self.isManualRefreshActive = false
+        self.isBooting = false
         self.presentationDate = Date()
         self.feedback = nil
         if source is CLIHealthSnapshotSource {
+            isBooting = true
+            scheduleBootGraceTimeout()
             refresh(reason: .initial)
         } else {
             do {
@@ -51,6 +57,29 @@ public final class SnapshotStore: ObservableObject {
 
     deinit {
         refreshTask?.cancel()
+        bootGraceTask?.cancel()
+    }
+
+    private func scheduleBootGraceTimeout() {
+        bootGraceTask?.cancel()
+        bootGraceTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Self.bootGraceSeconds))
+            guard !Task.isCancelled, let self else {
+                return
+            }
+            self.isBooting = false
+        }
+    }
+
+    private func exitBootingIfReady(for snapshot: HealthSnapshot) {
+        guard isBooting else {
+            return
+        }
+        if snapshot.parsedSeverity == .green {
+            isBooting = false
+            bootGraceTask?.cancel()
+            bootGraceTask = nil
+        }
     }
 
     public func refresh(reason: SnapshotRefreshReason = .background) {
@@ -124,6 +153,7 @@ public final class SnapshotStore: ObservableObject {
                 self.snapshot = snapshot
                 self.appendHistorySample(for: snapshot)
                 self.loadError = nil
+                self.exitBootingIfReady(for: snapshot)
             case let .failure(message):
                 self.loadError = message
             }
