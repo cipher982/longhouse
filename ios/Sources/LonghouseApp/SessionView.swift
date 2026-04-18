@@ -54,7 +54,7 @@ struct SessionView: View {
                                 TimelineItemView(
                                     item: item,
                                     isExpanded: viewModel.isExpanded(item.id),
-                                    sessionActive: viewModel.isSessionActive,
+                                    sessionEnded: viewModel.isSessionEnded,
                                     onToggle: { viewModel.toggleExpanded(item.id) }
                                 )
                                 .id(item.id)
@@ -200,7 +200,7 @@ private struct PresenceBadge: View {
 private struct TimelineItemView: View {
     let item: TimelineItem
     let isExpanded: Bool
-    let sessionActive: Bool
+    let sessionEnded: Bool
     let onToggle: () -> Void
 
     var body: some View {
@@ -210,9 +210,9 @@ private struct TimelineItemView: View {
         case .assistant(let event):
             AssistantBubble(event: event)
         case .tool(let call, let result):
-            ToolRow(call: call, result: result, isExpanded: isExpanded, sessionActive: sessionActive, onToggle: onToggle)
+            ToolRow(call: call, result: result, isExpanded: isExpanded, sessionEnded: sessionEnded, onToggle: onToggle)
         case .orphanTool(let event):
-            ToolRow(call: event, result: event, isExpanded: isExpanded, sessionActive: sessionActive, onToggle: onToggle, orphan: true)
+            ToolRow(call: event, result: event, isExpanded: isExpanded, sessionEnded: sessionEnded, onToggle: onToggle, orphan: true)
         }
     }
 }
@@ -372,15 +372,21 @@ private struct ToolRow: View {
     let call: SessionEvent
     let result: SessionEvent?
     let isExpanded: Bool
-    let sessionActive: Bool
+    let sessionEnded: Bool
     let onToggle: () -> Void
     var orphan: Bool = false
 
     private var summary: String { TimelineBuilder.inputSummary(for: call) }
     private var toolName: String { call.toolName ?? (orphan ? "Tool" : "Tool") }
-    /// Only treat missing result as "running" when the session is actively
-    /// working. Otherwise a missing result is just a dropped/incomplete row.
-    private var isPending: Bool { result == nil && !orphan && sessionActive }
+    /// Pending = truly still running. A missing result becomes "dropped" once
+    /// the session ends or the call is older than the age threshold.
+    private var isPending: Bool {
+        guard result == nil, !orphan else { return false }
+        return !TimelineBuilder.isDropped(call: call, sessionEnded: sessionEnded)
+    }
+    private var isDropped: Bool {
+        result == nil && !orphan && TimelineBuilder.isDropped(call: call, sessionEnded: sessionEnded)
+    }
     private var durationText: String? {
         guard let result else { return nil }
         return TimelineBuilder.durationSeconds(call: call, result: result).map(TimelineBuilder.formatDuration)
@@ -407,6 +413,11 @@ private struct ToolRow: View {
                     Spacer(minLength: 4)
                     if isPending {
                         ProgressView().controlSize(.mini)
+                    } else if isDropped {
+                        Text("dropped")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .italic()
                     } else if let durationText {
                         Text(durationText)
                             .font(.caption2.monospaced())
@@ -441,6 +452,9 @@ private struct ToolRow: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else if isPending {
                         Text("Running…").font(.caption).foregroundStyle(.tertiary)
+                    } else if isDropped {
+                        Text("No result recorded — likely dropped during ingest.")
+                            .font(.caption).foregroundStyle(.tertiary)
                     }
                 }
                 .padding(.horizontal, 10)
@@ -609,6 +623,16 @@ final class SessionViewModel: ObservableObject {
         let active: Set<String> = ["running", "thinking", "working", "needs_user", "blocked", "active"]
         if let presence = detail.presenceState, active.contains(presence) { return true }
         if let status = detail.status, active.contains(status) { return true }
+        return false
+    }
+
+    /// Treat "completed" presence or status as terminal. This is a hint for
+    /// the UI to mark result-less calls as dropped rather than still running.
+    var isSessionEnded: Bool {
+        guard let detail else { return false }
+        let terminal: Set<String> = ["completed", "closed", "ended", "terminated"]
+        if let presence = detail.presenceState, terminal.contains(presence) { return true }
+        if let status = detail.status, terminal.contains(status) { return true }
         return false
     }
 }

@@ -120,6 +120,25 @@ enum TimelineBuilder {
         return max(0, b.timeIntervalSince(a))
     }
 
+    /// A call without a result is considered "dropped" (rather than still
+    /// running) when the enclosing session has terminated, or when the call is
+    /// older than 1 hour. 1 hour is a deliberately generous ceiling — longer
+    /// than any real tool we run — so legit slow Bash/Task calls aren't falsely
+    /// flagged while the session is actively working.
+    static let droppedAgeThreshold: TimeInterval = 3600
+
+    static func isDropped(call: SessionEvent, sessionEnded: Bool, now: Date = Date()) -> Bool {
+        if sessionEnded { return true }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let fallback = ISO8601DateFormatter()
+        fallback.formatOptions = [.withInternetDateTime]
+        guard let callDate = formatter.date(from: call.timestamp) ?? fallback.date(from: call.timestamp) else {
+            return false
+        }
+        return now.timeIntervalSince(callDate) > droppedAgeThreshold
+    }
+
     static func formatDuration(_ seconds: Double) -> String {
         if seconds < 1 {
             return "\(Int((seconds * 1000).rounded()))ms"
