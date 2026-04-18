@@ -213,6 +213,39 @@ def test_agents_sessions_allows_bounded_project_lookup_for_managed_local_hook_to
             api_app.dependency_overrides.clear()
 
 
+def test_startup_context_allows_bounded_project_lookup_for_managed_local_hook_token(tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        user = _seed_user(db)
+        session = _seed_session(db, project="hiring", device_id="cinder")
+        session.summary = "Recent hiring session."
+        session.summary_title = "Hiring work"
+        db.commit()
+        token = issue_managed_local_hook_token(
+            owner_id=user.id,
+            session_id=str(session.id),
+            project="hiring",
+            device_id="cinder",
+        )
+        client = _make_client(db)
+
+        try:
+            with patch("zerg.dependencies.agents_auth.get_settings", _settings_override):
+                response = client.get(
+                    "/agents/sessions/startup-context",
+                    params={"project": "hiring", "limit": 5, "days_back": 7},
+                    headers={"X-Agents-Token": token},
+                )
+
+            assert response.status_code == 200, response.text
+            payload = response.json()
+            assert payload["session_count"] == 1
+            assert payload["items"][0]["summary_title"] == "Hiring work"
+        finally:
+            api_app.dependency_overrides.clear()
+
+
 def test_managed_local_hook_token_is_rejected_outside_allowed_surfaces(tmp_path):
     session_local = _make_db(tmp_path)
 

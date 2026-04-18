@@ -1,28 +1,28 @@
-"""Claude Code and Codex hook installation and shared workspace MCP helpers for Longhouse.
+"""Claude Code and Codex hook installation and shared workspace MCP helpers.
 
-Installs hook scripts and injects hook configuration into
-~/.claude/settings.json and ~/.codex/hooks.json so that both Claude Code
-and Codex automatically ship sessions and report real-time presence
-without network calls in the hook hot path.
+Installs provider hook scripts and injects hook configuration into
+``~/.claude/settings.json`` and ``~/.codex/hooks.json`` so Longhouse can:
+
+- write presence and binding events locally without network calls in the hot path
+- inject a small startup continuity block on fresh session start
 
 Claude hooks (via settings.json):
 
-- **longhouse-hook.sh** (Stop, UserPromptSubmit, PreToolUse, PostToolUse):
-  Unified hook. Writes presence events to a local outbox directory
-  (~/.longhouse/agent/outbox/) as small JSON files (<2ms, no network). The
-  longhouse-engine daemon drains the outbox on a 1-second poll and POSTs
-  to /api/agents/presence. On Stop, also seeds the session_binding table
-  so the daemon ships with the correct managed session ID. All
-  registrations use async: False — no banners.
+- **longhouse-hook.sh** (SessionStart, Stop, UserPromptSubmit, PreToolUse,
+  PostToolUse, PermissionRequest, Notification):
+  Writes presence events to a local outbox directory
+  (``~/.longhouse/agent/outbox/``) as small JSON files (<2ms, no network) for
+  non-startup events. On SessionStart it also performs one bounded best-effort
+  API read to fetch startup continuity for the current project and injects it
+  as silent additional context.
 
 Codex hooks (via hooks.json):
 
 - **longhouse-codex-hook.sh** (SessionStart, UserPromptSubmit, Stop):
-  Writes presence events to the same ~/.longhouse/agent/outbox/ directory using
-  Codex's snake_case hook command input fields. Seeds session_binding for
-  managed sessions so the daemon ships with the correct ID.
-  Codex has fewer hook events than Claude (no PreToolUse/PostToolUse),
-  so tool-level granularity is not available.
+  Uses the same pattern: local outbox writes for hot-path presence, plus one
+  bounded startup-context fetch on fresh SessionStart. Codex has fewer hook
+  events than Claude (no PreToolUse/PostToolUse), so tool-level granularity is
+  not available there.
 
 Usage:
     from zerg.services.shipper.hooks import install_hooks
@@ -52,14 +52,13 @@ logger = logging.getLogger(__name__)
 
 HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse unified hook — presence outbox write + session binding
+# Longhouse unified Claude hook — startup continuity + presence outbox + binding
 # Installed by: longhouse connect --install
-# Registered on: Stop, UserPromptSubmit, PreToolUse, PostToolUse,
-#                PermissionRequest, Notification
-# Presence delivery:
-#   - Always write a small JSON event into ~/.longhouse/agent/outbox/
-#   - longhouse-engine is the only process that talks to remote endpoints
-# Session binding: seeds managed session ID so daemon ships correctly.
+# Registered on: SessionStart, Stop, UserPromptSubmit, PreToolUse,
+#                PostToolUse, PostToolUseFailure, PermissionRequest, Notification
+# SessionStart: best-effort bounded fetch of /api/agents/sessions/startup-context
+#               and inject the result as silent additional context.
+# Other events: local-only presence outbox write + session binding seed.
 INPUT=$(cat)
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
@@ -68,20 +67,62 @@ command -v jq >/dev/null 2>&1 || exit 0
 
 # Parse all fields in a single jq call using unit-separator (\\x1f) as delimiter.
 # @tsv would split on spaces inside field values; \\x1f is safe for paths/tool names.
-IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE <<< "$(
+IFS=$'\\x1f' read -r EVENT SESSION_ID TOOL CWD TRANSCRIPT NOTIF_TYPE SOURCE <<< "$(
   printf '%s' "$INPUT" | jq -r '[
     (.hook_event_name // ""),
     (.session_id // ""),
     (.tool_name // ""),
     (.cwd // ""),
     (.transcript_path // ""),
-    (.notification_type // "")
+    (.notification_type // ""),
+    (.source // "")
   ] | join("\\u001f")'
 )"
 
 MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-}"
 [ -n "$MANAGED_SESSION_ID" ] && SESSION_ID="$MANAGED_SESSION_ID"
-[ -z "$SESSION_ID" ] && exit 0
+STARTUP_OUTPUT=""
+
+build_startup_context_output() {
+  [[ "$EVENT" == "SessionStart" ]] || return 0
+  [[ "$SOURCE" == "startup" ]] || return 0
+  [[ -n "$CWD" ]] || return 0
+
+  REPO_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null | tr -d '\r')
+  if [[ -n "$REPO_ROOT" ]]; then
+    PROJECT=$(basename "$REPO_ROOT")
+  else
+    PROJECT=$(basename "$CWD")
+  fi
+  [[ -n "$PROJECT" ]] || return 0
+
+  TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
+  URL="${LONGHOUSE_HOOK_URL:-}"
+  if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]; then
+    TOKEN_FILE="$LONGHOUSE_HOME/machine/device-token"
+    STATE_FILE="$LONGHOUSE_HOME/machine/state.json"
+    [[ -f "$TOKEN_FILE" ]] || return 0
+    [[ -f "$STATE_FILE" ]] || return 0
+    TOKEN=$(tr -d '[:space:]' < "$TOKEN_FILE")
+    URL=$(jq -r '.runtime_url // empty' "$STATE_FILE" 2>/dev/null | tr -d '[:space:]')
+    [[ -n "$URL" ]] || return 0
+  fi
+
+  PROJECT_ENC=$(
+    python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$PROJECT" 2>/dev/null \
+      || printf '%s' "$PROJECT"
+  )
+  RESPONSE=$(curl -sf --max-time 5 \\
+    -H "X-Agents-Token: $TOKEN" \\
+    "${URL}/api/agents/sessions/startup-context?project=${PROJECT_ENC}&limit=5" 2>/dev/null) || return 0
+
+  CONTEXT=$(printf '%s' "$RESPONSE" | jq -r '.startup_context // empty' 2>/dev/null)
+  [[ -n "$CONTEXT" ]] || return 0
+
+  STARTUP_OUTPUT=$(jq -nc --arg msg "$CONTEXT" '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}}' 2>/dev/null) || STARTUP_OUTPUT=""
+}
+
+build_startup_context_output
 
 FORCE_SIDECHAIN="${LONGHOUSE_IS_SIDECHAIN:-0}"
 HINDSIGHT_ROOT="__HINDSIGHT_ROOT__"
@@ -102,6 +143,7 @@ write_presence_outbox() {
 
 # Map event → presence state
 case "$EVENT" in
+  SessionStart)                    STATE="idle" ;;
   UserPromptSubmit)               STATE="thinking" ;;
   PreToolUse)                     STATE="running" ;;
   PostToolUse|PostToolUseFailure) STATE="thinking" ;;
@@ -111,25 +153,31 @@ case "$EVENT" in
     case "$NOTIF_TYPE" in
       idle_prompt|elicitation_dialog) STATE="needs_user" ;;
       permission_prompt)              STATE="blocked" ;;
-      *)                              exit 0 ;;
+      *)                              STATE="" ;;
     esac
     ;;
-  *)                              exit 0 ;;
+  *)                              STATE="" ;;
 esac
 
-PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
-      --arg tool "$TOOL" --arg cwd "$CWD" \\
-  '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}')
+if [[ -n "$STATE" ]] && [[ -n "$SESSION_ID" ]]; then
+  PAYLOAD=$(jq -n --arg sid "$SESSION_ID" --arg st "$STATE" \\
+        --arg tool "$TOOL" --arg cwd "$CWD" \\
+    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd}')
 
-# Seed session binding so the daemon ships with the correct managed session ID.
-# The daemon (longhouse-engine connect) handles all transcript shipping via its
-# file watcher — hooks no longer ship directly.
-ENGINE="__ENGINE_PATH__"
-if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
-  "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" >/dev/null 2>&1 || true
+  # Seed session binding so the daemon ships with the correct managed session ID.
+  # The daemon (longhouse-engine connect) handles all transcript shipping via its
+  # file watcher — hooks no longer ship directly.
+  ENGINE="__ENGINE_PATH__"
+  if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
+    "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" >/dev/null 2>&1 || true
+  fi
+
+  write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
 fi
 
-write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
+if [[ -n "$STARTUP_OUTPUT" ]]; then
+  printf '%s\\n' "$STARTUP_OUTPUT"
+fi
 
 # Always exit 0 — hook errors trigger Claude Code's "What should Claude do
 # instead?" prompt, which interrupts the session.
@@ -142,23 +190,23 @@ exit 0
 
 CODEX_HOOK_SCRIPT = """\
 #!/bin/bash
-# Longhouse Codex hook — presence outbox write + session binding
+# Longhouse Codex hook — startup continuity + presence outbox + binding
 # Installed by: longhouse connect --install
 # Registered on: SessionStart, UserPromptSubmit, Stop (via ~/.codex/hooks.json)
-# Presence delivery:
-#   - Always write a small JSON event into ~/.longhouse/agent/outbox/
-#   - longhouse-engine is the only process that talks to remote endpoints
-# Session binding: seeds managed session ID so daemon ships correctly.
+# SessionStart: best-effort bounded fetch of /api/agents/sessions/startup-context
+#               and inject the result as silent additional context.
+# Other events: local-only presence outbox write + session binding seed.
 INPUT=$(cat)
 LONGHOUSE_HOME="${LONGHOUSE_HOME:-__LONGHOUSE_HOME__}"
 
 # Codex command hooks use snake_case field names.
-IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT <<< "$(
+IFS=$'\\x1f' read -r EVENT CODEX_SESSION_ID CWD TRANSCRIPT SOURCE <<< "$(
   printf '%s' "$INPUT" | jq -r '[
     (.hook_event_name // ""),
     (.session_id // ""),
     (.cwd // ""),
-    (.transcript_path // "")
+    (.transcript_path // ""),
+    (.source // "")
   ] | join("\\u001f")'
 )"
 
@@ -167,9 +215,50 @@ MANAGED_SESSION_ID="${LONGHOUSE_MANAGED_SESSION_ID:-}"
 if [ -n "$MANAGED_SESSION_ID" ]; then
   SID="$MANAGED_SESSION_ID"
 else
-  [ -z "$CODEX_SESSION_ID" ] && exit 0
   SID="$CODEX_SESSION_ID"
 fi
+STARTUP_OUTPUT=""
+
+build_startup_context_output() {
+  [[ "$EVENT" == "SessionStart" ]] || return 0
+  [[ "$SOURCE" == "startup" ]] || return 0
+  [[ -n "$CWD" ]] || return 0
+
+  REPO_ROOT=$(git -C "$CWD" rev-parse --show-toplevel 2>/dev/null | tr -d '\r')
+  if [[ -n "$REPO_ROOT" ]]; then
+    PROJECT=$(basename "$REPO_ROOT")
+  else
+    PROJECT=$(basename "$CWD")
+  fi
+  [[ -n "$PROJECT" ]] || return 0
+
+  TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"
+  URL="${LONGHOUSE_HOOK_URL:-}"
+  if [[ -z "$TOKEN" ]] || [[ -z "$URL" ]]; then
+    TOKEN_FILE="$LONGHOUSE_HOME/machine/device-token"
+    STATE_FILE="$LONGHOUSE_HOME/machine/state.json"
+    [[ -f "$TOKEN_FILE" ]] || return 0
+    [[ -f "$STATE_FILE" ]] || return 0
+    TOKEN=$(tr -d '[:space:]' < "$TOKEN_FILE")
+    URL=$(jq -r '.runtime_url // empty' "$STATE_FILE" 2>/dev/null | tr -d '[:space:]')
+    [[ -n "$URL" ]] || return 0
+  fi
+
+  PROJECT_ENC=$(
+    python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$PROJECT" 2>/dev/null \
+      || printf '%s' "$PROJECT"
+  )
+  RESPONSE=$(curl -sf --max-time 5 \\
+    -H "X-Agents-Token: $TOKEN" \\
+    "${URL}/api/agents/sessions/startup-context?project=${PROJECT_ENC}&limit=5" 2>/dev/null) || return 0
+
+  CONTEXT=$(printf '%s' "$RESPONSE" | jq -r '.startup_context // empty' 2>/dev/null)
+  [[ -n "$CONTEXT" ]] || return 0
+
+  STARTUP_OUTPUT=$(jq -nc --arg msg "$CONTEXT" '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}}' 2>/dev/null) || STARTUP_OUTPUT=""
+}
+
+build_startup_context_output
 
 write_presence_outbox() {
   payload="$1"
@@ -185,18 +274,24 @@ case "$EVENT" in
   SessionStart)         STATE="idle" ;;
   UserPromptSubmit)     STATE="thinking" ;;
   Stop)                 STATE="idle" ;;
-  *)                    exit 0 ;;
+  *)                    STATE="" ;;
 esac
 
-PAYLOAD=$(jq -n --arg sid "$SID" --arg st "$STATE" \\
-      --arg tool "" --arg cwd "$CWD" --arg provider "codex" \\
-  '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider}')
-write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
+if [[ -n "$STATE" ]] && [[ -n "$SID" ]]; then
+  PAYLOAD=$(jq -n --arg sid "$SID" --arg st "$STATE" \\
+        --arg tool "" --arg cwd "$CWD" --arg provider "codex" \\
+    '{session_id: $sid, state: $st, tool_name: $tool, cwd: $cwd, provider: $provider}')
+  write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true
 
-# Seed session binding so the daemon ships with the correct managed session ID.
-ENGINE="__ENGINE_PATH__"
-if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
-  "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" --provider codex >/dev/null 2>&1 || true
+  # Seed session binding so the daemon ships with the correct managed session ID.
+  ENGINE="__ENGINE_PATH__"
+  if [[ -n "$MANAGED_SESSION_ID" ]] && [[ -n "$TRANSCRIPT" ]]; then
+    "$ENGINE" bind --path "$TRANSCRIPT" --session-id "$MANAGED_SESSION_ID" --provider codex >/dev/null 2>&1 || true
+  fi
+fi
+
+if [[ -n "$STARTUP_OUTPUT" ]]; then
+  printf '%s\\n' "$STARTUP_OUTPUT"
 fi
 
 exit 0
@@ -214,8 +309,7 @@ def _make_hook_entries(hooks_dir: Path) -> tuple[dict, dict]:
 
     Returns (stop_entry, lifecycle_entry):
     - stop_entry: unified script for Stop (sync, local write/bind — not a banner)
-    - lifecycle_entry: unified script for UserPromptSubmit/PreToolUse/PostToolUse
-      (sync — local outbox write only)
+    - lifecycle_entry: unified script for SessionStart and other lifecycle hooks
     """
     hook_path = str(hooks_dir / "longhouse-hook.sh")
 
@@ -296,11 +390,6 @@ def _merge_hooks_for_event(
     return result
 
 
-def _remove_longhouse_hooks_for_event(existing_entries: list[dict]) -> list[dict]:
-    """Drop Longhouse-owned hook entries while preserving user hooks."""
-    return [entry for entry in existing_entries if not _is_longhouse_hook(entry)]
-
-
 def _read_settings(settings_path: Path) -> dict:
     """Read and parse settings.json, returning an empty dict if file is absent.
 
@@ -352,12 +441,13 @@ def install_hooks(
     2. Write ``longhouse-hook.sh`` with executable permissions.
     3. Read ``~/.claude/settings.json`` (or start with ``{}``).
     4. Upsert Longhouse hook entries into the ``hooks`` object.
-    5. Remove deprecated Longhouse SessionStart briefing hooks.
+    5. Remove deprecated standalone SessionStart scripts superseded by the
+       unified hook.
     6. Write ``settings.json`` back.
 
     Args:
-        url: Longhouse API URL (used only for logging; the unified hook
-             does not read it at runtime — presence goes via outbox).
+        url: Longhouse API URL (used for logging and by SessionStart startup
+             continuity fetches; hot-path presence still goes via outbox only).
         token: Unused legacy arg retained for compatibility.
         claude_dir: Override for Claude config directory.
 
@@ -411,7 +501,7 @@ def install_hooks(
     hook_script.chmod(stat.S_IRWXU | stat.S_IRGRP | stat.S_IXGRP | stat.S_IROTH | stat.S_IXOTH)
     actions.append(f"Wrote {hook_script}")
 
-    # Remove deprecated hook scripts (superseded by longhouse-hook.sh).
+    # Remove deprecated standalone hook scripts (superseded by longhouse-hook.sh).
     for deprecated in ("longhouse-ship.sh", "longhouse-presence.sh", "longhouse-session-start.sh"):
         deprecated_path = hooks_dir / deprecated
         if deprecated_path.exists():
@@ -433,8 +523,10 @@ def install_hooks(
     stop_list = hooks_obj.get("Stop", [])
     hooks_obj["Stop"] = _merge_hooks_for_event(stop_list, stop_entry)
 
-    # Lifecycle events: sync (outbox write <2ms, silent)
+    # Lifecycle events: sync. SessionStart may perform one bounded continuity
+    # fetch; other lifecycle events stay local-only (outbox write <2ms).
     for event in (
+        "SessionStart",
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
@@ -446,22 +538,13 @@ def install_hooks(
         event_list = raw if isinstance(raw, list) else []
         hooks_obj[event] = _merge_hooks_for_event(event_list, lifecycle_entry)
 
-    # Remove deprecated Longhouse SessionStart hooks that used the deleted
-    # /api/agents/briefing surface. Preserve any user-owned SessionStart hooks.
-    session_start_list = hooks_obj.get("SessionStart", [])
-    if isinstance(session_start_list, list):
-        cleaned_session_start = _remove_longhouse_hooks_for_event(session_start_list)
-        if cleaned_session_start:
-            hooks_obj["SessionStart"] = cleaned_session_start
-        else:
-            hooks_obj.pop("SessionStart", None)
-
     # ------------------------------------------------------------------
     # 5. Write settings back
     # ------------------------------------------------------------------
     _write_settings(settings_path, settings)
     actions.append(
-        f"Updated {settings_path} with Stop, UserPromptSubmit, PreToolUse, " "PostToolUse, PermissionRequest, and Notification hooks"
+        f"Updated {settings_path} with SessionStart, Stop, UserPromptSubmit, PreToolUse, "
+        "PostToolUse, PermissionRequest, and Notification hooks"
     )
 
     logger.info("Installed Longhouse hooks in %s", config_dir)

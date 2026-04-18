@@ -210,6 +210,27 @@ class SessionThreadResponse(BaseModel):
     sessions: List[SessionResponse]
 
 
+class StartupContextItemResponse(UTCBaseModel):
+    """One recent session summary for startup continuity injection."""
+
+    session_id: str = Field(..., description="Session UUID")
+    thread_root_session_id: str = Field(..., description="Logical thread root UUID")
+    provider: str = Field(..., description="Session provider")
+    started_at: datetime = Field(..., description="Session start time")
+    age: str = Field(..., description="Human-readable recency label")
+    summary_title: str = Field(..., description="Short session title")
+    summary: str = Field(..., description="Sanitized summary text")
+
+
+class StartupContextResponse(BaseModel):
+    """Response envelope for startup continuity context."""
+
+    project: str = Field(..., description="Project label used for lookup")
+    session_count: int = Field(..., description="Number of sessions included in the context")
+    items: List[StartupContextItemResponse] = Field(..., description="Recent project sessions used for continuity")
+    startup_context: Optional[str] = Field(None, description="Rendered context block for provider hook injection")
+
+
 class SessionPreviewMessage(UTCBaseModel):
     """Preview message entry for session picker."""
 

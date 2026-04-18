@@ -19,9 +19,16 @@ def test_claude_hook_writes_presence_to_outbox():
     assert 'write_presence_outbox "$PAYLOAD" >/dev/null 2>&1 || true' in HOOK_SCRIPT
 
 
-def test_claude_hook_script_is_local_only():
-    assert 'TARGET_URL="${LONGHOUSE_HOOK_URL:-}"' not in HOOK_SCRIPT
-    assert 'TARGET_TOKEN="${LONGHOUSE_HOOK_TOKEN:-}"' not in HOOK_SCRIPT
+def test_claude_hook_supports_startup_context_injection():
+    assert 'LONGHOUSE_HOOK_URL' in HOOK_SCRIPT
+    assert 'LONGHOUSE_HOOK_TOKEN' in HOOK_SCRIPT
+    assert 'git -C "$CWD" rev-parse --show-toplevel' in HOOK_SCRIPT
+    assert '/api/agents/sessions/startup-context' in HOOK_SCRIPT
+    assert '"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": $msg}' in HOOK_SCRIPT
+    assert '(.source // "")' in HOOK_SCRIPT
+
+
+def test_claude_hook_hot_path_stays_local_only():
     assert 'PRESENCE_MODE="${LONGHOUSE_HOOK_PRESENCE_MODE:-auto}"' not in HOOK_SCRIPT
     assert "/api/agents/presence" not in HOOK_SCRIPT
     assert "emit_presence()" not in HOOK_SCRIPT

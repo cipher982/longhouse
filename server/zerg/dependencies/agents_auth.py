@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _MANAGED_LOCAL_HOOK_ALLOWED_ROUTES = {
     ("GET", "/agents/sessions"),
+    ("GET", "/agents/sessions/startup-context"),
     ("POST", "/agents/ingest"),
     ("POST", "/agents/presence"),
 }
