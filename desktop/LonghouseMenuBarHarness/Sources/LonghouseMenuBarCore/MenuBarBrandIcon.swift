@@ -3,7 +3,7 @@ import AppKit
 @MainActor
 public enum MenuBarBrandIcon {
     public static let baseImage: NSImage = {
-        guard let url = Bundle.module.url(forResource: "LonghouseMenuIcon", withExtension: "png"),
+        guard let url = LonghouseResourceLocator.url(forResource: "LonghouseMenuIcon", withExtension: "png"),
               let image = NSImage(contentsOf: url) else {
             let fallback = NSImage(systemSymbolName: "circle.dotted", accessibilityDescription: "Longhouse") ?? NSImage()
             return fallback
