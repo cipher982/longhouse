@@ -2,66 +2,72 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject var appState: AppState
-    @State private var showingServerConfig = false
 
     var body: some View {
         Group {
             if appState.isValidating {
-                ZStack {
-                    Color(red: 0.04, green: 0.04, blue: 0.06).ignoresSafeArea()
-                    VStack(spacing: 16) {
-                        Image(systemName: "house.lodge.fill")
-                            .font(.system(size: 36))
-                            .foregroundStyle(.white.opacity(0.6))
-                        ProgressView()
-                            .tint(.white.opacity(0.6))
-                    }
-                }
+                LoadingScreen()
             } else if appState.isAuthenticated {
-                LonghouseWebView(
-                    serverURL: appState.serverURL,
-                    initialPath: appState.postLoginPath
-                ) { requestedPostLoginPath in
-                    Task { await appState.signOutAndReturnToLogin(postLoginPath: requestedPostLoginPath) }
-                }
-                .ignoresSafeArea(.all, edges: .bottom)
-                    .overlay(alignment: .topTrailing) {
-                        Menu {
-                            Button("Change Server") {
-                                showingServerConfig = true
-                            }
-                            Button("Sign Out", role: .destructive) {
-                                appState.signOut()
-                            }
-                        } label: {
-                            Image(systemName: "gearshape")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(.secondary)
-                                .padding(10)
-                                .background(.ultraThinMaterial, in: Circle())
-                        }
-                        .padding(.trailing, 8)
-                        .padding(.top, 4)
-                    }
+                AuthenticatedPager()
             } else {
                 LoginView()
                     .overlay(alignment: .topTrailing) {
-                        Button {
-                            showingServerConfig = true
-                        } label: {
-                            Image(systemName: "server.rack")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(.white.opacity(0.4))
-                                .padding(10)
-                                .background(.white.opacity(0.06), in: Circle())
-                        }
-                        .accessibilityIdentifier("login.serverConfig")
-                        .padding(.trailing, 8)
-                        .padding(.top, 4)
+                        ServerConfigButton()
                     }
             }
         }
-        .sheet(isPresented: $showingServerConfig) {
+    }
+}
+
+private struct LoadingScreen: View {
+    var body: some View {
+        ZStack {
+            Color(red: 0.04, green: 0.04, blue: 0.06).ignoresSafeArea()
+            VStack(spacing: 16) {
+                Image(systemName: "house.lodge.fill")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.white.opacity(0.6))
+                ProgressView()
+                    .tint(.white.opacity(0.6))
+            }
+        }
+    }
+}
+
+private struct AuthenticatedPager: View {
+    @EnvironmentObject var appState: AppState
+
+    var body: some View {
+        TabView {
+            InboxView()
+                .tabItem {
+                    Label("Inbox", systemImage: "tray.full")
+                }
+            SettingsView()
+                .tabItem {
+                    Label("Settings", systemImage: "gearshape")
+                }
+        }
+    }
+}
+
+private struct ServerConfigButton: View {
+    @State private var showingSheet = false
+
+    var body: some View {
+        Button {
+            showingSheet = true
+        } label: {
+            Image(systemName: "server.rack")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white.opacity(0.4))
+                .padding(10)
+                .background(.white.opacity(0.06), in: Circle())
+        }
+        .accessibilityIdentifier("login.serverConfig")
+        .padding(.trailing, 8)
+        .padding(.top, 4)
+        .sheet(isPresented: $showingSheet) {
             ServerConfigSheet()
         }
     }
