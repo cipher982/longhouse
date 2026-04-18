@@ -20,7 +20,9 @@ public struct HarnessRootView: View {
 
     public var body: some View {
         Group {
-            if let snapshot = store.snapshot {
+            if store.isBooting && (store.snapshot?.parsedSeverity ?? .gray) != .green {
+                MenuBarBootingView()
+            } else if let snapshot = store.snapshot {
                 MenuBarPanelView(
                     snapshot: snapshot,
                     history: store.history,
