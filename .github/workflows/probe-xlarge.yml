@@ -1,0 +1,16 @@
+name: Probe macos-latest-xlarge
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    runs-on: macos-latest-xlarge
+    timeout-minutes: 10
+    steps:
+      - name: Show host specs
+        run: |
+          sysctl -n machdep.cpu.brand_string || true
+          sysctl -n hw.ncpu
+          sysctl -n hw.memsize
+          uname -a
