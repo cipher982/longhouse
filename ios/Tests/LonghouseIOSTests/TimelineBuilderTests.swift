@@ -139,6 +139,23 @@ final class TimelineBuilderTests: XCTestCase {
         XCTAssertEqual(secs!, 2.5, accuracy: 0.05)
     }
 
+    func testDroppedWhenSessionEnded() {
+        let call = event(id: 1, role: "assistant", tool: "Read", callId: "t1", ts: "2026-04-18T18:00:00Z")
+        XCTAssertTrue(TimelineBuilder.isDropped(call: call, sessionEnded: true))
+    }
+
+    func testNotDroppedWhenSessionActiveAndRecent() {
+        let now = ISO8601DateFormatter().date(from: "2026-04-18T18:00:10Z")!
+        let call = event(id: 1, role: "assistant", tool: "Read", callId: "t1", ts: "2026-04-18T18:00:00Z")
+        XCTAssertFalse(TimelineBuilder.isDropped(call: call, sessionEnded: false, now: now))
+    }
+
+    func testDroppedWhenCallOlderThanOneHour() {
+        let now = ISO8601DateFormatter().date(from: "2026-04-18T19:05:00Z")!
+        let call = event(id: 1, role: "assistant", tool: "Read", callId: "t1", ts: "2026-04-18T18:00:00Z")
+        XCTAssertTrue(TimelineBuilder.isDropped(call: call, sessionEnded: false, now: now))
+    }
+
     func testStableIDsAcrossBuilds() {
         let events = [
             event(id: 1, role: "user", text: "hi"),
