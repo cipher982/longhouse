@@ -1,10 +1,10 @@
-"""Tests for session_processing.summarize and the briefing endpoint.
+"""Tests for session_processing.summarize and briefing formatting.
 
 Tests cover:
     - SessionSummary dataclass creation
     - quick_summary with mock AsyncOpenAI client
     - _format_age helper (relative time formatting)
-    - GET /agents/briefing endpoint format
+    - briefing output formatting
 """
 
 from __future__ import annotations
@@ -273,8 +273,8 @@ class TestFormatAge:
 # =====================================================================
 
 
-class TestBriefingEndpoint:
-    """Test the GET /agents/briefing endpoint with a real SQLite DB."""
+class TestBriefingFormatting:
+    """Test briefing text construction with a real SQLite DB."""
 
     def _setup_db(self, tmp_path):
         """Set up a SQLite test database with sessions."""
@@ -290,7 +290,7 @@ class TestBriefingEndpoint:
         return Session()
 
     def test_briefing_returns_summaries(self, tmp_path):
-        """Briefing endpoint returns formatted summaries for sessions with pre-computed summaries."""
+        """Briefing text includes formatted summaries for sessions with pre-computed summaries."""
         from zerg.models.agents import AgentSession as _AgentSession
 
         db = self._setup_db(tmp_path)
@@ -388,7 +388,7 @@ class TestBriefingEndpoint:
         db.close()
 
     def test_briefing_respects_limit(self, tmp_path):
-        """Briefing endpoint respects the limit parameter."""
+        """Briefing text respects the requested limit."""
         from zerg.models.agents import AgentSession as _AgentSession
 
         db = self._setup_db(tmp_path)

@@ -115,13 +115,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"Auto-seed failed (non-fatal): {e}")
 
-        # Demo mode warnings
-        if _settings.demo_mode and not _settings.testing:
-            if not _settings.discord_webhook_url:
-                logger.warning(
-                    "DISCORD_WEBHOOK_URL not set — waitlist signups will return 503. " "Set this env var to enable waitlist collection."
-                )
-
         # Demo session seeding
         if _settings.demo_mode and not _settings.testing:
             try:

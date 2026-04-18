@@ -66,7 +66,7 @@ Use it for directed session actions such as:
 - Responses are JSON-only.
 - UUIDs are serialized as strings.
 - Timestamps are ISO-8601 UTC strings.
-- List responses use stable envelopes like `{sessions, total}`, `{events, total}`, `{messages, total}`, or `{insights, total}`.
+- List responses use stable envelopes like `{sessions, total}`, `{events, total}`, `{messages, total}`, or `{turns, total}`.
 - Directed message payloads use explicit delivery fields instead of inferring state from fetch behavior.
 - Machine errors should use normal HTTP status codes plus JSON `detail`.
 
@@ -87,6 +87,8 @@ Use it for directed session actions such as:
 - `GET /api/agents/sessions/{session_id}/workspace`
 - `GET /api/agents/sessions/{session_id}/preview`
 - `GET /api/agents/sessions/{session_id}/export`
+- `GET /api/agents/sessions/{session_id}/turns`
+- `GET /api/agents/sessions/{session_id}/turns/{turn_id}`
 
 ### Coordination and directed messaging
 
@@ -105,19 +107,10 @@ Current delivery model:
 ### Continuity and project context
 
 - `GET /api/agents/recall`
-- `GET /api/agents/briefing`
-- `POST /api/agents/reflect`
-- `GET /api/agents/reflections`
-- `GET /api/agents/insights`
-- `POST /api/agents/insights`
-
-Compatibility note:
-
-- `POST /api/insights` remains supported for existing machine callers, but new machine clients should use `POST /api/agents/insights`.
 
 ## Browser Relationship
 
-The browser owns presentation-first routes such as `/api/timeline/*` and browser-auth insight reads/archive actions under `/api/insights`.
+The browser owns presentation-first routes such as `/api/timeline/*`.
 
 That browser surface is a veneer, not the canon:
 
@@ -130,8 +123,8 @@ Examples:
 
 - `/api/timeline/sessions` is a browser archive feed
 - `/api/agents/sessions` is the canonical machine session listing/search surface
-- `/api/insights` `GET` is browser-owned
-- `/api/agents/insights` `GET/POST` is machine-owned
+- `/api/timeline/sessions/{session_id}/turns` is a browser inspection route
+- `/api/agents/sessions/{session_id}/turns` is the canonical machine-facing turn surface
 
 ## CLI Parity
 

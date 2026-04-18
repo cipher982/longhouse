@@ -560,7 +560,7 @@ class TestFullFlow:
 
 
 class TestBriefingInsights:
-    """Tests for insights appearing in the briefing endpoint output."""
+    """Tests for insights appearing in briefing output."""
 
     def _build_briefing(self, db, project="myapp"):
         """Build briefing text using the same logic as the endpoint."""

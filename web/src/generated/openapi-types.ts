@@ -2494,116 +2494,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/funnel/batch": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Track Batch
-         * @description Track multiple events in one request (reduces network calls).
-         */
-        post: operations["track_batch_funnel_batch_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/funnel/stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Stats
-         * @description Get funnel statistics.
-         *
-         *     Args:
-         *         hours: Time period in hours (default 24)
-         */
-        get: operations["get_stats_funnel_stats_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/funnel/stitch-visitor": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Stitch Visitor
-         * @description Link anonymous visitor to authenticated user.
-         */
-        post: operations["stitch_visitor_funnel_stitch_visitor_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/funnel/attribution": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Attribution
-         * @description Get attribution breakdown by UTM source and campaign.
-         *
-         *     Args:
-         *         hours: Time period in hours (default 72 = 3 days)
-         */
-        get: operations["get_attribution_funnel_attribution_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/waitlist": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Join Waitlist
-         * @description Add email to waitlist via Discord webhook.
-         *
-         *     This endpoint is public (no auth required). Discord is the durable
-         *     record — the call is synchronous so we know if it succeeded before
-         *     telling the user.
-         */
-        post: operations["join_waitlist_waitlist_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/traces/": {
         parameters: {
             query?: never;
@@ -3203,6 +3093,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/timeline/sessions/{session_id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Session Turns */
+        get: operations["get_timeline_session_turns_timeline_sessions__session_id__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/timeline/sessions/{session_id}/turns/{turn_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Timeline Session Turn */
+        get: operations["get_timeline_session_turn_timeline_sessions__session_id__turns__turn_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/timeline/sessions/{session_id}/events": {
         parameters: {
             query?: never;
@@ -3444,6 +3368,46 @@ export interface paths {
          *     raw log — no summary layer in between.
          */
         get: operations["session_tail_agents_sessions__session_id__tail_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/turns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Turns
+         * @description List canonical turn timing rows for one session.
+         */
+        get: operations["get_session_turns_agents_sessions__session_id__turns_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/agents/sessions/{session_id}/turns/{turn_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Session Turn Detail
+         * @description Get one canonical turn timing row for a session.
+         */
+        get: operations["get_session_turn_detail_agents_sessions__session_id__turns__turn_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6852,7 +6816,10 @@ export interface components {
             /** Source Event Id */
             source_event_id?: number | null;
         };
-        /** SessionMessageRequest */
+        /**
+         * SessionMessageRequest
+         * @description Request to send one message into an explicit session interaction path.
+         */
         SessionMessageRequest: {
             /**
              * Message
@@ -7320,6 +7287,115 @@ export interface components {
             head_session_id: string;
             /** Sessions */
             sessions: components["schemas"]["SessionResponse"][];
+        };
+        /**
+         * SessionTurnEnvelopeResponse
+         * @description Envelope for turn detail responses.
+         */
+        SessionTurnEnvelopeResponse: {
+            turn: components["schemas"]["SessionTurnResponse"];
+        };
+        /**
+         * SessionTurnResponse
+         * @description Canonical public timing fields for one session turn.
+         */
+        SessionTurnResponse: {
+            /**
+             * Id
+             * @description Turn integer id
+             */
+            id: number;
+            /**
+             * Session Id
+             * @description Owning session UUID
+             */
+            session_id: string;
+            /**
+             * Request Id
+             * @description Transport/control request id when available
+             */
+            request_id?: string | null;
+            /**
+             * State
+             * @description created|send_accepted|active|terminal|durable|failed
+             */
+            state: string;
+            /**
+             * Terminal Phase
+             * @description Observed terminal phase when known
+             */
+            terminal_phase?: string | null;
+            /**
+             * Error Code
+             * @description Canonical irrecoverable error code when failed
+             */
+            error_code?: string | null;
+            /**
+             * User Event Id
+             * @description Triggering durable user event id
+             */
+            user_event_id?: number | null;
+            /**
+             * Durable Assistant Event Id
+             * @description Durable assistant event id that closed the turn
+             */
+            durable_assistant_event_id?: number | null;
+            /**
+             * Baseline Event Id
+             * @description Latest durable event id observed before the turn began
+             */
+            baseline_event_id?: number | null;
+            /**
+             * Baseline Runtime Cursor
+             * @description Latest runtime cursor observed before the turn began
+             */
+            baseline_runtime_cursor?: number | null;
+            /**
+             * User Submitted At
+             * Format: date-time
+             * @description When the user prompt was accepted as a turn
+             */
+            user_submitted_at: string;
+            /**
+             * Send Accepted At
+             * @description When transport accepted the prompt send
+             */
+            send_accepted_at?: string | null;
+            /**
+             * Active Phase Observed At
+             * @description When Longhouse first observed active runtime work
+             */
+            active_phase_observed_at?: string | null;
+            /**
+             * Terminal At
+             * @description When the turn reached terminal phase
+             */
+            terminal_at?: string | null;
+            /**
+             * Durable At
+             * @description When transcript durability was established
+             */
+            durable_at?: string | null;
+            /**
+             * Created At
+             * @description Row creation timestamp
+             */
+            created_at?: string | null;
+            /**
+             * Updated At
+             * @description Row update timestamp
+             */
+            updated_at?: string | null;
+        };
+        /**
+         * SessionTurnsListResponse
+         * @description Response for a stable per-session turn listing.
+         */
+        SessionTurnsListResponse: {
+            /** Turns */
+            turns: components["schemas"]["SessionTurnResponse"][];
+            /** Total */
+            total: number;
         };
         /**
          * SessionWorkspaceResponse
@@ -8054,29 +8130,6 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
-        };
-        /**
-         * WaitlistRequest
-         * @description Request body for waitlist signup.
-         */
-        WaitlistRequest: {
-            /** Email */
-            email: string;
-            /**
-             * Source
-             * @default pricing_hosted
-             */
-            source: string;
-        };
-        /**
-         * WaitlistResponse
-         * @description Response for waitlist signup.
-         */
-        WaitlistResponse: {
-            /** Success */
-            success: boolean;
-            /** Message */
-            message: string;
         };
         /**
          * WallResponse
@@ -12270,141 +12323,6 @@ export interface operations {
             };
         };
     };
-    track_batch_funnel_batch_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    get_stats_funnel_stats_get: {
-        parameters: {
-            query?: {
-                hours?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    stitch_visitor_funnel_stitch_visitor_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
-    get_attribution_funnel_attribution_get: {
-        parameters: {
-            query?: {
-                hours?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    join_waitlist_waitlist_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WaitlistRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WaitlistResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     list_traces_traces__get: {
         parameters: {
             query?: {
@@ -13572,6 +13490,76 @@ export interface operations {
             };
         };
     };
+    get_timeline_session_turns_timeline_sessions__session_id__turns_get: {
+        parameters: {
+            query?: {
+                /** @description Max turns to return */
+                limit?: number;
+                /** @description Offset within the stable per-session turn order */
+                offset?: number;
+                /** @description Turn order: asc|desc */
+                order?: string;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTurnsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_timeline_session_turn_timeline_sessions__session_id__turns__turn_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                turn_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTurnEnvelopeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_timeline_session_events_timeline_sessions__session_id__events_get: {
         parameters: {
             query?: {
@@ -14035,6 +14023,76 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_turns_agents_sessions__session_id__turns_get: {
+        parameters: {
+            query?: {
+                /** @description Max turns to return */
+                limit?: number;
+                /** @description Offset within the stable per-session turn order */
+                offset?: number;
+                /** @description Turn order: asc|desc */
+                order?: string;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTurnsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_session_turn_detail_agents_sessions__session_id__turns__turn_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+                turn_id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionTurnEnvelopeResponse"];
                 };
             };
             /** @description Validation Error */
