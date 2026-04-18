@@ -21,21 +21,10 @@ permissions:
   id-token: write
 
 jobs:
-  build-engine:
+  build-engine-linux-x64:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            engine_asset: longhouse-engine-linux-x64
-            codex_asset: longhouse-codex-linux-x64
-          - os: ubuntu-24.04-arm
-            engine_asset: longhouse-engine-linux-arm64
-            codex_asset: longhouse-codex-linux-arm64
-
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -47,7 +36,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install Linux build deps for managed Codex
-        if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
@@ -85,22 +73,92 @@ jobs:
       - name: Stage managed Codex release asset
         run: |
           mkdir -p binaries
-          cp prebuilt/longhouse-codex "binaries/${{ matrix.codex_asset }}"
-          chmod +x "binaries/${{ matrix.codex_asset }}"
+          cp prebuilt/longhouse-codex binaries/longhouse-codex-linux-x64
+          chmod +x binaries/longhouse-codex-linux-x64
 
       - name: Collect engine binary
         run: |
           mkdir -p binaries
-          cp engine/target/release/longhouse-engine "binaries/${{ matrix.engine_asset }}"
-          chmod +x "binaries/${{ matrix.engine_asset }}"
+          cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-x64
+          chmod +x binaries/longhouse-engine-linux-x64
 
       - name: Upload runtime artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: runtime-${{ matrix.engine_asset }}
+          name: runtime-longhouse-engine-linux-x64
           path: |
-            binaries/${{ matrix.engine_asset }}
-            binaries/${{ matrix.codex_asset }}
+            binaries/longhouse-engine-linux-x64
+            binaries/longhouse-codex-linux-x64
+          retention-days: 7
+
+  build-engine-linux-arm64:
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build deps for managed Codex
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
+
+      - name: Build engine binary
+        run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
+
+      - name: Restore managed Codex cargo dependency cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
+          restore-keys: |
+            managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-
+            managed-codex-cargo-${{ runner.os }}-
+
+      - name: Prepare managed Codex cache directory
+        run: mkdir -p prebuilt
+
+      - name: Restore managed Codex binary cache
+        id: managed_codex_binary_cache
+        uses: actions/cache@v4
+        with:
+          path: prebuilt/longhouse-codex
+          key: managed-codex-binary-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
+
+      - name: Build managed Codex binary
+        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit != 'true' }}
+        run: |
+          chmod +x scripts/release/build-managed-codex.sh
+          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
+
+      - name: Stage managed Codex release asset
+        run: |
+          mkdir -p binaries
+          cp prebuilt/longhouse-codex binaries/longhouse-codex-linux-arm64
+          chmod +x binaries/longhouse-codex-linux-arm64
+
+      - name: Collect engine binary
+        run: |
+          mkdir -p binaries
+          cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-arm64
+          chmod +x binaries/longhouse-engine-linux-arm64
+
+      - name: Upload runtime artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: runtime-longhouse-engine-linux-arm64
+          path: |
+            binaries/longhouse-engine-linux-arm64
+            binaries/longhouse-codex-linux-arm64
           retention-days: 7
 
   build-macos:
@@ -595,7 +653,7 @@ jobs:
 
   release:
     needs:
-      - build-engine
+      - build-engine-linux-x64
       - build-macos
     runs-on: ubuntu-latest
     env:
@@ -614,11 +672,17 @@ jobs:
             echo "tier=smoke" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download runtime artifacts
+      - name: Download macOS runtime artifacts
         uses: actions/download-artifact@v5
         with:
           path: binaries
-          merge-multiple: true
+          name: runtime-macos
+
+      - name: Download linux x64 runtime artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: binaries
+          name: runtime-longhouse-engine-linux-x64
 
       - name: List runtime artifacts
         run: ls -la binaries
@@ -658,14 +722,42 @@ jobs:
           subject-path: |
             binaries/longhouse-engine-darwin-arm64
             binaries/longhouse-engine-linux-x64
-            binaries/longhouse-engine-linux-arm64
             binaries/longhouse-codex-darwin-arm64
             binaries/longhouse-codex-linux-x64
-            binaries/longhouse-codex-linux-arm64
             binaries/Longhouse-macos-arm64.dmg
             binaries/Longhouse-macos-arm64.zip
             binaries/local-runtime-macos-packaging.json
             binaries/local-runtime-checksums.txt
+
+  release-attach-arm64:
+    needs:
+      - release
+      - build-engine-linux-arm64
+    if: ${{ needs.build-engine-linux-arm64.result == 'success' }}
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Download linux arm64 runtime artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: runtime-longhouse-engine-linux-arm64
+          path: binaries
+
+      - name: List arm64 artifacts
+        run: ls -la binaries
+
+      - name: Upload arm64 assets to release
+        run: gh release upload "$RELEASE_TAG" binaries/longhouse-engine-linux-arm64 binaries/longhouse-codex-linux-arm64 --clobber --repo "${{ github.repository }}"
+
+      - name: Attest arm64 release artifacts
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            binaries/longhouse-engine-linux-arm64
+            binaries/longhouse-codex-linux-arm64
 
   verify-install-from-release:
     name: "verify-install-from-release--${{ matrix.os }}"
