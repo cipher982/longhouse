@@ -1,9 +1,10 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Navigate, useLocation } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import config from './config';
 import { buildLoginUrl } from './loginRedirect';
+import { requestNativeAuth, supportsNativeAuthBridge } from './nativeAuthBridge';
 import { useServiceHealth, isServiceUnavailable } from './useServiceHealth';
 import { ServiceUnavailable } from '../components/ServiceUnavailable';
 
@@ -220,6 +221,23 @@ export function useCurrentUserQuery() {
   });
 }
 
+function NativeAuthHandoff({ returnTo }: { returnTo: string }) {
+  useEffect(() => {
+    requestNativeAuth(returnTo);
+  }, [returnTo]);
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      height: '100vh', fontSize: '1.2rem',
+      background: 'linear-gradient(135deg, #120B09 0%, #1A1410 100%)',
+      color: 'rgba(243, 234, 217, 0.7)',
+    }}>
+      Returning to sign in...
+    </div>
+  );
+}
+
 // Global Google Sign-In SDK type augmentation (used by LoginPage)
 declare global {
   interface Window {
@@ -344,6 +362,9 @@ export function AuthGuard({ children }: AuthGuardProps) {
 
   if (!isAuthenticated) {
     const returnTo = location.pathname + location.search + location.hash;
+    if (supportsNativeAuthBridge()) {
+      return <NativeAuthHandoff returnTo={returnTo} />;
+    }
     return <Navigate to={buildLoginUrl(returnTo)} replace />;
   }
 

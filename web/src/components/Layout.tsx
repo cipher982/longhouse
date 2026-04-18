@@ -3,6 +3,7 @@ import { useState, useCallback, useEffect, useRef, type PropsWithChildren } from
 import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth, useAuthMethods } from "../lib/auth";
+import { requestNativeAuth } from "../lib/nativeAuthBridge";
 import { useShelf } from "../lib/useShelfState";
 import { ConnectionStatus, ConnectionStatusIndicator } from "../lib/useWebSocket";
 import { useApiHealth } from "../lib/apiHealth";
@@ -104,6 +105,7 @@ function WelcomeHeader() {
     if (confirmed) {
       closeUserMenu();
       await logout();
+      requestNativeAuth(window.location.pathname + window.location.search + window.location.hash);
     }
   };
 

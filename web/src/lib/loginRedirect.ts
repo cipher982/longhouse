@@ -42,3 +42,7 @@ export function buildLoginUrl(returnTo: string): string {
   const safe = sanitizeReturnTo(returnTo);
   return `/login?return_to=${encodeURIComponent(safe)}`;
 }
+
+export function replaceWithLoginUrl(returnTo: string): void {
+  window.location.replace(buildLoginUrl(returnTo));
+}

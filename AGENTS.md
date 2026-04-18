@@ -254,3 +254,4 @@ If asked about Sauron, private cron packs, or job failures outside the core prod
 - Menu bar process/session truth should be modeled explicitly, not inferred from `recent activity`; fixture-first states like `attached`, `detached`, `degraded`, and `orphan bridge` are the right harness loop before wiring live data.
 - Timeline scroll performance is fragile: hover prefetch, card hover transitions, and decorative shell animations can steal raster budget during active scroll and should be suppressed when scrolling.
 - `/api/threads/{id}/runs` needs direct backend coverage. Dead runtime imports can survive broad suites and only surface in hosted chat smoke.
+- iOS auth boundary fixes cannot rely on `WKNavigationDelegate` alone; React/SPA transitions to `/login` can bypass network navigation, so the shell must also observe in-page history changes before web login leaks into the app.

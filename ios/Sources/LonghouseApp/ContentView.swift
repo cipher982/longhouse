@@ -21,8 +21,8 @@ struct ContentView: View {
                 LonghouseWebView(
                     serverURL: appState.serverURL,
                     initialPath: appState.postLoginPath
-                ) { interceptedURL in
-                    Task { await appState.signOutAndReturnToLogin(interceptedURL: interceptedURL) }
+                ) { requestedPostLoginPath in
+                    Task { await appState.signOutAndReturnToLogin(postLoginPath: requestedPostLoginPath) }
                 }
                 .ignoresSafeArea(.all, edges: .bottom)
                     .overlay(alignment: .topTrailing) {
