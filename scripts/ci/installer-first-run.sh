@@ -206,16 +206,7 @@ onboard_supports_flag() {
 
 run_onboard_quickstart() {
   local log_path="$1"
-  local -a cmd=(longhouse onboard)
-
-  if onboard_supports_flag "--topology"; then
-    cmd+=(--topology local --no-browser --port "$PORT")
-  else
-    cmd+=(--quick --no-browser --port "$PORT")
-    if onboard_supports_flag "--no-demo"; then
-      cmd+=(--no-demo)
-    fi
-  fi
+  local -a cmd=(longhouse onboard --topology local --no-browser --port "$PORT")
 
   log "🧭 Onboarding command: ${cmd[*]}"
   "${cmd[@]}" | tee "$log_path"
