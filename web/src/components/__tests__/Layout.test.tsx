@@ -19,13 +19,6 @@ vi.mock("../../components/confirm", () => ({
   useConfirm: () => vi.fn().mockResolvedValue(true),
 }));
 
-vi.mock("../../lib/useShelfState", () => ({
-  useShelf: () => ({
-    isShelfOpen: false,
-    toggleShelf: vi.fn(),
-  }),
-}));
-
 vi.mock("../../lib/apiHealth", () => ({
   useApiHealth: () => null,
 }));

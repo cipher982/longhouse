@@ -24,14 +24,10 @@
 /* Components */
 @import url("./ui.css");
 @import url("./modal.css");
-@import url("./chat.css");
 
 /* Pages */
 @import url("./profile-admin.css");
 @import url("./admin-ops.css");
 @import url("./settings.css");
-@import url("./css/automation-settings.css");
 @import url("./marketing-mode.css");
-@import url("./reliability.css");
-@import url("./trace-explorer.css");
 @import url("./page-shell.css");

@@ -1,5 +1,4 @@
 import React, { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "react-hot-toast";
 import { useAuth } from "../lib/auth";
@@ -971,40 +970,6 @@ function AdminPage() {
                     <span className="info-value">{summary.latency_ms.p50}ms</span>
                   </div>
                 </div>
-              </div>
-            </Card.Body>
-          </Card>
-
-          {/* Developer Tools */}
-          <Card>
-            <Card.Header>
-              <h3 className="admin-section-title ui-section-title">Developer Tools</h3>
-            </Card.Header>
-            <Card.Body>
-              <div className="admin-devtools-grid">
-                <Link to="/traces" className="admin-devtools-link">
-                  <div className="admin-devtool-card admin-devtool-card--trace">
-                    <div className="admin-devtool-header">
-                      <span className="admin-devtool-icon">🔍</span>
-                      <span className="admin-devtool-title">Trace Explorer</span>
-                    </div>
-                    <p className="admin-devtool-desc">
-                      Debug chat runs, session continuations, and LLM calls with unified trace timelines.
-                    </p>
-                  </div>
-                </Link>
-
-                <Link to="/reliability" className="admin-devtools-link">
-                  <div className="admin-devtool-card admin-devtool-card--reliability">
-                    <div className="admin-devtool-header">
-                      <span className="admin-devtool-icon">📊</span>
-                      <span className="admin-devtool-title">Reliability Dashboard</span>
-                    </div>
-                    <p className="admin-devtool-desc">
-                      Monitor system reliability metrics, error rates, and performance trends.
-                    </p>
-                  </div>
-                </Link>
               </div>
             </Card.Body>
           </Card>
