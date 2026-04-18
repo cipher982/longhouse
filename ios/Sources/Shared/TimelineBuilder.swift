@@ -1,10 +1,17 @@
 import Foundation
 
+struct PassiveCall: Identifiable, Sendable {
+    let call: SessionEvent
+    let result: SessionEvent?
+    var id: Int { call.id }
+}
+
 enum TimelineItem: Identifiable, Sendable {
     case user(SessionEvent)
     case assistant(SessionEvent)
     case tool(call: SessionEvent, result: SessionEvent?)
     case orphanTool(SessionEvent)
+    case passiveGroup(calls: [PassiveCall])
 
     var id: String {
         switch self {
@@ -12,6 +19,9 @@ enum TimelineItem: Identifiable, Sendable {
         case .assistant(let e): return "prose:\(e.id)"
         case .tool(let call, _): return "tool:\(call.id)"
         case .orphanTool(let e): return "orphan:\(e.id)"
+        case .passiveGroup(let calls):
+            let firstId = calls.first?.call.id ?? 0
+            return "passive:\(firstId)"
         }
     }
 
@@ -21,17 +31,35 @@ enum TimelineItem: Identifiable, Sendable {
             return e.timestamp
         case .tool(let call, _):
             return call.timestamp
+        case .passiveGroup(let calls):
+            return calls.first?.call.timestamp ?? ""
         }
     }
 }
 
 enum TimelineBuilder {
+    /// Tools that are passive reads/searches — safe to collapse into a single
+    /// row when they appear in a run within a turn. Covers both Claude
+    /// (Read, Grep, Glob, ...) and Codex (read_file, grep, list_files, ...)
+    /// primitives. Bash and Task are deliberately excluded: Bash can do
+    /// anything, Task spawns a subagent, and both deserve individual rows.
+    static let passiveToolNames: Set<String> = [
+        // Claude
+        "Read", "Grep", "Glob", "ToolSearch", "WebFetch", "WebSearch",
+        // Codex
+        "read_file", "grep", "list_files", "find", "codebase_search", "web_search",
+    ]
+
     /// Build a paired, renderable timeline from raw events.
     /// Mirrors the web pairing logic: assistant-with-tool_name registers in a
     /// Map<tool_call_id, item>. Role=tool events look up their tool_call_id
     /// and attach as the result. Orphan tool events render as their own row.
+    ///
+    /// After pairing, consecutive passive tool calls are collapsed into a
+    /// single `.passiveGroup` row. User messages and non-passive tool calls
+    /// (Bash, Task, Edit, Write, …) are boundaries that flush the buffer.
     static func build(events: [SessionEvent]) -> [TimelineItem] {
-        var items: [TimelineItem] = []
+        var raw: [TimelineItem] = []
         var callIdToIndex: [String: Int] = [:]
 
         for event in events {
@@ -39,19 +67,19 @@ enum TimelineBuilder {
 
             switch event.role {
             case "user":
-                items.append(.user(event))
+                raw.append(.user(event))
 
             case "assistant":
                 let hasText = !(event.contentText ?? "").isEmpty
                 let hasTool = (event.toolName ?? "").isEmpty == false
 
                 if hasText {
-                    items.append(.assistant(event))
+                    raw.append(.assistant(event))
                 }
                 if hasTool {
-                    items.append(.tool(call: event, result: nil))
+                    raw.append(.tool(call: event, result: nil))
                     if let callId = event.toolCallId, !callId.isEmpty {
-                        callIdToIndex[callId] = items.count - 1
+                        callIdToIndex[callId] = raw.count - 1
                     }
                 }
                 // Assistants with neither text nor tool_name are dropped silently.
@@ -59,21 +87,54 @@ enum TimelineBuilder {
             case "tool":
                 if let callId = event.toolCallId,
                    let idx = callIdToIndex[callId],
-                   case .tool(let call, _) = items[idx] {
-                    items[idx] = .tool(call: call, result: event)
+                   case .tool(let call, _) = raw[idx] {
+                    raw[idx] = .tool(call: call, result: event)
                 } else {
-                    items.append(.orphanTool(event))
+                    raw.append(.orphanTool(event))
                 }
 
             default:
                 // Unknown role: treat as assistant prose for safety.
                 if !(event.contentText ?? "").isEmpty {
-                    items.append(.assistant(event))
+                    raw.append(.assistant(event))
                 }
             }
         }
 
-        return items
+        return collapsePassive(raw)
+    }
+
+    /// Collapse runs of 2+ consecutive passive tool calls into `.passiveGroup`
+    /// rows. A single passive call stays as `.tool` — one row already, no
+    /// need to add an expander. Non-passive items (user, assistant, active
+    /// tool calls, orphans) flush the buffer.
+    static func collapsePassive(_ items: [TimelineItem]) -> [TimelineItem] {
+        var out: [TimelineItem] = []
+        var buffer: [PassiveCall] = []
+
+        func flush() {
+            guard !buffer.isEmpty else { return }
+            if buffer.count == 1 {
+                let only = buffer[0]
+                out.append(.tool(call: only.call, result: only.result))
+            } else {
+                out.append(.passiveGroup(calls: buffer))
+            }
+            buffer.removeAll()
+        }
+
+        for item in items {
+            switch item {
+            case .tool(let call, let result)
+                where passiveToolNames.contains(call.toolName ?? ""):
+                buffer.append(PassiveCall(call: call, result: result))
+            default:
+                flush()
+                out.append(item)
+            }
+        }
+        flush()
+        return out
     }
 
     /// Extract a one-line human summary from a tool call's input JSON.

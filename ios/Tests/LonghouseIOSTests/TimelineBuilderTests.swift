@@ -165,6 +165,178 @@ final class TimelineBuilderTests: XCTestCase {
         let a = TimelineBuilder.build(events: events)
         let b = TimelineBuilder.build(events: events)
         XCTAssertEqual(a.map(\.id), b.map(\.id))
-        XCTAssertEqual(a[1].id, "tool:2")  // stable even after result attaches
+        XCTAssertEqual(a[1].id, "tool:2")  // single passive stays as .tool
+    }
+
+    // MARK: - Passive collapse
+
+    func testSinglePassiveCallStaysAsTool() {
+        let events = [
+            event(id: 1, role: "user", text: "hi"),
+            event(id: 2, role: "assistant", tool: "Read", input: ["file_path": .string("/a.swift")], callId: "t1"),
+            event(id: 3, role: "tool", output: "ok", callId: "t1"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        XCTAssertEqual(items.count, 2)
+        guard case .tool = items[1] else {
+            return XCTFail("Single passive call should not collapse into a passiveGroup")
+        }
+    }
+
+    func testConsecutivePassivesCollapseIntoGroup() {
+        let events = [
+            event(id: 1, role: "user", text: "go"),
+            event(id: 2, role: "assistant", tool: "Read", input: ["file_path": .string("/a.swift")], callId: "t1"),
+            event(id: 3, role: "tool", output: "ok", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "Grep", input: ["pattern": .string("foo")], callId: "t2"),
+            event(id: 5, role: "tool", output: "1 match", callId: "t2"),
+            event(id: 6, role: "assistant", tool: "Read", input: ["file_path": .string("/b.swift")], callId: "t3"),
+            event(id: 7, role: "tool", output: "ok", callId: "t3"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        XCTAssertEqual(items.count, 2)
+        guard case .passiveGroup(let calls) = items[1] else {
+            return XCTFail("Expected passive group")
+        }
+        XCTAssertEqual(calls.count, 3)
+        XCTAssertEqual(calls.map(\.call.id), [2, 4, 6])
+        XCTAssertEqual(calls.map(\.result?.id), [3, 5, 7])
+    }
+
+    func testActiveToolInMiddleSplitsIntoTwoGroups() {
+        let events = [
+            event(id: 1, role: "user", text: "go"),
+            event(id: 2, role: "assistant", tool: "Read", callId: "t1"),
+            event(id: 3, role: "tool", output: "ok", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "Grep", callId: "t2"),
+            event(id: 5, role: "tool", output: "ok", callId: "t2"),
+            event(id: 6, role: "assistant", tool: "Bash", input: ["command": .string("ls")], callId: "t3"),
+            event(id: 7, role: "tool", output: "files", callId: "t3"),
+            event(id: 8, role: "assistant", tool: "Read", callId: "t4"),
+            event(id: 9, role: "tool", output: "ok", callId: "t4"),
+            event(id: 10, role: "assistant", tool: "Glob", callId: "t5"),
+            event(id: 11, role: "tool", output: "ok", callId: "t5"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        // user, passiveGroup(2,4), tool(6=Bash), passiveGroup(8,10)
+        XCTAssertEqual(items.count, 4)
+        guard case .user = items[0] else { return XCTFail("item 0") }
+        guard case .passiveGroup(let first) = items[1] else { return XCTFail("item 1") }
+        XCTAssertEqual(first.map(\.call.id), [2, 4])
+        guard case .tool(let bashCall, _) = items[2] else { return XCTFail("item 2") }
+        XCTAssertEqual(bashCall.toolName, "Bash")
+        guard case .passiveGroup(let second) = items[3] else { return XCTFail("item 3") }
+        XCTAssertEqual(second.map(\.call.id), [8, 10])
+    }
+
+    func testBashDoesNotCollapse() {
+        let events = [
+            event(id: 1, role: "user", text: "go"),
+            event(id: 2, role: "assistant", tool: "Bash", input: ["command": .string("ls")], callId: "t1"),
+            event(id: 3, role: "tool", output: "a", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "Bash", input: ["command": .string("pwd")], callId: "t2"),
+            event(id: 5, role: "tool", output: "/", callId: "t2"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        XCTAssertEqual(items.count, 3)
+        guard case .tool = items[1], case .tool = items[2] else {
+            return XCTFail("Bash calls should remain as individual .tool rows")
+        }
+    }
+
+    func testTaskDoesNotCollapse() {
+        let events = [
+            event(id: 1, role: "user", text: "go"),
+            event(id: 2, role: "assistant", tool: "Task", input: ["prompt": .string("do it")], callId: "t1"),
+            event(id: 3, role: "tool", output: "done", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "Task", input: ["prompt": .string("next")], callId: "t2"),
+            event(id: 5, role: "tool", output: "done", callId: "t2"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        XCTAssertEqual(items.count, 3)
+        guard case .tool(let a, _) = items[1], a.toolName == "Task" else {
+            return XCTFail("Task should stay as .tool")
+        }
+        guard case .tool(let b, _) = items[2], b.toolName == "Task" else {
+            return XCTFail("Task should stay as .tool")
+        }
+    }
+
+    func testCodexPassiveNamesAlsoCollapse() {
+        let events = [
+            event(id: 1, role: "user", text: "go"),
+            event(id: 2, role: "assistant", tool: "read_file", input: ["file_path": .string("/a.swift")], callId: "t1"),
+            event(id: 3, role: "tool", output: "ok", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "grep", input: ["pattern": .string("x")], callId: "t2"),
+            event(id: 5, role: "tool", output: "ok", callId: "t2"),
+            event(id: 6, role: "assistant", tool: "list_files", callId: "t3"),
+            event(id: 7, role: "tool", output: "ok", callId: "t3"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        XCTAssertEqual(items.count, 2)
+        guard case .passiveGroup(let calls) = items[1] else {
+            return XCTFail("Codex passive names should collapse")
+        }
+        XCTAssertEqual(calls.count, 3)
+        XCTAssertEqual(calls.map(\.call.toolName), ["read_file", "grep", "list_files"])
+    }
+
+    func testUserMessageBreaksPassiveRun() {
+        let events = [
+            event(id: 1, role: "user", text: "first"),
+            event(id: 2, role: "assistant", tool: "Read", callId: "t1"),
+            event(id: 3, role: "tool", output: "ok", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "Grep", callId: "t2"),
+            event(id: 5, role: "tool", output: "ok", callId: "t2"),
+            event(id: 6, role: "user", text: "second"),
+            event(id: 7, role: "assistant", tool: "Read", callId: "t3"),
+            event(id: 8, role: "tool", output: "ok", callId: "t3"),
+            event(id: 9, role: "assistant", tool: "Glob", callId: "t4"),
+            event(id: 10, role: "tool", output: "ok", callId: "t4"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        // user, passiveGroup(2,4), user, passiveGroup(7,9)
+        XCTAssertEqual(items.count, 4)
+        guard case .passiveGroup(let first) = items[1] else { return XCTFail("first group") }
+        XCTAssertEqual(first.map(\.call.id), [2, 4])
+        guard case .user = items[2] else { return XCTFail("second user") }
+        guard case .passiveGroup(let second) = items[3] else { return XCTFail("second group") }
+        XCTAssertEqual(second.map(\.call.id), [7, 9])
+    }
+
+    func testAssistantProseBetweenPassivesDoesNotCollapseAcross() {
+        let events = [
+            event(id: 1, role: "user", text: "go"),
+            event(id: 2, role: "assistant", tool: "Read", callId: "t1"),
+            event(id: 3, role: "tool", output: "ok", callId: "t1"),
+            event(id: 4, role: "assistant", text: "Let me also search."),
+            event(id: 5, role: "assistant", tool: "Grep", callId: "t2"),
+            event(id: 6, role: "tool", output: "ok", callId: "t2"),
+            event(id: 7, role: "assistant", tool: "Glob", callId: "t3"),
+            event(id: 8, role: "tool", output: "ok", callId: "t3"),
+        ]
+        let items = TimelineBuilder.build(events: events)
+        // user, tool(Read single), assistant prose, passiveGroup(Grep, Glob)
+        XCTAssertEqual(items.count, 4)
+        guard case .tool(let readCall, _) = items[1], readCall.toolName == "Read" else {
+            return XCTFail("Read alone stays as .tool")
+        }
+        guard case .assistant = items[2] else { return XCTFail("assistant prose") }
+        guard case .passiveGroup(let grp) = items[3] else { return XCTFail("second group") }
+        XCTAssertEqual(grp.map(\.call.id), [5, 7])
+    }
+
+    func testPassiveGroupStableID() {
+        let events = [
+            event(id: 1, role: "user", text: "go"),
+            event(id: 2, role: "assistant", tool: "Read", callId: "t1"),
+            event(id: 3, role: "tool", output: "ok", callId: "t1"),
+            event(id: 4, role: "assistant", tool: "Grep", callId: "t2"),
+            event(id: 5, role: "tool", output: "ok", callId: "t2"),
+        ]
+        let a = TimelineBuilder.build(events: events)
+        let b = TimelineBuilder.build(events: events)
+        XCTAssertEqual(a.map(\.id), b.map(\.id))
+        XCTAssertEqual(a[1].id, "passive:2")
     }
 }
