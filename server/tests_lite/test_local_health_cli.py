@@ -143,6 +143,14 @@ def _write_service_plist(
 
 def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
+    # Stub the live process scan by default so tests don't pick up the dev
+    # box's real Claude/Codex processes. Tests that want process-scan output
+    # override this explicitly.
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_managed_sessions_by_process",
+        lambda *, now, existing_session_ids: [],
+    )
 
 
 def _write_shipper_db(tmp_path: Path, rows: list[tuple[str, str, str | None, str | None, str]]) -> None:
@@ -987,3 +995,196 @@ def test_update_info_present_in_json_cli_output(monkeypatch, tmp_path: Path):
     assert payload["update_info"]["latest_version"] == "0.1.9"
     assert payload["update_info"]["upgrade_command"] == "uv tool upgrade longhouse"
     assert payload["update_info"]["supported"] is True
+
+
+# ----------------------------------------------------------------------------
+# Process-scan managed session detection
+# ----------------------------------------------------------------------------
+
+
+class _FakeProc:
+    """Minimal stand-in for psutil.Process for process_iter fixtures."""
+
+    def __init__(
+        self,
+        *,
+        pid: int,
+        cmdline: list[str],
+        create_time: float,
+        env: dict | None = None,
+        cwd: str | None = None,
+        real_uid: int | None = None,
+        env_raises: bool = False,
+        cwd_raises: bool = False,
+    ) -> None:
+        self.info = {"pid": pid, "cmdline": cmdline, "create_time": create_time}
+        self._env = env
+        self._cwd = cwd
+        self._real_uid = real_uid if real_uid is not None else os.getuid()
+        self._env_raises = env_raises
+        self._cwd_raises = cwd_raises
+
+    def uids(self):
+        return SimpleNamespace(real=self._real_uid)
+
+    def environ(self):
+        import psutil
+
+        if self._env_raises:
+            raise psutil.AccessDenied()
+        return self._env or {}
+
+    def cwd(self):
+        import psutil
+
+        if self._cwd_raises:
+            raise psutil.AccessDenied()
+        return self._cwd
+
+
+def _patch_process_iter(monkeypatch, procs: list[_FakeProc]) -> None:
+    import psutil
+
+    def fake_iter(_attrs=None):
+        return iter(procs)
+
+    monkeypatch.setattr(psutil, "process_iter", fake_iter)
+
+
+def test_process_scan_detects_claude_via_env(monkeypatch, tmp_path: Path):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=55507,
+        cmdline=["claude", "--dangerously-skip-permissions", "--session-id", "bfb567fb-7e0f-4552-8411-24f682751484"],
+        create_time=now.timestamp(),
+        env={
+            "LONGHOUSE_MANAGED_SESSION_ID": "bfb567fb-7e0f-4552-8411-24f682751484",
+            "LONGHOUSE_DEVICE_ID": "device-abc",
+            "LONGHOUSE_HOOK_TOKEN": "zdt_secret_do_not_leak",
+        },
+        cwd="/Users/test/git/zerg",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["session_id"] == "bfb567fb-7e0f-4552-8411-24f682751484"
+    assert row["provider"] == "claude"
+    assert row["pid"] == 55507
+    assert row["cwd"] == "/Users/test/git/zerg"
+    assert row["workspace_label"] == "zerg"
+    assert row["device_id"] == "device-abc"
+    assert row["state"] == "attached"
+    blob = json.dumps(row)
+    assert "zdt_secret_do_not_leak" not in blob
+    assert "LONGHOUSE_HOOK_TOKEN" not in blob
+
+
+def test_process_scan_falls_back_to_argv_when_env_empty(monkeypatch, tmp_path: Path):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=9001,
+        cmdline=["claude", "--session-id", "11111111-2222-3333-4444-555555555555"],
+        create_time=now.timestamp(),
+        env_raises=True,
+        cwd="/Users/test/launchctl-session",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == "11111111-2222-3333-4444-555555555555"
+    assert rows[0]["provider"] == "claude"
+    assert rows[0]["device_id"] is None
+
+
+def test_process_scan_skips_unmanaged_bare_cli(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=11466,
+        cmdline=["claude", "--dangerously-skip-permissions"],
+        create_time=now.timestamp(),
+        env={},  # no LONGHOUSE_MANAGED_SESSION_ID, no argv session-id
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+    assert rows == []
+
+
+def test_process_scan_skips_other_user_processes(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=777,
+        cmdline=["claude", "--session-id", "11111111-2222-3333-4444-555555555555"],
+        create_time=now.timestamp(),
+        real_uid=os.getuid() + 1,  # different user
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+    assert rows == []
+
+
+def test_process_scan_dedupes_against_existing_bridge_ids(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=8881,
+        cmdline=["/opt/codex", "codex-bridge"],
+        create_time=now.timestamp(),
+        env={"LONGHOUSE_MANAGED_SESSION_ID": "sess-codex-1"},
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids={"sess-codex-1"}
+    )
+    assert rows == []
+
+
+def test_collect_local_health_reports_claude_managed_session_via_process_scan(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_managed_sessions_by_process",
+        lambda *, now, existing_session_ids: [
+            {
+                "session_id": "bfb567fb-7e0f-4552-8411-24f682751484",
+                "provider": "claude",
+                "pid": 55507,
+                "workspace_label": "zerg",
+                "cwd": "/Users/test/git/zerg",
+                "device_id": "device-abc",
+                "started_at": "2026-04-19T00:00:00Z",
+                "branch": None,
+                "state": "attached",
+                "phase": "waiting for input",
+                "last_activity_at": "2026-04-19T00:00:00Z",
+                "bridge_status": None,
+                "bridge_pid": None,
+                "bridge_heartbeat_at": None,
+                "reason_codes": [],
+            }
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["managed_summary"]["attached_count"] == 1
+    assert snapshot["managed_sessions"][0]["provider"] == "claude"
+    assert snapshot["managed_sessions"][0]["session_id"] == "bfb567fb-7e0f-4552-8411-24f682751484"
+    assert snapshot["orphan_bridges"] == []
