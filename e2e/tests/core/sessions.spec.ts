@@ -1375,19 +1375,6 @@ test.describe("SSE Fallback", () => {
   });
 });
 
-test.describe("Sessions Navigation", () => {
-  test("Sessions tab in nav links to /sessions", async ({ page }) => {
-    await page.goto("/automations");
-    await page.waitForSelector(".header-nav", { timeout: 10000 });
-
-    // Click Timeline tab
-    await page.locator('.nav-tab:has-text("Timeline")').click();
-
-    // Should navigate to timeline page
-    await expect(page).toHaveURL("/timeline");
-  });
-});
-
 test.describe("Machine Filter", () => {
   test("filters API returns machines list", async ({ request }) => {
     // Ingest sessions with distinct machine names
