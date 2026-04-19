@@ -76,10 +76,14 @@ Boundary rules:
 
 ## Shared Worktree Reality
 
-- Assume multiple agents can be working in this exact repo, on the same `main`, and even in this same local worktree on this laptop at the same time.
+- **Four or five agents may be working in this exact directory on this laptop right now.** The filesystem, index, and `main` are shared. Plan for interference, do not assume exclusivity.
 - "Latest" is not evidence. Branch-latest workflow lists, generic tails, and recent logs often belong to another agent or another deploy.
 - Any CI or deploy claim must be anchored to an exact commit SHA, workflow run id, session id, or container/service name.
 - If deployment matters, verify live surface SHAs too; demo, control plane, and canary can be on different commits during rollout.
+- **Always `git status` before committing.** The index is shared. Plain `git add <file> && git commit` can sweep another agent's staged files into your commit. Prefer `git commit <paths>` / `git commit -o <path>` to commit only the files you touched.
+- **Never reset or force-push a commit that already landed on `main`.** If you accidentally bundled another agent's work into your commit, roll forward — the mess is cheaper than a force-push race. "Atomic commits" is a preference; not losing pushed work is a hard rule.
+- **A failing CI check on your commit isn't automatically yours.** Read the failing job first — path, test name, whether the regression predates your SHA. Parallel agents deploy concurrently; a hosted-chat smoke failure on a backend-only commit is usually someone else's in-flight fix.
+- **Pre-commit stashes unstaged files and restores them after hooks run.** If files seem to appear or disappear mid-commit, that's the stash dance, not corruption.
 
 ## Cowbell
 
@@ -212,6 +216,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 - `/api/timeline/sessions` caps `limit` at 100. Frontend URL parsing needs to clamp to that or the timeline can self-422 on oversized `limit` params.
 - Managed Codex now installs as a launcher at `~/.local/bin/longhouse-codex` with versioned payloads under `~/.longhouse/runtimes/codex/`; don’t mistake the launcher script for the actual runtime binary when debugging or migrating it.
 - For `longhouse-engine codex-bridge` repros, `--state-root` isolates bridge files only; also set `--longhouse-home` to a temp dir or you will contaminate the live shipper DB/session_binding state under `~/.longhouse`.
+- **Codex and Claude managed sessions have completely different liveness models.** Codex runs a detached Rust daemon with a state file + flock sidecar under `~/.claude/managed-local/codex-bridge/`. Claude runs an MCP server inside the stdio stream — no daemon, no state file, no flock. Claude liveness comes from a process scan (`local_health._collect_managed_sessions_by_process`). When asked about "the bridge," clarify which provider.
 
 ## Pushing Changes
 
