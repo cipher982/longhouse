@@ -1167,6 +1167,131 @@ def test_process_scan_dedupes_against_existing_bridge_ids(monkeypatch):
     assert rows == []
 
 
+def test_process_scan_rejects_empty_env_session_id(monkeypatch):
+    """Empty-string LONGHOUSE_MANAGED_SESSION_ID must fall through to argv fallback."""
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=10001,
+        cmdline=["claude", "--session-id", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"],
+        create_time=now.timestamp(),
+        env={"LONGHOUSE_MANAGED_SESSION_ID": ""},
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_process_scan_rejects_whitespace_only_env_session_id(monkeypatch):
+    """Whitespace session id should be treated as absent, not valid."""
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=10002,
+        cmdline=["claude"],  # no argv fallback either
+        create_time=now.timestamp(),
+        env={"LONGHOUSE_MANAGED_SESSION_ID": "   \t\n"},
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+    assert rows == []
+
+
+def test_process_scan_rejects_non_uuid_argv_session_id(monkeypatch):
+    """--session-id with a non-UUID value must not be accepted."""
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=10003,
+        cmdline=["claude", "--session-id", "not-a-uuid"],
+        create_time=now.timestamp(),
+        env={},
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+    assert rows == []
+
+
+def test_process_scan_env_wins_over_argv(monkeypatch):
+    """When both env and argv carry a session id, env is authoritative."""
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    proc = _FakeProc(
+        pid=10004,
+        cmdline=["claude", "--session-id", "argv1234-5678-4444-8888-aaaaaaaaaaaa"],
+        create_time=now.timestamp(),
+        env={"LONGHOUSE_MANAGED_SESSION_ID": "env11111-2222-4333-8444-555566667777"},
+    )
+    _patch_process_iter(monkeypatch, [proc])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+    assert len(rows) == 1
+    assert rows[0]["session_id"] == "env11111-2222-4333-8444-555566667777"
+
+
+def test_process_scan_continues_past_access_denied_env(monkeypatch):
+    """AccessDenied on one proc's environ() must not abort the scan."""
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    blocked = _FakeProc(
+        pid=20001,
+        cmdline=["claude", "--session-id", "11111111-1111-4111-8111-111111111111"],
+        create_time=now.timestamp(),
+        env_raises=True,  # argv fallback still works
+    )
+    visible = _FakeProc(
+        pid=20002,
+        cmdline=["claude"],
+        create_time=now.timestamp(),
+        env={"LONGHOUSE_MANAGED_SESSION_ID": "22222222-2222-4222-8222-222222222222"},
+    )
+    _patch_process_iter(monkeypatch, [blocked, visible])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+    session_ids = {row["session_id"] for row in rows}
+    assert session_ids == {
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+    }
+
+
+def test_process_scan_dedupes_duplicate_session_ids(monkeypatch):
+    """Two claude procs advertising the same session id -> first wins, no duplicate row."""
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    shared = "33333333-3333-4333-8333-333333333333"
+    first = _FakeProc(
+        pid=30001,
+        cmdline=["claude"],
+        create_time=now.timestamp(),
+        env={"LONGHOUSE_MANAGED_SESSION_ID": shared},
+        cwd="/Users/test/first",
+    )
+    second = _FakeProc(
+        pid=30002,
+        cmdline=["claude"],
+        create_time=now.timestamp() + 1,
+        env={"LONGHOUSE_MANAGED_SESSION_ID": shared},
+        cwd="/Users/test/second",
+    )
+    _patch_process_iter(monkeypatch, [first, second])
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now, existing_session_ids=set()
+    )
+    assert len(rows) == 1
+    assert rows[0]["pid"] == 30001
+    assert rows[0]["cwd"] == "/Users/test/first"
+
+
 def test_merge_bridge_row_wins_on_session_id_collision():
     bridge_row = {
         "session_id": "shared-sid",

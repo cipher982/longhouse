@@ -928,7 +928,7 @@ def _collect_managed_sessions_by_process(*, now: datetime, existing_session_ids:
 
             session_id: str | None = None
             if env:
-                session_id = env.get("LONGHOUSE_MANAGED_SESSION_ID")
+                session_id = _normalize_optional_string(env.get("LONGHOUSE_MANAGED_SESSION_ID"))
             if not session_id:
                 session_id = _session_id_from_argv(cmdline)
             if not session_id or session_id in seen:
