@@ -123,21 +123,21 @@ export function HeroSection() {
       {/* ── Hero device showcase ── */}
       <div className="landing-hero-devices">
         <img
-          src="/images/landing/device-monitor.webp?v=2"
+          src="/images/landing/device-monitor.webp?v=3"
           alt="Longhouse timeline in a Pro Display"
           className="landing-hero-device landing-hero-device--monitor"
-          width={1294}
-          height={650}
+          width={1400}
+          height={871}
           loading="eager"
           fetchPriority="high"
           decoding="async"
         />
         <img
-          src="/images/landing/device-iphone.webp?v=3"
+          src="/images/landing/device-iphone.webp?v=4"
           alt="Longhouse iOS widget on iPhone"
           className="landing-hero-device landing-hero-device--iphone"
-          width={234}
-          height={420}
+          width={1024}
+          height={1526}
           loading="eager"
           fetchPriority="high"
           decoding="async"

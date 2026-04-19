@@ -23,7 +23,7 @@ const tabs: TabConfig[] = [
     id: "timeline",
     label: "Timeline",
     description: "See imported and Longhouse-launched sessions in one archive across providers and machines.",
-    image: "/images/landing/timeline-preview.png",
+    image: "/images/landing/timeline-preview.png?v=2",
     alt: "Session timeline showing Claude Code sessions with timestamps and summaries",
   },
   {
