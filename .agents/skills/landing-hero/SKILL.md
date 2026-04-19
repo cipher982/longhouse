@@ -43,19 +43,42 @@ You are done when all of these are true:
 
 - the hero looks intentional on desktop
 - the hero still reads on mobile
-- the three device assets are the only shipped image inputs
+- the shipped device assets are the only image inputs
 - no stale legacy hero image is still referenced or lingering
 - the skill/docs do not contradict the implementation
+- **you actually looked at the live result** — see "Vision Check Before Calling Done" below
+
+## Vision Check Before Calling Done
+
+**Hard rule: after any hero iteration deploys, fetch the live screenshot and view it with vision tools before telling the user "done."**
+
+Not the local dev server. Not the raw asset. The composed live page, through Cloudflare, rendered by Playwright or curl-into-headless-browser, opened with Read so you (and the model looking at the result) can *see* the pixels.
+
+Why this rule exists:
+
+- Image work routinely breaks silently. Alpha channels, blend modes, `?v=` cache busts, CDN cache layers, wrong file names, lying alt text — none of this shows up in CSS or HTML review.
+- Multiple agents have reported "done" on hero work that was visibly broken: semi-transparent phones, black rectangles, assets not actually updated, filenames that don't match the pixels.
+- Trusting filenames is not the same as seeing the image. `device-monitor.webp` was actually a MacBook for months and nobody noticed because nobody looked.
+
+Minimum vision check:
+
+1. Fetch the live hero image the way a browser would (`curl https://longhouse.ai/...`) into a fresh filename with timestamp (stale Read-cache is real — see "Read-cache invalidation" below).
+2. Take a live Playwright screenshot of `https://longhouse.ai/` at desktop and mobile viewports.
+3. Open both with the Read tool and look at them. Confirm: is the asset actually what you think it is? Does it render solid, with clean edges, no transparency issues, no ghosting? Do both viewports hold together?
+4. Only *then* call the task done.
+
+If the result does not match what you claimed you shipped, say so out loud before handing back.
 
 ## Canonical Outputs
 
 Ship and maintain these files:
 
-- `web/public/images/landing/device-monitor.webp`
-- `web/public/images/landing/device-macbook.webp`
-- `web/public/images/landing/device-iphone.webp`
+- `web/public/images/landing/device-laptop.webp` — MacBook render displaying the timeline
+- `web/public/images/landing/device-iphone.webp` — iPhone render displaying the widget
 - `web/src/components/landing/HeroSection.tsx`
 - `web/src/styles/landing.css`
+
+Naming rule: the file name must match what is actually in the pixels. If the render is a MacBook, the file is `device-laptop.webp`, not `device-monitor.webp`. Agents read file names before they read images; a lying name propagates for months.
 
 ## Default Workflow
 
@@ -110,9 +133,10 @@ If the user says "update the hero image", do this exact loop:
 
 These are the production-facing hero assets:
 
-- `web/public/images/landing/device-monitor.webp`
-- `web/public/images/landing/device-macbook.webp`
+- `web/public/images/landing/device-laptop.webp`
 - `web/public/images/landing/device-iphone.webp`
+
+(`device-macbook.webp` is an older asset from the trio exploration and is currently unreferenced. Delete it if you do another hero pass and still don't need it.)
 
 These are assembled here:
 
