@@ -210,7 +210,16 @@ def _write_codex_bridge_state(state_dir: Path, session_id: str, payload: dict) -
     state_dir.mkdir(parents=True, exist_ok=True)
     path = state_dir / f"{session_id}.json"
     path.write_text(json.dumps(payload))
+    # Also create the sidecar lock file so _bridge_is_alive's flock probe can
+    # find it. Tests stub `_bridge_is_alive` to return True instead of
+    # actually holding a lock — creating the lock file here just prevents
+    # the probe's "no lock file = stale, purge" branch from running.
+    (state_dir / f"{session_id}.lock").touch()
     return path
+
+
+def _stub_bridge_alive(monkeypatch, alive: bool = True) -> None:
+    monkeypatch.setattr(local_health_service, "_bridge_is_alive", lambda _path: alive)
 
 
 def test_collect_local_health_healthy(monkeypatch, tmp_path: Path):
@@ -281,6 +290,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
         },
     )
     monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
     monkeypatch.setattr(
         local_health_service,
         "_collect_process_rows",
@@ -340,6 +350,7 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
         },
     )
     monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
     monkeypatch.setattr(
         local_health_service,
         "_collect_process_rows",
@@ -405,6 +416,7 @@ def test_collect_local_health_recognizes_remote_tui_attach_without_resume_token(
         },
     )
     monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
     monkeypatch.setattr(
         local_health_service,
         "_collect_process_rows",
@@ -452,6 +464,7 @@ def test_collect_local_health_does_not_flag_missing_rollout_before_first_turn(mo
         },
     )
     monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
     monkeypatch.setattr(
         local_health_service,
         "_collect_process_rows",
@@ -504,6 +517,7 @@ def test_collect_local_health_marks_missing_rollout_thread_as_degraded_after_tur
         },
     )
     monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
     monkeypatch.setattr(
         local_health_service,
         "_collect_process_rows",
@@ -1248,3 +1262,45 @@ def test_collect_local_health_reports_claude_managed_session_via_process_scan(mo
     assert snapshot["managed_sessions"][0]["provider"] == "claude"
     assert snapshot["managed_sessions"][0]["session_id"] == "bfb567fb-7e0f-4552-8411-24f682751484"
     assert snapshot["orphan_bridges"] == []
+
+
+def test_bridge_is_alive_detects_held_flock(tmp_path: Path) -> None:
+    """A held flock on the sidecar means the bridge is alive."""
+    import fcntl
+
+    state_file = tmp_path / "sess-live.json"
+    state_file.write_text("{}")
+    lock_path = state_file.with_suffix(".lock")
+    fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        assert local_health_service._bridge_is_alive(state_file) is True
+        # Probe must not have deleted live bridge's files.
+        assert state_file.exists()
+        assert lock_path.exists()
+    finally:
+        os.close(fd)
+
+
+def test_bridge_is_alive_purges_stale_files_when_lock_acquirable(tmp_path: Path) -> None:
+    """A free flock means the bridge is gone; probe cleans up all sidecars."""
+    state_file = tmp_path / "sess-dead.json"
+    state_file.write_text("{}")
+    lock_path = state_file.with_suffix(".lock")
+    sock_path = state_file.with_suffix(".sock")
+    lock_path.touch()
+    sock_path.touch()
+
+    assert local_health_service._bridge_is_alive(state_file) is False
+    assert not state_file.exists()
+    assert not lock_path.exists()
+    assert not sock_path.exists()
+
+
+def test_bridge_is_alive_purges_when_lock_missing(tmp_path: Path) -> None:
+    """Legacy bridges (pre-flock) have no lock sidecar — treat as stale."""
+    state_file = tmp_path / "sess-legacy.json"
+    state_file.write_text("{}")
+
+    assert local_health_service._bridge_is_alive(state_file) is False
+    assert not state_file.exists()

@@ -633,6 +633,61 @@ def _bridge_process_exists(process_rows: list[dict[str, Any]], pid: int) -> bool
     return any(int(row.get("pid") or 0) == pid for row in process_rows)
 
 
+def _bridge_is_alive(state_file: Path) -> bool:
+    """Check if a codex bridge daemon is alive via its process-lifetime flock.
+
+    The engine daemon holds an exclusive advisory lock on a sidecar `.lock`
+    file for its entire process lifetime. The kernel releases the lock on
+    process exit (normal, crash, or SIGKILL), making this probe immune to
+    PID reuse.
+
+    Returns True if the lock is held (bridge is alive). Returns False if the
+    lock can be acquired (bridge is gone) and cleans up stale bridge files.
+    """
+    import fcntl
+
+    lock_path = state_file.with_suffix(".lock")
+    if not lock_path.exists():
+        # No lock file: legacy bridges (pre-flock) or truly orphaned state.
+        # Treat as dead and clean up.
+        _purge_stale_bridge_files(state_file)
+        return False
+
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR)
+    except OSError:
+        return False
+
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # Lock held by live bridge.
+            return True
+        # We acquired the lock — bridge is gone. Release immediately and purge.
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+    _purge_stale_bridge_files(state_file)
+    return False
+
+
+def _purge_stale_bridge_files(state_file: Path) -> None:
+    """Remove a dead bridge's state file and its sidecars.
+
+    Called once the flock probe confirms no process owns the bridge.
+    """
+    for suffix in (".json", ".lock", ".sock"):
+        candidate = state_file.with_suffix(suffix)
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
 def _find_attached_codex_process(process_rows: list[dict[str, Any]], ws_url: str | None) -> dict[str, Any] | None:
     normalized_ws_url = _normalize_optional_string(ws_url)
     if normalized_ws_url is None:
@@ -707,7 +762,7 @@ def _collect_managed_codex_summary(
             continue
 
         bridge_pid = int(state.get("pid") or 0)
-        if bridge_pid <= 0 or not _bridge_process_exists(process_rows, bridge_pid):
+        if not _bridge_is_alive(path):
             continue
 
         ws_url = _normalize_optional_string(state.get("ws_url"))
