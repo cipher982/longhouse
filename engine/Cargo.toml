@@ -70,6 +70,9 @@ walkdir = "2"
 # CPU detection
 num_cpus = "1"
 
+# Process-lifetime file locking (bridge state file liveness)
+fd-lock = "4"
+
 [dev-dependencies]
 tempfile = "3"
 pretty_assertions = "1"

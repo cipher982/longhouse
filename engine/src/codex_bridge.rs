@@ -528,6 +528,14 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
     };
     write_state_file(&config.state_file, &initial_state)?;
 
+    // Acquire an exclusive advisory lock on a sidecar file for the process
+    // lifetime. The kernel releases the flock when this process exits (normal,
+    // crash, or SIGKILL), so readers can use a non-blocking flock() probe as a
+    // liveness test immune to PID reuse. A sidecar is used instead of the
+    // state file itself because state writes go through atomic rename, which
+    // would replace the inode and break the lock.
+    acquire_bridge_lock(&bridge_lock_path(&config.state_file))?;
+
     let current_exe =
         std::env::current_exe().context("resolving current executable for codex-bridge run")?;
     let mut client = spawn_app_server_client(&config).await?;
@@ -1046,6 +1054,41 @@ fn resolve_bridge_agent_db_path(longhouse_home_override: Option<&Path>) -> Resul
     match longhouse_home_override {
         Some(home) => Ok(home.join("agent").join("longhouse-shipper.db")),
         None => crate::config::get_agent_db_path(),
+    }
+}
+
+fn bridge_lock_path(state_file: &Path) -> PathBuf {
+    state_file.with_extension("lock")
+}
+
+fn acquire_bridge_lock(lock_path: &Path) -> Result<()> {
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(lock_path)
+        .with_context(|| format!("opening bridge lock file {}", lock_path.display()))?;
+    let lock = Box::leak(Box::new(fd_lock::RwLock::new(file)));
+    match lock.try_write() {
+        Ok(guard) => {
+            // Leak the guard so the lock is held for the process lifetime.
+            // The kernel releases it on exit via fd close.
+            Box::leak(Box::new(guard));
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+            bail!(
+                "another codex bridge already owns lock {}",
+                lock_path.display()
+            )
+        }
+        Err(err) => Err(err).with_context(|| {
+            format!("acquiring exclusive lock on {}", lock_path.display())
+        }),
     }
 }
 
