@@ -1153,6 +1153,66 @@ def test_process_scan_dedupes_against_existing_bridge_ids(monkeypatch):
     assert rows == []
 
 
+def test_merge_bridge_row_wins_on_session_id_collision():
+    bridge_row = {
+        "session_id": "shared-sid",
+        "provider": "codex",
+        "workspace_label": "zerg",
+        "state": "attached",
+        "bridge_status": "ready",
+        "bridge_pid": 7777,
+        "last_activity_at": "2026-04-19T00:00:00Z",
+        "reason_codes": [],
+    }
+    process_row = {
+        "session_id": "shared-sid",
+        "provider": "codex",
+        "pid": 9999,
+        "workspace_label": "zerg",
+        "cwd": "/Users/test/git/zerg",
+        "state": "attached",
+        "bridge_status": None,  # process scan can't see this
+        "last_activity_at": "2026-04-19T00:00:30Z",
+        "reason_codes": [],
+    }
+    process_only_row = {
+        "session_id": "claude-sid",
+        "provider": "claude",
+        "pid": 1234,
+        "state": "attached",
+        "last_activity_at": "2026-04-19T00:00:15Z",
+        "reason_codes": [],
+    }
+
+    summary, sessions, orphans = local_health_service._merge_managed_sessions(
+        bridge_summary={"latest_activity_at": "2026-04-19T00:00:00Z"},
+        bridge_sessions=[bridge_row],
+        bridge_orphans=[],
+        process_sessions=[process_row, process_only_row],
+    )
+
+    assert orphans == []
+    by_sid = {row["session_id"]: row for row in sessions}
+    # bridge wins — keeps bridge_status
+    assert by_sid["shared-sid"]["bridge_status"] == "ready"
+    assert by_sid["shared-sid"]["bridge_pid"] == 7777
+    # process-only row is appended
+    assert by_sid["claude-sid"]["provider"] == "claude"
+    assert summary["attached_count"] == 2
+
+
+def test_merge_returns_none_summary_when_nothing_present():
+    summary, sessions, orphans = local_health_service._merge_managed_sessions(
+        bridge_summary=None,
+        bridge_sessions=[],
+        bridge_orphans=[],
+        process_sessions=[],
+    )
+    assert summary is None
+    assert sessions == []
+    assert orphans == []
+
+
 def test_collect_local_health_reports_claude_managed_session_via_process_scan(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
