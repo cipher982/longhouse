@@ -3,7 +3,7 @@
 Renders a MacBook Pro displaying the Longhouse timeline via Gemini 3 Pro Image.
 Pure black background so we can alpha-cut it cleanly with rembg.
 
-Output: web/public/images/landing/device-monitor.webp
+Output: web/public/images/landing/device-laptop.webp
 """
 import argparse
 import base64
@@ -16,7 +16,7 @@ from pathlib import Path
 
 REPO = Path("/Users/davidrose/git/zerg")
 TIMELINE_REF = REPO / "web/public/images/landing/timeline-preview.png"
-SHIP_PATH = REPO / "web/public/images/landing/device-monitor.webp"
+SHIP_PATH = REPO / "web/public/images/landing/device-laptop.webp"
 WORK_DIR = Path("/tmp/macbook-pipeline")
 WORK_DIR.mkdir(exist_ok=True)
 
