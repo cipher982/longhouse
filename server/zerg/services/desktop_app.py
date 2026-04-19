@@ -168,7 +168,10 @@ def _generate_launchd_plist(
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
-    <true/>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
     <key>ProcessType</key>
     <string>Interactive</string>
     <key>StandardOutPath</key>
@@ -282,6 +285,15 @@ def install_desktop_app_service(
         if candidate_path.exists():
             subprocess.run(["launchctl", "unload", str(candidate_path)], capture_output=True, check=False)
             candidate_path.unlink(missing_ok=True)
+
+    # Reap any Longhouse.app instances launchd doesn't own (GUI-launched
+    # copies). launchctl unload only stops its own services, so without this
+    # a Finder/Dock launch can outlive every refresh and race the real one.
+    subprocess.run(
+        ["pkill", "-f", "Longhouse.app/Contents/MacOS/Longhouse"],
+        capture_output=True,
+        check=False,
+    )
 
     plist_path.write_text(
         _generate_launchd_plist(
