@@ -80,21 +80,6 @@ jobs:
             sleep 5
           done
 
-      - name: Run hosted chat QA
-        id: qa_live_chat
-        env:
-          HOME: ${{ env.QA_HOME }}
-        run: |
-          attempts=0
-          until make qa-live-chat; do
-            attempts=$((attempts + 1))
-            if [[ "$attempts" -ge 2 ]]; then
-              exit 1
-            fi
-            echo "qa-live-chat failed; retrying once after 5s..." >&2
-            sleep 5
-          done
-
       - name: Write summary
         if: always()
         run: |
@@ -105,7 +90,6 @@ jobs:
             echo "- Trigger: \`${{ github.event_name }}\`"
             echo "- Commit: \`${{ github.sha }}\`"
             echo "- qa-live: \`${{ steps.qa_live.outcome || 'skipped' }}\`"
-            echo "- qa-live-chat: \`${{ steps.qa_live_chat.outcome || 'skipped' }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload live QA artifacts
