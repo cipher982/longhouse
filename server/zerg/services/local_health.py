@@ -794,10 +794,6 @@ _UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
     re.IGNORECASE,
 )
-# Env keys we are willing to read off a managed process. Anything secret-shaped
-# (hook tokens, provider API keys) must never leak into the health payload, so
-# we denylist rather than allowlist-by-prefix.
-_MANAGED_ENV_DENYLIST = {"LONGHOUSE_HOOK_TOKEN"}
 
 
 def _is_claude_cmdline(cmdline: list[str]) -> bool:
@@ -883,11 +879,10 @@ def _collect_managed_sessions_by_process(*, now: datetime, existing_session_ids:
             if not session_id or session_id in seen:
                 continue
 
-            device_id: str | None = None
-            if env:
-                device_id = env.get("LONGHOUSE_DEVICE_ID")
-                for forbidden in _MANAGED_ENV_DENYLIST:
-                    env.pop(forbidden, None)
+            # Only pull the specific managed-session keys we care about. The
+            # rest of the env (hook tokens, API keys, provider state) stays
+            # out of the health payload by construction.
+            device_id = env.get("LONGHOUSE_DEVICE_ID") if env else None
 
             try:
                 cwd = proc.cwd()
