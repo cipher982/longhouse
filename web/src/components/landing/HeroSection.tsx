@@ -123,9 +123,9 @@ export function HeroSection() {
       {/* ── Hero device showcase ── */}
       <div className="landing-hero-devices">
         <img
-          src="/images/landing/device-monitor.webp?v=3"
-          alt="Longhouse timeline in a Pro Display"
-          className="landing-hero-device landing-hero-device--monitor"
+          src="/images/landing/device-laptop.webp?v=4"
+          alt="Longhouse timeline on a MacBook"
+          className="landing-hero-device landing-hero-device--laptop"
           width={1400}
           height={871}
           loading="eager"
