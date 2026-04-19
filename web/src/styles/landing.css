@@ -602,7 +602,7 @@
     right: 2%;
     bottom: 0;
     z-index: 4;
-    mix-blend-mode: screen;
+    filter: drop-shadow(-18px 12px 28px rgba(0, 0, 0, 0.55));
   }
 
   .landing-hero-glow {
