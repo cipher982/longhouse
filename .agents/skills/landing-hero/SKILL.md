@@ -237,6 +237,16 @@ Output lands in `web/public/images/landing/`:
 
 Manifest: `scripts/screenshots.yaml`
 
+### Gotcha: chromium cache drift
+
+`marketing-screenshots.sh` can fail with `BrowserType.launch: Executable doesn't exist at .../chromium_headless_shell-<rev>/...`. The Playwright pin has rolled forward past the cached browser. Fix once:
+
+```bash
+uv run --with playwright playwright install chromium
+```
+
+Takes ~2 min. Not a `chromium_headless_shell` vs `chromium` distinction — `playwright install chromium` installs both.
+
 ### Adding new screenshots
 
 Add entries to `scripts/screenshots.yaml`:
@@ -346,6 +356,8 @@ The phone asset ships on a **pure black bg** and composites via `mix-blend-mode:
 - **Asset intrinsic dimensions** in `<img width height>` must match the generated asset (1024×1526 currently), not the old tiny thumbnail. Wrong aspect causes layout-reservation mismatch on load.
 
 **Key learning (April 18, 2026):** Gemini 3 Pro nails legible widget text on the first call about 90% of the time when given a solo-device prompt + real widget PNG reference. The multi-device composed hero prompt is where text fabrication shows up — too many UI elements competing for token budget.
+
+**Re-roll before text-fix.** On a misfire, re-roll Gemini 2–3 times before trying surgical text edits. For the iPhone: second or third roll usually lands clean widget text. For the monitor asset: Gemini fabricates plausible-but-hallucinated UI text, which is acceptable at thumbnail scale in the composed hero (the timeline-preview.png PNG is the real product surface users click to). Don't waste time re-rolling the monitor for perfect UI fidelity — ship it.
 
 **Output resolution floor:** ship ≥ 1024px wide. CSS scales iPhone to ~42% of hero width (~600px rendered at desktop 1440px). Smaller source assets blur catastrophically at that scale factor — this is what made the old `device-iphone.webp` look hallucinated.
 
@@ -499,6 +511,17 @@ Always view generated images with vision before presenting to the user:
 ```python
 Read(file_path="/tmp/hero-output.png")
 ```
+
+### Read-cache invalidation
+
+If you Read the same `/tmp/output.png` path after regenerating, the model may still see the previous version from cache. Two workarounds:
+
+1. **Fresh filename per attempt** — write to `/tmp/hero-output-$(date +%s).png` so every Read hits a new path.
+2. **Resize + rename** — if an image exceeds the 2000px dimension limit for multi-image turns, `magick input.png -resize 1400x /tmp/shot-$(date +%s%N).png` produces a smaller file on a fresh path in one step.
+
+### Playwright scripts must live in-repo
+
+Running an ad-hoc `chromium.launch()` script from `/tmp/foo.mjs` fails — the repo's Playwright install doesn't resolve modules from outside the project root. Drop the mjs file inside `/Users/davidrose/git/zerg/` (gitignored or cleaned up after) and import `'playwright'` normally.
 
 Common issues to check:
 - Phone screen facing backward (re-prompt with "screen facing viewer")
