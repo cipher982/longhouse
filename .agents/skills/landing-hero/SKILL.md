@@ -349,10 +349,24 @@ Pipeline inside the script:
 
 ### CSS compositing (critical)
 
-The phone asset ships on a **pure black bg** and composites via `mix-blend-mode: screen` over the hero background. With `screen`, any pure-black pixel becomes invisible (screen(0, X) = X), and only the lit phone remains. Rules:
+**Always ship a true alpha cutout. Never the matte + `mix-blend-mode: screen` shortcut.**
 
-- **`.landing-hero-device--iphone { mix-blend-mode: screen; }`** — required. Without it, the black matte shows as a rectangle against the hero's warmer charcoal.
-- **Do NOT add `filter: drop-shadow(...)` to a full-opaque-bg image.** drop-shadow paints a shadow around every non-transparent pixel, including the entire black background rectangle. The shadow creates a visible frame. Either use a true alpha cutout + drop-shadow, or skip the shadow (current approach — phone's own rim light carries it).
+Gemini renders the iPhone on a pure-black bg (we prompt for that so the model doesn't invent a floor/gradient/desk). The asset must then have its outer black alpha-cut before shipping. Raw `-transparent '#000000'` eats the dark wallpaper too — use corner floodfill with a tight fuzz instead:
+
+```bash
+magick iphone-raw.png -alpha set \
+  -fill none -fuzz 4% \
+  -draw 'alpha 0,0 floodfill' \
+  -draw 'alpha W-1,0 floodfill' \
+  -draw 'alpha 0,H-1 floodfill' \
+  -draw 'alpha W-1,H-1 floodfill' \
+  -quality 90 device-iphone.webp
+```
+
+Rules:
+- **Ship the alpha-cut webp.** `.landing-hero-device--iphone { filter: drop-shadow(...); }` works because the cutout exposes the hero bg through transparent pixels.
+- **Do NOT use `mix-blend-mode: screen` as a "dissolve the black matte" shortcut.** It brightens every non-pure-black pixel on the phone body against the hero bg, which makes the phone itself look washed out / semi-transparent — exactly the "transparent phone" bug this pitfall keeps reintroducing. Two agents hit this before the alpha-cut workflow was written down.
+- **Do NOT use global `-transparent '#000000'`.** The phone's wallpaper is mostly near-black too — you'll punch holes through the screen content. Floodfill from the corners instead.
 - **Asset intrinsic dimensions** in `<img width height>` must match the generated asset (1024×1526 currently), not the old tiny thumbnail. Wrong aspect causes layout-reservation mismatch on load.
 
 **Key learning (April 18, 2026):** Gemini 3 Pro nails legible widget text on the first call about 90% of the time when given a solo-device prompt + real widget PNG reference. The multi-device composed hero prompt is where text fabrication shows up — too many UI elements competing for token budget.
@@ -372,8 +386,9 @@ If Gemini's first pass has garbled text, you can try Nano Banana Pro on Replicat
 3. **Do NOT build multi-stage "blank phone → AI paste widget" pipelines.** Multi-image edit models (Qwen, Seedream) route the paste to whichever screen has the biggest canvas, regardless of prompt. Even "iPhone only" directives fail when a monitor is in the scene.
 4. **Do NOT run `magick -trim` on Gemini output.** The transparent/gradient edges produce stair-stepping artifacts. Gemini already crops tight.
 5. **Do NOT ask Nano Banana Pro to "edit only the text" on a photo.** It treats any edit prompt as a creative license to reinvent the scene. For text-only surgery, the tooling isn't there yet.
-6. **Do NOT ship a phone asset with a floor/gradient/vignette background.** Mid-gray pixels can't be dissolved by `mix-blend-mode: screen` — they'll always show a matte. Force a uniform #000000 bg in the prompt.
-7. **Do NOT combine `drop-shadow` CSS filter with a full-bg (non-alpha) image.** Shadow paints around the whole rectangle, defeating the composite. Remove the shadow or move to a true alpha cutout.
+6. **Do NOT ship a phone asset with a floor/gradient/vignette background.** Mid-gray pixels create a visible matte against the hero bg no matter how you composite. Force a uniform #000000 bg in the prompt, then alpha-cut the background at build time (corner floodfill, fuzz ≤4%).
+7. **Do NOT ship the raw black-matte webp and rely on `mix-blend-mode: screen`.** `screen` brightens every non-pure-black pixel on the phone body, making the phone itself look washed out / semi-transparent — the "transparent phone" bug. Always alpha-cut and composite normally with `drop-shadow`.
+8. **Do NOT alpha-cut with global `-transparent '#000000'`.** The phone's wallpaper is near-black; a global threshold punches holes through the screen content. Floodfill from the four corners instead.
 
 ## Reference: Multi-Device Composed Hero
 
