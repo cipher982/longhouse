@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import re
 import shlex
 import sqlite3
 import subprocess
@@ -789,6 +790,179 @@ def _collect_managed_codex_summary(
     return managed_summary, sessions, orphan_bridges
 
 
+_UUID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+    re.IGNORECASE,
+)
+# Env keys we are willing to read off a managed process. Anything secret-shaped
+# (hook tokens, provider API keys) must never leak into the health payload, so
+# we denylist rather than allowlist-by-prefix.
+_MANAGED_ENV_DENYLIST = {"LONGHOUSE_HOOK_TOKEN"}
+
+
+def _is_claude_cmdline(cmdline: list[str]) -> bool:
+    if not cmdline:
+        return False
+    exe = cmdline[0].rsplit("/", 1)[-1]
+    return exe == "claude"
+
+
+def _is_codex_cmdline(cmdline: list[str]) -> bool:
+    if not cmdline:
+        return False
+    exe = cmdline[0].rsplit("/", 1)[-1]
+    if exe == "codex":
+        return True
+    joined = " ".join(cmdline)
+    return "/codex/codex" in joined or "codex-darwin" in joined
+
+
+def _provider_for_cmdline(cmdline: list[str]) -> str | None:
+    if _is_claude_cmdline(cmdline):
+        return "claude"
+    if _is_codex_cmdline(cmdline):
+        return "codex"
+    return None
+
+
+def _session_id_from_argv(cmdline: list[str]) -> str | None:
+    """Claude emits `--session-id <uuid>`. Codex does not pass it on argv."""
+    for index, arg in enumerate(cmdline):
+        if arg == "--session-id" and index + 1 < len(cmdline):
+            candidate = cmdline[index + 1]
+            if _UUID_RE.fullmatch(candidate):
+                return candidate
+    return None
+
+
+def _collect_managed_sessions_by_process(*, now: datetime, existing_session_ids: set[str]) -> list[dict[str, Any]]:
+    """Detect live managed provider processes (Claude/Codex) via same-uid scan.
+
+    Uses psutil to enumerate provider processes the current user owns, then
+    tags them as managed by either env (`LONGHOUSE_MANAGED_SESSION_ID`) or, as
+    a fallback for launch contexts where `psutil.Process.environ()` is empty
+    (e.g. launchctl LaunchAgents on macOS), by argv (`--session-id <uuid>`).
+
+    Process liveness is the liveness signal; nothing to "orphan" here. Bridge
+    files are intentionally not consulted.
+
+    `existing_session_ids` lets callers deduplicate against rows already built
+    from bridge-file scans, so the same Codex session isn't reported twice.
+    """
+    try:
+        import psutil  # imported lazily to keep module import cheap
+    except ImportError:
+        return []
+
+    me = os.getuid()
+    sessions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for session_id in existing_session_ids:
+        seen.add(session_id)
+
+    for proc in psutil.process_iter(["pid", "cmdline", "create_time"]):
+        try:
+            if proc.uids().real != me:
+                continue
+            info = proc.info
+            cmdline = info.get("cmdline") or []
+            provider = _provider_for_cmdline(cmdline)
+            if not provider:
+                continue
+
+            try:
+                env = proc.environ()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                env = {}
+
+            session_id: str | None = None
+            if env:
+                session_id = env.get("LONGHOUSE_MANAGED_SESSION_ID")
+            if not session_id:
+                session_id = _session_id_from_argv(cmdline)
+            if not session_id or session_id in seen:
+                continue
+
+            device_id: str | None = None
+            if env:
+                device_id = env.get("LONGHOUSE_DEVICE_ID")
+                for forbidden in _MANAGED_ENV_DENYLIST:
+                    env.pop(forbidden, None)
+
+            try:
+                cwd = proc.cwd()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                cwd = None
+
+            started_at = datetime.fromtimestamp(info["create_time"], tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+            sessions.append(
+                {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "pid": info["pid"],
+                    "workspace_label": Path(cwd).name if cwd else None,
+                    "cwd": cwd,
+                    "device_id": device_id,
+                    "started_at": started_at,
+                    "branch": None,
+                    "state": "attached",
+                    "phase": "waiting for input",
+                    "last_activity_at": started_at,
+                    "bridge_status": None,
+                    "bridge_pid": None,
+                    "bridge_heartbeat_at": None,
+                    "reason_codes": [],
+                }
+            )
+            seen.add(session_id)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    return sessions
+
+
+def _merge_managed_sessions(
+    *,
+    bridge_summary: dict[str, Any] | None,
+    bridge_sessions: list[dict[str, Any]],
+    bridge_orphans: list[dict[str, Any]],
+    process_sessions: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Combine bridge-file-derived rows with process-scan rows.
+
+    Bridge rows win on session_id collisions (they carry extra Codex-specific
+    fields). Process rows fill in everything else — specifically Claude, which
+    has no bridge file at all.
+    """
+    sessions = list(bridge_sessions)
+    bridge_ids = {row.get("session_id") for row in sessions if row.get("session_id")}
+    for proc_row in process_sessions:
+        if proc_row.get("session_id") in bridge_ids:
+            continue
+        sessions.append(proc_row)
+
+    if not sessions and not bridge_orphans:
+        return None, [], []
+
+    activity_candidates = [bridge_summary.get("latest_activity_at")] if bridge_summary else []
+    for row in sessions:
+        activity_candidates.append(row.get("last_activity_at"))
+    latest_activity_at = max(
+        [item for item in activity_candidates if item],
+        default=None,
+    )
+
+    managed_summary = {
+        "attached_count": sum(1 for item in sessions if item.get("state") == "attached"),
+        "detached_count": sum(1 for item in sessions if item.get("state") == "detached"),
+        "degraded_count": sum(1 for item in sessions if item.get("state") == "degraded"),
+        "orphan_bridge_count": len(bridge_orphans),
+        "latest_activity_at": latest_activity_at,
+    }
+    return managed_summary, sessions, bridge_orphans
+
+
 def _collect_activity_summary(base_dir: Path, *, now: datetime) -> dict[str, Any]:
     db_path = get_agent_db_path(base_dir)
     summary = {
@@ -1186,7 +1360,15 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
-    managed_summary, managed_sessions, orphan_bridges = _collect_managed_codex_summary(resolved_base_dir, now=now)
+    bridge_summary, bridge_sessions, orphan_bridges = _collect_managed_codex_summary(resolved_base_dir, now=now)
+    bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
+    process_sessions = _collect_managed_sessions_by_process(now=now, existing_session_ids=bridge_session_ids)
+    managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
+        bridge_summary=bridge_summary,
+        bridge_sessions=bridge_sessions,
+        bridge_orphans=orphan_bridges,
+        process_sessions=process_sessions,
+    )
     launch_readiness = _collect_launch_readiness(resolved_base_dir, service=service)
     health_state, severity, headline, reasons, suggested_actions = _classify_health(
         service=service,

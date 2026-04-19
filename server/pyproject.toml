@@ -44,6 +44,7 @@ dependencies = [
     "pyyaml>=6.0",
     "zstandard>=0.23.0",
     "packaging>=24.2",
+    "psutil>=5.9.0",
 ]
 
 [project.optional-dependencies]
