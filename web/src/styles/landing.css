@@ -586,7 +586,7 @@
     filter: drop-shadow(0 16px 40px rgba(0, 0, 0, 0.6));
   }
 
-  .landing-hero-device--monitor {
+  .landing-hero-device--laptop {
     width: 78%;
     left: 0;
     top: 6%;
@@ -640,7 +640,7 @@
       margin-top: calc(var(--space-4) * -1);
     }
 
-    .landing-hero-device--monitor {
+    .landing-hero-device--laptop {
       width: 82%;
       left: 0;
       top: 8%;
