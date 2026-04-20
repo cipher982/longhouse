@@ -243,7 +243,7 @@ conn = sqlite3.connect(db_path)
 cur = conn.cursor()
 
 tables = {}
-for table in ("sessions", "events", "session_presence", "agent_sessions", "agent_events"):
+for table in ("sessions", "events", "session_runtime_state", "agent_sessions", "agent_events"):
     cur.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
         (table,),

@@ -677,17 +677,6 @@ def _migrate_agents_columns(engine: Engine) -> None:
     except Exception:
         logger.debug("sessions table migration skipped (table may not exist yet)", exc_info=True)
 
-    # session_presence table migrations
-    try:
-        with engine.connect() as conn:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(session_presence)"))}
-            if columns:
-                if "device_id" not in columns:
-                    conn.execute(text("ALTER TABLE session_presence ADD COLUMN device_id VARCHAR(255)"))
-                conn.commit()
-    except Exception:
-        logger.debug("session_presence table migration skipped (table may not exist yet)", exc_info=True)
-
     # session_turn_reviews table migrations (legacy — turn-review pipeline removed)
     try:
         with engine.connect() as conn:
