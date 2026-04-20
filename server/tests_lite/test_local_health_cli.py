@@ -1685,6 +1685,10 @@ def test_phase_freshness_rust_engine_matches_python() -> None:
 
     rust_path = Path(__file__).resolve().parents[2] / "engine" / "src" / "state" / "session_phase.rs"
     text = rust_path.read_text()
+    # Strip line + block comments before parsing so a commented-out or
+    # example tuple inside the const body can't sneak into `rust_map`.
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    text = re.sub(r"//[^\n]*", "", text)
     match = re.search(
         r"pub const PHASE_FRESHNESS_SECONDS:\s*&\[\(&str,\s*i64\)\]\s*=\s*&\[(.*?)\];",
         text,
@@ -1696,7 +1700,8 @@ def test_phase_freshness_rust_engine_matches_python() -> None:
     entry_re = re.compile(r'\(\s*"(?P<phase>\w+)"\s*,\s*(?P<expr>[^)]+)\)')
     for m in entry_re.finditer(body):
         # The Rust source uses simple multiplications like `10 * 60`; eval is
-        # fine because we match a tight regex first.
+        # fine because we match a tight regex first and the comments above
+        # are already stripped.
         rust_map[m.group("phase")] = int(eval(m.group("expr"), {"__builtins__": {}}))
 
     local_copy = local_health_service._PHASE_FRESHNESS_SECONDS
