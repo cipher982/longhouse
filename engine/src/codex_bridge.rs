@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use crate::text::truncate_tail_chars;
 
-const BRIDGE_RUNTIME_SOURCE: &str = "codex_bridge";
+const BRIDGE_RUNTIME_SOURCE: &str = crate::state::session_phase::PhaseSource::CodexBridgeWs.as_str();
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
