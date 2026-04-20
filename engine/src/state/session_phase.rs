@@ -2,6 +2,50 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection};
 
+/// Where a phase observation came from. Each provenance ties to a concrete
+/// engine writer path. Kept as a closed set so drift between callers can't
+/// introduce a silent fourth value the server doesn't know about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PhaseSource {
+    /// Claude hook-derived phase signal drained from the outbox.
+    ClaudeHook,
+    /// Codex hook-derived phase signal drained from the outbox.
+    CodexHook,
+    /// Codex bridge WebSocket tracker-derived phase signal.
+    CodexBridgeWs,
+}
+
+impl PhaseSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            PhaseSource::ClaudeHook => "claude_hook",
+            PhaseSource::CodexHook => "codex_hook",
+            PhaseSource::CodexBridgeWs => "codex_bridge",
+        }
+    }
+
+    pub const fn for_hook_provider(provider: &str) -> Self {
+        // Small match-returning-const helper for hook outbox coalescing.
+        if matches!(provider.as_bytes(), b"codex") {
+            PhaseSource::CodexHook
+        } else {
+            PhaseSource::ClaudeHook
+        }
+    }
+}
+
+/// Canonical phase vocabulary the runtime reducer understands. Duplicated on
+/// the server in `session_runtime.PHASE_FRESHNESS`; keep the two lists in lock
+/// step or the overlay will silently drop observations.
+pub const KNOWN_PHASES: &[&str] = &[
+    "thinking",
+    "running",
+    "blocked",
+    "needs_user",
+    "idle",
+    "finished",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionPhaseSignal {
     pub session_id: String,

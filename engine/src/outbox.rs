@@ -18,7 +18,7 @@ use serde::Deserialize;
 use tracing::warn;
 
 use crate::shipping::client::ShipperClient;
-use crate::state::session_phase::{SessionPhaseSignal, SessionPhaseStore};
+use crate::state::session_phase::{PhaseSource, SessionPhaseSignal, SessionPhaseStore};
 
 /// Maximum age for an outbox file before it is considered stale and deleted.
 const STALE_SECS: u64 = 600; // 10 minutes
@@ -195,7 +195,7 @@ async fn drain_outbox_impl(
                 provider: provider.to_string(),
                 phase: payload.state.trim().to_string(),
                 tool_name: payload.tool_name.clone(),
-                source: phase_source_for_provider(provider).to_string(),
+                source: PhaseSource::for_hook_provider(provider).as_str().to_string(),
                 observed_at,
             };
             if let Err(err) = SessionPhaseStore::new(conn).record(&signal) {
@@ -252,12 +252,6 @@ fn normalize_provider(provider: Option<&str>) -> &str {
         .unwrap_or("claude")
 }
 
-fn phase_source_for_provider(provider: &str) -> &'static str {
-    match provider {
-        "codex" => "codex_hook",
-        _ => "claude_hook",
-    }
-}
 
 #[cfg(test)]
 mod tests {
