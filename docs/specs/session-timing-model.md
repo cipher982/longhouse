@@ -24,7 +24,7 @@ Longhouse already stores:
 
 - session-level timing on `sessions.started_at`, `sessions.ended_at`, and `sessions.last_activity_at`
 - raw transcript event timing on `events.timestamp`
-- live runtime state through `session_presence` and `session_runtime_state`
+- live runtime state through `session_runtime_state`
 - managed-local per-turn timing in the `managed_local_turns` shadow ledger
 
 That is enough to build a narrow elapsed-session counter, but it is not yet a canonical timing model.
@@ -44,7 +44,7 @@ Before launch, Longhouse should define that truth cleanly instead of accreting b
 
 - `sessions` is the canonical session row.
 - `events` is the canonical raw transcript archive.
-- `session_presence` and `session_runtime_state` carry the latest live/runtime overlay.
+- `session_runtime_state` carries the latest live/runtime overlay.
 - `managed_local_turns` tracks managed-local prompt acceptance, terminal phase, and durable linkage.
 
 ### What is missing
@@ -68,7 +68,7 @@ Rules:
 
 - `events` remains the raw transcript/archive layer.
 - `session_turns` becomes the durable turn lifecycle layer.
-- `session_presence` and `session_runtime_state` remain latest-state overlays, not the long-term analytics truth.
+- `session_runtime_state` remains the latest-state overlay, not the long-term analytics truth.
 - high-frequency progress ticks must not become the canonical durable model.
 - durations should be derived on read from timestamps, not stored as the primary truth.
 - canonical writes for launch-scoped exact producer paths must not be best-effort side writes that silently fail.
@@ -373,7 +373,7 @@ Expected posture:
 - `sessions`: durable, long-lived
 - `events`: durable archive
 - `session_turns`: durable product timing truth
-- `session_presence` and `session_runtime_state`: latest-state overlays
+- `session_runtime_state`: latest-state overlay
 - optional runtime-event history: retained only if it proves operationally useful
 
 If Longhouse later needs heavy multi-writer concurrency or large retained runtime history, that is an independent storage-engine discussion. The semantic model should still be the same.
