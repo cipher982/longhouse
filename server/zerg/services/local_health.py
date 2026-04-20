@@ -754,37 +754,36 @@ def _phase_display_label(phase: str | None, tool_name: str | None) -> str | None
     return lowered.replace("_", " ")
 
 
+# Phase freshness windows, seconds. MUST mirror
+# `session_runtime.PHASE_FRESHNESS` — duplicated here because importing
+# session_runtime would pull in `zerg.database`, which requires a real
+# DATABASE_URL. The local-health CLI must run without server settings.
+# `finished` intentionally omitted (terminal state; the runtime reducer
+# handles it via `terminal_state`).
+_PHASE_FRESHNESS_SECONDS: dict[str, int] = {
+    "thinking": 90,
+    "running": 10 * 60,
+    "idle": 10 * 60,
+    "blocked": 24 * 60 * 60,
+    "needs_user": 24 * 60 * 60,
+}
+
+
 def _phase_row_is_fresh(row: Mapping[str, str | None], now: datetime) -> bool:
-    """Apply phase-specific freshness windows so stale rows don't show phantom phases.
-
-    Uses the same PHASE_FRESHNESS windows as the server-side runtime reducer
-    (`session_runtime.PHASE_FRESHNESS`) so an observation the server considers
-    live is also live in the local overlay. One source of truth, two readers.
-
-    Idle rows are not carried in the overlay — an idle phase is the absence of
-    activity, not a positive signal to render. `finished` rows from the
-    canonical vocabulary also round-trip: once emitted, the runtime sees them
-    for 10 minutes before falling back to "Phase unknown".
-    """
-    # Local import: session_runtime imports ORM models, which balloon if loaded
-    # eagerly at module import for the CLI's local-health path.
-    from zerg.services.session_runtime import PHASE_FRESHNESS
-
+    """Apply phase-specific freshness windows so stale rows don't show phantom phases."""
     phase = _normalize_optional_string(row.get("phase"))
     observed_raw = _normalize_optional_string(row.get("observed_at"))
     if phase is None or observed_raw is None:
         return False
-    window = PHASE_FRESHNESS.get(phase.lower())
-    if window is None:
-        # Unknown phase values are always treated as stale — don't invent a
-        # freshness window for a phase the reducer won't understand.
+    window_seconds = _PHASE_FRESHNESS_SECONDS.get(phase.lower())
+    if window_seconds is None:
         return False
     observed_at = _parse_rfc3339(observed_raw)
     if observed_at is None:
         return False
     age = (now - observed_at).total_seconds()
     # Tolerate small clock skew (negative age from bridge on another clock).
-    return age <= window.total_seconds()
+    return age <= window_seconds
 
 
 def _load_managed_session_phase_overlay(base_dir: Path, *, now: datetime) -> dict[str, dict[str, str | None]]:

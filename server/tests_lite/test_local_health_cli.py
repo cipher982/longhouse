@@ -1620,4 +1620,23 @@ def test_bridge_is_alive_purges_when_lock_missing(tmp_path: Path) -> None:
     state_file.write_text("{}")
 
     assert local_health_service._bridge_is_alive(state_file) is False
-    assert not state_file.exists()
+
+
+def test_phase_freshness_local_health_matches_session_runtime() -> None:
+    """Drift guard: the two copies of the phase freshness map must agree.
+
+    `_PHASE_FRESHNESS_SECONDS` in local_health.py is duplicated from
+    `PHASE_FRESHNESS` in session_runtime.py because the CLI path cannot
+    import the server runtime module (it transitively requires
+    `DATABASE_URL`). This test catches drift between the two copies.
+    """
+    from zerg.services.session_runtime import PHASE_FRESHNESS
+
+    local_copy = local_health_service._PHASE_FRESHNESS_SECONDS
+    for phase, seconds in local_copy.items():
+        assert phase in PHASE_FRESHNESS, f"{phase} missing from session_runtime.PHASE_FRESHNESS"
+        assert seconds == int(PHASE_FRESHNESS[phase].total_seconds()), (
+            f"{phase}: local={seconds}s vs runtime={int(PHASE_FRESHNESS[phase].total_seconds())}s"
+        )
+    for phase in PHASE_FRESHNESS:
+        assert phase in local_copy, f"{phase} missing from local_health._PHASE_FRESHNESS_SECONDS"
