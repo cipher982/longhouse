@@ -112,6 +112,9 @@ def read_local_health() -> list[dict[str, Any]]:
     except json.JSONDecodeError as exc:
         print(f"!! local-health produced non-JSON: {exc}", file=sys.stderr)
         return []
+    if not isinstance(payload, dict):
+        print("!! local-health payload is not a JSON object", file=sys.stderr)
+        return []
     sessions = payload.get("managed_sessions") or []
     return list(sessions) if isinstance(sessions, list) else []
 
@@ -124,12 +127,20 @@ def read_server_active(base_url: str, token: str | None) -> list[dict[str, Any]]
         req.add_header("X-Agents-Token", token)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
-            payload = json.loads(resp.read())
+            body = resp.read()
     except urllib.error.HTTPError as exc:
         print(f"!! server {exc.code} at {url}: {exc.read().decode(errors='replace')}", file=sys.stderr)
         return []
     except urllib.error.URLError as exc:
         print(f"!! server unreachable at {url}: {exc.reason}", file=sys.stderr)
+        return []
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError as exc:
+        print(f"!! server returned non-JSON at {url}: {exc}", file=sys.stderr)
+        return []
+    if not isinstance(payload, dict):
+        print(f"!! server payload at {url} is not a JSON object", file=sys.stderr)
         return []
     sessions = payload.get("sessions") or []
     return list(sessions) if isinstance(sessions, list) else []
@@ -162,38 +173,54 @@ def merge(
             continue
         row = rows.setdefault(str(session_id), SessionRow(session_id=str(session_id)))
         row.provider = entry.get("provider") or row.provider
-        runtime = entry.get("runtime") or {}
-        row.server_phase = runtime.get("display_phase") or runtime.get("phase")
-        row.server_status = runtime.get("status") or entry.get("status")
-        row.server_confidence = runtime.get("confidence")
-        row.server_presence_state = runtime.get("presence_state")
+        # ActiveSessionResponse exposes runtime fields at the top level.
+        # Prefer `runtime_phase` (canonical) over `display_phase` which can
+        # be "Recent"/"Recent progress" and would never round-trip through
+        # _canonicalize_phase cleanly.
+        row.server_phase = entry.get("runtime_phase") or entry.get("display_phase")
+        row.server_status = entry.get("status")
+        row.server_confidence = entry.get("confidence")
+        row.server_presence_state = entry.get("presence_state")
     return sorted(rows.values(), key=lambda row: row.session_id)
 
 
-_DISPLAY_TO_CANONICAL = {
+_SINGLE_WORD_PHASE = {
     "thinking": "thinking",
     "running": "running",
     "idle": "idle",
     "blocked": "blocked",
     "completed": "finished",
-    "needs you": "needs_user",
+    "finished": "finished",
 }
 
 
 def _canonicalize_phase(raw: str | None) -> str | None:
+    """Map a local-health display label, a server runtime_phase, or a ledger
+    phase down to the canonical phase vocabulary.
+
+    Local-health labels come from `_phase_display_label` in
+    server/zerg/services/local_health.py. Examples:
+      - "running Bash" / "running"            -> running
+      - "blocked on shell" / "needs permission" -> blocked
+      - "needs you"                            -> needs_user
+      - "completed", "idle", "thinking"        -> as named
+    """
     if not raw:
         return None
-    tokens = raw.strip().lower().split()
-    if not tokens:
+    stripped = raw.strip().lower()
+    if not stripped:
         return None
+    if stripped == "needs permission":
+        return "blocked"
+    tokens = stripped.split()
     head = tokens[0]
     if head == "needs" and len(tokens) >= 2 and tokens[1] == "you":
         return "needs_user"
-    if head == "running":
-        return "running"
-    if head == "blocked":
-        return "blocked"
-    return _DISPLAY_TO_CANONICAL.get(head, head)
+    if head in ("running", "blocked", "idle", "thinking"):
+        return head
+    if head == "completed" or head == "finished":
+        return "finished"
+    return _SINGLE_WORD_PHASE.get(head, head)
 
 
 def classify(row: SessionRow) -> tuple[str, list[str]]:
@@ -259,6 +286,36 @@ def print_report(rows: list[SessionRow]) -> int:
     return divergences
 
 
+def self_check() -> int:
+    """Fail fast if `_canonicalize_phase` drifts from local-health's labels."""
+    cases = {
+        # local-health display labels from _phase_display_label
+        "running": "running",
+        "running Bash": "running",
+        "thinking": "thinking",
+        "blocked on shell": "blocked",
+        "needs permission": "blocked",
+        "needs you": "needs_user",
+        "idle": "idle",
+        "completed": "finished",
+        # raw server runtime_phase values
+        "finished": "finished",
+        "needs_user": "needs_user",
+    }
+    failures: list[str] = []
+    for raw, expected in cases.items():
+        actual = _canonicalize_phase(raw)
+        if actual != expected:
+            failures.append(f"{raw!r} -> {actual!r} (expected {expected!r})")
+    if failures:
+        print("self-check failures:", file=sys.stderr)
+        for failure in failures:
+            print(f"  {failure}", file=sys.stderr)
+        return 1
+    print(f"self-check OK ({len(cases)} cases)")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -276,7 +333,15 @@ def main() -> int:
         action="store_true",
         help="Only compare the two local views.",
     )
+    parser.add_argument(
+        "--self-check",
+        action="store_true",
+        help="Validate the phase canonicalizer against known display labels.",
+    )
     args = parser.parse_args()
+
+    if args.self_check:
+        return self_check()
 
     print(f"longhouse home: {_longhouse_home()}")
     print(f"ledger db:      {_agent_db_path()}")
