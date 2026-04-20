@@ -21,9 +21,7 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
-from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeState
-from zerg.services.presence_cache import get_presence_cache
 from zerg.services.session_runtime import phase_freshness_ms
 from zerg.services.session_runtime import runtime_key_for_session
 
@@ -143,35 +141,9 @@ def _upsert_runtime_state(db, session: AgentSession, phase: str):
     return state
 
 
-def _upsert_presence(db, session_id: str, state: str):
-    row = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
-    now = datetime.now(timezone.utc)
-    if row is None:
-        row = SessionPresence(
-            session_id=session_id,
-            state=state,
-            tool_name=None,
-            device_id="shipper-laptop",
-            cwd="/Users/davidrose/git/zerg",
-            project="zerg",
-            provider="claude",
-            updated_at=now,
-        )
-        db.add(row)
-    else:
-        row.state = state
-        row.updated_at = now
-        row.tool_name = None
-    db.commit()
-
-
-def _clear_presence_cache():
-    cache = get_presence_cache()
-    cache._entries.clear()  # type: ignore[attr-defined]
 
 
 def test_create_message_delivers_immediately_for_safe_managed_local(monkeypatch, tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
     send_calls: list[dict[str, object]] = []
 
@@ -186,7 +158,7 @@ def test_create_message_delivers_immediately_for_safe_managed_local(monkeypatch,
             device_id="cinder",
             device_name="cinder",
         )
-        _upsert_presence(db, str(to_session.id), "idle")
+        _upsert_runtime_state(db, to_session, "idle")
 
     async def fake_send_text(
         *,
@@ -238,7 +210,6 @@ def test_create_message_delivers_immediately_for_safe_managed_local(monkeypatch,
 
 
 def test_create_message_queues_when_target_is_running(monkeypatch, tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -252,7 +223,7 @@ def test_create_message_queues_when_target_is_running(monkeypatch, tmp_path):
             device_id="cinder",
             device_name="cinder",
         )
-        _upsert_presence(db, str(to_session.id), "running")
+        _upsert_runtime_state(db, to_session, "running")
 
     async def fail_if_called(**_kwargs):
         raise AssertionError("send_text_to_managed_local_session should not be called while running")
@@ -282,7 +253,6 @@ def test_create_message_queues_when_target_is_running(monkeypatch, tmp_path):
 
 
 def test_create_message_uses_runtime_state_when_presence_missing(monkeypatch, tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
     send_calls: list[dict[str, object]] = []
 
@@ -341,7 +311,6 @@ def test_create_message_uses_runtime_state_when_presence_missing(monkeypatch, tm
 
 
 def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
     send_calls: list[str] = []
 
@@ -405,7 +374,6 @@ def test_presence_safe_transition_delivers_oldest_queued_message(monkeypatch, tm
 
 
 def test_runtime_safe_transition_delivers_queued_message_without_presence(monkeypatch, tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
     send_calls: list[str] = []
 
@@ -481,7 +449,6 @@ def test_runtime_safe_transition_delivers_queued_message_without_presence(monkey
 
 
 def test_presence_safe_transition_drains_multiple_queued_messages(monkeypatch, tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
     send_calls: list[str] = []
 
@@ -558,7 +525,6 @@ def test_presence_safe_transition_drains_multiple_queued_messages(monkeypatch, t
 
 
 def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(monkeypatch, tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
     send_calls: list[str] = []
 
@@ -603,17 +569,7 @@ def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(
         verification_timeout_secs=None,
     ):
         send_calls.append(text)
-        updated_at = datetime.now(timezone.utc)
-        _upsert_presence(db, str(session.id), "running")
-        get_presence_cache().upsert(
-            str(session.id),
-            "running",
-            device_id=str(getattr(session, "device_id", "") or None),
-            cwd=str(getattr(session, "cwd", "") or None),
-            project=str(getattr(session, "project", "") or None),
-            provider=str(getattr(session, "provider", "") or "claude"),
-            updated_at=updated_at,
-        )
+        _upsert_runtime_state(db, session, "running")
         return SimpleNamespace(ok=True, error=None)
 
     monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fake_send_text)
@@ -640,7 +596,6 @@ def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(
 
 
 def test_create_message_stored_only_for_unmanaged_target(monkeypatch, tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -675,7 +630,6 @@ def test_create_message_stored_only_for_unmanaged_target(monkeypatch, tmp_path):
 
 
 def test_list_messages_returns_inbound_rows_without_mutation(tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -708,7 +662,6 @@ def test_list_messages_returns_inbound_rows_without_mutation(tmp_path):
 
 
 def test_create_message_uses_current_session_header_when_body_omitted(tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -734,7 +687,6 @@ def test_create_message_uses_current_session_header_when_body_omitted(tmp_path):
 
 
 def test_create_message_rejects_header_body_mismatch(tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -760,7 +712,6 @@ def test_create_message_rejects_header_body_mismatch(tmp_path):
 
 
 def test_list_messages_rejects_device_session_mismatch(tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -786,7 +737,6 @@ def test_list_messages_rejects_device_session_mismatch(tmp_path):
 
 
 def test_acknowledge_message_sets_acknowledged_at_and_filters_unacknowledged(tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
 
     with session_local() as db:
@@ -825,7 +775,6 @@ def test_acknowledge_message_sets_acknowledged_at_and_filters_unacknowledged(tmp
 
 
 def test_acknowledge_message_rejects_queued_delivery(tmp_path):
-    _clear_presence_cache()
     session_local = _make_db(tmp_path)
 
     with session_local() as db:

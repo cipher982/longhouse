@@ -9,7 +9,6 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPresence
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import ingest_runtime_events
 from zerg.services.session_runtime import phase_freshness_ms
@@ -58,43 +57,7 @@ def _emit_managed_local_phase_signal(
     )
 
 
-def _upsert_managed_local_presence(
-    db: Session,
-    *,
-    session: AgentSession,
-    state: str,
-    occurred_at: datetime | None = None,
-) -> None:
-    if not _is_managed_local_session(session):
-        return
-
-    updated_at = occurred_at or datetime.now(timezone.utc)
-    session_id = str(session.id)
-    presence = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).one_or_none()
-    if presence is None:
-        db.add(
-            SessionPresence(
-                session_id=session_id,
-                state=state,
-                tool_name=None,
-                cwd=session.cwd,
-                project=session.project,
-                provider=str(session.provider or "claude"),
-                updated_at=updated_at,
-            )
-        )
-        return
-
-    presence.state = state
-    presence.tool_name = None
-    presence.cwd = session.cwd
-    presence.project = session.project
-    presence.provider = str(session.provider or presence.provider or "claude")
-    presence.updated_at = updated_at
-
-
 def mark_managed_local_session_launched(db: Session, *, session: AgentSession) -> None:
-    _upsert_managed_local_presence(db, session=session, state="idle")
     _emit_managed_local_phase_signal(
         db,
         session=session,

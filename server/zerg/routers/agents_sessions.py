@@ -61,7 +61,6 @@ from zerg.services.session_views import build_active_session_response
 from zerg.services.session_views import build_event_response
 from zerg.services.session_views import build_session_response
 from zerg.services.session_views import build_session_turn_response
-from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import resolve_runtime_overlay
 from zerg.services.startup_context import STARTUP_CONTEXT_DEFAULT_DAYS_BACK
@@ -347,7 +346,6 @@ async def list_sessions(
 
             session_ids = [s.id for s in fused]
             activity_map = store.get_last_activity_map(session_ids)
-            presence_map = load_presence_map(db, session_ids)
             now = datetime.now(timezone.utc)
             runtime_state_map = await _load_surface_runtime_state_map(
                 db=db,
@@ -368,7 +366,6 @@ async def list_sessions(
                     runtime_overlay=resolve_runtime_overlay(
                         s,
                         last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
-                        presence_map=presence_map,
                         runtime_state_map=runtime_state_map,
                         now=now,
                     ),
@@ -431,7 +428,6 @@ async def list_sessions(
         session_ids = [s.id for s in sessions]
         match_map = store.get_session_matches(session_ids, query, context_mode=context_mode) if query else {}
         activity_map = store.get_last_activity_map(session_ids)
-        presence_map = load_presence_map(db, session_ids)
         first_user_map = store.get_first_message_map(session_ids, role="user", max_len=80)
         thread_cache: dict[str, tuple[str, int]] = {}
         now = datetime.now(timezone.utc)
@@ -451,7 +447,6 @@ async def list_sessions(
                 runtime_overlay=resolve_runtime_overlay(
                     s,
                     last_activity_at=activity_map.get(s.id) or s.ended_at or s.started_at,
-                    presence_map=presence_map,
                     runtime_state_map=runtime_state_map,
                     now=now,
                 ),
@@ -782,7 +777,6 @@ async def list_active_sessions(
         last_activity = store.get_last_activity_map(session_ids)
         last_user = store.get_last_message_map(session_ids, role="user", max_len=300)
         last_ai = store.get_last_message_map(session_ids, role="assistant", max_len=300)
-        presence_map = load_presence_map(db, session_ids)
         now = datetime.now(timezone.utc)
         runtime_state_map = await _load_surface_runtime_state_map(
             db=db,
@@ -796,7 +790,6 @@ async def list_active_sessions(
             runtime_overlay = resolve_runtime_overlay(
                 s,
                 last_activity_at=last_activity.get(s.id) or s.ended_at or s.started_at,
-                presence_map=presence_map,
                 runtime_state_map=runtime_state_map,
                 now=now,
             )
@@ -967,8 +960,6 @@ async def get_session(
 
     with timing.span("load_activity"):
         activity_map = store.get_last_activity_map([session.id])
-    with timing.span("load_presence"):
-        presence_map = load_presence_map(db, [session.id])
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map([session.id], role="user", max_len=80)
     now = datetime.now(timezone.utc)
@@ -987,7 +978,6 @@ async def get_session(
             runtime_overlay=resolve_runtime_overlay(
                 session,
                 last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-                presence_map=presence_map,
                 runtime_state_map=runtime_state_map,
                 now=now,
             ),
@@ -1024,8 +1014,6 @@ async def get_session_thread(
     thread_session_ids = [item.id for item in thread_sessions]
     with timing.span("load_activity"):
         activity_map = store.get_last_activity_map(thread_session_ids)
-    with timing.span("load_presence"):
-        presence_map = load_presence_map(db, thread_session_ids)
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = {}
@@ -1051,7 +1039,6 @@ async def get_session_thread(
                     runtime_overlay=resolve_runtime_overlay(
                         item,
                         last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
-                        presence_map=presence_map,
                         runtime_state_map=runtime_state_map,
                         now=now,
                     ),
@@ -1302,8 +1289,6 @@ async def get_session_workspace(
     thread_session_ids = [item.id for item in thread_sessions]
     with timing.span("load_activity"):
         activity_map = store.get_last_activity_map(thread_session_ids)
-    with timing.span("load_presence"):
-        presence_map = load_presence_map(db, thread_session_ids)
     with timing.span("load_first_user"):
         first_user_map = store.get_first_message_map(thread_session_ids, role="user", max_len=80)
     with timing.span("load_projection"):
@@ -1333,7 +1318,6 @@ async def get_session_workspace(
                 runtime_overlay=resolve_runtime_overlay(
                     item,
                     last_activity_at=activity_map.get(item.id) or item.ended_at or item.started_at,
-                    presence_map=presence_map,
                     runtime_state_map=runtime_state_map,
                     now=now,
                 ),
@@ -1352,7 +1336,6 @@ async def get_session_workspace(
             runtime_overlay=resolve_runtime_overlay(
                 session,
                 last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-                presence_map=presence_map,
                 runtime_state_map=runtime_state_map,
                 now=now,
             ),

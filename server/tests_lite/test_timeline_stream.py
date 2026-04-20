@@ -201,8 +201,8 @@ def test_session_window_signature_prefers_runtime_activity_anchor(tmp_path):
 
     assert total == 2
     assert rows[0][0] == str(old_runtime.id)
-    assert rows[0][5] == 7
-    assert rows[0][6] is not None
+    assert rows[0][4] == 7
+    assert rows[0][5] is not None
 
 
 def test_session_window_signature_can_skip_total_count(tmp_path):

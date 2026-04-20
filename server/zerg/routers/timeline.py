@@ -55,7 +55,6 @@ from zerg.services.session_views import SessionTurnEnvelopeResponse
 from zerg.services.session_views import SessionTurnsListResponse
 from zerg.services.session_views import SessionWorkspaceResponse
 from zerg.services.session_views import build_session_response
-from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import normalize_utc_datetime
 from zerg.services.session_views import resolve_runtime_overlay
 from zerg.utils.server_timing import ServerTimingRecorder
@@ -130,7 +129,6 @@ def _build_session_response_map(
         return {}
 
     activity_map = store.get_last_activity_map([session.id for session in sessions])
-    presence_map = load_presence_map(db, [session.id for session in sessions])
     runtime_state_map = load_runtime_state_map(db, [session.id for session in sessions])
     first_user_map = store.get_first_message_map([session.id for session in sessions], role="user", max_len=80)
     thread_cache: dict[str, tuple[str, int]] = store.batch_thread_meta(sessions)
@@ -146,7 +144,6 @@ def _build_session_response_map(
             runtime_overlay=resolve_runtime_overlay(
                 session,
                 last_activity_at=activity_map.get(session.id) or session.ended_at or session.started_at,
-                presence_map=presence_map,
                 runtime_state_map=runtime_state_map,
                 now=now,
             ),
@@ -245,7 +242,7 @@ def _load_timeline_stream_window_signature(
     limit: int,
     offset: int,
     context_mode: str,
-) -> tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...]:
+) -> tuple[tuple[str, datetime | None, datetime | None, datetime | None, int, datetime | None], ...]:
     store = AgentsStore(db)
     since = datetime.now(timezone.utc) - timedelta(days=days_back)
     _, rows = store.list_timeline_thread_window_signature(
@@ -285,9 +282,7 @@ async def _timeline_sessions_stream(
     skip_initial_replay: bool,
 ):
     previous_signatures: dict[str, str] = {}
-    previous_window_signature: (
-        tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...] | None
-    ) = None
+    previous_window_signature: tuple[tuple[str, datetime | None, datetime | None, datetime | None, int, datetime | None], ...] | None = None
     last_heartbeat = monotonic()
     preflight_enabled = _stream_supports_preflight(query=query, sort=sort, mode=mode)
 
@@ -872,14 +867,12 @@ def _load_workspace_signature(
     """
     from zerg.models.agents import AgentEvent
     from zerg.models.agents import AgentSession
-    from zerg.models.agents import SessionPresence
     from zerg.models.agents import SessionRuntimeState
 
     session = db.query(AgentSession).filter(AgentSession.id == session_id).first()
     if session is None:
         return ()
 
-    # Resolve thread: all session IDs sharing this thread
     thread_root_id = session.thread_root_session_id or session.id
     thread_sessions = (
         db.query(AgentSession.id, AgentSession.updated_at)
@@ -889,13 +882,14 @@ def _load_workspace_signature(
     thread_session_ids = [str(row.id) for row in thread_sessions]
     latest_session_updated = max((row.updated_at for row in thread_sessions if row.updated_at), default=None)
 
-    # Latest event ID across thread
     latest_event_id = (db.query(func.max(AgentEvent.id)).filter(AgentEvent.session_id.in_(thread_session_ids)).scalar()) or 0
 
-    # Latest presence updated_at across thread
-    latest_presence = db.query(func.max(SessionPresence.updated_at)).filter(SessionPresence.session_id.in_(thread_session_ids)).scalar()
+    # Latest runtime signal across thread — the runtime state row advances on every
+    # hook-driven phase change, so this replaces the old SessionPresence anchor.
+    latest_runtime_signal = (
+        db.query(func.max(SessionRuntimeState.updated_at)).filter(SessionRuntimeState.session_id.in_(thread_session_ids)).scalar()
+    )
 
-    # Sum of runtime versions — detects any individual session's version bump
     runtime_version_sum = (
         db.query(func.sum(SessionRuntimeState.runtime_version)).filter(SessionRuntimeState.session_id.in_(thread_session_ids)).scalar()
     ) or 0
@@ -904,7 +898,7 @@ def _load_workspace_signature(
         str(thread_root_id),
         latest_session_updated,
         latest_event_id,
-        latest_presence,
+        latest_runtime_signal,
         runtime_version_sum,
         len(thread_session_ids),
     )

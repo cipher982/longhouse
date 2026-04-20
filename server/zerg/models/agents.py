@@ -435,41 +435,6 @@ class SessionTurn(AgentsBase):
     )
 
 
-class SessionPresence(AgentsBase):
-    """Real-time session presence for managed CLI sessions.
-
-    Written by provider hooks and managed bridge adapters via POST
-    /api/agents/presence. Rows are upserted (one per session_id) so the table
-    stays small. Stale rows (updated_at > 10 min ago) are treated as gone and
-    can be pruned periodically.
-
-    States:
-        thinking    — model is active between tool calls
-        running     — a tool or command is actively executing
-        needs_user  — the session is paused waiting for user input
-        blocked     — the session is paused on approval/permission
-        idle        — the session completed its turn and is ready
-    """
-
-    __tablename__ = "session_presence"
-
-    session_id = Column(String(255), primary_key=True)
-    state = Column(String(32), nullable=False)  # thinking | running | needs_user | blocked | idle
-    tool_name = Column(String(128), nullable=True)  # set when state=running|blocked
-    device_id = Column(String(255), nullable=True)  # Machine identifier for cross-device wall
-    cwd = Column(String(512), nullable=True)
-    project = Column(String(255), nullable=True)  # basename(cwd)
-    provider = Column(String(64), nullable=False, default="claude")
-    updated_at = Column(
-        DateTime(timezone=True),
-        nullable=False,
-        server_default=func.now(),
-        onupdate=func.now(),
-    )
-
-    __table_args__ = (Index("ix_presence_updated", "updated_at"),)
-
-
 class SessionRuntimeState(AgentsBase):
     """Materialized runtime truth for a session/runtime key."""
 

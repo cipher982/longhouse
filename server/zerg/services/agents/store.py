@@ -31,7 +31,6 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentSessionBranch
 from zerg.models.agents import AgentSourceLine
-from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeState
 from zerg.services.raw_json_compression import CODEC_PLAIN
 from zerg.services.raw_json_compression import CODEC_ZSTD
@@ -1589,13 +1588,10 @@ class AgentsStore:
         stmt = select(AgentSession)
         activity_anchor = AgentSession.started_at
         if anchor_on_activity:
-            presence_subq = self._presence_updated_subquery()
             runtime_signal_subq = self._runtime_signal_subquery()
-            stmt = stmt.outerjoin(presence_subq, presence_subq.c.session_id == AgentSession.id)
             stmt = stmt.outerjoin(runtime_signal_subq, runtime_signal_subq.c.session_id == AgentSession.id)
             activity_anchor = self._recent_activity_anchor_expr(
                 AgentSession.last_activity_at,
-                presence_subq.c.presence_updated_at,
                 runtime_signal_subq.c.runtime_timeline_anchor_at,
             )
         stmt = self._apply_session_listing_filters(
@@ -1650,15 +1646,13 @@ class AgentsStore:
         include_total: bool = False,
     ) -> tuple[
         int | None,
-        tuple[tuple[str, datetime | None, datetime | None, datetime | None, datetime | None, int, datetime | None], ...],
+        tuple[tuple[str, datetime | None, datetime | None, datetime | None, int, datetime | None], ...],
     ]:
         """Return a lightweight recency window signature for timeline SSE preflight."""
 
-        presence_subq = self._presence_updated_subquery()
         runtime_signal_subq = self._runtime_signal_subquery()
         activity_anchor = self._recent_activity_anchor_expr(
             AgentSession.last_activity_at,
-            presence_subq.c.presence_updated_at,
             runtime_signal_subq.c.runtime_timeline_anchor_at,
         )
 
@@ -1667,13 +1661,11 @@ class AgentsStore:
                 AgentSession.id.label("session_id"),
                 AgentSession.updated_at.label("session_updated_at"),
                 AgentSession.last_activity_at.label("last_activity_at"),
-                presence_subq.c.presence_updated_at.label("presence_updated_at"),
                 runtime_signal_subq.c.runtime_updated_at.label("runtime_updated_at"),
                 runtime_signal_subq.c.runtime_version.label("runtime_version"),
                 runtime_signal_subq.c.runtime_timeline_anchor_at.label("runtime_timeline_anchor_at"),
             )
             .select_from(AgentSession)
-            .outerjoin(presence_subq, presence_subq.c.session_id == AgentSession.id)
             .outerjoin(runtime_signal_subq, runtime_signal_subq.c.session_id == AgentSession.id)
         )
 
@@ -1708,7 +1700,6 @@ class AgentsStore:
                 str(row.session_id),
                 row.session_updated_at,
                 row.last_activity_at,
-                row.presence_updated_at,
                 row.runtime_updated_at,
                 int(row.runtime_version or 0),
                 row.runtime_timeline_anchor_at,
@@ -1733,11 +1724,9 @@ class AgentsStore:
         context_mode: str,
         branch_mode: str,
     ):
-        presence_subq = self._presence_updated_subquery()
         runtime_signal_subq = self._runtime_signal_subquery()
         activity_anchor = self._recent_activity_anchor_expr(
             AgentSession.last_activity_at,
-            presence_subq.c.presence_updated_at,
             runtime_signal_subq.c.runtime_timeline_anchor_at,
         )
         thread_id = func.coalesce(AgentSession.thread_root_session_id, AgentSession.id).label("thread_id")
@@ -1750,12 +1739,10 @@ class AgentsStore:
                 AgentSession.updated_at.label("session_updated_at"),
                 activity_anchor.label("thread_anchor"),
                 AgentSession.last_activity_at.label("last_activity_at"),
-                presence_subq.c.presence_updated_at.label("presence_updated_at"),
                 runtime_signal_subq.c.runtime_updated_at.label("runtime_updated_at"),
                 runtime_signal_subq.c.runtime_version.label("runtime_version"),
             )
             .select_from(AgentSession)
-            .outerjoin(presence_subq, presence_subq.c.session_id == AgentSession.id)
             .outerjoin(runtime_signal_subq, runtime_signal_subq.c.session_id == AgentSession.id)
         )
 
@@ -1798,7 +1785,6 @@ class AgentsStore:
             base_subq.c.session_updated_at,
             base_subq.c.thread_anchor,
             base_subq.c.last_activity_at,
-            base_subq.c.presence_updated_at,
             base_subq.c.runtime_updated_at,
             base_subq.c.runtime_version,
             row_number,
@@ -1880,7 +1866,7 @@ class AgentsStore:
         include_total: bool = False,
     ) -> tuple[
         int | None,
-        tuple[tuple[str, str, datetime | None, datetime | None, datetime | None, datetime | None, int], ...],
+        tuple[tuple[str, str, datetime | None, datetime | None, datetime | None, int], ...],
     ]:
         ranked_subq = self._timeline_thread_ranked_subquery(
             project=project,
@@ -1916,7 +1902,6 @@ class AgentsStore:
                     ranked_subq.c.thread_anchor,
                     ranked_subq.c.session_updated_at,
                     ranked_subq.c.last_activity_at,
-                    ranked_subq.c.presence_updated_at,
                     ranked_subq.c.runtime_version,
                 )
                 .where(ranked_subq.c.rn == 1)
@@ -1932,7 +1917,6 @@ class AgentsStore:
                 row.thread_anchor,
                 row.session_updated_at,
                 row.last_activity_at,
-                row.presence_updated_at,
                 int(row.runtime_version or 0),
             )
             for row in rows
@@ -1948,18 +1932,11 @@ class AgentsStore:
         )
 
     @classmethod
-    def _recent_activity_anchor_expr(cls, last_activity_expr, presence_updated_expr, runtime_anchor_expr=None):
-        latest_signal = cls._latest_non_null_expr(last_activity_expr, presence_updated_expr)
+    def _recent_activity_anchor_expr(cls, last_activity_expr, runtime_anchor_expr=None):
+        latest_signal = last_activity_expr
         if runtime_anchor_expr is not None:
-            latest_signal = cls._latest_non_null_expr(latest_signal, runtime_anchor_expr)
+            latest_signal = cls._latest_non_null_expr(last_activity_expr, runtime_anchor_expr)
         return func.coalesce(latest_signal, AgentSession.started_at)
-
-    @staticmethod
-    def _presence_updated_subquery():
-        return select(
-            SessionPresence.session_id.label("session_id"),
-            SessionPresence.updated_at.label("presence_updated_at"),
-        ).subquery()
 
     @staticmethod
     def _runtime_signal_subquery():

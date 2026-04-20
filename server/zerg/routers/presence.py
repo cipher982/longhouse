@@ -10,8 +10,12 @@ Receives real-time state signals from Claude Code hooks:
   - Notification/elicitation_dialog → state=needs_user
   - Notification/permission_prompt  → state=blocked
 
-One row per session_id, upserted on each call. Stale rows (>10 min) are
-treated as gone by the active sessions endpoint.
+Stage 4: `/api/agents/presence` is now a pure RuntimeEventIngest emitter.
+Each POST normalizes the payload into a phase_signal and feeds it through
+`ingest_runtime_events`, which materializes SessionRuntimeState via the
+reducer. The legacy SessionPresence TTL cache is gone — SessionRuntimeState
+is the single server-side runtime source of truth. The endpoint still
+handles auto-resume of snoozed sessions and queued-message delivery.
 
 Auto-resume: only thinking/running signal genuine resumption of work and
 auto-resume snoozed sessions. blocked/needs_user are pause states — the
@@ -23,7 +27,6 @@ Authentication: same X-Agents-Token / device token as ingest.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime
 from datetime import timezone
 from typing import Optional
@@ -41,8 +44,6 @@ from zerg.auth.managed_local_hook_tokens import ManagedLocalHookToken
 from zerg.database import get_db
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
-from zerg.models.user import User
-from zerg.services.presence_cache import get_presence_cache
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
@@ -60,9 +61,6 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 
 VALID_STATES = {"thinking", "running", "idle", "needs_user", "blocked"}
 
-# States that store tool_name (session is actively blocked on a specific tool)
-_STATES_WITH_TOOL = {"running", "blocked"}
-
 # States that trigger auto-resume of snoozed sessions (genuine work restart)
 _AUTO_RESUME_STATES = {"thinking", "running"}
 
@@ -79,26 +77,6 @@ class PresenceIn(UTCBaseModel):
     dedupe_key: Optional[str] = None
 
 
-def _effective_tool_name(payload: PresenceIn, previous: object | None) -> str | None:
-    """Resolve effective tool name. `previous` can be SessionPresence or PresenceEntry."""
-    if payload.state not in _STATES_WITH_TOOL:
-        return None
-    if payload.state == "blocked" and payload.tool_name is None:
-        return getattr(previous, "tool_name", None) if previous is not None else None
-    return payload.tool_name
-
-
-def _resolve_owner_id(db: Session, token: object | None) -> int | None:
-    owner_id = getattr(token, "owner_id", None)
-    if owner_id is not None:
-        return int(owner_id)
-
-    owner = db.query(User.id).order_by(User.id).first()
-    if owner is None:
-        return None
-    return int(owner[0])
-
-
 @router.post("/presence", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 async def upsert_presence(
     payload: PresenceIn,
@@ -109,50 +87,24 @@ async def upsert_presence(
     """Upsert real-time presence state for a session."""
     if payload.state not in VALID_STATES:
         # Silently ignore unknown states rather than erroring hooks
-        return
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
     if isinstance(_token, ManagedLocalHookToken) and payload.session_id != _token.session_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Managed-local hook token does not match session",
         )
 
-    project: Optional[str] = None
-    if payload.cwd:
-        project = os.path.basename(payload.cwd.rstrip("/"))
-
     now = payload.occurred_at.astimezone(timezone.utc) if payload.occurred_at is not None else datetime.now(timezone.utc)
-
-    # Resolve tool_name with blocked-state preservation logic
-    if payload.state == "blocked" and payload.tool_name is None:
-        cache = get_presence_cache()
-        prev_entry = cache.get(payload.session_id)
-        insert_tool_name = getattr(prev_entry, "tool_name", None)
-    elif payload.state in _STATES_WITH_TOOL:
-        insert_tool_name = payload.tool_name
-    else:
-        insert_tool_name = None
-
-    # In-memory upsert — no DB write. Flushed to SQLite every 5s.
-    cache = get_presence_cache()
-    _entry, prev_snapshot = cache.upsert(
-        payload.session_id,
-        payload.state,
-        tool_name=insert_tool_name,
-        device_id=getattr(_token, "device_id", None),
-        cwd=payload.cwd,
-        project=project,
-        provider=payload.provider or "claude",
-        updated_at=now,
-    )
-
-    effective_tool_name = _effective_tool_name(payload, prev_snapshot)
 
     runtime_provider = payload.provider or "claude"
     runtime_key = runtime_key_for_session(runtime_provider, payload.session_id)
+    # `blocked` signals sometimes arrive without a tool_name; the reducer
+    # preserves the prior active_tool in that case, so we just pass the
+    # event's tool_name as-is.
+    runtime_tool_name = payload.tool_name if payload.state in {"running", "blocked"} else None
     runtime_dedupe_key = payload.dedupe_key or (
-        f"presence:{payload.session_id}:{payload.state}:{effective_tool_name or '-'}:{now.isoformat()}"
+        f"presence:{payload.session_id}:{payload.state}:{runtime_tool_name or '-'}:{now.isoformat()}"
     )
-    # Build runtime event for serialized write
     runtime_event = RuntimeEventIngest(
         runtime_key=runtime_key,
         session_id=coerce_session_uuid(payload.session_id),
@@ -161,14 +113,13 @@ async def upsert_presence(
         source="claude_hook",
         kind="phase_signal",
         phase=payload.state,
-        tool_name=effective_tool_name,
+        tool_name=runtime_tool_name,
         occurred_at=now,
         freshness_ms=phase_freshness_ms(payload.state),
         dedupe_key=runtime_dedupe_key,
         payload={},
     )
 
-    # Bundle runtime-event ingest + auto-resume into one serialized write.
     auto_resume = payload.state in _AUTO_RESUME_STATES
     _session_id_str = payload.session_id
     _now = now

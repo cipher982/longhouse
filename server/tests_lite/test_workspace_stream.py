@@ -10,7 +10,7 @@ from uuid import uuid4
 import zerg.dependencies.auth as _auth_deps  # noqa: F401 — triggers settings init
 import zerg.routers.timeline as timeline_mod
 from zerg.database import make_engine, make_sessionmaker
-from zerg.models.agents import AgentEvent, AgentSession, AgentsBase, SessionPresence
+from zerg.models.agents import AgentEvent, AgentSession, AgentsBase, SessionRuntimeState
 
 
 async def _noop_coro() -> None:
@@ -195,13 +195,19 @@ def test_workspace_stream_detects_presence_change(tmp_path):
             self._checks += 1
             if self._checks == 2:
                 with sf() as db:
-                    presence = SessionPresence(
-                        session_id=str(session_id),
-                        state="thinking",
+                    state = SessionRuntimeState(
+                        runtime_key=f"claude:{session_id}",
+                        session_id=session_id,
                         provider="claude",
-                        updated_at=now,
+                        phase="thinking",
+                        phase_source="semantic",
+                        phase_started_at=now,
+                        last_runtime_signal_at=now,
+                        last_live_at=now,
+                        timeline_anchor_at=now,
+                        runtime_version=1,
                     )
-                    db.merge(presence)
+                    db.merge(state)
                     db.commit()
             return self._checks > 3
 

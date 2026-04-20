@@ -19,7 +19,7 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPresence
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -180,7 +180,7 @@ def test_this_device_launch_creates_native_claude_session(monkeypatch, tmp_path)
 
         payload = response.json()
         session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
-        presence = db.query(SessionPresence).filter(SessionPresence.session_id == payload["session_id"]).one()
+        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
 
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "claude_channel_bridge"
@@ -190,7 +190,7 @@ def test_this_device_launch_creates_native_claude_session(monkeypatch, tmp_path)
     assert "server:longhouse-channel" in payload["attach_command"]
     assert session.managed_transport == "claude_channel_bridge"
     assert session.source_runner_id == runner.id
-    assert presence.state == "idle"
+    assert runtime_state.phase == "idle"
 
 
 def test_this_device_launch_uses_token_device_id_for_runner_lookup(monkeypatch, tmp_path):
@@ -260,7 +260,7 @@ def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
 
         payload = response.json()
         session = db.query(AgentSession).filter(AgentSession.id == payload["session_id"]).one()
-        presence = db.query(SessionPresence).filter(SessionPresence.session_id == payload["session_id"]).one()
+        runtime_state = db.query(SessionRuntimeState).filter(SessionRuntimeState.session_id == payload["session_id"]).one()
 
     assert response.status_code == 200, response.text
     assert payload["managed_transport"] == "codex_app_server"
@@ -268,4 +268,4 @@ def test_this_device_launch_creates_native_codex_session(monkeypatch, tmp_path):
     assert '"$engine" codex-bridge attach --session-id' in payload["attach_command"]
     assert session.managed_transport == "codex_app_server"
     assert session.source_runner_id == runner.id
-    assert presence.state == "idle"
+    assert runtime_state.phase == "idle"

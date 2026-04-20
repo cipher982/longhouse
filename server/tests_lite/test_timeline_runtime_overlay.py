@@ -19,9 +19,7 @@ from zerg.database import make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentSession
 from zerg.models.agents import AgentsBase
-from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeState
-from zerg.services.presence_cache import get_presence_cache
 from zerg.session_execution_home import SessionExecutionHome
 
 
@@ -73,31 +71,50 @@ def _seed_session(
     return session
 
 
-def _upsert_presence(
+def _upsert_runtime_state(
     db,
     *,
     session_id: str,
-    state: str,
+    phase: str,
     updated_at: datetime,
     tool_name: str | None = None,
-    project: str = "zerg",
+    provider: str = "claude",
+    freshness_window: timedelta = timedelta(minutes=5),
 ):
-    row = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
+    runtime_key = f"{provider}:{session_id}"
+    row = (
+        db.query(SessionRuntimeState)
+        .filter(SessionRuntimeState.runtime_key == runtime_key)
+        .first()
+    )
     if row is None:
-        row = SessionPresence(
+        row = SessionRuntimeState(
+            runtime_key=runtime_key,
             session_id=session_id,
-            state=state,
-            tool_name=tool_name,
-            cwd="/tmp/zerg",
-            project=project,
-            provider="claude",
-            updated_at=updated_at,
+            provider=provider,
+            phase=phase,
+            phase_source="semantic",
+            active_tool=tool_name,
+            phase_started_at=updated_at,
+            last_runtime_signal_at=updated_at,
+            last_progress_at=updated_at,
+            last_live_at=updated_at,
+            timeline_anchor_at=updated_at,
+            freshness_expires_at=updated_at + freshness_window,
+            runtime_version=1,
         )
         db.add(row)
     else:
-        row.state = state
-        row.tool_name = tool_name
-        row.updated_at = updated_at
+        row.phase = phase
+        row.phase_source = "semantic"
+        row.active_tool = tool_name
+        row.phase_started_at = updated_at
+        row.last_runtime_signal_at = updated_at
+        row.last_progress_at = updated_at
+        row.last_live_at = updated_at
+        row.timeline_anchor_at = updated_at
+        row.freshness_expires_at = updated_at + freshness_window
+        row.runtime_version = (row.runtime_version or 0) + 1
     db.commit()
 
 
@@ -140,13 +157,12 @@ def test_sessions_list_uses_recent_activity_anchor_for_old_live_session(tmp_path
             ended_at=now - timedelta(hours=1, minutes=30),
             project="recent-idle",
         )
-        _upsert_presence(
+        _upsert_runtime_state(
             db,
             session_id=str(old_live.id),
-            state="running",
+            phase="running",
             updated_at=now - timedelta(seconds=20),
             tool_name="bash",
-            project="old-live",
         )
     finally:
         db.close()
@@ -242,12 +258,11 @@ def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
             ended_at=now - timedelta(minutes=2),
             project="fresh-presence",
         )
-        _upsert_presence(
+        _upsert_runtime_state(
             db,
             session_id=str(session.id),
-            state="thinking",
+            phase="thinking",
             updated_at=now - timedelta(seconds=15),
-            project="fresh-presence",
         )
     finally:
         db.close()
@@ -264,57 +279,6 @@ def test_active_sessions_fresh_presence_beats_ended_at(tmp_path):
         assert row["display_phase"] == "Thinking"
         assert row["confidence"] == "live"
         assert row["timeline_anchor_at"] is not None
-
-
-def test_sessions_list_reads_missing_presence_from_db_when_cache_is_warm(tmp_path):
-    factory = _make_db(tmp_path, "warm_cache_presence.db")
-    now = datetime.now(timezone.utc)
-
-    db = factory()
-    try:
-        session = _seed_session(
-            db,
-            started_at=now - timedelta(hours=1),
-            ended_at=None,
-            project="warm-cache",
-        )
-        _upsert_presence(
-            db,
-            session_id=str(session.id),
-            state="running",
-            updated_at=now - timedelta(seconds=10),
-            tool_name="bash",
-            project="warm-cache",
-        )
-    finally:
-        db.close()
-
-    cache = get_presence_cache()
-    original_entries = dict(cache._entries)
-    original_cold = cache._cold
-    try:
-        cache._entries.clear()
-        cache._cold = False
-        cache._entries["other-session"] = cache.upsert(
-            "other-session",
-            "idle",
-            project="other",
-            updated_at=now - timedelta(seconds=5),
-        )[0]
-        cache._entries["other-session"].dirty = False
-
-        for client in _client(factory):
-            resp = client.get("/agents/sessions?days_back=14&limit=1", headers={"X-Agents-Token": "dev"})
-            assert resp.status_code == 200, resp.text
-            row = resp.json()["sessions"][0]
-            assert row["id"] == str(session.id)
-            assert row["status"] == "working"
-            assert row["presence_state"] == "running"
-            assert row["active_tool"] == "bash"
-    finally:
-        cache._entries.clear()
-        cache._entries.update(original_entries)
-        cache._cold = original_cold
 
 
 def test_sessions_list_uses_runtime_anchor_for_old_runtime_only_session(tmp_path):

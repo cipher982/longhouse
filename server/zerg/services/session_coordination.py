@@ -24,7 +24,6 @@ from zerg.services.session_messages import MESSAGE_STATUS_DELIVERING
 from zerg.services.session_messages import MESSAGE_STATUS_FAILED
 from zerg.services.session_messages import MESSAGE_STATUS_QUEUED
 from zerg.services.session_views import WallSessionResponse
-from zerg.services.session_views import load_presence_map
 from zerg.services.session_views import load_runtime_state_map
 from zerg.services.session_views import resolve_runtime_overlay
 
@@ -85,7 +84,6 @@ def query_wall_sessions(
     last_activity = store.get_last_activity_map(session_ids)
     last_user_msg = store.get_last_timestamp_by_role_map(session_ids, "user")
     last_tool_call = store.get_last_tool_call_map(session_ids)
-    presence_map = load_presence_map(db, session_ids)
     runtime_state_map = load_runtime_state_map(db, session_ids)
     pending_inbound_map: dict[UUID, int] = {}
     if session_ids:
@@ -105,7 +103,6 @@ def query_wall_sessions(
         runtime_overlay = resolve_runtime_overlay(
             session,
             last_activity_at=last_activity.get(session.id),
-            presence_map=presence_map,
             runtime_state_map=runtime_state_map,
             now=now,
         )

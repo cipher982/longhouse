@@ -12,7 +12,6 @@ import zerg.services.live_session_dispatch as live_session_dispatch
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
 from zerg.models.user import User
-from zerg.services.session_runtime import load_presence_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 
@@ -56,12 +55,10 @@ def _current_live_presence_state(db: Session, session_id: UUID, *, session: Agen
         return None
 
     now = datetime.now(timezone.utc)
-    presence_map = load_presence_map(db, [session_id])
     runtime_state_map = load_runtime_state_map(db, [session_id])
     runtime_overlay = resolve_runtime_overlay(
         target_session,
         last_activity_at=target_session.last_activity_at,
-        presence_map=presence_map,
         runtime_state_map=runtime_state_map,
         now=now,
     )

@@ -17,8 +17,9 @@ from zerg.database import make_engine
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionMessage
-from zerg.models.agents import SessionPresence
-from zerg.services.presence_cache import get_presence_cache
+from zerg.models.agents import SessionRuntimeState
+from zerg.services.session_runtime import phase_freshness_ms
+from zerg.services.session_runtime import runtime_key_for_session
 from zerg.tools.builtin import session_coordination_tools
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -33,7 +34,7 @@ def _make_engine(tmp_path, filename: str):
 
 
 def _patch_db_session(monkeypatch, engine):
-    SessionLocal = sessionmaker(bind=engine)
+    SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
     @contextmanager
     def _db_session():
@@ -112,31 +113,42 @@ def _seed_event(
 
 
 def _seed_presence(db, *, session: AgentSession, state: str) -> None:
-    updated_at = datetime.now(timezone.utc)
-    row = SessionPresence(
-        session_id=str(session.id),
-        state=state,
-        tool_name=None,
-        device_id=session.device_id,
-        cwd=session.cwd,
-        project=session.project,
-        provider=session.provider,
-        updated_at=updated_at,
-    )
-    db.add(row)
+    now = datetime.now(timezone.utc)
+    runtime_key = runtime_key_for_session(str(session.provider or "claude"), str(session.id))
+    freshness_ms = phase_freshness_ms(state) or int(timedelta(minutes=5).total_seconds() * 1000)
+    freshness_expires_at = now + timedelta(milliseconds=freshness_ms)
+    existing = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
+    if existing is None:
+        db.add(
+            SessionRuntimeState(
+                runtime_key=runtime_key,
+                session_id=session.id,
+                provider=str(session.provider or "claude"),
+                device_id=session.device_id,
+                phase=state,
+                phase_source="semantic",
+                active_tool=None,
+                phase_started_at=now,
+                last_runtime_signal_at=now,
+                last_progress_at=now,
+                last_live_at=now,
+                timeline_anchor_at=now,
+                freshness_expires_at=freshness_expires_at,
+                runtime_version=1,
+            )
+        )
+    else:
+        existing.phase = state
+        existing.phase_source = "semantic"
+        existing.active_tool = None
+        existing.phase_started_at = now
+        existing.last_runtime_signal_at = now
+        existing.last_progress_at = now
+        existing.last_live_at = now
+        existing.timeline_anchor_at = now
+        existing.freshness_expires_at = freshness_expires_at
+        existing.runtime_version = int(getattr(existing, "runtime_version", 0) or 0) + 1
     db.commit()
-
-    cache = get_presence_cache()
-    cache._entries.clear()  # type: ignore[attr-defined]
-    cache.upsert(
-        str(session.id),
-        state,
-        device_id=session.device_id,
-        cwd=session.cwd,
-        project=session.project,
-        provider=session.provider,
-        updated_at=updated_at,
-    )
 
 
 def test_peers_returns_live_repo_matches(tmp_path, monkeypatch):
@@ -149,17 +161,19 @@ def test_peers_returns_live_repo_matches(tmp_path, monkeypatch):
         _seed_session(db, device_id="shipper-idle", device_name="idle-box", git_repo="git@github.com:other/repo.git")
         _seed_presence(db, session=source, state="idle")
         _seed_presence(db, session=peer, state="thinking")
+        source_id = str(source.id)
+        peer_id = str(peer.id)
 
     result = session_coordination_tools.peers(
         repo="longhouse",
-        exclude_session_id=str(source.id),
+        exclude_session_id=source_id,
         active_only=True,
     )
 
     assert result["ok"] is True
     data = result["data"]
     assert data["total"] == 1
-    assert data["peers"][0]["session_id"] == str(peer.id)
+    assert data["peers"][0]["session_id"] == peer_id
     assert data["peers"][0]["presence_state"] == "thinking"
     assert data["peers"][0]["pending_inbound_messages"] == 0
 
@@ -221,11 +235,13 @@ def test_message_session_creates_stored_only_message_for_legacy_target(tmp_path,
     with SessionLocal() as db:
         from_session = _seed_session(db, device_id="shipper-laptop")
         to_session = _seed_session(db, device_id="shipper-cube")
+        from_session_id = str(from_session.id)
+        to_session_id = str(to_session.id)
 
     result = asyncio.run(
         session_coordination_tools.message_session_async(
-            from_session_id=str(from_session.id),
-            to_session_id=str(to_session.id),
+            from_session_id=from_session_id,
+            to_session_id=to_session_id,
             text="please check the deploy logs",
         )
     )
@@ -265,8 +281,9 @@ def test_check_messages_filters_unacknowledged(tmp_path, monkeypatch):
             ]
         )
         db.commit()
+        to_session_id = str(to_session.id)
 
-    result = session_coordination_tools.check_messages(session_id=str(to_session.id))
+    result = session_coordination_tools.check_messages(session_id=to_session_id)
 
     assert result["ok"] is True
     data = result["data"]

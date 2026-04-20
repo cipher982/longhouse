@@ -18,18 +18,15 @@ from zerg.database import make_engine
 from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
 from zerg.services.managed_local_control import await_managed_local_hook_phase_update
-from zerg.services.managed_local_control import await_managed_local_presence_update
 from zerg.services.managed_local_control import await_managed_local_turn_events
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import send_text_to_managed_local_session
 from zerg.services.managed_local_control import validate_managed_local_chat_done_payload
-from zerg.services.presence_cache import get_presence_cache
 from zerg.session_execution_home import ManagedSessionTransport
 
 
@@ -360,7 +357,6 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
         db_bind,
         session_id,
         after_runtime_event_id,
-        after_presence_updated_at,
         phases,
         timeout_secs,
         poll_interval_secs=1.0,
@@ -368,7 +364,6 @@ def test_send_text_to_managed_local_session_can_require_active_hook_phase_for_co
         assert db_bind is not None
         assert timeout_secs == 2.5
         assert after_runtime_event_id >= 0
-        assert after_presence_updated_at is None
         assert phases == {"thinking", "running"}
         return SessionRuntimeEvent(
             id=after_runtime_event_id + 1,
@@ -445,146 +440,6 @@ def test_send_text_to_managed_local_session_reports_codex_verification_failure_w
         assert result.error == "Managed local session did not acknowledge the prompt after send"
 
 
-def test_await_managed_local_presence_update_returns_newer_row(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-
-    with SessionLocal() as db:
-        _user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
-        baseline = datetime.now(timezone.utc)
-        db.add(
-            SessionPresence(
-                session_id=str(session.id),
-                state="idle",
-                provider="codex",
-                cwd=session.cwd,
-                project=session.project,
-                updated_at=baseline,
-            )
-        )
-        db.commit()
-
-        async def _update_later():
-            await asyncio.sleep(0.05)
-            with SessionLocal() as event_db:
-                row = event_db.query(SessionPresence).filter(SessionPresence.session_id == str(session.id)).one()
-                row.state = "thinking"
-                row.updated_at = datetime.now(timezone.utc)
-                event_db.commit()
-
-        async def _run_wait():
-            writer = asyncio.create_task(_update_later())
-            try:
-                return await await_managed_local_presence_update(
-                    db_bind=db.get_bind(),
-                    session_id=session.id,
-                    after_updated_at=baseline,
-                    timeout_secs=1.0,
-                    poll_interval_secs=0.02,
-                )
-            finally:
-                await writer
-
-        row = asyncio.run(_run_wait())
-        assert row is not None
-        assert row.state == "thinking"
-
-
-def test_await_managed_local_hook_phase_update_prefers_presence_cache(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-
-    with SessionLocal() as db:
-        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
-        cache = get_presence_cache()
-        baseline = datetime.now(timezone.utc)
-        cache.upsert(
-            str(session.id),
-            "idle",
-            provider="claude",
-            cwd=session.cwd,
-            project=session.project,
-            updated_at=baseline,
-        )
-
-        async def _update_later():
-            await asyncio.sleep(0.05)
-            cache.upsert(
-                str(session.id),
-                "thinking",
-                provider="claude",
-                cwd=session.cwd,
-                project=session.project,
-                updated_at=datetime.now(timezone.utc),
-            )
-
-        async def _run_wait():
-            writer = asyncio.create_task(_update_later())
-            try:
-                return await await_managed_local_hook_phase_update(
-                    db_bind=db.get_bind(),
-                    session_id=session.id,
-                    after_runtime_event_id=0,
-                    after_presence_updated_at=baseline,
-                    phases={"thinking", "running"},
-                    timeout_secs=1.0,
-                    poll_interval_secs=0.02,
-                )
-            finally:
-                await writer
-
-        result = asyncio.run(_run_wait())
-        assert result is not None
-        assert result.phase == "thinking"
-        assert result.source == "presence_cache"
-
-
-def test_await_managed_local_turn_terminal_accepts_presence_cache_terminal_without_active_phase(tmp_path):
-    SessionLocal = _make_db(tmp_path)
-
-    with SessionLocal() as db:
-        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
-        cache = get_presence_cache()
-        baseline = datetime.now(timezone.utc)
-        cache.upsert(
-            str(session.id),
-            "idle",
-            provider="claude",
-            cwd=session.cwd,
-            project=session.project,
-            updated_at=baseline,
-        )
-
-        async def _update_later():
-            await asyncio.sleep(0.05)
-            cache.upsert(
-                str(session.id),
-                "needs_user",
-                provider="claude",
-                cwd=session.cwd,
-                project=session.project,
-                updated_at=datetime.now(timezone.utc),
-            )
-
-        async def _run_wait():
-            writer = asyncio.create_task(_update_later())
-            try:
-                return await await_managed_local_turn_terminal(
-                    db_bind=db.get_bind(),
-                    session_id=session.id,
-                    after_runtime_event_id=0,
-                    after_presence_updated_at=baseline,
-                    timeout_secs=1.0,
-                    poll_interval_secs=0.02,
-                )
-            finally:
-                await writer
-
-        result = asyncio.run(_run_wait())
-        assert result is not None
-        assert result.phase == "needs_user"
-        assert result.control_status == "needs_user"
-        assert result.runtime_event_id == 0
-
-
 def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(monkeypatch, tmp_path):
     SessionLocal = _make_db(tmp_path)
     dispatcher = _FakeDispatcher()
@@ -595,7 +450,6 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
         db_bind,
         session_id,
         after_runtime_event_id,
-        after_presence_updated_at,
         phases,
         timeout_secs,
         poll_interval_secs=1.0,
@@ -603,7 +457,6 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
         assert db_bind is not None
         assert timeout_secs == 2.5
         assert after_runtime_event_id >= 0
-        assert after_presence_updated_at is None
         assert phases == {"thinking", "running"}
         return SessionRuntimeEvent(
             id=after_runtime_event_id + 1,
@@ -627,18 +480,7 @@ def test_send_text_to_managed_local_session_verifies_codex_via_hook_activity(mon
     )
 
     with SessionLocal() as db:
-        user, runner, session = _seed_user_runner_and_session(db, provider="codex")
-        db.add(
-            SessionPresence(
-                session_id=str(session.id),
-                state="idle",
-                provider="codex",
-                cwd=session.cwd,
-                project=session.project,
-                updated_at=datetime.now(timezone.utc),
-            )
-        )
-        db.commit()
+        user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
 
         result = asyncio.run(
             send_text_to_managed_local_session(
@@ -671,17 +513,6 @@ def test_send_text_to_managed_local_session_reports_codex_hook_verification_fail
 
     with SessionLocal() as db:
         user, _runner, session = _seed_user_runner_and_session(db, provider="codex")
-        db.add(
-            SessionPresence(
-                session_id=str(session.id),
-                state="idle",
-                provider="codex",
-                cwd=session.cwd,
-                project=session.project,
-                updated_at=datetime.now(timezone.utc),
-            )
-        )
-        db.commit()
 
         result = asyncio.run(
             send_text_to_managed_local_session(

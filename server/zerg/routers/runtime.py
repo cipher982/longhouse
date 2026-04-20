@@ -21,7 +21,6 @@ from zerg.services.session_messages import resolve_session_message_owner_id
 from zerg.services.session_runtime import RuntimeEventBatchIngest
 from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import ingest_runtime_events
-from zerg.services.session_runtime import load_presence_map
 from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.write_serializer import get_write_serializer
@@ -52,13 +51,11 @@ async def ingest_runtime_event_batch(
             if sessions:
                 now = datetime.now(timezone.utc)
                 owner_id = resolve_session_message_owner_id(db, _token)
-                presence_map = load_presence_map(db, session_ids)
                 runtime_state_map = load_runtime_state_map(db, session_ids)
                 for session in sessions:
                     current_state = resolve_runtime_overlay(
                         session,
                         last_activity_at=session.last_activity_at,
-                        presence_map=presence_map,
                         runtime_state_map=runtime_state_map,
                         now=now,
                     ).presence_state

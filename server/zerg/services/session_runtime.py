@@ -21,7 +21,6 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.models.agents import SessionRuntimeState
 from zerg.utils.time import normalize_utc
@@ -234,64 +233,48 @@ def build_fallback_runtime_view(
     *,
     session: AgentSession,
     last_activity_at: datetime | None,
-    presence: SessionPresence | None,
     now: datetime,
 ) -> SessionRuntimeView:
     normalized_now = normalize_utc(now) or datetime.now(timezone.utc)
     started_at = normalize_utc(session.started_at) or normalized_now
     ended_at = normalize_utc(session.ended_at)
     progress_at = normalize_utc(last_activity_at) or ended_at or started_at
-    presence_updated_at = normalize_utc(presence.updated_at if presence else None)
 
-    presence_state: str | None = None
-    presence_tool: str | None = None
-    if presence is not None and presence_updated_at is not None and (normalized_now - presence_updated_at) < PRESENCE_STALE_THRESHOLD:
-        presence_state = presence.state
-        presence_tool = presence.tool_name
-
-    timeline_anchor_at = _latest_timestamp(progress_at, presence_updated_at, started_at) or normalized_now
-    last_live_at = presence_updated_at
+    timeline_anchor_at = _latest_timestamp(progress_at, started_at) or normalized_now
+    last_live_at: datetime | None = None
     confidence: str | None = None
 
-    if presence_state in {"thinking", "running", "needs_user", "blocked"}:
-        status = "working" if presence_state in LIVE_EXECUTION_PHASES else "active"
-        confidence = "live"
-    elif presence_state == "idle":
-        status = "idle"
-        confidence = "live"
-    elif ended_at is None:
+    if ended_at is None:
         if (normalized_now - progress_at) <= INFERRED_PROGRESS_WINDOW:
             status = "active"
             confidence = "inferred"
-            last_live_at = last_live_at or progress_at
+            last_live_at = progress_at
         else:
             status = "idle"
-            confidence = "stale" if presence_updated_at is not None else None
     else:
         status = "completed"
-        confidence = "stale" if presence_updated_at is not None else None
 
-    runtime_phase = presence_state or ("finished" if ended_at is not None else "idle")
+    runtime_phase = "finished" if ended_at is not None else "idle"
     return SessionRuntimeView(
         runtime_phase=runtime_phase,
-        phase_started_at=presence_updated_at or progress_at,
+        phase_started_at=progress_at,
         last_progress_at=progress_at,
-        runtime_source=("semantic" if presence_state is not None else ("progress" if confidence == "inferred" else "fallback")),
+        runtime_source=("progress" if confidence == "inferred" else "fallback"),
         terminal_state=("finished" if ended_at is not None and status == "completed" else None),
         runtime_version=0,
         status=status,
-        presence_state=presence_state,
-        presence_tool=presence_tool,
-        presence_updated_at=presence_updated_at,
+        presence_state=None,
+        presence_tool=None,
+        presence_updated_at=None,
         last_live_at=last_live_at,
         display_phase=_display_phase_for_state(
             phase=runtime_phase,
-            active_tool=presence_tool,
+            active_tool=None,
             confidence=confidence or "stale",
             terminal_state=("finished" if ended_at is not None and status == "completed" else None),
             status=status,
         ),
-        active_tool=presence_tool,
+        active_tool=None,
         confidence=confidence,
         timeline_anchor_at=timeline_anchor_at,
     )
@@ -310,53 +293,22 @@ def should_include_runtime_view(
     )
 
 
-def load_presence_map(db: Session, session_ids: list[UUID]) -> dict[str, SessionPresence]:
-    if not session_ids:
-        return {}
-    str_session_ids = [str(session_id) for session_id in session_ids]
-
-    from zerg.services.presence_cache import get_presence_cache
-
-    cache = get_presence_cache()
-    if not cache.is_cold:
-        cached = cache.get_many(str_session_ids)
-        missing_ids = [sid for sid in str_session_ids if sid not in cached]
-        if missing_ids:
-            rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(missing_ids)).all()
-            if rows:
-                cache.warm_from_db(rows)
-                cached = cache.get_many(str_session_ids)
-        return {sid: cache.to_presence_obj(entry) for sid, entry in cached.items()}
-
-    rows = db.query(SessionPresence).filter(SessionPresence.session_id.in_(str_session_ids)).all()
-    return {row.session_id: row for row in rows}
-
-
 def resolve_runtime_overlay(
     session: AgentSession,
     *,
     last_activity_at: datetime | None,
-    presence_map: Mapping[str, SessionPresence],
     runtime_state_map: Mapping[str, SessionRuntimeState],
     now: datetime,
 ) -> SessionRuntimeView:
+    """Runtime overlay sourced exclusively from SessionRuntimeState.
+
+    Every `/api/agents/presence` call emits a RuntimeEventIngest which the
+    reducer materializes into SessionRuntimeState — that row is the single
+    source of truth for phase, tool, and confidence.
+    """
     session_key = str(session.id)
-    presence = presence_map.get(session_key)
     runtime_state = runtime_state_map.get(session_key)
     if runtime_state is not None:
-        runtime_signal_at = normalize_utc(runtime_state.last_runtime_signal_at)
-        presence_updated_at = normalize_utc(presence.updated_at if presence is not None else None)
-        if (
-            presence_updated_at is not None
-            and (now - presence_updated_at) < PRESENCE_STALE_THRESHOLD
-            and (runtime_signal_at is None or presence_updated_at > runtime_signal_at)
-        ):
-            return build_fallback_runtime_view(
-                session=session,
-                last_activity_at=last_activity_at,
-                presence=presence,
-                now=now,
-            )
         return build_runtime_view(
             state=runtime_state,
             session=session,
@@ -366,7 +318,6 @@ def resolve_runtime_overlay(
     return build_fallback_runtime_view(
         session=session,
         last_activity_at=last_activity_at,
-        presence=presence,
         now=now,
     )
 
@@ -515,7 +466,13 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
             state.phase_started_at = occurred_at
         state.phase = next_phase
         state.phase_source = "semantic"
-        state.active_tool = event.tool_name if next_phase in {"running", "blocked"} else None
+        if next_phase in {"running", "blocked"}:
+            # Blocked-with-no-tool means "still blocked on the same tool as
+            # last time" — keep the prior active_tool instead of dropping
+            # it. Running signals always carry the tool explicitly.
+            state.active_tool = event.tool_name or (state.active_tool if next_phase == "blocked" else None)
+        else:
+            state.active_tool = None
         state.last_runtime_signal_at = occurred_at
         state.last_live_at = occurred_at
         freshness_ms = event.freshness_ms or phase_freshness_ms(next_phase)

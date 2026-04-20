@@ -438,21 +438,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning("Startup: failed to reset runner statuses (non-fatal): %s", e)
 
-        # Presence cache
-        try:
-            from zerg.database import db_session
-            from zerg.models.agents import SessionPresence
-            from zerg.services.presence_cache import get_presence_cache
-
-            with db_session() as db:
-                rows = db.query(SessionPresence).all()
-                cache = get_presence_cache()
-                cache.warm_from_db(rows)
-                cache.start_flush_loop()
-                logger.info("Presence cache warmed (%d entries), flush loop started", len(rows))
-        except Exception as e:
-            logger.warning("Startup: presence cache warm failed (non-fatal): %s", e)
-
         # WAL checkpoints
         if not _settings.testing:
             try:
@@ -497,13 +482,6 @@ async def lifespan(app: FastAPI):
                 await watch_renewal_service.stop()
             except Exception:  # noqa: BLE001
                 logger.exception("Failed to stop watch_renewal_service")
-
-            try:
-                from zerg.services.presence_cache import get_presence_cache
-
-                get_presence_cache().stop_flush_loop()
-            except Exception:  # noqa: BLE001
-                logger.exception("Failed to stop presence cache flush loop")
 
             try:
                 from zerg.database import stop_wal_checkpoint_loop

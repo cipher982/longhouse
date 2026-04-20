@@ -17,13 +17,11 @@ from sqlalchemy.orm import Session
 
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPresence
 from zerg.models.agents import SessionRuntimeEvent
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_local_transport import ManagedLocalTransportError
 from zerg.services.managed_local_transport import build_managed_local_send_text_command
-from zerg.services.presence_cache import get_presence_cache
 from zerg.services.runner_job_dispatcher import get_runner_job_dispatcher
 from zerg.session_execution_home import ManagedSessionTransport
 from zerg.session_execution_home import SessionExecutionHome
@@ -48,7 +46,6 @@ _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS = {
     "needs_user": MANAGED_LOCAL_CONTROL_STATUS_NEEDS_USER,
     "blocked": MANAGED_LOCAL_CONTROL_STATUS_BLOCKED,
 }
-_MANAGED_LOCAL_PRESENCE_CURSOR_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -117,39 +114,6 @@ def validate_managed_local_chat_done_payload(
     return None
 
 
-def _to_utc_timestamp(value: datetime | None) -> float | None:
-    normalized = normalize_utc(value)
-    return normalized.timestamp() if normalized is not None else None
-
-
-def get_managed_local_presence_updated_at(*, session_id: UUID) -> datetime | None:
-    """Return the latest in-memory presence timestamp for a managed-local session."""
-
-    entry = get_presence_cache().get(str(session_id))
-    return normalize_utc(getattr(entry, "updated_at", None))
-
-
-def _get_newer_cached_presence_entry(
-    *,
-    session_id: UUID,
-    after_updated_at: datetime | None | object = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET,
-):
-    if after_updated_at is _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET:
-        return None
-
-    cache = get_presence_cache()
-    entry = cache.get(str(session_id))
-    if entry is None:
-        return None
-
-    entry_updated_at = normalize_utc(getattr(entry, "updated_at", None))
-    baseline_ts = _to_utc_timestamp(after_updated_at if isinstance(after_updated_at, datetime) else None)
-    entry_ts = _to_utc_timestamp(entry_updated_at)
-    if baseline_ts is not None and (entry_ts is None or entry_ts <= baseline_ts):
-        return None
-    return entry
-
-
 def get_managed_local_latest_event_id(*, db: Session, session_id: UUID) -> int:
     """Return the latest stored event id for a managed-local session."""
     return int(AgentsStore(db).get_latest_event_id(session_id) or 0)
@@ -199,76 +163,27 @@ def _fetch_managed_local_hook_runtime_events_since(
         )
 
 
-def _get_managed_local_presence_updated_at(*, db_bind, session_id: UUID) -> datetime | None:
-    with Session(bind=db_bind) as poll_db:
-        row = poll_db.query(SessionPresence).filter(SessionPresence.session_id == str(session_id)).one_or_none()
-        return row.updated_at if row is not None else None
-
-
-async def await_managed_local_presence_update(
-    *,
-    db_bind,
-    session_id: UUID,
-    after_updated_at: datetime | None,
-    timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
-    poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
-) -> SessionPresence | None:
-    """Wait until a managed-local session gets a newer presence update."""
-
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout_secs
-    cache = get_presence_cache()
-
-    while loop.time() < deadline:
-        cached = _get_newer_cached_presence_entry(
-            session_id=session_id,
-            after_updated_at=after_updated_at,
-        )
-        if cached is not None:
-            return cache.to_presence_obj(cached)
-
-        with Session(bind=db_bind) as poll_db:
-            row = poll_db.query(SessionPresence).filter(SessionPresence.session_id == str(session_id)).one_or_none()
-            if row is not None and row.updated_at is not None:
-                row_ts = _to_utc_timestamp(row.updated_at)
-                baseline_ts = _to_utc_timestamp(after_updated_at)
-                if baseline_ts is None or (row_ts is not None and row_ts > baseline_ts):
-                    return row
-        await asyncio.sleep(poll_interval_secs)
-
-    return None
-
-
 async def await_managed_local_hook_phase_update(
     *,
     db_bind,
     session_id: UUID,
     after_runtime_event_id: int,
-    after_presence_updated_at: datetime | None | object = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET,
     phases: set[str] | frozenset[str] | None = None,
     timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
     poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
 ) -> ManagedLocalPhaseUpdate | None:
-    """Wait for a new hook-driven runtime phase after the provided cursor."""
+    """Wait for a new hook-driven runtime phase after the provided cursor.
+
+    The `/api/agents/presence` endpoint materializes SessionRuntimeEvent rows
+    via RuntimeEventIngest, so polling that table is the single source of
+    truth for hook-driven phase updates.
+    """
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout_secs
     cursor = after_runtime_event_id
 
     while loop.time() < deadline:
-        cached = _get_newer_cached_presence_entry(
-            session_id=session_id,
-            after_updated_at=after_presence_updated_at,
-        )
-        if cached is not None:
-            phase = str(getattr(cached, "state", "") or "").strip()
-            if phases is None or phase in phases:
-                return ManagedLocalPhaseUpdate(
-                    phase=phase,
-                    occurred_at=normalize_utc(getattr(cached, "updated_at", None)),
-                    source="presence_cache",
-                )
-
         events = _fetch_managed_local_hook_runtime_events_since(
             db_bind=db_bind,
             session_id=session_id,
@@ -294,15 +209,14 @@ async def await_managed_local_turn_terminal(
     db_bind,
     session_id: UUID,
     after_runtime_event_id: int,
-    after_presence_updated_at: datetime | None | object = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET,
     timeout_secs: float = MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
     poll_interval_secs: float = MANAGED_LOCAL_POLL_INTERVAL_SECS,
 ) -> ManagedLocalTerminalResult | None:
     """Wait for a new terminal phase for a managed-local turn.
 
-    For live managed-local chat, trust the in-memory presence cache first so the
-    route does not block on SQLite runtime-event persistence. Hook runtime rows
-    remain a fallback for cold-cache or non-hot-path callers.
+    Polls SessionRuntimeEvent rows keyed by the session's runtime-event
+    cursor. Callers pass a pre-send cursor, so any newer idle/needs_user/
+    blocked row still belongs to the in-flight managed-local turn.
     """
 
     loop = asyncio.get_running_loop()
@@ -310,23 +224,6 @@ async def await_managed_local_turn_terminal(
     cursor = after_runtime_event_id
 
     while loop.time() < deadline:
-        cached = _get_newer_cached_presence_entry(
-            session_id=session_id,
-            after_updated_at=after_presence_updated_at,
-        )
-        if cached is not None:
-            phase = str(getattr(cached, "state", "") or "").strip()
-            if phase in _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS:
-                return ManagedLocalTerminalResult(
-                    phase=phase,
-                    control_status=_MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS.get(
-                        phase,
-                        MANAGED_LOCAL_CONTROL_STATUS_COMPLETED,
-                    ),
-                    runtime_event_id=0,
-                    occurred_at=normalize_utc(getattr(cached, "updated_at", None)),
-                )
-
         events = _fetch_managed_local_hook_runtime_events_since(
             db_bind=db_bind,
             session_id=session_id,
@@ -339,11 +236,6 @@ async def await_managed_local_turn_terminal(
                 continue
             if phase not in _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS:
                 continue
-            # Treat a newer terminal hook event as authoritative for the current
-            # turn even if the matching active phase never made it to this
-            # worker's cache or SQLite. The session-chat route passes a
-            # pre-send runtime-event cursor, so any later idle/needs_user/blocked
-            # event still belongs to the in-flight managed-local turn.
             return ManagedLocalTerminalResult(
                 phase=phase,
                 control_status=_MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS.get(
@@ -495,9 +387,6 @@ async def send_text_to_managed_local_session(
         if effective_verify and transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value
         else 0
     )
-    baseline_presence_updated_at = _MANAGED_LOCAL_PRESENCE_CURSOR_UNSET
-    if effective_verify and transport != ManagedSessionTransport.CLAUDE_CHANNEL_BRIDGE.value:
-        baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=session.id)
     try:
         command = build_managed_local_send_text_command(session=session, text=text)
     except ManagedLocalTransportError as exc:
@@ -563,7 +452,6 @@ async def send_text_to_managed_local_session(
                 db_bind=db.get_bind(),
                 session_id=session.id,
                 after_runtime_event_id=baseline_hook_runtime_event_id,
-                after_presence_updated_at=baseline_presence_updated_at,
                 phases=set(_MANAGED_LOCAL_ACTIVE_HOOK_PHASES),
                 timeout_secs=verification_timeout,
             )

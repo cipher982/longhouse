@@ -563,7 +563,6 @@ def test_managed_local_active_observer_marks_canonical_turn(monkeypatch, tmp_pat
             session_id=source_session.id,
             db_bind=db_bind,
             after_runtime_event_id=0,
-            after_presence_updated_at=None,
         )
     )
 
@@ -615,7 +614,6 @@ def test_managed_local_terminal_observer_marks_canonical_turn_and_releases_lock(
             session_id=source_session.id,
             db_bind=db_bind,
             after_runtime_event_id=0,
-            after_presence_updated_at=None,
         )
     )
 
@@ -677,7 +675,6 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
             session_id=source_session.id,
             db_bind=db_bind,
             after_runtime_event_id=0,
-            after_presence_updated_at=None,
         )
     )
     asyncio.run(
@@ -686,7 +683,6 @@ def test_managed_local_active_observer_is_noop_after_terminal_turn(monkeypatch, 
             session_id=source_session.id,
             db_bind=db_bind,
             after_runtime_event_id=0,
-            after_presence_updated_at=None,
         )
     )
 
