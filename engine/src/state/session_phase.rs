@@ -46,6 +46,26 @@ pub const KNOWN_PHASES: &[&str] = &[
     "finished",
 ];
 
+/// Phase freshness windows in seconds. MUST stay in lock-step with
+/// `server/zerg/services/local_health.py::_PHASE_FRESHNESS_SECONDS` and
+/// `server/zerg/services/session_runtime.py::PHASE_FRESHNESS`. Used by the
+/// engine to decide which ledger rows to emit in `engine-status.json`.
+pub const PHASE_FRESHNESS_SECONDS: &[(&str, i64)] = &[
+    ("thinking", 90),
+    ("running", 10 * 60),
+    ("idle", 10 * 60),
+    ("blocked", 24 * 60 * 60),
+    ("needs_user", 24 * 60 * 60),
+    ("finished", 10 * 60),
+];
+
+fn phase_window_seconds(phase: &str) -> Option<i64> {
+    PHASE_FRESHNESS_SECONDS
+        .iter()
+        .find(|(p, _)| *p == phase)
+        .map(|(_, s)| *s)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionPhaseSignal {
     pub session_id: String,
@@ -105,6 +125,60 @@ impl<'a> SessionPhaseStore<'a> {
             ],
         )?;
         Ok(rows > 0)
+    }
+}
+
+/// One row of the `session_phase_state` table. Used by status emission so
+/// consumers reading `engine-status.json` see the same shape the SQL ledger
+/// holds.
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+pub struct PhaseLedgerRow {
+    pub session_id: String,
+    pub provider: String,
+    pub phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    pub source: String,
+    pub observed_at: String,
+}
+
+impl<'a> SessionPhaseStore<'a> {
+    /// Return ledger rows whose phase + observed_at still satisfy the
+    /// canonical freshness windows. Unknown phases are dropped: the
+    /// overlay/server reducer can't interpret them either, so there's no
+    /// point emitting them.
+    pub fn fresh_rows(&self, now: DateTime<Utc>) -> Result<Vec<PhaseLedgerRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT session_id, provider, phase, tool_name, source, observed_at
+             FROM session_phase_state",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let phase: String = row.get(2)?;
+            let Some(window_secs) = phase_window_seconds(&phase) else {
+                continue;
+            };
+            let observed_at: String = row.get(5)?;
+            let observed = match DateTime::parse_from_rfc3339(&observed_at) {
+                Ok(dt) => dt.with_timezone(&Utc),
+                Err(_) => continue,
+            };
+            let age_secs = (now - observed).num_seconds();
+            if age_secs > window_secs {
+                continue;
+            }
+            out.push(PhaseLedgerRow {
+                session_id: row.get(0)?,
+                provider: row.get(1)?,
+                phase,
+                tool_name: row.get(3)?,
+                source: row.get(4)?,
+                observed_at,
+            });
+        }
+        out.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+        Ok(out)
     }
 }
 
@@ -275,5 +349,60 @@ mod tests {
             .unwrap();
         assert_eq!(row.0, "running");
         assert_eq!(row.1, "2026-04-19T00:20:00+00:00");
+    }
+
+    #[test]
+    fn fresh_rows_drops_stale_and_unknown() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = crate::state::db::open_db(Some(tmp.path())).unwrap();
+
+        // Insert one fresh + one stale + one unknown-phase row directly.
+        // The store's `record()` would reject the unknown one, so we bypass it
+        // to simulate a pre-existing legacy row from an older engine build.
+        conn.execute(
+            "INSERT INTO session_phase_state (session_id, provider, phase, tool_name, source, observed_at)
+             VALUES
+                ('fresh', 'claude', 'running', 'Bash', 'claude_hook', '2026-04-19T12:00:00+00:00'),
+                ('stale', 'claude', 'thinking', NULL, 'claude_hook', '2026-04-19T10:00:00+00:00'),
+                ('bogus', 'claude', 'typo_phase', NULL, 'claude_hook', '2026-04-19T12:00:00+00:00')",
+            [],
+        ).unwrap();
+
+        let store = SessionPhaseStore::new(&conn);
+        let now = DateTime::parse_from_rfc3339("2026-04-19T12:05:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let rows = store.fresh_rows(now).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "fresh");
+        assert_eq!(rows[0].phase, "running");
+        assert_eq!(rows[0].tool_name.as_deref(), Some("Bash"));
+    }
+
+    #[test]
+    fn fresh_rows_respects_per_phase_windows() {
+        // thinking is 90s; running is 10m; both insertions sit just inside
+        // their respective windows.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = crate::state::db::open_db(Some(tmp.path())).unwrap();
+        conn.execute(
+            "INSERT INTO session_phase_state (session_id, provider, phase, tool_name, source, observed_at)
+             VALUES
+                ('think-old', 'claude', 'thinking', NULL, 'claude_hook', '2026-04-19T11:58:00+00:00'),
+                ('run-old', 'claude', 'running', 'Bash', 'claude_hook', '2026-04-19T11:55:00+00:00')",
+            [],
+        ).unwrap();
+
+        let store = SessionPhaseStore::new(&conn);
+        let now = DateTime::parse_from_rfc3339("2026-04-19T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let rows = store.fresh_rows(now).unwrap();
+
+        // thinking row is 2m old — outside 90s window; running row is 5m old —
+        // inside 10m window.
+        let ids: Vec<&str> = rows.iter().map(|r| r.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["run-old"]);
     }
 }

@@ -1669,3 +1669,35 @@ def test_phase_freshness_local_health_matches_session_runtime() -> None:
         )
     extras = set(local_copy) - set(PHASE_FRESHNESS)
     assert extras <= {"finished"}, f"unexpected local-health-only phases: {extras - {'finished'}}"
+
+
+def test_phase_freshness_rust_engine_matches_python() -> None:
+    """Drift guard: engine/src/state/session_phase.rs PHASE_FRESHNESS_SECONDS
+    must agree with the Python map exactly.
+
+    The Rust engine emits `phase_ledger[]` in engine-status.json, filtered by
+    its own freshness map. If the Rust and Python maps diverge, consumers
+    that read the ledger rows will see different rows than readers that
+    re-filter via Python. Parse the Rust const directly so the test fails
+    loudly when either side is edited in isolation.
+    """
+    import re
+
+    rust_path = Path(__file__).resolve().parents[2] / "engine" / "src" / "state" / "session_phase.rs"
+    text = rust_path.read_text()
+    match = re.search(
+        r"pub const PHASE_FRESHNESS_SECONDS:\s*&\[\(&str,\s*i64\)\]\s*=\s*&\[(.*?)\];",
+        text,
+        re.DOTALL,
+    )
+    assert match, "could not locate PHASE_FRESHNESS_SECONDS in Rust source"
+    body = match.group(1)
+    rust_map: dict[str, int] = {}
+    entry_re = re.compile(r'\(\s*"(?P<phase>\w+)"\s*,\s*(?P<expr>[^)]+)\)')
+    for m in entry_re.finditer(body):
+        # The Rust source uses simple multiplications like `10 * 60`; eval is
+        # fine because we match a tight regex first.
+        rust_map[m.group("phase")] = int(eval(m.group("expr"), {"__builtins__": {}}))
+
+    local_copy = local_health_service._PHASE_FRESHNESS_SECONDS
+    assert rust_map == local_copy, f"rust={rust_map} python={local_copy}"

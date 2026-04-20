@@ -12,6 +12,7 @@ use crate::config;
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::shipping::client::ShipperClient;
+use crate::state::session_phase::{PhaseLedgerRow, SessionPhaseStore};
 use crate::state::spool::DeadLetterEntry;
 use crate::state::spool::Spool;
 
@@ -39,6 +40,10 @@ pub struct HeartbeatStats<'a> {
     pub parse_tracker: &'a RecentIssueTracker,
     pub is_offline: bool,
     pub last_ship_at: Option<String>,
+    /// Optional DB connection used to embed fresh phase-ledger rows in the
+    /// local status file. `None` for non-daemon callers (tests, CLI) where
+    /// the ledger doesn't need to surface.
+    pub phase_store: Option<SessionPhaseStore<'a>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -94,6 +99,11 @@ pub fn write_status_file(
         #[serde(flatten)]
         payload: &'a HeartbeatPayload,
         recent_dead_letters: Vec<StatusDeadLetter>,
+        /// Ledger rows whose phase is still within its freshness window.
+        /// Empty when there's no DB connection available (e.g. tests).
+        /// Same LWW rows that back `session_phase_state` so consumers can
+        /// read this file instead of re-opening the SQLite ledger.
+        phase_ledger: Vec<PhaseLedgerRow>,
         last_updated: String,
     }
 
@@ -104,11 +114,17 @@ pub fn write_status_file(
         .into_iter()
         .map(status_dead_letter_from_entry)
         .collect();
-    let now = chrono::Utc::now().to_rfc3339();
+    let now_utc = chrono::Utc::now();
+    let phase_ledger = stats
+        .phase_store
+        .as_ref()
+        .and_then(|store| store.fresh_rows(now_utc).ok())
+        .unwrap_or_default();
     let status = StatusFile {
         payload,
         recent_dead_letters,
-        last_updated: now,
+        phase_ledger,
+        last_updated: now_utc.to_rfc3339(),
     };
 
     if let Some(parent) = status_path.parent() {
@@ -254,6 +270,7 @@ mod tests {
             parse_tracker: &parse_tracker,
             is_offline: false,
             last_ship_at: payload.last_ship_at.clone(),
+            phase_store: None,
         };
 
         let status_path = dir.path().join("agent").join("engine-status.json");
@@ -268,5 +285,62 @@ mod tests {
             "/tmp/dead-range.jsonl"
         );
         assert_eq!(parsed["recent_dead_letters"][0]["range_bytes"], 120);
+        // phase_ledger is empty when no phase_store is wired.
+        assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn test_write_status_file_embeds_fresh_phase_ledger() {
+        use crate::state::session_phase::{SessionPhaseSignal, SessionPhaseStore};
+        use chrono::Utc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let spool = Spool::new(&conn);
+        let tracker = ConsecutiveErrorTracker::new();
+        let parse_tracker = RecentIssueTracker::new();
+
+        // Seed one fresh ledger row.
+        SessionPhaseStore::new(&conn)
+            .record(&SessionPhaseSignal {
+                session_id: "sess-live".to_string(),
+                provider: "claude".to_string(),
+                phase: "running".to_string(),
+                tool_name: Some("Bash".to_string()),
+                source: "claude_hook".to_string(),
+                observed_at: Utc::now(),
+            })
+            .unwrap();
+
+        let payload = HeartbeatPayload {
+            version: "0.1.0".to_string(),
+            daemon_pid: 42,
+            last_ship_at: None,
+            spool_pending_count: 0,
+            spool_dead_count: 0,
+            parse_error_count_1h: 0,
+            consecutive_ship_failures: 0,
+            disk_free_bytes: 0,
+            is_offline: false,
+        };
+        let stats = HeartbeatStats {
+            spool: &spool,
+            tracker: &tracker,
+            parse_tracker: &parse_tracker,
+            is_offline: false,
+            last_ship_at: None,
+            phase_store: Some(SessionPhaseStore::new(&conn)),
+        };
+
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        write_status_file(&payload, &stats, &status_path);
+
+        let json = std::fs::read_to_string(status_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["phase_ledger"][0]["session_id"], "sess-live");
+        assert_eq!(parsed["phase_ledger"][0]["phase"], "running");
+        assert_eq!(parsed["phase_ledger"][0]["tool_name"], "Bash");
+        assert_eq!(parsed["phase_ledger"][0]["source"], "claude_hook");
     }
 }

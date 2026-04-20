@@ -37,6 +37,8 @@ class SessionRow:
     local_ledger_phase: str | None = None
     local_ledger_observed_at: str | None = None
     local_ledger_source: str | None = None
+    engine_status_phase: str | None = None
+    engine_status_source: str | None = None
     local_health_phase: str | None = None
     local_health_state: str | None = None
     local_health_observed_at: str | None = None
@@ -56,6 +58,46 @@ def _longhouse_home() -> Path:
 
 def _agent_db_path() -> Path:
     return _longhouse_home() / "agent" / "longhouse-shipper.db"
+
+
+def _engine_status_path() -> Path:
+    return _longhouse_home() / "agent" / "engine-status.json"
+
+
+def read_engine_status_ledger() -> dict[str, dict[str, Any]]:
+    """Read `phase_ledger[]` from engine-status.json — the engine's own view
+    of the LWW ledger, pre-filtered for freshness. Diverging from the raw
+    SQL read (`read_ledger`) would mean the engine and the overlay disagree
+    on which rows are current.
+    """
+    path = _engine_status_path()
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"!! could not read {path}: {exc}", file=sys.stderr)
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    rows = payload.get("phase_ledger") or []
+    if not isinstance(rows, list):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        session_id = row.get("session_id")
+        if not session_id:
+            continue
+        out[str(session_id)] = {
+            "provider": row.get("provider"),
+            "phase": row.get("phase"),
+            "tool_name": row.get("tool_name"),
+            "source": row.get("source"),
+            "observed_at": row.get("observed_at"),
+        }
+    return out
 
 
 def read_ledger() -> dict[str, dict[str, Any]]:
@@ -148,6 +190,7 @@ def read_server_active(base_url: str, token: str | None) -> list[dict[str, Any]]
 
 def merge(
     ledger: dict[str, dict[str, Any]],
+    engine_status: dict[str, dict[str, Any]],
     local_sessions: list[dict[str, Any]],
     server_sessions: list[dict[str, Any]],
 ) -> list[SessionRow]:
@@ -158,6 +201,11 @@ def merge(
         row.local_ledger_phase = data.get("phase")
         row.local_ledger_observed_at = data.get("observed_at")
         row.local_ledger_source = data.get("source")
+    for session_id, data in engine_status.items():
+        row = rows.setdefault(session_id, SessionRow(session_id=session_id))
+        row.provider = data.get("provider") or row.provider
+        row.engine_status_phase = data.get("phase")
+        row.engine_status_source = data.get("source")
     for entry in local_sessions:
         session_id = entry.get("session_id")
         if not session_id:
@@ -224,23 +272,34 @@ def _canonicalize_phase(raw: str | None) -> str | None:
 
 
 def classify(row: SessionRow) -> tuple[str, list[str]]:
-    """Systems agree if canonical phase matches across all three.
+    """Systems agree if canonical phase matches across all four sources.
 
-    Local-health and server use display labels (`needs you`, `running Bash`)
-    while the ledger stores canonical phase (`needs_user`, `running`), so
-    compare canonical forms only. The observed_at column is not part of the
-    verdict — the overlay intentionally advances past the ledger as soon as a
-    newer outbox file lands.
+    Sources compared:
+    - raw SQL ledger (session_phase_state)
+    - engine-status.json phase_ledger[]  (the engine's filtered view)
+    - local-health managed_sessions      (overlay of ledger + newer outbox)
+    - server runtime_phase               (materialized runtime reducer)
+
+    The engine-status view should always be a subset of the raw ledger
+    (pre-filtered for freshness), so a divergence there means the engine
+    and the overlay filtered the same row differently. The observed_at
+    column is not part of the verdict — the overlay intentionally advances
+    past the ledger as soon as a newer outbox file lands.
     """
     ledger = _canonicalize_phase(row.local_ledger_phase)
+    engine_status = _canonicalize_phase(row.engine_status_phase)
     local = _canonicalize_phase(row.local_health_phase)
     server = _canonicalize_phase(row.server_phase)
-    known = [value for value in (ledger, local, server) if value]
+    known = [value for value in (ledger, engine_status, local, server) if value]
     if not known:
         return "silent", ["no system reported a phase"]
     if len(set(known)) == 1:
         return "agree", []
     reasons: list[str] = []
+    if ledger and engine_status and ledger != engine_status:
+        reasons.append(
+            f"ledger={row.local_ledger_phase!r} vs engine-status={row.engine_status_phase!r}"
+        )
     if ledger and local and ledger != local:
         reasons.append(
             f"ledger={row.local_ledger_phase!r} vs local-health={row.local_health_phase!r}"
@@ -260,8 +319,11 @@ def print_report(rows: list[SessionRow]) -> int:
     divergences = 0
     silent = 0
     agreeing = 0
-    print(f"{'session_id':<38}  {'prov':<6}  {'ledger':<24}  {'local-health':<24}  {'server':<24}  verdict")
-    print("-" * 130)
+    print(
+        f"{'session_id':<38}  {'prov':<6}  {'ledger':<22}  {'engine-status':<22}  "
+        f"{'local-health':<22}  {'server':<22}  verdict"
+    )
+    print("-" * 150)
     for row in rows:
         verdict, reasons = classify(row)
         if verdict == "diverge":
@@ -272,11 +334,13 @@ def print_report(rows: list[SessionRow]) -> int:
         else:
             agreeing += 1
         ledger_col = f"{row.local_ledger_phase or '-'} ({(row.local_ledger_source or '-').split('_')[0]})"
+        engine_col = f"{row.engine_status_phase or '-'} ({(row.engine_status_source or '-').split('_')[0]})"
         local_col = f"{row.local_health_phase or '-'} [{row.local_health_state or '-'}]"
         server_col = f"{row.server_phase or '-'} [{row.server_confidence or '-'}]"
         print(
             f"{row.session_id:<38}  {(row.provider or '-'):<6}  "
-            f"{ledger_col[:24]:<24}  {local_col[:24]:<24}  {server_col[:24]:<24}  {verdict}"
+            f"{ledger_col[:22]:<22}  {engine_col[:22]:<22}  "
+            f"{local_col[:22]:<22}  {server_col[:22]:<22}  {verdict}"
         )
         for note in row.notes:
             print(f"  -> {note}")
@@ -348,6 +412,9 @@ def main() -> int:
     ledger = read_ledger()
     print(f"ledger rows:    {len(ledger)}")
 
+    engine_status = read_engine_status_ledger()
+    print(f"engine-status:  {len(engine_status)} fresh ledger rows from {_engine_status_path()}")
+
     local_sessions = read_local_health()
     print(f"local-health:   {len(local_sessions)} managed sessions")
 
@@ -357,7 +424,7 @@ def main() -> int:
         print(f"server:         {len(server_sessions)} active sessions from {args.server}")
 
     print()
-    rows = merge(ledger, local_sessions, server_sessions)
+    rows = merge(ledger, engine_status, local_sessions, server_sessions)
     if not rows:
         print("(no sessions in any system)")
         return 0
