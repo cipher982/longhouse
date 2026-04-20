@@ -166,6 +166,7 @@ struct BridgeRuntimeSink {
     session_id: String,
     machine_name: Option<String>,
     thread_id: Option<String>,
+    local_db_path: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -574,6 +575,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             session_id: config.session_id.clone(),
             machine_name: config.machine_name.clone(),
             thread_id: None,
+            local_db_path: resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).ok(),
         },
         current_exe,
         last_progress_emit: None,
@@ -1086,9 +1088,9 @@ fn acquire_bridge_lock(lock_path: &Path) -> Result<()> {
                 lock_path.display()
             )
         }
-        Err(err) => Err(err).with_context(|| {
-            format!("acquiring exclusive lock on {}", lock_path.display())
-        }),
+        Err(err) => {
+            Err(err).with_context(|| format!("acquiring exclusive lock on {}", lock_path.display()))
+        }
     }
 }
 
@@ -2023,6 +2025,8 @@ async fn emit_runtime_keepalive(context: &mut BridgeContext) {
 
 impl BridgeRuntimeSink {
     async fn post_phase(&self, phase: &str, dedupe_key: String, tool_name: Option<String>) {
+        let observed_at = Utc::now();
+        self.persist_local_phase(phase, tool_name.clone(), observed_at);
         // freshness_ms omitted — backend PHASE_FRESHNESS is the single source of truth.
         self.post_runtime_events(vec![json!({
             "runtime_key": format!("codex:{}", self.session_id),
@@ -2033,7 +2037,7 @@ impl BridgeRuntimeSink {
             "kind": "phase_signal",
             "phase": phase,
             "tool_name": tool_name,
-            "occurred_at": Utc::now().to_rfc3339(),
+            "occurred_at": observed_at.to_rfc3339(),
             "dedupe_key": dedupe_key,
             "payload": {
                 "managed_transport": "codex_app_server",
@@ -2041,6 +2045,41 @@ impl BridgeRuntimeSink {
             }
         })])
         .await;
+    }
+
+    fn persist_local_phase(
+        &self,
+        phase: &str,
+        tool_name: Option<String>,
+        observed_at: chrono::DateTime<Utc>,
+    ) {
+        let Some(db_path) = self.local_db_path.as_deref() else {
+            return;
+        };
+
+        let conn = match crate::state::db::open_db(Some(db_path)) {
+            Ok(conn) => conn,
+            Err(err) => {
+                eprintln!("[codex-bridge] open local phase DB failed: {err}");
+                return;
+            }
+        };
+
+        let signal = crate::state::session_phase::SessionPhaseSignal {
+            session_id: self.session_id.clone(),
+            provider: "codex".to_string(),
+            phase: phase.to_string(),
+            tool_name,
+            source: BRIDGE_RUNTIME_SOURCE.to_string(),
+            observed_at,
+        };
+        if let Err(err) = crate::state::session_phase::SessionPhaseStore::new(&conn).record(&signal)
+        {
+            eprintln!(
+                "[codex-bridge] persist local phase failed for {}: {err}",
+                self.session_id
+            );
+        }
     }
 
     async fn post_progress(&self, dedupe_key: String) {
@@ -2300,6 +2339,7 @@ fn extract_in_progress_turn(thread: &Value) -> Option<&Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::DateTime;
     use pretty_assertions::assert_eq;
 
     fn make_test_context(temp: &tempfile::TempDir) -> BridgeContext {
@@ -2329,6 +2369,7 @@ mod tests {
                 session_id: "session-123".to_string(),
                 machine_name: Some("test-box".to_string()),
                 thread_id: None,
+                local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
             },
             current_exe: PathBuf::from("/bin/echo"),
             last_progress_emit: None,
@@ -2405,6 +2446,41 @@ mod tests {
             db_path,
             temp.path().join("agent").join("longhouse-shipper.db")
         );
+    }
+
+    #[test]
+    fn bridge_runtime_sink_persists_local_phase() {
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = resolve_bridge_agent_db_path(Some(temp.path())).unwrap();
+        let sink = BridgeRuntimeSink {
+            http: reqwest::Client::new(),
+            api_url: "http://127.0.0.1:9".to_string(),
+            api_token: "token".to_string(),
+            session_id: "session-123".to_string(),
+            machine_name: Some("test-box".to_string()),
+            thread_id: None,
+            local_db_path: Some(db_path.clone()),
+        };
+
+        let observed_at = DateTime::parse_from_rfc3339("2026-04-19T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        sink.persist_local_phase("running", Some("shell".to_string()), observed_at);
+
+        let conn = crate::state::db::open_db(Some(&db_path)).unwrap();
+        let row: (String, Option<String>, String) = conn
+            .query_row(
+                "SELECT phase, tool_name, source
+                 FROM session_phase_state
+                 WHERE session_id = 'session-123'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+
+        assert_eq!(row.0, "running");
+        assert_eq!(row.1, Some("shell".to_string()));
+        assert_eq!(row.2, BRIDGE_RUNTIME_SOURCE);
     }
 
     #[test]

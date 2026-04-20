@@ -149,7 +149,7 @@ def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         local_health_service,
         "_collect_managed_sessions_by_process",
-        lambda *, now, existing_session_ids: [],
+        lambda *, now, existing_session_ids, phase_overlay=None: [],
     )
 
 
@@ -199,6 +199,42 @@ def _write_session_binding_rows(tmp_path: Path, rows: list[tuple[str, str, str, 
         """
         INSERT INTO session_binding (path, session_id, provider, updated_at)
         VALUES (?, ?, ?, ?)
+        """,
+        rows,
+    )
+    conn.commit()
+    conn.close()
+
+
+def _write_session_phase_rows(
+    tmp_path: Path,
+    rows: list[tuple[str, str, str, str | None, str, str]],
+) -> None:
+    db_path = get_agent_db_path(tmp_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS session_phase_state (
+            session_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            tool_name TEXT,
+            source TEXT NOT NULL,
+            observed_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO session_phase_state (session_id, provider, phase, tool_name, source, observed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(session_id) DO UPDATE SET
+            provider = excluded.provider,
+            phase = excluded.phase,
+            tool_name = excluded.tool_name,
+            source = excluded.source,
+            observed_at = excluded.observed_at
         """,
         rows,
     )
@@ -320,7 +356,8 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
             "workspace_label": "zerg",
             "branch": None,
             "state": "detached",
-            "phase": "running in background",
+            "phase": None,
+            "phase_observed_at": None,
             "last_activity_at": "2026-04-17T17:31:00Z",
             "bridge_status": "ready",
             "bridge_pid": 7771,
@@ -386,6 +423,69 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
             "reason_codes": ["no_managed_session_bound"],
         }
     ]
+
+
+def test_collect_local_health_uses_local_phase_overlay_for_codex_bridge_session(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    rollout_path = tmp_path / "sessions" / "2026" / "04" / "17" / "rollout-zerg.jsonl"
+    rollout_path.parent.mkdir(parents=True, exist_ok=True)
+    rollout_path.write_text("{}\n")
+    _write_session_binding_rows(
+        tmp_path,
+        [(str(rollout_path), "sess-attached", "codex", "2026-04-17T17:30:36Z")],
+    )
+    _write_session_phase_rows(
+        tmp_path,
+        [
+            (
+                "sess-attached",
+                "codex",
+                "blocked",
+                "shell",
+                "codex_bridge",
+                "2026-04-17T17:31:30Z",
+            )
+        ],
+    )
+
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-attached",
+        {
+            "session_id": "sess-attached",
+            "pid": 7771,
+            "ws_url": "ws://127.0.0.1:49760",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "updated_at": "2026-04-17T17:31:00Z",
+            "thread_path": str(rollout_path),
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-attached"},
+            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {
+                "pid": 7773,
+                "ppid": 7000,
+                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49760",
+            },
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["managed_sessions"][0]["phase"] == "blocked on shell"
+    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:31:30Z"
+    assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:31:30Z"
 
 
 def test_collect_local_health_recognizes_remote_tui_attach_without_resume_token(monkeypatch, tmp_path: Path):
@@ -1098,6 +1198,66 @@ def test_process_scan_detects_claude_via_env(monkeypatch, tmp_path: Path):
     assert "LONGHOUSE_HOOK_TOKEN" not in blob
 
 
+def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: Path):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    session_id = "bfb567fb-7e0f-4552-8411-24f682751484"
+    proc = _FakeProc(
+        pid=55507,
+        cmdline=["claude", "--session-id", session_id],
+        create_time=now.timestamp(),
+        env={"LONGHOUSE_MANAGED_SESSION_ID": session_id},
+        cwd="/Users/test/git/zerg",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+    _write_session_phase_rows(
+        tmp_path,
+        [
+            (
+                session_id,
+                "claude",
+                "running",
+                "Bash",
+                "claude_hook",
+                "2026-04-19T00:04:00Z",
+            )
+        ],
+    )
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now,
+        existing_session_ids=set(),
+        phase_overlay=local_health_service._load_managed_session_phase_overlay(tmp_path),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["phase"] == "running Bash"
+    assert rows[0]["phase_observed_at"] == "2026-04-19T00:04:00Z"
+    assert rows[0]["last_activity_at"] == "2026-04-19T00:04:00Z"
+
+
+def test_phase_overlay_prefers_newer_outbox_signal(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    _write_session_phase_rows(
+        tmp_path,
+        [
+            (
+                "sess-1",
+                "claude",
+                "idle",
+                None,
+                "claude_hook",
+                "2026-04-19T00:00:00Z",
+            )
+        ],
+    )
+    _write_outbox_file(tmp_path, age_seconds=0, name="prs.sess-outbox.json")
+
+    overlay = local_health_service._load_managed_session_phase_overlay(tmp_path)
+
+    assert overlay["sess-1"]["phase"] == "thinking"
+    assert overlay["sess-1"]["source"] == "claude_hook"
+
+
 def test_process_scan_falls_back_to_argv_when_env_empty(monkeypatch, tmp_path: Path):
     now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
     proc = _FakeProc(
@@ -1360,7 +1520,7 @@ def test_collect_local_health_reports_claude_managed_session_via_process_scan(mo
     monkeypatch.setattr(
         local_health_service,
         "_collect_managed_sessions_by_process",
-        lambda *, now, existing_session_ids: [
+        lambda *, now, existing_session_ids, phase_overlay=None: [
             {
                 "session_id": "bfb567fb-7e0f-4552-8411-24f682751484",
                 "provider": "claude",

@@ -70,6 +70,15 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             session_id TEXT NOT NULL,
             provider TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS session_phase_state (
+            session_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            tool_name TEXT,
+            source TEXT NOT NULL,
+            observed_at TEXT NOT NULL
         );",
     )?;
 
@@ -90,7 +99,10 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
     conn.execute_batch(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_spool_pending_unique
          ON spool_queue(provider, file_path, start_offset, end_offset)
-         WHERE status = 'pending';",
+         WHERE status = 'pending';
+
+         CREATE INDEX IF NOT EXISTS idx_session_phase_provider_observed
+         ON session_phase_state(provider, observed_at DESC);",
     )?;
 
     tracing::debug!("Opened shipper DB: {}", path.display());

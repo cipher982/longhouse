@@ -1043,11 +1043,40 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     public let branch: String?
     public let state: String?
     public let phase: String?
+    public let phaseObservedAt: String?
     public let lastActivityAt: String?
     public let bridgeStatus: String?
     public let bridgePid: Int?
     public let bridgeHeartbeatAt: String?
     public let reasonCodes: [String]?
+
+    public init(
+        sessionId: String?,
+        provider: String?,
+        workspaceLabel: String?,
+        branch: String?,
+        state: String?,
+        phase: String?,
+        phaseObservedAt: String? = nil,
+        lastActivityAt: String?,
+        bridgeStatus: String?,
+        bridgePid: Int?,
+        bridgeHeartbeatAt: String?,
+        reasonCodes: [String]?
+    ) {
+        self.sessionId = sessionId
+        self.provider = provider
+        self.workspaceLabel = workspaceLabel
+        self.branch = branch
+        self.state = state
+        self.phase = phase
+        self.phaseObservedAt = phaseObservedAt
+        self.lastActivityAt = lastActivityAt
+        self.bridgeStatus = bridgeStatus
+        self.bridgePid = bridgePid
+        self.bridgeHeartbeatAt = bridgeHeartbeatAt
+        self.reasonCodes = reasonCodes
+    }
 
     public var id: String {
         sessionId ?? "\(provider ?? "unknown")-\(workspaceLabel ?? "workspace")-\(lastActivityAt ?? "never")"
