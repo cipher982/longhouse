@@ -561,16 +561,7 @@ public struct MenuBarPanelView: View {
         parts.append(contentsOf: (session.reasonCodes ?? []).prefix(1).map { HealthSnapshot.humanizeManagedReason($0) })
 
         if parts.isEmpty {
-            switch session.normalizedState {
-            case "attached":
-                parts.append("Live control path present")
-            case "detached":
-                parts.append("Managed session still running in background")
-            case "degraded":
-                parts.append("Bridge is running but not trustworthy")
-            default:
-                parts.append("Managed session state unknown")
-            }
+            parts.append("Phase unknown")
         }
 
         let heartbeat = snapshot.compactTimestampLabel(session.bridgeHeartbeatAt, relativeTo: presentationDate)

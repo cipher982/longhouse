@@ -58,6 +58,27 @@ def _to_rfc3339(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def _parse_rfc3339(value: str | None) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _max_rfc3339(*values: str | None) -> str | None:
+    candidates = [_parse_rfc3339(value) for value in values]
+    present = [value for value in candidates if value is not None]
+    if not present:
+        return None
+    return _to_rfc3339(max(present))
+
+
 def _coerce_path(path: str | Path | None) -> Path:
     if path is not None:
         return Path(path).expanduser()
@@ -629,6 +650,118 @@ def _load_session_binding_rows(base_dir: Path) -> list[dict[str, str | None]]:
         conn.close()
 
 
+def _load_persisted_session_phase_rows(base_dir: Path) -> dict[str, dict[str, str | None]]:
+    db_path = get_agent_db_path(base_dir)
+    if not db_path.exists():
+        return {}
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1)
+    except sqlite3.Error:
+        return {}
+
+    try:
+        rows = conn.execute(
+            """
+            SELECT session_id, provider, phase, tool_name, source, observed_at
+            FROM session_phase_state
+            ORDER BY observed_at DESC
+            """
+        ).fetchall()
+    except sqlite3.Error:
+        return {}
+    finally:
+        conn.close()
+
+    merged: dict[str, dict[str, str | None]] = {}
+    for session_id, provider, phase, tool_name, source, observed_at in rows:
+        normalized_session_id = _normalize_optional_string(session_id)
+        normalized_phase = _normalize_optional_string(phase)
+        normalized_observed_at = _parse_rfc3339(str(observed_at or ""))
+        if normalized_session_id is None or normalized_phase is None or normalized_observed_at is None:
+            continue
+        merged[normalized_session_id] = {
+            "provider": _normalize_optional_string(provider),
+            "phase": normalized_phase,
+            "tool_name": _normalize_optional_string(tool_name),
+            "source": _normalize_optional_string(source),
+            "observed_at": _to_rfc3339(normalized_observed_at),
+        }
+    return merged
+
+
+def _load_outbox_session_phase_rows(base_dir: Path) -> dict[str, dict[str, str | None]]:
+    outbox_dir = get_agent_outbox_dir(base_dir)
+    if not outbox_dir.exists():
+        return {}
+
+    merged: dict[str, dict[str, str | None]] = {}
+    for path in sorted(outbox_dir.glob("*.json")):
+        if path.name.startswith("."):
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+
+        session_id = _normalize_optional_string(payload.get("session_id"))
+        phase = _normalize_optional_string(payload.get("state"))
+        provider = _normalize_optional_string(payload.get("provider")) or "claude"
+        tool_name = _normalize_optional_string(payload.get("tool_name"))
+        observed_at = _parse_rfc3339(payload.get("occurred_at"))
+        if observed_at is None:
+            try:
+                observed_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            except OSError:
+                observed_at = None
+        if session_id is None or phase is None or observed_at is None:
+            continue
+
+        next_row = {
+            "provider": provider,
+            "phase": phase,
+            "tool_name": tool_name,
+            "source": f"{provider}_hook",
+            "observed_at": _to_rfc3339(observed_at),
+        }
+        current = merged.get(session_id)
+        if current is None or _max_rfc3339(next_row["observed_at"], current.get("observed_at")) == next_row["observed_at"]:
+            merged[session_id] = next_row
+    return merged
+
+
+def _phase_display_label(phase: str | None, tool_name: str | None) -> str | None:
+    normalized_phase = _normalize_optional_string(phase)
+    if normalized_phase is None:
+        return None
+    normalized_tool = _normalize_optional_string(tool_name)
+    lowered = normalized_phase.lower()
+    if lowered == "running":
+        return f"running {normalized_tool}" if normalized_tool else "running"
+    if lowered == "thinking":
+        return "thinking"
+    if lowered == "blocked":
+        return f"blocked on {normalized_tool}" if normalized_tool else "needs permission"
+    if lowered == "needs_user":
+        return "needs you"
+    if lowered == "idle":
+        return "idle"
+    if lowered == "finished":
+        return "completed"
+    return lowered.replace("_", " ")
+
+
+def _load_managed_session_phase_overlay(base_dir: Path) -> dict[str, dict[str, str | None]]:
+    merged = _load_persisted_session_phase_rows(base_dir)
+    for session_id, row in _load_outbox_session_phase_rows(base_dir).items():
+        current = merged.get(session_id)
+        if current is None or _max_rfc3339(row.get("observed_at"), current.get("observed_at")) == row.get("observed_at"):
+            merged[session_id] = row
+    return merged
+
+
 def _bridge_process_exists(process_rows: list[dict[str, Any]], pid: int) -> bool:
     return any(int(row.get("pid") or 0) == pid for row in process_rows)
 
@@ -729,21 +862,11 @@ def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
     return latest
 
 
-def _managed_session_phase(state: dict[str, Any], normalized_state: str) -> str:
-    if normalized_state == "degraded":
-        return "needs attention"
-    if normalized_state == "detached":
-        return "running in background"
-    if state.get("active_turn_id"):
-        return "running"
-    last_turn_status = _normalize_optional_string(state.get("last_turn_status"))
-    if last_turn_status == "completed":
-        return "waiting for input"
-    return "waiting for input"
-
-
 def _collect_managed_codex_summary(
-    base_dir: Path, *, now: datetime
+    base_dir: Path,
+    *,
+    now: datetime,
+    phase_overlay: dict[str, dict[str, str | None]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
     state_dir = _codex_bridge_state_dir(base_dir)
     if not state_dir.exists():
@@ -768,10 +891,7 @@ def _collect_managed_codex_summary(
         ws_url = _normalize_optional_string(state.get("ws_url"))
         session_id = _normalize_optional_string(state.get("session_id"))
         bridge_updated_at = _normalize_optional_string(state.get("updated_at"))
-        latest_activity_at = max(
-            [item for item in [latest_activity_at, bridge_updated_at] if item],
-            default=None,
-        )
+        latest_activity_at = _max_rfc3339(latest_activity_at, bridge_updated_at)
 
         attached_process = _find_attached_codex_process(process_rows, ws_url)
         binding = binding_by_session.get(session_id or "")
@@ -815,6 +935,8 @@ def _collect_managed_codex_summary(
         normalized_state = "attached" if attached_process is not None else "detached"
         if reason_codes:
             normalized_state = "degraded"
+        phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
+        phase_observed_at = phase_state.get("observed_at") if phase_state else None
 
         sessions.append(
             {
@@ -823,8 +945,12 @@ def _collect_managed_codex_summary(
                 "workspace_label": Path(str(state.get("cwd") or "")).name or None,
                 "branch": None,
                 "state": normalized_state,
-                "phase": _managed_session_phase(state, normalized_state),
-                "last_activity_at": bridge_updated_at,
+                "phase": _phase_display_label(
+                    phase_state.get("phase") if phase_state else None,
+                    phase_state.get("tool_name") if phase_state else None,
+                ),
+                "phase_observed_at": phase_observed_at,
+                "last_activity_at": _max_rfc3339(bridge_updated_at, phase_observed_at),
                 "bridge_status": bridge_status,
                 "bridge_pid": bridge_pid,
                 "bridge_heartbeat_at": bridge_heartbeat_at,
@@ -886,7 +1012,12 @@ def _session_id_from_argv(cmdline: list[str]) -> str | None:
     return None
 
 
-def _collect_managed_sessions_by_process(*, now: datetime, existing_session_ids: set[str]) -> list[dict[str, Any]]:
+def _collect_managed_sessions_by_process(
+    *,
+    now: datetime,
+    existing_session_ids: set[str],
+    phase_overlay: dict[str, dict[str, str | None]] | None = None,
+) -> list[dict[str, Any]]:
     """Detect live managed provider processes (Claude/Codex) via same-uid scan.
 
     Uses psutil to enumerate provider processes the current user owns, then
@@ -945,6 +1076,8 @@ def _collect_managed_sessions_by_process(*, now: datetime, existing_session_ids:
                 cwd = None
 
             started_at = datetime.fromtimestamp(info["create_time"], tz=timezone.utc).isoformat().replace("+00:00", "Z")
+            phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
+            phase_observed_at = phase_state.get("observed_at") if phase_state else None
 
             sessions.append(
                 {
@@ -957,8 +1090,12 @@ def _collect_managed_sessions_by_process(*, now: datetime, existing_session_ids:
                     "started_at": started_at,
                     "branch": None,
                     "state": "attached",
-                    "phase": "waiting for input",
-                    "last_activity_at": started_at,
+                    "phase": _phase_display_label(
+                        phase_state.get("phase") if phase_state else None,
+                        phase_state.get("tool_name") if phase_state else None,
+                    ),
+                    "phase_observed_at": phase_observed_at,
+                    "last_activity_at": _max_rfc3339(started_at, phase_observed_at) or started_at,
                     "bridge_status": None,
                     "bridge_pid": None,
                     "bridge_heartbeat_at": None,
@@ -995,13 +1132,9 @@ def _merge_managed_sessions(
     if not sessions and not bridge_orphans:
         return None, [], []
 
-    activity_candidates = [bridge_summary.get("latest_activity_at")] if bridge_summary else []
+    latest_activity_at = bridge_summary.get("latest_activity_at") if bridge_summary else None
     for row in sessions:
-        activity_candidates.append(row.get("last_activity_at"))
-    latest_activity_at = max(
-        [item for item in activity_candidates if item],
-        default=None,
-    )
+        latest_activity_at = _max_rfc3339(latest_activity_at, row.get("last_activity_at"))
 
     managed_summary = {
         "attached_count": sum(1 for item in sessions if item.get("state") == "attached"),
@@ -1406,13 +1539,22 @@ def _classify_health(
 def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]:
     now = _utc_now()
     resolved_base_dir = _coerce_path(claude_dir)
+    phase_overlay = _load_managed_session_phase_overlay(resolved_base_dir)
     service = _collect_service(resolved_base_dir)
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
-    bridge_summary, bridge_sessions, orphan_bridges = _collect_managed_codex_summary(resolved_base_dir, now=now)
+    bridge_summary, bridge_sessions, orphan_bridges = _collect_managed_codex_summary(
+        resolved_base_dir,
+        now=now,
+        phase_overlay=phase_overlay,
+    )
     bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
-    process_sessions = _collect_managed_sessions_by_process(now=now, existing_session_ids=bridge_session_ids)
+    process_sessions = _collect_managed_sessions_by_process(
+        now=now,
+        existing_session_ids=bridge_session_ids,
+        phase_overlay=phase_overlay,
+    )
     managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
         bridge_summary=bridge_summary,
         bridge_sessions=bridge_sessions,

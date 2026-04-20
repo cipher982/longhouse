@@ -13,17 +13,62 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use tracing::warn;
+
 use crate::shipping::client::ShipperClient;
+use crate::state::session_phase::{SessionPhaseSignal, SessionPhaseStore};
 
 /// Maximum age for an outbox file before it is considered stale and deleted.
 const STALE_SECS: u64 = 600; // 10 minutes
+
+#[derive(Debug, Clone, Deserialize)]
+struct PresenceOutboxPayload {
+    session_id: String,
+    state: String,
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    occurred_at: Option<String>,
+}
+
+#[derive(Debug)]
+struct PendingPresenceFile {
+    path: PathBuf,
+    bytes: Vec<u8>,
+    payload: PresenceOutboxPayload,
+    observed_at: DateTime<Utc>,
+}
 
 /// Drain all ready presence events from the outbox directory.
 ///
 /// Returns `(sent, kept)`:
 /// - `sent`: number of events successfully POSTed (files deleted)
 /// - `kept`: number of files kept for retry (POST failed)
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn drain_outbox(dir: &Path, client: &ShipperClient) -> (usize, usize) {
+    drain_outbox_impl(dir, client, None, false).await
+}
+
+/// Same as `drain_outbox`, but also mirrors the latest coalesced phase into
+/// the local agent DB so local-health can render accurate per-session phase.
+pub async fn drain_outbox_with_local_state(
+    dir: &Path,
+    client: &ShipperClient,
+    db_path: Option<&Path>,
+) -> (usize, usize) {
+    drain_outbox_impl(dir, client, db_path, true).await
+}
+
+async fn drain_outbox_impl(
+    dir: &Path,
+    client: &ShipperClient,
+    db_path: Option<&Path>,
+    persist_local_state: bool,
+) -> (usize, usize) {
     // Nothing to do if outbox doesn't exist yet.
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -31,8 +76,8 @@ pub async fn drain_outbox(dir: &Path, client: &ShipperClient) -> (usize, usize) 
     };
 
     let now = SystemTime::now();
-    // session_id → (path, bytes) — latest file per session wins
-    let mut by_session: HashMap<String, (PathBuf, Vec<u8>)> = HashMap::new();
+    // session_id → latest payload — newest observation per session wins
+    let mut by_session: HashMap<String, PendingPresenceFile> = HashMap::new();
 
     for entry in entries.flatten() {
         let path = entry.path();
@@ -76,7 +121,7 @@ pub async fn drain_outbox(dir: &Path, client: &ShipperClient) -> (usize, usize) 
             Ok(b) => b,
             Err(_) => continue, // file disappeared between read_dir and read
         };
-        let val: serde_json::Value = match serde_json::from_slice(&bytes) {
+        let payload: PresenceOutboxPayload = match serde_json::from_slice(&bytes) {
             Ok(v) => v,
             Err(_) => {
                 // Malformed JSON — delete to avoid indefinite retry.
@@ -86,40 +131,36 @@ pub async fn drain_outbox(dir: &Path, client: &ShipperClient) -> (usize, usize) 
         };
 
         // Must have a non-empty session_id.
-        let sid = match val.get("session_id").and_then(|v| v.as_str()) {
-            Some(s) if !s.is_empty() => s.to_owned(),
-            _ => {
-                let _ = std::fs::remove_file(&path);
-                continue;
-            }
+        let sid = payload.session_id.trim().to_string();
+        if sid.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+        let state = payload.state.trim();
+        if state.is_empty() {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
+
+        let observed_at = observed_at_for_payload(&payload, &entry, now);
+        let next_file = PendingPresenceFile {
+            path: path.clone(),
+            bytes,
+            payload,
+            observed_at,
         };
 
-        // Coalesce: keep the file with the latest mtime for each session.
-        // If we can't get mtime, the last file iterated wins (good enough).
-        let new_mtime = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-
         match by_session.get(&sid) {
-            Some((existing_path, _)) => {
-                let existing_mtime = existing_path
-                    .metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .unwrap_or(SystemTime::UNIX_EPOCH);
-                if new_mtime > existing_mtime {
-                    // Delete the older file; replace with newer.
-                    let _ = std::fs::remove_file(existing_path);
-                    by_session.insert(sid, (path, bytes));
+            Some(existing) => {
+                if next_file.observed_at > existing.observed_at {
+                    let _ = std::fs::remove_file(&existing.path);
+                    by_session.insert(sid, next_file);
                 } else {
-                    // New file is older; delete it.
                     let _ = std::fs::remove_file(&path);
                 }
             }
             None => {
-                by_session.insert(sid, (path, bytes));
+                by_session.insert(sid, next_file);
             }
         }
     }
@@ -127,8 +168,44 @@ pub async fn drain_outbox(dir: &Path, client: &ShipperClient) -> (usize, usize) 
     // POST coalesced events.
     let mut sent = 0usize;
     let mut kept = 0usize;
+    let local_phase_conn = if persist_local_state {
+        match crate::state::db::open_db(db_path) {
+            Ok(conn) => Some(conn),
+            Err(err) => {
+                warn!("opening local session phase DB failed: {err}");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
-    for (_sid, (path, bytes)) in by_session {
+    for pending in by_session.into_values() {
+        let PendingPresenceFile {
+            path,
+            bytes,
+            payload,
+            observed_at,
+        } = pending;
+
+        if let Some(conn) = local_phase_conn.as_ref() {
+            let provider = normalize_provider(payload.provider.as_deref());
+            let signal = SessionPhaseSignal {
+                session_id: payload.session_id.trim().to_string(),
+                provider: provider.to_string(),
+                phase: payload.state.trim().to_string(),
+                tool_name: payload.tool_name.clone(),
+                source: phase_source_for_provider(provider).to_string(),
+                observed_at,
+            };
+            if let Err(err) = SessionPhaseStore::new(conn).record(&signal) {
+                warn!(
+                    "persisting local phase failed for session {}: {err}",
+                    signal.session_id
+                );
+            }
+        }
+
         match client.post_json("/api/agents/presence", bytes).await {
             Ok(_) => {
                 let _ = std::fs::remove_file(&path);
@@ -142,6 +219,44 @@ pub async fn drain_outbox(dir: &Path, client: &ShipperClient) -> (usize, usize) 
     }
 
     (sent, kept)
+}
+
+fn observed_at_for_payload(
+    payload: &PresenceOutboxPayload,
+    entry: &std::fs::DirEntry,
+    now: SystemTime,
+) -> DateTime<Utc> {
+    if let Some(parsed) = payload.occurred_at.as_deref().and_then(parse_rfc3339_utc) {
+        return parsed;
+    }
+
+    if let Ok(metadata) = entry.metadata() {
+        if let Ok(modified) = metadata.modified() {
+            return DateTime::<Utc>::from(modified);
+        }
+    }
+
+    DateTime::<Utc>::from(now)
+}
+
+fn parse_rfc3339_utc(raw: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn normalize_provider(provider: Option<&str>) -> &str {
+    provider
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("claude")
+}
+
+fn phase_source_for_provider(provider: &str) -> &'static str {
+    match provider {
+        "codex" => "codex_hook",
+        _ => "claude_hook",
+    }
 }
 
 #[cfg(test)]
@@ -579,5 +694,53 @@ mod tests {
         server.abort();
         let logged = paths.lock().unwrap().clone();
         assert_eq!(logged.len(), 0, "no POSTs — stale dot-files never sent");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn test_drain_outbox_with_local_state_persists_latest_phase() {
+        use crate::config::ShipperConfig;
+        use crate::pipeline::compressor::CompressionAlgo;
+        use crate::shipping::client::ShipperClient;
+
+        let (addr, _paths, server) = spawn_http_server(204).await;
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+
+        write_hook_style(dir.path(), "PHASE1", "sess-phase", "thinking");
+        std::thread::sleep(Duration::from_millis(10));
+        write_hook_style(dir.path(), "PHASE2", "sess-phase", "running");
+
+        let url = format!("http://{}", addr);
+        let cfg = ShipperConfig::default().with_overrides(
+            Some(&url),
+            None,
+            Some(db.path()),
+            None,
+            None,
+            None,
+        );
+        let client = ShipperClient::with_compression(&cfg, CompressionAlgo::Gzip).unwrap();
+
+        let (sent, kept) =
+            drain_outbox_with_local_state(dir.path(), &client, Some(db.path())).await;
+
+        assert_eq!(sent, 1);
+        assert_eq!(kept, 0);
+
+        let conn = crate::state::db::open_db(Some(db.path())).unwrap();
+        let row: (String, Option<String>, String) = conn
+            .query_row(
+                "SELECT phase, tool_name, source
+                 FROM session_phase_state
+                 WHERE session_id = 'sess-phase'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "running");
+        assert!(row.1.is_none());
+        assert_eq!(row.2, "claude_hook");
+
+        server.abort();
     }
 }

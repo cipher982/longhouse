@@ -366,7 +366,12 @@ pub async fn run(config: ConnectConfig) -> Result<()> {
 
             // Outbox drain: presence events written by hooks (every 1s, skip when offline)
             _ = outbox_timer.tick(), if !offline.is_offline => {
-                let (sent, kept) = outbox::drain_outbox(&outbox_dir, &client).await;
+                let (sent, kept) = outbox::drain_outbox_with_local_state(
+                    &outbox_dir,
+                    &client,
+                    config.shipper_config.db_path.as_deref(),
+                )
+                .await;
                 if sent > 0 || kept > 0 {
                     tracing::debug!("Outbox drain: {} sent, {} pending", sent, kept);
                 }
