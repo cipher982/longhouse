@@ -1266,6 +1266,30 @@ def test_phase_overlay_drops_stale_rows_past_freshness_window(monkeypatch, tmp_p
     assert "sess-stale" not in overlay
 
 
+def test_phase_overlay_surfaces_recent_finished_row(monkeypatch, tmp_path: Path):
+    """`finished` rows are shown for 10 minutes then drop.
+
+    A recent terminal signal should render as a managed session so the menu
+    bar can display the shutdown event, but stale ones should age out.
+    """
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
+    recent_observed_at = (now - timedelta(minutes=2)).isoformat().replace("+00:00", "Z")
+    stale_observed_at = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+    _write_session_phase_rows(
+        tmp_path,
+        [
+            ("sess-recent", "claude", "finished", None, "claude_hook", recent_observed_at),
+            ("sess-stale", "claude", "finished", None, "claude_hook", stale_observed_at),
+        ],
+    )
+
+    overlay = local_health_service._load_managed_session_phase_overlay(tmp_path, now=now)
+
+    assert overlay["sess-recent"]["phase"] == "finished"
+    assert "sess-stale" not in overlay
+
+
 def test_phase_overlay_prefers_newer_outbox_signal(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     now = datetime.now(tz=timezone.utc)
@@ -1623,20 +1647,25 @@ def test_bridge_is_alive_purges_when_lock_missing(tmp_path: Path) -> None:
 
 
 def test_phase_freshness_local_health_matches_session_runtime() -> None:
-    """Drift guard: the two copies of the phase freshness map must agree.
+    """Drift guard: the two copies of the phase freshness map must agree on
+    the phases both sides handle.
 
     `_PHASE_FRESHNESS_SECONDS` in local_health.py is duplicated from
     `PHASE_FRESHNESS` in session_runtime.py because the CLI path cannot
     import the server runtime module (it transitively requires
     `DATABASE_URL`). This test catches drift between the two copies.
+
+    local_health adds `finished` on top of the runtime map (see comment on
+    `_PHASE_FRESHNESS_SECONDS`). That extra key is allowed; everything the
+    runtime knows must still be in the local copy with the same window.
     """
     from zerg.services.session_runtime import PHASE_FRESHNESS
 
     local_copy = local_health_service._PHASE_FRESHNESS_SECONDS
-    for phase, seconds in local_copy.items():
-        assert phase in PHASE_FRESHNESS, f"{phase} missing from session_runtime.PHASE_FRESHNESS"
-        assert seconds == int(PHASE_FRESHNESS[phase].total_seconds()), (
-            f"{phase}: local={seconds}s vs runtime={int(PHASE_FRESHNESS[phase].total_seconds())}s"
-        )
-    for phase in PHASE_FRESHNESS:
+    for phase, window in PHASE_FRESHNESS.items():
         assert phase in local_copy, f"{phase} missing from local_health._PHASE_FRESHNESS_SECONDS"
+        assert local_copy[phase] == int(window.total_seconds()), (
+            f"{phase}: local={local_copy[phase]}s vs runtime={int(window.total_seconds())}s"
+        )
+    extras = set(local_copy) - set(PHASE_FRESHNESS)
+    assert extras <= {"finished"}, f"unexpected local-health-only phases: {extras - {'finished'}}"
