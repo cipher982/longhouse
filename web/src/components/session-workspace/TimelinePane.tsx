@@ -17,6 +17,7 @@ import {
   getToolSummary,
   isAgentToolInteraction,
   isOutsideActiveContext,
+  isToolInteractionDropped,
   timelineItemContainsSelection,
 } from "../../lib/sessionWorkspace";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
@@ -40,6 +41,7 @@ interface TimelinePaneProps {
   onSelectKey: (key: string) => void;
   /** Called when local filtering hides/reveals the parent-selected key. */
   onVisibleSelectionChange?: (visibleKey: string | null) => void;
+  sessionEnded?: boolean;
   /** Navigation / context content rendered at the start of the header bar. */
   headerLeft?: ReactNode;
   /** Actions rendered at the far right of the header bar. */
@@ -103,11 +105,13 @@ function ToolRow({
   interaction,
   rowId,
   isSelected,
+  sessionEnded,
   onSelect,
 }: {
   interaction: ToolInteraction;
   rowId: string;
   isSelected: boolean;
+  sessionEnded: boolean;
   onSelect: () => void;
 }) {
   const info = getToolDisplayInfo(interaction.toolName);
@@ -116,7 +120,9 @@ function ToolRow({
   const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
   const outsideActiveContext =
     isOutsideActiveContext(interaction.callEvent) || isOutsideActiveContext(interaction.resultEvent);
-  const pending = !interaction.resultEvent && interaction.pairing !== "orphan";
+  const awaitingResult = !interaction.resultEvent && interaction.pairing !== "orphan";
+  const dropped = awaitingResult && isToolInteractionDropped(interaction, sessionEnded);
+  const pending = awaitingResult && !dropped;
   const isAgent = isAgentToolInteraction(interaction);
   const agentType = isAgent ? (interaction.callEvent?.tool_input_json as Record<string, unknown> | null)?.subagent_type as string | undefined : undefined;
 
@@ -142,7 +148,13 @@ function ToolRow({
         </span>
       </div>
       <div className="timeline-row__content timeline-row__content--tool">
-        {summary || (pending ? "Waiting for tool result..." : "No input or output recorded")}
+        {summary || (
+          dropped
+            ? "Result not recorded \u2014 tool call dropped."
+            : pending
+            ? "Waiting for tool result..."
+            : "No input or output recorded"
+        )}
       </div>
       <div className="timeline-row__badges">
         {exitCode != null ? (
@@ -152,6 +164,7 @@ function ToolRow({
         ) : null}
         {duration ? <span className="timeline-row__badge">{duration}</span> : null}
         {pending ? <span className="timeline-row__badge">Pending</span> : null}
+        {dropped ? <span className="timeline-row__badge timeline-row__badge--warning">Dropped</span> : null}
         {outsideActiveContext ? (
           <span className="timeline-row__badge timeline-row__badge--warning">Outside active context</span>
         ) : null}
@@ -221,6 +234,7 @@ export function TimelinePane({
   selectedKey,
   onSelectKey,
   onVisibleSelectionChange,
+  sessionEnded = false,
   headerLeft,
   headerRight,
   dock = null,
@@ -510,6 +524,7 @@ export function TimelinePane({
                   interaction={item.interaction}
                   rowId={`event-${item.interaction.anchorId}`}
                   isSelected={selectedKey === selectionKey}
+                  sessionEnded={sessionEnded}
                   onSelect={() => onSelectKey(selectionKey)}
                 />
               );

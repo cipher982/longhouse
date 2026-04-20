@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildTimelineModel, getSessionInteractionCapabilities } from "../sessionWorkspace";
-import type { AgentSession, AgentSessionProjectionItem, SessionCapabilities } from "../../services/api/agents";
+import { buildTimelineModel, getSessionInteractionCapabilities, isToolInteractionDropped } from "../sessionWorkspace";
+import type { ToolInteraction } from "../sessionWorkspace";
+import type { AgentEvent, AgentSession, AgentSessionProjectionItem, SessionCapabilities } from "../../services/api/agents";
 
 function makeCapabilities(overrides: Partial<SessionCapabilities> = {}): SessionCapabilities {
   return {
@@ -83,6 +84,58 @@ describe("buildTimelineModel", () => {
       throw new Error("Expected an orphan tool selection");
     }
     expect(selection.interaction.toolName).toBe("Bash");
+  });
+});
+
+describe("isToolInteractionDropped", () => {
+  const baseCall: AgentEvent = {
+    id: 1,
+    role: "assistant",
+    content_text: null,
+    tool_name: "Bash",
+    tool_input_json: null,
+    tool_output_text: null,
+    tool_call_id: "tc-1",
+    timestamp: "2026-03-22T22:00:00Z",
+    in_active_context: true,
+  };
+
+  function makeInteraction(overrides: Partial<ToolInteraction> = {}): ToolInteraction {
+    return {
+      key: "id:tc-1",
+      toolName: "Bash",
+      callEvent: baseCall,
+      resultEvent: null,
+      pairing: "id",
+      anchorId: 1,
+      timestamp: baseCall.timestamp,
+      ...overrides,
+    };
+  }
+
+  const nowOlder = Date.parse("2026-03-22T23:30:00Z"); // 90min after call
+  const nowRecent = Date.parse("2026-03-22T22:10:00Z"); // 10min after call
+
+  it("returns false when a result is present", () => {
+    const interaction = makeInteraction({ resultEvent: { ...baseCall, id: 2, role: "tool" } });
+    expect(isToolInteractionDropped(interaction, false, nowOlder)).toBe(false);
+  });
+
+  it("marks an unresolved call as dropped once the session has ended", () => {
+    expect(isToolInteractionDropped(makeInteraction(), true, nowRecent)).toBe(true);
+  });
+
+  it("marks an unresolved call older than 1 hour as dropped in a live session", () => {
+    expect(isToolInteractionDropped(makeInteraction(), false, nowOlder)).toBe(true);
+  });
+
+  it("leaves fresh unresolved calls in a live session as pending (not dropped)", () => {
+    expect(isToolInteractionDropped(makeInteraction(), false, nowRecent)).toBe(false);
+  });
+
+  it("never marks orphan results as dropped", () => {
+    const interaction = makeInteraction({ pairing: "orphan" });
+    expect(isToolInteractionDropped(interaction, true, nowOlder)).toBe(false);
   });
 });
 
