@@ -195,6 +195,7 @@ def read_server_active(base_url: str, token: str | None) -> list[dict[str, Any]]
     url = f"{base_url.rstrip('/')}/api/agents/sessions/active?limit=200"
     req = urllib.request.Request(url)
     req.add_header("Accept", "application/json")
+    req.add_header("User-Agent", "longhouse-verify-runtime-truth/1.0")
     if token:
         req.add_header("X-Agents-Token", token)
     try:
