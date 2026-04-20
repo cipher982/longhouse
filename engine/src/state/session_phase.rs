@@ -69,7 +69,14 @@ impl<'a> SessionPhaseStore<'a> {
     /// the `WHERE` clause is monotonic. A single statement keeps the check and
     /// the write atomic — no SELECT-then-write race between writers on
     /// different connections.
+    ///
+    /// Rejects phases outside `KNOWN_PHASES` so a typo in a hook script or
+    /// bridge update can't pollute the ledger with values the overlay or
+    /// server reducer can't interpret. Rejection returns `Ok(false)`.
     pub fn record(&self, signal: &SessionPhaseSignal) -> Result<bool> {
+        if !KNOWN_PHASES.contains(&signal.phase.as_str()) {
+            return Ok(false);
+        }
         let observed_at = signal.observed_at.to_rfc3339();
         let tool_name = normalize_optional_string(signal.tool_name.clone());
         let rows = self.conn.execute(
@@ -213,6 +220,25 @@ mod tests {
 
         assert_eq!(row.0, "blocked");
         assert_eq!(row.1, Some("Edit".to_string()));
+    }
+
+    #[test]
+    fn record_rejects_unknown_phase() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = crate::state::db::open_db(Some(tmp.path())).unwrap();
+        let store = SessionPhaseStore::new(&conn);
+
+        let wrote = store
+            .record(&signal("2026-04-19T00:00:00Z", "typo_phase", None))
+            .unwrap();
+        assert!(!wrote, "unknown phase must not land in the ledger");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM session_phase_state", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[test]

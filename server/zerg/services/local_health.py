@@ -755,17 +755,22 @@ def _phase_display_label(phase: str | None, tool_name: str | None) -> str | None
 
 
 # Phase freshness windows, seconds. MUST mirror
-# `session_runtime.PHASE_FRESHNESS` — duplicated here because importing
-# session_runtime would pull in `zerg.database`, which requires a real
-# DATABASE_URL. The local-health CLI must run without server settings.
-# `finished` intentionally omitted (terminal state; the runtime reducer
-# handles it via `terminal_state`).
+# `session_runtime.PHASE_FRESHNESS` for the non-terminal phases it covers —
+# duplicated here because importing session_runtime would pull in
+# `zerg.database`, which requires a real DATABASE_URL. The local-health CLI
+# must run without server settings. A drift test in
+# test_local_health_cli.py cross-checks the two copies.
+#
+# `finished` is local-health-only: the runtime reducer tracks it forever via
+# `terminal_state`, but a raw ledger row for `finished` is just a recent
+# shutdown signal — show it for the same window as `idle`, then drop.
 _PHASE_FRESHNESS_SECONDS: dict[str, int] = {
     "thinking": 90,
     "running": 10 * 60,
     "idle": 10 * 60,
     "blocked": 24 * 60 * 60,
     "needs_user": 24 * 60 * 60,
+    "finished": 10 * 60,
 }
 
 
