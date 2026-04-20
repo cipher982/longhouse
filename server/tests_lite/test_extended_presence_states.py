@@ -48,9 +48,7 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.main import api_app
 from zerg.models.agents import AgentsBase
 from zerg.models.agents import AgentSession
-from zerg.models.agents import SessionPresence
-from zerg.models.user import User
-from zerg.services.presence_cache import get_presence_cache
+from zerg.models.agents import SessionRuntimeState
 from zerg.session_loop_mode import SessionLoopMode
 
 # ---------------------------------------------------------------------------
@@ -100,6 +98,16 @@ def client(tmp_path):
 
 def _auth_headers() -> dict:
     return {"X-Agents-Token": "test-token"}
+
+
+def _runtime_state(SessionLocal, sid: str) -> SessionRuntimeState | None:
+    with SessionLocal() as db:
+        return (
+            db.query(SessionRuntimeState)
+            .filter(SessionRuntimeState.session_id == sid)
+            .order_by(SessionRuntimeState.updated_at.desc())
+            .first()
+        )
 
 
 def _make_session(
@@ -202,10 +210,9 @@ def test_blocked_stores_tool_name(client, tmp_path):
             },
             headers=_auth_headers(),
         )
-        # Presence is now in-memory; read from cache (source of truth).
-        entry = get_presence_cache().get(sid)
-        assert entry is not None
-        assert entry.tool_name == "Bash", f"expected tool_name='Bash', got {entry.tool_name!r}"
+        state = _runtime_state(SessionLocal, sid)
+        assert state is not None
+        assert state.active_tool == "Bash", f"expected active_tool='Bash', got {state.active_tool!r}"
     api_app.dependency_overrides.clear()
     engine.dispose()
 
@@ -236,9 +243,9 @@ def test_needs_user_clears_tool_name(client, tmp_path):
             json={"session_id": sid, "state": "needs_user", "cwd": "/tmp"},
             headers=_auth_headers(),
         )
-        entry = get_presence_cache().get(sid)
-        assert entry is not None
-        assert entry.tool_name is None, f"expected tool_name=None on needs_user, got {entry.tool_name!r}"
+        state = _runtime_state(SessionLocal, sid)
+        assert state is not None
+        assert state.active_tool is None, f"expected active_tool=None on needs_user, got {state.active_tool!r}"
     api_app.dependency_overrides.clear()
     engine.dispose()
 
@@ -401,10 +408,10 @@ def test_blocked_permission_request_then_notification_preserves_tool_name(client
             json={"session_id": sid, "state": "blocked", "cwd": "/tmp"},
             headers=_auth_headers(),
         )
-        entry = get_presence_cache().get(sid)
-        assert entry is not None
-        assert entry.tool_name == "Bash", (
-            f"tool_name should be preserved after Notification/permission_prompt, got {entry.tool_name!r}"
+        state = _runtime_state(SessionLocal, sid)
+        assert state is not None
+        assert state.active_tool == "Bash", (
+            f"active_tool should be preserved after Notification/permission_prompt, got {state.active_tool!r}"
         )
     api_app.dependency_overrides.clear()
     engine.dispose()
@@ -436,9 +443,9 @@ def test_blocked_notification_then_permission_request_sets_tool_name(client, tmp
             json={"session_id": sid, "state": "blocked", "tool_name": "Bash", "cwd": "/tmp"},
             headers=_auth_headers(),
         )
-        entry = get_presence_cache().get(sid)
-        assert entry is not None
-        assert entry.tool_name == "Bash", f"tool_name should be set by PermissionRequest, got {entry.tool_name!r}"
+        state = _runtime_state(SessionLocal, sid)
+        assert state is not None
+        assert state.active_tool == "Bash", f"active_tool should be set by PermissionRequest, got {state.active_tool!r}"
     api_app.dependency_overrides.clear()
     engine.dispose()
 

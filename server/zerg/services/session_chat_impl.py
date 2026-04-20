@@ -38,7 +38,6 @@ from zerg.services.managed_local_control import await_managed_local_hook_phase_u
 from zerg.services.managed_local_control import await_managed_local_turn_terminal
 from zerg.services.managed_local_control import get_managed_local_control_status_for_phase
 from zerg.services.managed_local_control import get_managed_local_latest_hook_runtime_event_id
-from zerg.services.managed_local_control import get_managed_local_presence_updated_at
 from zerg.services.managed_local_event_polling import MANAGED_LOCAL_EVENT_TIMEOUT_SECS
 from zerg.services.managed_local_event_polling import MANAGED_LOCAL_POLL_INTERVAL_SECS
 from zerg.services.managed_local_event_polling import await_managed_local_events_task
@@ -280,14 +279,12 @@ async def _release_managed_local_lock_after_terminal(
     session_id: UUID,
     db_bind,
     after_runtime_event_id: int,
-    after_presence_updated_at: datetime | None,
 ) -> None:
     try:
         terminal_result = await await_managed_local_turn_terminal(
             db_bind=db_bind,
             session_id=session_id,
             after_runtime_event_id=after_runtime_event_id,
-            after_presence_updated_at=after_presence_updated_at,
             timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
         )
     except Exception:
@@ -349,14 +346,12 @@ async def _observe_managed_local_turn_active_phase(
     session_id: UUID,
     db_bind,
     after_runtime_event_id: int,
-    after_presence_updated_at: datetime | None,
 ) -> None:
     try:
         active_update = await await_managed_local_hook_phase_update(
             db_bind=db_bind,
             session_id=session_id,
             after_runtime_event_id=after_runtime_event_id,
-            after_presence_updated_at=after_presence_updated_at,
             phases=set(_MANAGED_LOCAL_ACTIVE_PHASES),
             timeout_secs=MANAGED_LOCAL_LOCK_RELEASE_TIMEOUT_SECS,
             poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
@@ -406,7 +401,6 @@ def _schedule_managed_local_active_phase_observation(
     session_id: UUID,
     db_bind,
     after_runtime_event_id: int,
-    after_presence_updated_at: datetime | None,
 ) -> None:
     task = asyncio.create_task(
         _observe_managed_local_turn_active_phase(
@@ -414,7 +408,6 @@ def _schedule_managed_local_active_phase_observation(
             session_id=session_id,
             db_bind=db_bind,
             after_runtime_event_id=after_runtime_event_id,
-            after_presence_updated_at=after_presence_updated_at,
         )
     )
 
@@ -436,7 +429,6 @@ def _schedule_managed_local_lock_release(
     session_id: UUID,
     db_bind,
     after_runtime_event_id: int,
-    after_presence_updated_at: datetime | None,
 ) -> None:
     task = asyncio.create_task(
         _release_managed_local_lock_after_terminal(
@@ -445,7 +437,6 @@ def _schedule_managed_local_lock_release(
             session_id=session_id,
             db_bind=db_bind,
             after_runtime_event_id=after_runtime_event_id,
-            after_presence_updated_at=after_presence_updated_at,
         )
     )
 
@@ -488,7 +479,6 @@ async def _dispatch_managed_local_text(
         db=db,
         session_id=source_session.id,
     )
-    baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
     user_submitted_at = datetime.now(timezone.utc)
     t_baseline = time.monotonic()
     create_session_turn(
@@ -572,7 +562,6 @@ async def _dispatch_managed_local_text(
         session_id=source_session.id,
         db_bind=db.get_bind(),
         after_runtime_event_id=baseline_hook_runtime_event_id,
-        after_presence_updated_at=baseline_presence_updated_at,
     )
     _schedule_managed_local_lock_release(
         lock_scope_id=lock_scope_id,
@@ -580,7 +569,6 @@ async def _dispatch_managed_local_text(
         session_id=source_session.id,
         db_bind=db.get_bind(),
         after_runtime_event_id=baseline_hook_runtime_event_id,
-        after_presence_updated_at=baseline_presence_updated_at,
     )
 
     dispatch_ms = round((t_sent - t0) * 1000, 1)
@@ -690,7 +678,6 @@ async def _stream_managed_local_output(
         db=db,
         session_id=source_session.id,
     )
-    baseline_presence_updated_at = get_managed_local_presence_updated_at(session_id=source_session.id)
     run_best_effort_session_turn_write(
         db_bind=db.get_bind(),
         label="create",
@@ -773,7 +760,6 @@ async def _stream_managed_local_output(
             db_bind=db.get_bind(),
             session_id=source_session.id,
             after_runtime_event_id=baseline_hook_runtime_event_id,
-            after_presence_updated_at=baseline_presence_updated_at,
             timeout_secs=MANAGED_LOCAL_EVENT_TIMEOUT_SECS,
             poll_interval_secs=MANAGED_LOCAL_POLL_INTERVAL_SECS,
         )

@@ -21,7 +21,7 @@ os.environ.setdefault("TESTING", "1")
 
 from zerg.database import Base, get_db, make_engine, make_sessionmaker
 from zerg.dependencies.agents_auth import verify_agents_token
-from zerg.models.agents import AgentSession, AgentsBase, SessionPresence
+from zerg.models.agents import AgentSession, AgentsBase, SessionRuntimeState
 
 
 def _make_db(tmp_path, name="forum.db"):
@@ -80,19 +80,18 @@ def _get_user_state(factory, session_id):
 
 
 def _get_presence_row(factory, session_id):
-    # Presence is now in-memory; read from cache (source of truth).
-    from zerg.services.presence_cache import get_presence_cache
-
-    entry = get_presence_cache().get(session_id)
-    if entry is not None:
-        return entry.state, entry.tool_name
-    # Fallback to DB for cold cache
+    """Return (phase, active_tool) from the runtime-state reducer."""
     db = factory()
-    row = db.query(SessionPresence).filter(SessionPresence.session_id == session_id).first()
-    state = row.state if row else None
-    tool_name = row.tool_name if row else None
+    row = (
+        db.query(SessionRuntimeState)
+        .filter(SessionRuntimeState.session_id == session_id)
+        .order_by(SessionRuntimeState.updated_at.desc())
+        .first()
+    )
+    phase = row.phase if row else None
+    active_tool = row.active_tool if row else None
     db.close()
-    return state, tool_name
+    return phase, active_tool
 
 
 # ---------------------------------------------------------------------------
