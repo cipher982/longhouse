@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""MVP: compare the three runtime-truth systems for managed sessions.
+"""MVP: compare the runtime-truth systems for managed sessions.
 
 Systems inspected (read-only):
   1) Local: ~/.longhouse/agent/longhouse-shipper.db -> session_phase_state
      (written by the engine on every hook/bridge phase signal, LWW)
   2) Local view: `longhouse local-health --json` (the overlay + scans)
-  3) Server view: GET /api/agents/sessions/active (SessionRuntimeState +
-     SessionPresence, overlayed by resolve_runtime_overlay)
+  3) Server view: GET /api/agents/sessions/active (SessionRuntimeState,
+     overlayed by resolve_runtime_overlay)
 
 For each session observed in any of the three, print the phase each system
-reports. A disagreement is the interesting signal — it's where "three
-overlapping truths" is actively lying.
+reports. A disagreement is the interesting signal.
 
 Output is intentionally dense + plain-text so agents can diff two runs.
 """
