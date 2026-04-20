@@ -12,7 +12,7 @@ use crate::config;
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
 use crate::shipping::client::ShipperClient;
-use crate::state::session_phase::{PhaseLedgerRow, SessionPhaseStore};
+use crate::state::session_phase::PhaseLedgerRow;
 use crate::state::spool::DeadLetterEntry;
 use crate::state::spool::Spool;
 
@@ -40,10 +40,6 @@ pub struct HeartbeatStats<'a> {
     pub parse_tracker: &'a RecentIssueTracker,
     pub is_offline: bool,
     pub last_ship_at: Option<String>,
-    /// Optional DB connection used to embed fresh phase-ledger rows in the
-    /// local status file. `None` for non-daemon callers (tests, CLI) where
-    /// the ledger doesn't need to surface.
-    pub phase_store: Option<SessionPhaseStore<'a>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -89,9 +85,16 @@ pub async fn send_heartbeat(client: &ShipperClient, payload: &HeartbeatPayload) 
 }
 
 /// Write status to `~/.longhouse/agent/engine-status.json`.
+///
+/// `phase_ledger` is passed in explicitly (not pulled from a store) so
+/// callers can't accidentally emit an empty ledger by forgetting to wire
+/// the DB — the absence of fresh rows and the absence of a reader look
+/// identical otherwise. Compute it with
+/// `SessionPhaseStore::new(conn).fresh_rows(now)` at the call site.
 pub fn write_status_file(
     payload: &HeartbeatPayload,
     stats: &HeartbeatStats<'_>,
+    phase_ledger: Vec<PhaseLedgerRow>,
     status_path: &std::path::Path,
 ) {
     #[derive(Serialize)]
@@ -100,7 +103,6 @@ pub fn write_status_file(
         payload: &'a HeartbeatPayload,
         recent_dead_letters: Vec<StatusDeadLetter>,
         /// Ledger rows whose phase is still within its freshness window.
-        /// Empty when there's no DB connection available (e.g. tests).
         /// Same LWW rows that back `session_phase_state` so consumers can
         /// read this file instead of re-opening the SQLite ledger.
         phase_ledger: Vec<PhaseLedgerRow>,
@@ -115,11 +117,6 @@ pub fn write_status_file(
         .map(status_dead_letter_from_entry)
         .collect();
     let now_utc = chrono::Utc::now();
-    let phase_ledger = stats
-        .phase_store
-        .as_ref()
-        .and_then(|store| store.fresh_rows(now_utc).ok())
-        .unwrap_or_default();
     let status = StatusFile {
         payload,
         recent_dead_letters,
@@ -130,8 +127,14 @@ pub fn write_status_file(
     if let Some(parent) = status_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
+    // Atomic replace via tmp+rename so a concurrent reader never sees a
+    // half-written file. Readers would otherwise hit JSONDecodeError and
+    // silently drop phase_ledger from their cross-check.
     if let Ok(json) = serde_json::to_string_pretty(&status) {
-        let _ = std::fs::write(status_path, json);
+        let tmp_path = status_path.with_extension("json.tmp");
+        if std::fs::write(&tmp_path, json).is_ok() {
+            let _ = std::fs::rename(&tmp_path, status_path);
+        }
     }
 }
 
@@ -270,11 +273,10 @@ mod tests {
             parse_tracker: &parse_tracker,
             is_offline: false,
             last_ship_at: payload.last_ship_at.clone(),
-            phase_store: None,
         };
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        write_status_file(&payload, &stats, &status_path);
+        write_status_file(&payload, &stats, Vec::new(), &status_path);
 
         let json = std::fs::read_to_string(status_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -285,7 +287,8 @@ mod tests {
             "/tmp/dead-range.jsonl"
         );
         assert_eq!(parsed["recent_dead_letters"][0]["range_bytes"], 120);
-        // phase_ledger is empty when no phase_store is wired.
+        // Callers that pass an empty ledger get an empty array, not a missing
+        // key — the shape stays stable for consumers.
         assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
     }
 
@@ -330,11 +333,14 @@ mod tests {
             parse_tracker: &parse_tracker,
             is_offline: false,
             last_ship_at: None,
-            phase_store: Some(SessionPhaseStore::new(&conn)),
         };
 
+        let phase_ledger = SessionPhaseStore::new(&conn)
+            .fresh_rows(Utc::now())
+            .expect("fresh_rows should succeed on a live DB");
+
         let status_path = dir.path().join("agent").join("engine-status.json");
-        write_status_file(&payload, &stats, &status_path);
+        write_status_file(&payload, &stats, phase_ledger, &status_path);
 
         let json = std::fs::read_to_string(status_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();

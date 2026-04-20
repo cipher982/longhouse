@@ -64,7 +64,19 @@ def _engine_status_path() -> Path:
     return _longhouse_home() / "agent" / "engine-status.json"
 
 
-def read_engine_status_ledger() -> dict[str, dict[str, Any]]:
+@dataclass
+class EngineStatusView:
+    """Engine-status.json view. `available` separates "file missing / mid-
+    write / malformed" from "file fine but empty", so the verifier can flag
+    the former instead of quietly calling everything else `agree`.
+    """
+
+    available: bool
+    rows: dict[str, dict[str, Any]] = field(default_factory=dict)
+    error: str | None = None
+
+
+def read_engine_status_ledger() -> EngineStatusView:
     """Read `phase_ledger[]` from engine-status.json — the engine's own view
     of the LWW ledger, pre-filtered for freshness. Diverging from the raw
     SQL read (`read_ledger`) would mean the engine and the overlay disagree
@@ -72,19 +84,28 @@ def read_engine_status_ledger() -> dict[str, dict[str, Any]]:
     """
     path = _engine_status_path()
     if not path.exists():
-        return {}
+        return EngineStatusView(available=False, error=f"{path} does not exist")
     try:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
-        print(f"!! could not read {path}: {exc}", file=sys.stderr)
-        return {}
+        msg = f"could not read {path}: {exc}"
+        print(f"!! {msg}", file=sys.stderr)
+        return EngineStatusView(available=False, error=msg)
     if not isinstance(payload, dict):
-        return {}
-    rows = payload.get("phase_ledger") or []
-    if not isinstance(rows, list):
-        return {}
+        return EngineStatusView(available=False, error=f"{path} is not a JSON object")
+    rows_raw = payload.get("phase_ledger")
+    if rows_raw is None:
+        return EngineStatusView(
+            available=False,
+            error=f"{path} has no phase_ledger field (engine predates Stage 3?)",
+        )
+    if not isinstance(rows_raw, list):
+        return EngineStatusView(
+            available=False,
+            error=f"{path} phase_ledger is {type(rows_raw).__name__}, expected list",
+        )
     out: dict[str, dict[str, Any]] = {}
-    for row in rows:
+    for row in rows_raw:
         if not isinstance(row, dict):
             continue
         session_id = row.get("session_id")
@@ -97,7 +118,7 @@ def read_engine_status_ledger() -> dict[str, dict[str, Any]]:
             "source": row.get("source"),
             "observed_at": row.get("observed_at"),
         }
-    return out
+    return EngineStatusView(available=True, rows=out)
 
 
 def read_ledger() -> dict[str, dict[str, Any]]:
@@ -190,7 +211,7 @@ def read_server_active(base_url: str, token: str | None) -> list[dict[str, Any]]
 
 def merge(
     ledger: dict[str, dict[str, Any]],
-    engine_status: dict[str, dict[str, Any]],
+    engine_status: EngineStatusView,
     local_sessions: list[dict[str, Any]],
     server_sessions: list[dict[str, Any]],
 ) -> list[SessionRow]:
@@ -201,7 +222,7 @@ def merge(
         row.local_ledger_phase = data.get("phase")
         row.local_ledger_observed_at = data.get("observed_at")
         row.local_ledger_source = data.get("source")
-    for session_id, data in engine_status.items():
+    for session_id, data in engine_status.rows.items():
         row = rows.setdefault(session_id, SessionRow(session_id=session_id))
         row.provider = data.get("provider") or row.provider
         row.engine_status_phase = data.get("phase")
@@ -413,7 +434,13 @@ def main() -> int:
     print(f"ledger rows:    {len(ledger)}")
 
     engine_status = read_engine_status_ledger()
-    print(f"engine-status:  {len(engine_status)} fresh ledger rows from {_engine_status_path()}")
+    if engine_status.available:
+        print(
+            f"engine-status:  {len(engine_status.rows)} fresh ledger rows "
+            f"from {_engine_status_path()}"
+        )
+    else:
+        print(f"engine-status:  UNAVAILABLE — {engine_status.error}")
 
     local_sessions = read_local_health()
     print(f"local-health:   {len(local_sessions)} managed sessions")
@@ -427,8 +454,17 @@ def main() -> int:
     rows = merge(ledger, engine_status, local_sessions, server_sessions)
     if not rows:
         print("(no sessions in any system)")
-        return 0
+        # Missing engine-status is still a failure even when no sessions exist:
+        # it's exactly the cross-check we added Stage 3 to keep honest.
+        return 0 if engine_status.available else 2
     divergences = print_report(rows)
+    if not engine_status.available:
+        print(
+            "!! engine-status.json cross-check skipped — treat verdict column "
+            "`engine-status` as unreliable for this run.",
+            file=sys.stderr,
+        )
+        return 2
     return 1 if divergences else 0
 
 
