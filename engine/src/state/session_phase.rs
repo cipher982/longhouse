@@ -1,6 +1,6 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionPhaseSignal {
@@ -21,28 +21,14 @@ impl<'a> SessionPhaseStore<'a> {
         Self { conn }
     }
 
+    /// LWW upsert. Always stores RFC3339 with `+00:00`, so string comparison in
+    /// the `WHERE` clause is monotonic. A single statement keeps the check and
+    /// the write atomic — no SELECT-then-write race between writers on
+    /// different connections.
     pub fn record(&self, signal: &SessionPhaseSignal) -> Result<bool> {
-        let next_observed_at = signal.observed_at;
-        let existing_observed_at: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT observed_at FROM session_phase_state WHERE session_id = ?1",
-                params![signal.session_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-
-        if let Some(existing_raw) = existing_observed_at.as_deref() {
-            if let Some(existing) = parse_observed_at(existing_raw) {
-                if existing > next_observed_at {
-                    return Ok(false);
-                }
-            }
-        }
-
-        let observed_at = next_observed_at.to_rfc3339();
+        let observed_at = signal.observed_at.to_rfc3339();
         let tool_name = normalize_optional_string(signal.tool_name.clone());
-        self.conn.execute(
+        let rows = self.conn.execute(
             "INSERT INTO session_phase_state (
                 session_id,
                 provider,
@@ -56,7 +42,8 @@ impl<'a> SessionPhaseStore<'a> {
                 phase = excluded.phase,
                 tool_name = excluded.tool_name,
                 source = excluded.source,
-                observed_at = excluded.observed_at",
+                observed_at = excluded.observed_at
+             WHERE session_phase_state.observed_at <= excluded.observed_at",
             params![
                 signal.session_id,
                 signal.provider,
@@ -66,15 +53,8 @@ impl<'a> SessionPhaseStore<'a> {
                 observed_at,
             ],
         )?;
-
-        Ok(true)
+        Ok(rows > 0)
     }
-}
-
-fn parse_observed_at(raw: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(raw)
-        .ok()
-        .map(|value| value.with_timezone(&Utc))
 }
 
 fn normalize_optional_string(value: Option<String>) -> Option<String> {
@@ -189,5 +169,41 @@ mod tests {
 
         assert_eq!(row.0, "blocked");
         assert_eq!(row.1, Some("Edit".to_string()));
+    }
+
+    #[test]
+    fn record_is_lww_across_independent_connections() {
+        // Two connections race to write: newer observed_at must win regardless
+        // of which connection commits first. The single-statement conditional
+        // UPSERT means the stale writer can never overwrite a fresh commit.
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let _bootstrap = crate::state::db::open_db(Some(tmp.path())).unwrap();
+
+        let conn_a = crate::state::db::open_db(Some(tmp.path())).unwrap();
+        let conn_b = crate::state::db::open_db(Some(tmp.path())).unwrap();
+
+        // B writes a fresh signal first.
+        SessionPhaseStore::new(&conn_b)
+            .record(&signal("2026-04-19T00:20:00Z", "running", Some("Bash")))
+            .unwrap();
+
+        // A holds onto a stale signal and commits after B. The WHERE clause
+        // on the UPSERT must prevent A from overwriting B's newer row.
+        let written = SessionPhaseStore::new(&conn_a)
+            .record(&signal("2026-04-19T00:05:00Z", "idle", None))
+            .unwrap();
+        assert!(!written, "stale writer must not overwrite fresh row");
+
+        let row: (String, String) = conn_b
+            .query_row(
+                "SELECT phase, observed_at
+                 FROM session_phase_state
+                 WHERE session_id = 'sess-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "running");
+        assert_eq!(row.1, "2026-04-19T00:20:00+00:00");
     }
 }

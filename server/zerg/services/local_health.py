@@ -14,6 +14,7 @@ import re
 import shlex
 import sqlite3
 import subprocess
+from collections.abc import Mapping
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -753,13 +754,40 @@ def _phase_display_label(phase: str | None, tool_name: str | None) -> str | None
     return lowered.replace("_", " ")
 
 
-def _load_managed_session_phase_overlay(base_dir: Path) -> dict[str, dict[str, str | None]]:
+_PHASE_FRESHNESS_SECONDS: dict[str, int] = {
+    "thinking": 90,
+    "running": 10 * 60,
+    "idle": 10 * 60,
+    "finished": 10 * 60,
+    "blocked": 24 * 60 * 60,
+    "needs_user": 24 * 60 * 60,
+}
+
+
+def _phase_row_is_fresh(row: Mapping[str, str | None], now: datetime) -> bool:
+    """Apply phase-specific freshness windows so stale rows don't show phantom phases."""
+    phase = _normalize_optional_string(row.get("phase"))
+    observed_raw = _normalize_optional_string(row.get("observed_at"))
+    if phase is None or observed_raw is None:
+        return False
+    window_seconds = _PHASE_FRESHNESS_SECONDS.get(phase.lower())
+    if window_seconds is None:
+        return False
+    observed_at = _parse_rfc3339(observed_raw)
+    if observed_at is None:
+        return False
+    age = (now - observed_at).total_seconds()
+    # Tolerate small clock skew (negative age from bridge on another clock).
+    return age <= window_seconds
+
+
+def _load_managed_session_phase_overlay(base_dir: Path, *, now: datetime) -> dict[str, dict[str, str | None]]:
     merged = _load_persisted_session_phase_rows(base_dir)
     for session_id, row in _load_outbox_session_phase_rows(base_dir).items():
         current = merged.get(session_id)
         if current is None or _max_rfc3339(row.get("observed_at"), current.get("observed_at")) == row.get("observed_at"):
             merged[session_id] = row
-    return merged
+    return {session_id: row for session_id, row in merged.items() if _phase_row_is_fresh(row, now)}
 
 
 def _bridge_process_exists(process_rows: list[dict[str, Any]], pid: int) -> bool:
@@ -1539,7 +1567,7 @@ def _classify_health(
 def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]:
     now = _utc_now()
     resolved_base_dir = _coerce_path(claude_dir)
-    phase_overlay = _load_managed_session_phase_overlay(resolved_base_dir)
+    phase_overlay = _load_managed_session_phase_overlay(resolved_base_dir, now=now)
     service = _collect_service(resolved_base_dir)
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)

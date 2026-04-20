@@ -429,6 +429,8 @@ def test_collect_local_health_uses_local_phase_overlay_for_codex_bridge_session(
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
+    pinned_now = datetime(2026, 4, 17, 17, 32, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: pinned_now)
 
     rollout_path = tmp_path / "sessions" / "2026" / "04" / "17" / "rollout-zerg.jsonl"
     rollout_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1226,7 +1228,7 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
     rows = local_health_service._collect_managed_sessions_by_process(
         now=now,
         existing_session_ids=set(),
-        phase_overlay=local_health_service._load_managed_session_phase_overlay(tmp_path),
+        phase_overlay=local_health_service._load_managed_session_phase_overlay(tmp_path, now=now),
     )
 
     assert len(rows) == 1
@@ -1235,8 +1237,38 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
     assert rows[0]["last_activity_at"] == "2026-04-19T00:04:00Z"
 
 
+def test_phase_overlay_drops_stale_rows_past_freshness_window(monkeypatch, tmp_path: Path):
+    """Old running/thinking rows from a prior runtime must not show phantom phases.
+
+    Phase-specific freshness: `running` is 10 minutes. A row older than that
+    should be suppressed so the menu bar renders "Phase unknown" instead of an
+    out-of-date activity label.
+    """
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
+    stale_observed_at = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+    _write_session_phase_rows(
+        tmp_path,
+        [
+            (
+                "sess-stale",
+                "claude",
+                "running",
+                "Bash",
+                "claude_hook",
+                stale_observed_at,
+            )
+        ],
+    )
+
+    overlay = local_health_service._load_managed_session_phase_overlay(tmp_path, now=now)
+
+    assert "sess-stale" not in overlay
+
+
 def test_phase_overlay_prefers_newer_outbox_signal(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
+    now = datetime.now(tz=timezone.utc)
     _write_session_phase_rows(
         tmp_path,
         [
@@ -1246,13 +1278,13 @@ def test_phase_overlay_prefers_newer_outbox_signal(monkeypatch, tmp_path: Path):
                 "idle",
                 None,
                 "claude_hook",
-                "2026-04-19T00:00:00Z",
+                (now - timedelta(seconds=30)).isoformat().replace("+00:00", "Z"),
             )
         ],
     )
     _write_outbox_file(tmp_path, age_seconds=0, name="prs.sess-outbox.json")
 
-    overlay = local_health_service._load_managed_session_phase_overlay(tmp_path)
+    overlay = local_health_service._load_managed_session_phase_overlay(tmp_path, now=now)
 
     assert overlay["sess-1"]["phase"] == "thinking"
     assert overlay["sess-1"]["source"] == "claude_hook"
