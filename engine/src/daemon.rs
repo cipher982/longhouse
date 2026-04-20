@@ -448,23 +448,29 @@ fn write_local_status_snapshot(
         last_ship_at: last_ship_at.clone(),
     };
     let payload = heartbeat::HeartbeatPayload::build(&stats);
-    // Compute the fresh ledger view up front so a read failure is visible in
-    // logs instead of silently becoming an empty `phase_ledger: []`. The
-    // status file still ships with an empty ledger on error, but at least
-    // the daemon log shows why.
-    let phase_ledger = match crate::state::session_phase::SessionPhaseStore::new(conn)
-        .fresh_rows(chrono::Utc::now())
+    // Compute the fresh ledger view up front so a read failure is both
+    // logged and encoded in the status file as `phase_ledger_status`.
+    // Downstream readers (verify-runtime-truth, local-health) can then
+    // tell an intentionally empty ledger apart from one the engine
+    // couldn't read this tick.
+    let (phase_ledger, ledger_status) = match crate::state::session_phase::SessionPhaseStore::new(
+        conn,
+    )
+    .fresh_rows(chrono::Utc::now())
     {
-        Ok(rows) => rows,
+        Ok(rows) => (rows, heartbeat::PhaseLedgerStatus::Ok),
         Err(err) => {
             tracing::warn!(
                 error = %err,
                 "failed to read fresh phase_ledger rows for engine-status.json"
             );
-            Vec::new()
+            (
+                Vec::new(),
+                heartbeat::PhaseLedgerStatus::ReadFailed(err.to_string()),
+            )
         }
     };
-    heartbeat::write_status_file(&payload, &stats, phase_ledger, status_path);
+    heartbeat::write_status_file(&payload, &stats, phase_ledger, ledger_status, status_path);
     payload
 }
 

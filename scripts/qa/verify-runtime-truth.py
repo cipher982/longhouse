@@ -104,6 +104,16 @@ def read_engine_status_ledger() -> EngineStatusView:
             available=False,
             error=f"{path} phase_ledger is {type(rows_raw).__name__}, expected list",
         )
+    # Emitter-side ledger read failure: the engine wrote a valid file but the
+    # DB read threw. Treat that as unavailable — an empty `phase_ledger: []`
+    # with `phase_ledger_status: "read_failed: ..."` is not the same as "no
+    # fresh rows", and the cross-check would silently agree otherwise.
+    status = payload.get("phase_ledger_status")
+    if isinstance(status, str) and status.startswith("read_failed"):
+        return EngineStatusView(
+            available=False,
+            error=f"{path} phase_ledger_status={status!r}",
+        )
     out: dict[str, dict[str, Any]] = {}
     for row in rows_raw:
         if not isinstance(row, dict):
