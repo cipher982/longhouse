@@ -84,17 +84,38 @@ pub async fn send_heartbeat(client: &ShipperClient, payload: &HeartbeatPayload) 
     client.post_json("/api/agents/heartbeat", json).await
 }
 
+/// Result of the caller's attempt to read fresh phase-ledger rows. Serializes
+/// to `"ok"` / `"read_failed: <err>"` so verify-runtime-truth can tell a
+/// genuinely empty ledger apart from a ledger read that threw on emit.
+#[derive(Debug, Clone)]
+pub enum PhaseLedgerStatus {
+    Ok,
+    ReadFailed(String),
+}
+
+impl Serialize for PhaseLedgerStatus {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        match self {
+            PhaseLedgerStatus::Ok => ser.serialize_str("ok"),
+            PhaseLedgerStatus::ReadFailed(msg) => ser.serialize_str(&format!("read_failed: {msg}")),
+        }
+    }
+}
+
 /// Write status to `~/.longhouse/agent/engine-status.json`.
 ///
 /// `phase_ledger` is passed in explicitly (not pulled from a store) so
 /// callers can't accidentally emit an empty ledger by forgetting to wire
 /// the DB — the absence of fresh rows and the absence of a reader look
-/// identical otherwise. Compute it with
+/// identical otherwise. `ledger_status` encodes whether the vec is empty
+/// because there are no fresh rows or because the read threw, so consumers
+/// can surface the distinction. Compute both with
 /// `SessionPhaseStore::new(conn).fresh_rows(now)` at the call site.
 pub fn write_status_file(
     payload: &HeartbeatPayload,
     stats: &HeartbeatStats<'_>,
     phase_ledger: Vec<PhaseLedgerRow>,
+    ledger_status: PhaseLedgerStatus,
     status_path: &std::path::Path,
 ) {
     #[derive(Serialize)]
@@ -106,6 +127,10 @@ pub fn write_status_file(
         /// Same LWW rows that back `session_phase_state` so consumers can
         /// read this file instead of re-opening the SQLite ledger.
         phase_ledger: Vec<PhaseLedgerRow>,
+        /// `"ok"` or `"read_failed: ..."`. Lets readers tell an empty-but-
+        /// intentional ledger apart from a ledger that the engine couldn't
+        /// read this tick.
+        phase_ledger_status: PhaseLedgerStatus,
         last_updated: String,
     }
 
@@ -121,6 +146,7 @@ pub fn write_status_file(
         payload,
         recent_dead_letters,
         phase_ledger,
+        phase_ledger_status: ledger_status,
         last_updated: now_utc.to_rfc3339(),
     };
 
@@ -276,7 +302,7 @@ mod tests {
         };
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        write_status_file(&payload, &stats, Vec::new(), &status_path);
+        write_status_file(&payload, &stats, Vec::new(), PhaseLedgerStatus::Ok, &status_path);
 
         let json = std::fs::read_to_string(status_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -290,6 +316,7 @@ mod tests {
         // Callers that pass an empty ledger get an empty array, not a missing
         // key — the shape stays stable for consumers.
         assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
+        assert_eq!(parsed["phase_ledger_status"], "ok");
     }
 
     #[test]
@@ -340,7 +367,13 @@ mod tests {
             .expect("fresh_rows should succeed on a live DB");
 
         let status_path = dir.path().join("agent").join("engine-status.json");
-        write_status_file(&payload, &stats, phase_ledger, &status_path);
+        write_status_file(
+            &payload,
+            &stats,
+            phase_ledger,
+            PhaseLedgerStatus::Ok,
+            &status_path,
+        );
 
         let json = std::fs::read_to_string(status_path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -348,5 +381,48 @@ mod tests {
         assert_eq!(parsed["phase_ledger"][0]["phase"], "running");
         assert_eq!(parsed["phase_ledger"][0]["tool_name"], "Bash");
         assert_eq!(parsed["phase_ledger"][0]["source"], "claude_hook");
+        assert_eq!(parsed["phase_ledger_status"], "ok");
+    }
+
+    #[test]
+    fn test_write_status_file_records_ledger_read_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_db(Some(db.path())).unwrap();
+        let spool = Spool::new(&conn);
+        let tracker = ConsecutiveErrorTracker::new();
+        let parse_tracker = RecentIssueTracker::new();
+        let payload = HeartbeatPayload {
+            version: "0.1.0".to_string(),
+            daemon_pid: 42,
+            last_ship_at: None,
+            spool_pending_count: 0,
+            spool_dead_count: 0,
+            parse_error_count_1h: 0,
+            consecutive_ship_failures: 0,
+            disk_free_bytes: 0,
+            is_offline: false,
+        };
+        let stats = HeartbeatStats {
+            spool: &spool,
+            tracker: &tracker,
+            parse_tracker: &parse_tracker,
+            is_offline: false,
+            last_ship_at: None,
+        };
+
+        let status_path = dir.path().join("agent").join("engine-status.json");
+        write_status_file(
+            &payload,
+            &stats,
+            Vec::new(),
+            PhaseLedgerStatus::ReadFailed("db locked".to_string()),
+            &status_path,
+        );
+
+        let json = std::fs::read_to_string(status_path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
+        assert_eq!(parsed["phase_ledger_status"], "read_failed: db locked");
     }
 }
