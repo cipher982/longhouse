@@ -235,6 +235,7 @@ function SessionDetailWorkspaceRoute({
             selectedKey={selectedKey}
             onSelectKey={selectKey}
             onVisibleSelectionChange={handleVisibleSelectionChange}
+            sessionEnded={Boolean(session?.ended_at)}
             headerLeft={
               <div className="session-workspace-header__left">
                 <Button variant="ghost" size="sm" onClick={handleBack}>
@@ -339,6 +340,7 @@ function SessionDetailWorkspaceRoute({
           inspectorSelection ? (
             <EventInspectorPane
               selection={inspectorSelection}
+              sessionEnded={Boolean(session?.ended_at)}
               onSelectKey={selectKey}
             />
           ) : undefined

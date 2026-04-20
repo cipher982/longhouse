@@ -33,6 +33,7 @@ export {
   getToolSummary,
   isAgentToolInteraction,
   isOutsideActiveContext,
+  isToolInteractionDropped,
   parseLonghouseOutput,
   timelineItemContainsSelection,
 } from "./timelineModel";

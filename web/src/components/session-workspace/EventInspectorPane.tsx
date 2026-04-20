@@ -8,11 +8,13 @@ import {
   getToolExitCode,
   getToolSummary,
   isOutsideActiveContext,
+  isToolInteractionDropped,
   parseLonghouseOutput,
 } from "../../lib/sessionWorkspace";
 
 interface EventInspectorPaneProps {
   selection: TimelineSelection | null;
+  sessionEnded?: boolean;
   onSelectKey: (key: string) => void;
 }
 
@@ -31,7 +33,7 @@ function InspectorSection({
   );
 }
 
-export function EventInspectorPane({ selection, onSelectKey }: EventInspectorPaneProps) {
+export function EventInspectorPane({ selection, sessionEnded = false, onSelectKey }: EventInspectorPaneProps) {
   if (!selection) {
     return (
       <div className="event-inspector">
@@ -147,6 +149,7 @@ export function EventInspectorPane({ selection, onSelectKey }: EventInspectorPan
   const hasInput =
     selection.interaction.callEvent?.tool_input_json != null &&
     Object.keys(selection.interaction.callEvent.tool_input_json).length > 0;
+  const dropped = isToolInteractionDropped(selection.interaction, sessionEnded);
 
   return (
     <div className="event-inspector">
@@ -175,7 +178,9 @@ export function EventInspectorPane({ selection, onSelectKey }: EventInspectorPan
                       : `Failed (${exitCode})`
                   : selection.interaction.pairing === "orphan"
                     ? "Orphan result"
-                    : "Pending"}
+                    : dropped
+                      ? "Dropped"
+                      : "Pending"}
               </strong>
             </div>
             {duration ? (
@@ -223,9 +228,11 @@ export function EventInspectorPane({ selection, onSelectKey }: EventInspectorPan
             </>
           ) : (
             <div className="inspector-empty-block">
-              {selection.interaction.pairing === "pending"
-                ? "Result not recorded yet."
-                : "No output recorded."}
+              {dropped
+                ? "Tool call dropped \u2014 no result was ever recorded."
+                : selection.interaction.pairing === "pending"
+                  ? "Result not recorded yet."
+                  : "No output recorded."}
             </div>
           )}
         </InspectorSection>
