@@ -226,7 +226,7 @@ def test_wall_includes_pending_inbound_message_count(tmp_path):
 
 
 def test_wall_uses_runtime_state_for_live_presence_without_presence_row(tmp_path):
-    """Wall prefers live runtime state even when session_presence is empty."""
+    """Wall uses live runtime state as the single source of presence truth."""
     SessionLocal = _make_db(tmp_path)
     now = datetime.now(timezone.utc)
 
