@@ -70,3 +70,19 @@ def test_agents_ingest_route_uses_longer_timeout_budget():
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_agents_archive_bundle_route_uses_longer_timeout_budget():
+    app = FastAPI()
+    app.add_middleware(RequestTimeoutMiddleware, timeout=0.01)
+
+    @app.get("/api/agents/sessions/test-session/archive-bundle")
+    async def archive_bundle():
+        await asyncio.sleep(0.05)
+        return {"ok": True}
+
+    with TestClient(app) as client:
+        response = client.get("/api/agents/sessions/test-session/archive-bundle")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}

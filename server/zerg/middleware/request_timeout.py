@@ -26,6 +26,7 @@ DEFAULT_TIMEOUT_SECONDS = 15
 MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS = 45
 INTERACTIVE_AUTH_TIMEOUT_SECONDS = 30
 INGEST_TIMEOUT_SECONDS = 30
+ARCHIVE_BUNDLE_TIMEOUT_SECONDS = 120
 
 # Paths that are excluded from the timeout enforcement.
 _SKIP_PATHS = ("/readyz", "/health")
@@ -39,6 +40,7 @@ _TIMEOUT_OVERRIDES = {
     "/devices/tokens": INTERACTIVE_AUTH_TIMEOUT_SECONDS,
     "/agents/ingest": INGEST_TIMEOUT_SECONDS,
     "/sessions/managed-local/this-device": MANAGED_LOCAL_LAUNCH_TIMEOUT_SECONDS,
+    "/agents/sessions/": ARCHIVE_BUNDLE_TIMEOUT_SECONDS,
 }
 
 
@@ -85,6 +87,11 @@ class RequestTimeoutMiddleware:
 
         timeout = self.timeout
         for prefix, override in _TIMEOUT_OVERRIDES.items():
+            if prefix == "/agents/sessions/":
+                if api_path.startswith(prefix) and api_path.endswith("/archive-bundle"):
+                    timeout = override
+                    break
+                continue
             if api_path.startswith(prefix):
                 timeout = override
                 break
