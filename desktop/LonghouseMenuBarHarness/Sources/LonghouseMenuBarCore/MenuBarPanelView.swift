@@ -337,34 +337,36 @@ public struct MenuBarPanelView: View {
 
             managedRuntimeSurface
 
-            sectionDivider.padding(.horizontal, 4)
+            if !unmanagedActivityEntries.isEmpty || !snapshot.providerCountsRecent.isEmpty {
+                sectionDivider.padding(.horizontal, 4)
 
-            PanelSection(title: "Recent activity", trailing: snapshot.recentActivitySummaryLabel) {
-                if recentActivityEntries.isEmpty {
-                    Text("No recent session touches recorded yet.")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Color.secondary)
-                } else {
-                    ActivityFeed(entries: recentActivityEntries)
-                }
-
-                if !snapshot.providerCountsRecent.isEmpty {
-                    sectionDivider
-
-                    HStack(alignment: .center, spacing: 8) {
-                        Text("Active now")
-                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                PanelSection(title: "Also on this Mac", trailing: snapshot.recentActivitySummaryLabel) {
+                    if unmanagedActivityEntries.isEmpty {
+                        Text("Everything touched recently is managed.")
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.secondary)
-                            .tracking(0.55)
+                    } else {
+                        UnmanagedActivityList(entries: unmanagedActivityEntries)
+                    }
 
-                        Spacer(minLength: 8)
+                    if !snapshot.providerCountsRecent.isEmpty {
+                        sectionDivider
 
-                        Text(snapshot.recentProviderMixLabel)
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundStyle(Color.primary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.82)
-                            .monospacedDigit()
+                        HStack(alignment: .center, spacing: 8) {
+                            Text("Active now")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .foregroundStyle(Color.secondary)
+                                .tracking(0.55)
+
+                            Spacer(minLength: 8)
+
+                            Text(snapshot.recentProviderMixLabel)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(Color.primary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.82)
+                                .monospacedDigit()
+                        }
                     }
                 }
             }
@@ -440,21 +442,40 @@ public struct MenuBarPanelView: View {
             .joined(separator: " · ")
     }
 
-    private var recentActivityEntries: [ActivityFeedEntry] {
-        snapshot.recentTouches.map { touch in
-            ActivityFeedEntry(
+    /// Activity touches we know aren't owned by a managed session on this Mac.
+    /// Managed sessions already have their own card in "Managed now"; reprinting
+    /// them here doubles the same row and blurs the purpose of this section.
+    /// What's left over is exactly what the user should wrap next time: bare
+    /// CLI runs and sessions Longhouse cannot steer.
+    private var unmanagedActivityEntries: [UnmanagedActivityEntry] {
+        let managedKeys = Set(
+            snapshot.currentManagedSessions.map { managedTouchKey(provider: $0.provider, workspace: $0.workspaceLabel) }
+        )
+        return snapshot.recentTouches.compactMap { touch -> UnmanagedActivityEntry? in
+            let key = managedTouchKey(provider: touch.provider, workspace: touch.workspaceLabel)
+            if managedKeys.contains(key) {
+                return nil
+            }
+            return UnmanagedActivityEntry(
+                id: key,
                 provider: (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
                 title: snapshot.recentTouchTitle(touch),
+                branch: (touch.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : touch.branch,
                 age: snapshot.recentTouchAgeLabel(touch, relativeTo: presentationDate)
             )
         }
+    }
+
+    private func managedTouchKey(provider: String?, workspace: String?) -> String {
+        let p = (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let w = (workspace ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(p)|\(w)"
     }
 
     private var managedSessionEntries: [ManagedSessionEntry] {
         snapshot.currentManagedSessions.map { session in
             let workspace = (session.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let provider = (session.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            let normalizedState = session.normalizedState
 
             return ManagedSessionEntry(
                 id: session.id,
@@ -462,8 +483,7 @@ public struct MenuBarPanelView: View {
                 provider: provider.isEmpty ? "unknown" : provider,
                 workspace: workspace.isEmpty ? HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider) : workspace,
                 branch: (session.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : session.branch,
-                stateLabel: managedStateTitle(normalizedState),
-                stateColor: managedStateColor(normalizedState),
+                attention: managedAttention(for: session),
                 ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
                 detail: managedSessionDetail(session),
                 stopAction: managedStopAction(for: session)
@@ -529,48 +549,69 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    private func managedStateTitle(_ normalizedState: String) -> String {
-        switch normalizedState {
-        case "attached":
-            return "Attached"
+    /// Derive the user-facing attention state from raw bridge state + phase.
+    ///
+    /// The pill is the one thing a user should glance at to decide whether to
+    /// switch contexts, so it has to answer "is this session waiting on me?"
+    /// rather than "is Longhouse connected to it?". Treating `attached` as the
+    /// default and letting the phase drive the pill means managed sessions
+    /// that are just quietly running show *nothing* in the pill slot — and the
+    /// few amber pills on screen actually mean something.
+    private func managedAttention(for session: ManagedSessionSnapshot) -> ManagedAttentionKind {
+        switch session.normalizedState {
         case "detached":
-            return "Detached"
+            return .detached
         case "degraded":
-            return "Degraded"
+            return .degraded
+        case "attached":
+            return attachedAttention(for: session)
+        case "":
+            return .unknown("")
         default:
-            return "Unknown"
+            return .unknown(session.normalizedState)
         }
     }
 
-    private func managedStateColor(_ normalizedState: String) -> Color {
-        switch normalizedState {
-        case "attached":
-            return Color(red: 0.17, green: 0.70, blue: 0.39)
-        case "detached":
-            return Color(red: 0.90, green: 0.67, blue: 0.16)
-        case "degraded":
-            return Color(red: 0.86, green: 0.29, blue: 0.23)
+    private func attachedAttention(for session: ManagedSessionSnapshot) -> ManagedAttentionKind {
+        let phase = (session.phase ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalized = phase.replacingOccurrences(of: "_", with: " ")
+        switch normalized {
+        case "running", "running tools", "thinking":
+            return .working
+        case "needs user", "needs input", "waiting for input", "idle prompt":
+            return .needsYou
+        case "blocked":
+            return .blocked
+        case "", "idle", "finished":
+            return .idle
         default:
-            return Color.secondary
+            // Unrecognized phase — treat as working so we don't flip it to
+            // "idle" and let the user assume it's their turn.
+            return .working
         }
     }
 
+    /// The secondary line under the workspace. Keep it to signal that the
+    /// pill doesn't already carry (e.g. reason codes, heartbeat staleness).
+    /// Provider is already encoded in the left dot, and liveness state is in
+    /// the pill, so don't repeat them here.
     private func managedSessionDetail(_ session: ManagedSessionSnapshot) -> String {
         var parts: [String] = []
-        let phase = (session.phase ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if !phase.isEmpty {
-            parts.append(phase.replacingOccurrences(of: "_", with: " ").capitalized)
-        }
 
         parts.append(contentsOf: (session.reasonCodes ?? []).prefix(1).map { HealthSnapshot.humanizeManagedReason($0) })
 
-        if parts.isEmpty {
-            parts.append("Phase unknown")
-        }
-
-        let heartbeat = snapshot.compactTimestampLabel(session.bridgeHeartbeatAt, relativeTo: presentationDate)
-        if heartbeat != "-" {
-            parts.append("heartbeat \(heartbeat)")
+        // Only surface heartbeat age when it's stale enough to matter. A fresh
+        // heartbeat on an attached bridge is noise; a minutes-old one on a
+        // session the user thinks is live is a real signal.
+        if let heartbeatAt = session.bridgeHeartbeatAt,
+           let parsed = HealthSnapshot.parseISO8601(heartbeatAt) {
+            let age = presentationDate.timeIntervalSince(parsed)
+            if age >= 120 {
+                let heartbeatLabel = snapshot.compactTimestampLabel(heartbeatAt, relativeTo: presentationDate)
+                if heartbeatLabel != "-" {
+                    parts.append("heartbeat \(heartbeatLabel)")
+                }
+            }
         }
 
         return parts.joined(separator: " · ")

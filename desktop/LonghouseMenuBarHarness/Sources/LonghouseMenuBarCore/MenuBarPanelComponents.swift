@@ -272,6 +272,75 @@ struct ActivityFeed: View {
     }
 }
 
+struct UnmanagedActivityEntry: Identifiable {
+    let id: String
+    let provider: String
+    let title: String
+    let branch: String?
+    let age: String
+}
+
+struct UnmanagedActivityList: View {
+    let entries: [UnmanagedActivityEntry]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                HStack(alignment: .center, spacing: 8) {
+                    Circle()
+                        .fill(providerColor(entry.provider))
+                        .frame(width: 7, height: 7)
+
+                    Text(entry.title)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.84)
+
+                    if let branch = entry.branch, !branch.isEmpty {
+                        Text("/ \(branch)")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Color.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    unmanagedPill
+
+                    Text(entry.age)
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundStyle(Color.primary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+                .padding(.vertical, 7)
+
+                if index < entries.count - 1 {
+                    sectionDivider
+                }
+            }
+        }
+    }
+
+    /// Outline amber pill — visually distinct from the filled amber NEEDS YOU
+    /// pill so users don't read "unmanaged" as "waiting on me". It's a passive
+    /// "wrap this next time" badge, not an action cue.
+    private var unmanagedPill: some View {
+        let tint = Color(red: 0.95, green: 0.70, blue: 0.20)
+        return Text("UNMANAGED")
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .foregroundStyle(tint)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .overlay(
+                Capsule(style: .continuous)
+                    .strokeBorder(tint.opacity(0.55), lineWidth: 1)
+            )
+    }
+}
+
 struct ProviderComparisonRows: View {
     let entries: [(provider: String, count: Int)]
     let totalCount: Int
@@ -302,14 +371,30 @@ struct ProviderComparisonRows: View {
     }
 }
 
+public enum ManagedAttentionKind: Equatable {
+    /// Managed, attached, agent is doing work. Don't interrupt.
+    case working
+    /// Managed, attached, waiting for the user to act (prompt, approve tool, reply).
+    case needsYou
+    /// Managed, attached, blocked on an external tool or approval.
+    case blocked
+    /// Managed, attached, sitting idle with nothing to say. No pill.
+    case idle
+    /// Managed but detached — bridge lost its TUI.
+    case detached
+    /// Managed but the bridge itself is in trouble.
+    case degraded
+    /// Unknown — raw state we don't have a rule for.
+    case unknown(String)
+}
+
 struct ManagedSessionEntry: Identifiable {
     let id: String
     let sessionID: String?
     let provider: String
     let workspace: String
     let branch: String?
-    let stateLabel: String
-    let stateColor: Color
+    let attention: ManagedAttentionKind
     let ageLabel: String
     let detail: String
     let stopAction: (() -> Void)?
@@ -320,8 +405,7 @@ struct ManagedSessionEntry: Identifiable {
         provider: String,
         workspace: String,
         branch: String?,
-        stateLabel: String,
-        stateColor: Color,
+        attention: ManagedAttentionKind,
         ageLabel: String,
         detail: String,
         stopAction: (() -> Void)? = nil
@@ -331,8 +415,7 @@ struct ManagedSessionEntry: Identifiable {
         self.provider = provider
         self.workspace = workspace
         self.branch = branch
-        self.stateLabel = stateLabel
-        self.stateColor = stateColor
+        self.attention = attention
         self.ageLabel = ageLabel
         self.detail = detail
         self.stopAction = stopAction
@@ -359,53 +442,102 @@ private struct ManagedSessionRow: View {
     let entry: ManagedSessionEntry
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 8) {
-                Circle()
-                    .fill(providerColor(entry.provider))
-                    .frame(width: 7, height: 7)
+        HStack(alignment: .center, spacing: 8) {
+            Circle()
+                .fill(providerColor(entry.provider))
+                .frame(width: 7, height: 7)
 
-                Text(entry.workspace)
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundStyle(Color.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-
-                if let branch = entry.branch,
-                   !branch.isEmpty {
-                    Text("/ \(branch)")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(entry.workspace)
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(Color.primary)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                        .minimumScaleFactor(0.82)
+
+                    if let branch = entry.branch,
+                       !branch.isEmpty {
+                        Text("/ \(branch)")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Color.secondary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
                 }
 
-                Spacer(minLength: 8)
-
-                statePill(title: entry.stateLabel.uppercased(), color: entry.stateColor)
-
-                Text(entry.ageLabel)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundStyle(Color.primary)
-                    .monospacedDigit()
-
-                if let stopAction = entry.stopAction {
-                    inlineActionButton(
-                        systemImage: "xmark.circle",
-                        tint: entry.stateColor,
-                        accessibilityLabel: "Stop managed session"
-                    ) {
-                        stopAction()
-                    }
+                if !entry.detail.isEmpty {
+                    Text(entry.detail)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
                 }
             }
 
-            Text("\(HealthSnapshot.providerDisplayName(entry.provider)) · \(entry.detail)")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Color.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+
+            attentionPill(entry.attention)
+
+            Text(entry.ageLabel)
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(Color.primary)
+                .monospacedDigit()
+
+            if let stopAction = entry.stopAction {
+                inlineActionButton(
+                    systemImage: "xmark.circle",
+                    tint: attentionColor(entry.attention),
+                    accessibilityLabel: "Stop managed session"
+                ) {
+                    stopAction()
+                }
+            }
         }
         .padding(.vertical, 8)
+    }
+}
+
+@ViewBuilder
+private func attentionPill(_ kind: ManagedAttentionKind) -> some View {
+    switch kind {
+    case .working:
+        statePill(title: "THINKING", color: attentionColor(kind))
+    case .needsYou:
+        statePill(title: "NEEDS YOU", color: attentionColor(kind))
+    case .blocked:
+        statePill(title: "BLOCKED", color: attentionColor(kind))
+    case .detached:
+        statePill(title: "DETACHED", color: attentionColor(kind))
+    case .degraded:
+        statePill(title: "DEGRADED", color: attentionColor(kind))
+    case .idle:
+        EmptyView()
+    case .unknown(let label):
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            EmptyView()
+        } else {
+            statePill(title: trimmed.uppercased(), color: attentionColor(kind))
+        }
+    }
+}
+
+private func attentionColor(_ kind: ManagedAttentionKind) -> Color {
+    switch kind {
+    case .working:
+        // Muted neutral — "don't interrupt". Deliberately not green; green is
+        // reserved for overall system health at the panel header.
+        return Color.secondary
+    case .needsYou, .blocked:
+        return Color(red: 0.95, green: 0.70, blue: 0.20)
+    case .detached:
+        return Color(red: 0.90, green: 0.67, blue: 0.16)
+    case .degraded:
+        return Color(red: 0.86, green: 0.29, blue: 0.23)
+    case .idle:
+        return Color.secondary
+    case .unknown:
+        return Color.secondary
     }
 }
 
