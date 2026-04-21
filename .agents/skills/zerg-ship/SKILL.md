@@ -170,6 +170,43 @@ coolify app logs longhouse-demo
 coolify app logs longhouse-control-plane
 ```
 
+## Local Dogfood Refresh (MANDATORY after every ship)
+
+**Hosted ship does NOT update David's laptop.** The `longhouse` CLI,
+`longhouse-engine` daemon, and `Longhouse.app` menu bar are installed
+into his system and only move when rebuilt locally. If you forget this
+step, the menu bar will show "build drift" and David is stuck
+dogfooding old code.
+
+After **every** successful `make ship` — not conditionally, not "if
+runtime changed," always — run:
+
+```bash
+make dogfood-refresh
+launchctl kickstart -k gui/$(id -u)/ai.longhouse.app
+```
+
+That rebuilds+reinstalls CLI/engine and restarts the menu bar so it
+picks up the new `engine-status.json`. Takes ~1 minute.
+
+**Shortcut:** for Python-CLI-only changes under `server/zerg/cli/`,
+`cd server && uv tool install -e .` is ~5s vs ~60s. This is narrow —
+does not apply to engine, hooks, connect, desktop app, or iOS.
+
+### iOS
+
+If the change touched `ios/`, tell David explicitly at the end of
+the ship: iOS has no TestFlight/App Store path yet. He has to plug
+his phone in via USB and build via Xcode. Do not claim "shipped"
+for iOS changes without calling this out.
+
+### End-of-ship prompt
+
+Always end a successful ship by reporting:
+- exact SHA now live on demo + canary
+- confirmation that `make dogfood-refresh` ran (or why you skipped it)
+- whether iOS needs a manual Xcode rebuild
+
 ## Definition of Done
 
 - [ ] `make test-ci` passed before push
@@ -180,3 +217,5 @@ coolify app logs longhouse-control-plane
 - [ ] Control plane healthy if control-plane lane changed
 - [ ] Hosted canary healthy if runtime lane changed
 - [ ] `make qa-live` passed after hosted runtime changes
+- [ ] `make dogfood-refresh` ran + menu bar restarted (always)
+- [ ] iOS rebuild prompt given if `ios/` changed

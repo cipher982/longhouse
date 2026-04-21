@@ -241,6 +241,29 @@ Extra rules:
 - If you add a DB column, new required env var, or touch schema, call it out and run `make reprovision` after CI.
 - Hosted tenants get engine changes through the runtime image; users running the engine locally still need `make install-engine`.
 
+### David's laptop is always dogfooding
+
+David is the primary dogfood user. `make ship` updates hosted surfaces
+but does **not** touch his local `longhouse` CLI, `longhouse-engine`
+daemon, or `Longhouse.app` menu bar. Those are installed into his
+system and go stale silently.
+
+**After every successful `make ship`**, run:
+
+```bash
+make dogfood-refresh
+launchctl kickstart -k gui/$(id -u)/ai.longhouse.app
+```
+
+No conditionals. Not "if the runtime changed." Always. The menu bar
+will show "build drift" otherwise, and David is stuck running old
+code while hosted is already on the new SHA.
+
+**iOS:** if the change touched `ios/`, call it out explicitly — David
+has to plug his phone in and Xcode-build, because there is no
+TestFlight or App Store distribution yet. Do not mark iOS changes
+"shipped" without this prompt.
+
 ## Jobs and External Automation
 
 Longhouse core should keep builtin product jobs only.
