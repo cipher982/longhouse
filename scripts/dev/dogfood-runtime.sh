@@ -134,6 +134,11 @@ install_engine_from_source() {
   mkdir -p "$HOME/.local/bin"
 
   log "==> Building Rust engine"
+  # build-identity.json must be regenerated for the current HEAD before
+  # cargo runs, otherwise engine/build.rs reads a stale identity and the
+  # resulting binary reports the previous commit's SHA. See "BUILD DRIFT"
+  # in the menu bar if this is wrong.
+  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
   (cd "$ENGINE_DIR" && cargo build --release)
 
   if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign >/dev/null 2>&1; then
