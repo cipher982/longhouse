@@ -1,0 +1,146 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-04-21T18:35:00Z",
+  "health_state": "healthy",
+  "severity": "green",
+  "headline": "Longhouse shipping healthy",
+  "reasons": [],
+  "suggested_actions": [],
+  "service": {
+    "platform": "macos",
+    "status": "running",
+    "service_name": "com.longhouse.shipper",
+    "service_file": "/Users/davidrose/Library/LaunchAgents/com.longhouse.shipper.plist",
+    "log_path": "/Users/davidrose/.longhouse/agent/logs/engine.log.*"
+  },
+  "engine_status": {
+    "path": "/Users/davidrose/.longhouse/agent/engine-status.json",
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 3,
+    "payload": {
+      "version": "0.1.0",
+      "daemon_pid": 24653,
+      "last_ship_at": "2026-04-21T18:34:58Z",
+      "spool_pending_count": 0,
+      "spool_dead_count": 0,
+      "parse_error_count_1h": 0,
+      "consecutive_ship_failures": 0,
+      "disk_free_bytes": 42949672960,
+      "is_offline": false,
+      "recent_dead_letters": [],
+      "last_updated": "2026-04-21T18:35:00Z"
+    },
+    "error": null
+  },
+  "outbox": {
+    "path": "/Users/davidrose/.longhouse/agent/outbox",
+    "file_count": 0,
+    "oldest_age_seconds": null
+  },
+  "activity_summary": {
+    "path": "/Users/davidrose/.longhouse/agent/longhouse-shipper.db",
+    "exists": true,
+    "error": null,
+    "sessions_today": 22,
+    "sessions_recent": 5,
+    "provider_counts_today": {
+      "claude": 17,
+      "codex": 5
+    },
+    "provider_counts_recent": {
+      "claude": 3,
+      "codex": 2
+    },
+    "recent_touches": [
+      { "provider": "codex", "workspace_label": "sauron", "last_updated": "2026-04-21T18:34:58Z", "branch": "main" },
+      { "provider": "codex", "workspace_label": "citi", "last_updated": "2026-04-21T18:29:00Z", "branch": "fix/recs" },
+      { "provider": "claude", "workspace_label": "zeta-athena-horizon", "last_updated": "2026-04-21T18:29:00Z", "branch": "refactor/ingest" },
+      { "provider": "claude", "workspace_label": "zerg", "last_updated": "2026-04-21T18:24:00Z", "branch": "fix-auth" }
+    ],
+    "latest_activity_at": "2026-04-21T18:34:58Z",
+    "recent_window_minutes": 15
+  },
+  "managed_summary": {
+    "attached_count": 4,
+    "detached_count": 0,
+    "degraded_count": 0,
+    "orphan_bridge_count": 0,
+    "latest_activity_at": "2026-04-21T18:34:58Z"
+  },
+  "managed_sessions": [
+    {
+      "session_id": "sess-sauron-codex",
+      "provider": "codex",
+      "workspace_label": "sauron",
+      "branch": "main",
+      "state": "attached",
+      "phase": "running",
+      "last_activity_at": "2026-04-21T18:34:58Z",
+      "bridge_status": "running",
+      "bridge_pid": 27771,
+      "bridge_heartbeat_at": "2026-04-21T18:34:59Z",
+      "reason_codes": []
+    },
+    {
+      "session_id": "sess-zerg-claude",
+      "provider": "claude",
+      "workspace_label": "zerg",
+      "branch": "fix-auth",
+      "state": "attached",
+      "phase": "needs_user",
+      "last_activity_at": "2026-04-21T18:24:00Z",
+      "bridge_status": "running",
+      "bridge_pid": 28802,
+      "bridge_heartbeat_at": "2026-04-21T18:34:40Z",
+      "reason_codes": []
+    },
+    {
+      "session_id": "sess-zeta-claude",
+      "provider": "claude",
+      "workspace_label": "zeta",
+      "branch": "main",
+      "state": "attached",
+      "phase": "needs_user",
+      "last_activity_at": "2026-04-21T17:35:00Z",
+      "bridge_status": "running",
+      "bridge_pid": 29110,
+      "bridge_heartbeat_at": "2026-04-21T18:34:20Z",
+      "reason_codes": []
+    },
+    {
+      "session_id": "sess-tiger-claude",
+      "provider": "claude",
+      "workspace_label": "tiger",
+      "branch": "main",
+      "state": "attached",
+      "phase": "idle",
+      "last_activity_at": "2026-04-21T17:35:00Z",
+      "bridge_status": "running",
+      "bridge_pid": 30002,
+      "bridge_heartbeat_at": "2026-04-21T18:34:12Z",
+      "reason_codes": []
+    }
+  ],
+  "orphan_bridges": [],
+  "launch_readiness": {
+    "state": "ready",
+    "headline": "Managed launch configuration looks coherent",
+    "reasons": [],
+    "suggested_actions": [],
+    "stored_url": "https://david010.longhouse.ai",
+    "machine_name": "cinder",
+    "service_machine_name": "cinder",
+    "runner": {
+      "path": "/Users/davidrose/.config/longhouse/runner.env",
+      "exists": true,
+      "error": null,
+      "runner_name": "cinder",
+      "runner_id": null,
+      "runner_urls": [
+        "https://david010.longhouse.ai"
+      ],
+      "install_mode": "desktop"
+    }
+  }
+}

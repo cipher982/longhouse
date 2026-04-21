@@ -826,7 +826,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         compactAgeLabel(seconds: max(0, Int(referenceDate.timeIntervalSince(date))))
     }
 
-    private static func parseISO8601(_ raw: String) -> Date? {
+    internal static func parseISO8601(_ raw: String) -> Date? {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let parsed = fractional.date(from: raw) {
