@@ -1,0 +1,112 @@
+"""Tests for `_collect_build_identity` — the CLI/engine drift detector
+that feeds the local-health snapshot and menu bar."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+from cryptography.fernet import Fernet
+
+os.environ.setdefault("DATABASE_URL", "sqlite://")
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
+
+from zerg import build_info
+from zerg.services import local_health as local_health_service
+
+
+CLI_PAYLOAD = {
+    "version": "0.2.0",
+    "commit": "aaaaaaaa1111111111111111111111111111bbbb",
+    "commit_short": "aaaaaaaa",
+    "dirty": False,
+    "built_at": "2026-04-21T18:03:12Z",
+    "channel": "release",
+}
+
+
+def _engine_status(build: dict | None) -> dict:
+    payload: dict = {"version": "0.2.0"}
+    if build is not None:
+        payload["build"] = build
+    return {"path": "/tmp/engine-status.json", "exists": True, "payload": payload, "error": None}
+
+
+@pytest.fixture(autouse=True)
+def _reset_cache():
+    build_info.reset_cache()
+    yield
+    build_info.reset_cache()
+
+
+@pytest.fixture
+def _install_cli_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    identity_file = tmp_path / "build-identity.json"
+    identity_file.write_text(json.dumps(CLI_PAYLOAD), encoding="utf-8")
+    monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(identity_file))
+    build_info.reset_cache()
+
+
+def test_no_drift_when_cli_and_engine_agree(_install_cli_identity) -> None:
+    engine_build = {**CLI_PAYLOAD}
+    result = local_health_service._collect_build_identity(
+        engine_status=_engine_status(engine_build)
+    )
+
+    assert result["drift"] is False
+    assert result["cli"]["commit_short"] == "aaaaaaaa"
+    assert result["engine"]["commit_short"] == "aaaaaaaa"
+    names = {c["name"] for c in result["components"]}
+    assert names == {"cli", "engine"}
+
+
+def test_flags_drift_when_short_shas_differ(_install_cli_identity) -> None:
+    engine_build = {**CLI_PAYLOAD, "commit_short": "bbbbbbbb"}
+    result = local_health_service._collect_build_identity(
+        engine_status=_engine_status(engine_build)
+    )
+
+    assert result["drift"] is True
+    assert result["cli"]["commit_short"] == "aaaaaaaa"
+    assert result["engine"]["commit_short"] == "bbbbbbbb"
+
+
+def test_engine_missing_build_block_does_not_drift(_install_cli_identity) -> None:
+    """An engine that predates the build block still registers as "same" —
+    we only flag drift when we have two short SHAs that disagree."""
+    result = local_health_service._collect_build_identity(
+        engine_status=_engine_status(None)
+    )
+
+    assert result["drift"] is False
+    assert result["engine"] is None
+    names = [c["name"] for c in result["components"]]
+    assert names == ["cli"]
+
+
+def test_cli_identity_missing_surfaces_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("LONGHOUSE_BUILD_IDENTITY_PATH", raising=False)
+
+    class _MissingRef:
+        def is_file(self) -> bool:
+            return False
+
+        def __truediv__(self, _other: str) -> "_MissingRef":
+            return self
+
+    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _MissingRef())
+    build_info.reset_cache()
+
+    engine_build = {**CLI_PAYLOAD, "commit_short": "ccccc111"}
+    result = local_health_service._collect_build_identity(
+        engine_status=_engine_status(engine_build)
+    )
+
+    assert result["cli"]["error"] == "missing"
+    # With CLI missing we only have one short SHA — nothing to compare.
+    assert result["drift"] is False
+    names = [c["name"] for c in result["components"]]
+    assert names == ["engine"]

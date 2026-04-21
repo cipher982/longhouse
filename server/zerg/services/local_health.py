@@ -463,6 +463,47 @@ def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dic
     }
 
 
+def _collect_build_identity(*, engine_status: dict[str, Any]) -> dict[str, Any]:
+    """Compare CLI build identity against engine build identity.
+
+    Returns the CLI identity, engine identity (short SHA only, since that's
+    all we need for drift detection), and a list of drifting components.
+    A drift means the short SHAs disagree; same commit_short = same build.
+    """
+    from zerg.build_info import BuildIdentityMissing
+    from zerg.build_info import load as load_build_identity
+
+    cli_block: dict[str, Any]
+    try:
+        cli = load_build_identity()
+        cli_block = cli.as_dict()
+        cli_short: str | None = cli.commit_short
+    except BuildIdentityMissing as exc:
+        cli_block = {"error": "missing", "detail": str(exc)}
+        cli_short = None
+
+    engine_payload = (engine_status.get("payload") or {}) if engine_status else {}
+    engine_build = engine_payload.get("build") or {}
+    engine_short = engine_build.get("commit_short") if isinstance(engine_build, Mapping) else None
+
+    components: list[dict[str, Any]] = []
+    if cli_short:
+        components.append({"name": "cli", "commit_short": cli_short})
+    if engine_short:
+        components.append({"name": "engine", "commit_short": engine_short})
+
+    # Drift: two or more components with different commit_short values.
+    shorts = {c["commit_short"] for c in components}
+    drift = len(shorts) > 1
+
+    return {
+        "cli": cli_block,
+        "engine": engine_build if engine_build else None,
+        "drift": drift,
+        "components": components,
+    }
+
+
 def _collect_engine_status(base_dir: Path, *, now: datetime) -> dict[str, Any]:
     status_path = get_agent_status_path(base_dir)
     if not status_path.exists():
@@ -1607,6 +1648,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         launch_readiness=launch_readiness,
         managed_summary=managed_summary,
     )
+    build_identity = _collect_build_identity(engine_status=engine_status)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -1624,6 +1666,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "managed_sessions": managed_sessions,
         "orphan_bridges": orphan_bridges,
         "launch_readiness": launch_readiness,
+        "build": build_identity,
         "update_info": _collect_update_info(),
         "thresholds": {
             "engine_fresh_seconds": ENGINE_FRESH_SECONDS,

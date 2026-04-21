@@ -1,4 +1,5 @@
 mod bench;
+mod build_identity;
 mod codex_app_server_canary;
 mod codex_bridge;
 mod commands;
@@ -43,7 +44,7 @@ fn parse_compression_algo(s: &str) -> anyhow::Result<CompressionAlgo> {
 #[derive(Parser)]
 #[command(
     name = "longhouse-engine",
-    version,
+    version = env!("LONGHOUSE_BUILD_QUALIFIED"),
     about = "Longhouse session shipper (Rust engine)"
 )]
 struct Cli {

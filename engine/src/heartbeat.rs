@@ -8,6 +8,7 @@
 use anyhow::Result;
 use serde::Serialize;
 
+use crate::build_identity::BuildIdentity;
 use crate::config;
 use crate::error_tracker::ConsecutiveErrorTracker;
 use crate::error_tracker::RecentIssueTracker;
@@ -15,8 +16,6 @@ use crate::shipping::client::ShipperClient;
 use crate::state::session_phase::PhaseLedgerRow;
 use crate::state::spool::DeadLetterEntry;
 use crate::state::spool::Spool;
-
-const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Heartbeat payload sent to the server and written locally.
 #[derive(Debug, Serialize, Clone)]
@@ -65,7 +64,7 @@ impl HeartbeatPayload {
         let disk_free_bytes = get_disk_free();
 
         HeartbeatPayload {
-            version: ENGINE_VERSION.to_string(),
+            version: BuildIdentity::current().qualified(),
             daemon_pid: std::process::id(),
             last_ship_at: stats.last_ship_at.clone(),
             spool_pending_count,
@@ -122,6 +121,9 @@ pub fn write_status_file(
     struct StatusFile<'a> {
         #[serde(flatten)]
         payload: &'a HeartbeatPayload,
+        /// Compiled-in engine build identity. Menu bar / local-health read
+        /// this to detect drift between engine, CLI, and desktop app builds.
+        build: BuildIdentity,
         recent_dead_letters: Vec<StatusDeadLetter>,
         /// Ledger rows whose phase is still within its freshness window.
         /// Same LWW rows that back `session_phase_state` so consumers can
@@ -144,6 +146,7 @@ pub fn write_status_file(
     let now_utc = chrono::Utc::now();
     let status = StatusFile {
         payload,
+        build: BuildIdentity::current(),
         recent_dead_letters,
         phase_ledger,
         phase_ledger_status: ledger_status,
@@ -317,6 +320,16 @@ mod tests {
         // key — the shape stays stable for consumers.
         assert_eq!(parsed["phase_ledger"], serde_json::json!([]));
         assert_eq!(parsed["phase_ledger_status"], "ok");
+        // build block mirrors BuildIdentity::current() so menu bar / local-health
+        // can detect drift between the installed CLI and the engine.
+        let build = &parsed["build"];
+        assert!(build.is_object(), "expected build block");
+        assert!(build["version"].is_string());
+        assert!(build["commit"].is_string());
+        assert!(build["commit_short"].is_string());
+        assert!(build["built_at"].is_string());
+        assert!(build["channel"].is_string());
+        assert!(build["dirty"].is_boolean());
     }
 
     #[test]
