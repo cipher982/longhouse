@@ -482,9 +482,15 @@ def _collect_build_identity(*, engine_status: dict[str, Any]) -> dict[str, Any]:
         cli_block = {"error": "missing", "detail": str(exc)}
         cli_short = None
 
-    engine_payload = (engine_status.get("payload") or {}) if engine_status else {}
-    engine_build = engine_payload.get("build") or {}
-    engine_short = engine_build.get("commit_short") if isinstance(engine_build, Mapping) else None
+    # engine-status.json is engine-controlled but user-writable; guard
+    # against corrupt payloads (non-object top level, non-object build) so
+    # local-health degrades cleanly instead of raising and taking the whole
+    # menu bar snapshot down.
+    raw_payload = engine_status.get("payload") if engine_status else None
+    engine_payload: Mapping[str, Any] = raw_payload if isinstance(raw_payload, Mapping) else {}
+    raw_engine_build = engine_payload.get("build")
+    engine_build: Mapping[str, Any] = raw_engine_build if isinstance(raw_engine_build, Mapping) else {}
+    engine_short = engine_build.get("commit_short") if engine_build else None
 
     components: list[dict[str, Any]] = []
     if cli_short:
