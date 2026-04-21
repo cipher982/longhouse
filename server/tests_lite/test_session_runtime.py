@@ -577,3 +577,108 @@ def test_progress_signal_does_not_override_attention_phase(tmp_path):
         assert view.confidence == "live"
 
     engine.dispose()
+
+
+def test_older_phase_signal_does_not_override_newer_progress(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_old_phase_after_progress.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=20))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=now,
+                    dedupe_key="progress-new",
+                    payload={"progress_kind": "assistant_message"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="phase_signal",
+                    phase="thinking",
+                    occurred_at=now - timedelta(seconds=30),
+                    freshness_ms=phase_freshness_ms("thinking"),
+                    dedupe_key="phase-old-thinking",
+                    payload={},
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert state.phase == "running"
+        assert state.phase_source == "progress"
+        assert state.last_progress_at == now.replace(tzinfo=None)
+        assert state.last_runtime_signal_at is None
+        assert view.runtime_phase is None
+        assert view.display_phase == "Recent progress"
+        assert view.confidence == "inferred"
+
+    engine.dispose()
+
+
+def test_older_terminal_signal_does_not_override_newer_progress(tmp_path):
+    engine, SessionLocal = _make_db(tmp_path, "runtime_old_terminal_after_progress.db")
+    now = datetime.now(timezone.utc)
+
+    with SessionLocal() as db:
+        session = _seed_session(db, started_at=now - timedelta(minutes=20))
+        runtime_key = runtime_key_for_session("claude", str(session.id))
+
+        ingest_runtime_events(
+            db,
+            [
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="transcript",
+                    kind="progress_signal",
+                    occurred_at=now,
+                    dedupe_key="progress-new",
+                    payload={"progress_kind": "assistant_message"},
+                ),
+                RuntimeEventIngest(
+                    runtime_key=runtime_key,
+                    session_id=session.id,
+                    provider="claude",
+                    device_id="cinder",
+                    source="claude_hook",
+                    kind="terminal_signal",
+                    occurred_at=now - timedelta(seconds=30),
+                    dedupe_key="terminal-old",
+                    payload={"terminal_state": "finished"},
+                ),
+            ],
+        )
+        db.commit()
+
+        state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).one()
+        view = build_runtime_view(state=state, session=session, now=now)
+
+        assert state.phase == "running"
+        assert state.phase_source == "progress"
+        assert state.terminal_state is None
+        assert state.terminal_at is None
+        assert state.last_progress_at == now.replace(tzinfo=None)
+        assert view.runtime_phase is None
+        assert view.display_phase == "Recent progress"
+        assert view.confidence == "inferred"
+
+    engine.dispose()

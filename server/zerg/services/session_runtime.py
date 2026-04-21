@@ -454,7 +454,11 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
         state.device_id = event.device_id
 
     if event.kind == "phase_signal":
-        latest_phase_signal_at = _latest_timestamp(state.last_runtime_signal_at, state.terminal_at)
+        latest_phase_signal_at = _latest_timestamp(
+            state.last_runtime_signal_at,
+            state.last_progress_at,
+            state.terminal_at,
+        )
         if latest_phase_signal_at is not None and occurred_at < latest_phase_signal_at:
             return False
         next_phase = (event.phase or state.phase or "idle").strip() or "idle"
@@ -505,7 +509,11 @@ def _apply_runtime_event(db: Session, event: RuntimeEventIngest) -> bool:
             state.phase_source = "progress"
 
     elif event.kind == "terminal_signal":
-        latest_terminal_related_at = _latest_timestamp(state.last_runtime_signal_at, state.terminal_at)
+        latest_terminal_related_at = _latest_timestamp(
+            state.last_runtime_signal_at,
+            state.last_progress_at,
+            state.terminal_at,
+        )
         if latest_terminal_related_at is not None and occurred_at < latest_terminal_related_at:
             return False
         terminal_state = str((event.payload or {}).get("terminal_state") or "finished").strip() or "finished"

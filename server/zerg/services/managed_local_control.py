@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeEvent
+from zerg.models.agents import SessionRuntimeState
 from zerg.services.agents_store import AgentsStore
 from zerg.services.claude_channel_text import strip_claude_channel_wrapper
 from zerg.services.managed_local_transport import ManagedLocalTransportError
@@ -163,6 +164,30 @@ def _fetch_managed_local_hook_runtime_events_since(
         )
 
 
+def _load_managed_local_runtime_state(*, db_bind, session_id: UUID) -> SessionRuntimeState | None:
+    with Session(bind=db_bind) as poll_db:
+        return (
+            poll_db.query(SessionRuntimeState)
+            .filter(SessionRuntimeState.session_id == session_id)
+            .order_by(SessionRuntimeState.updated_at.desc(), SessionRuntimeState.runtime_version.desc())
+            .first()
+        )
+
+
+def _hook_runtime_event_matches_canonical_state(
+    *,
+    db_bind,
+    session_id: UUID,
+    event: SessionRuntimeEvent,
+) -> bool:
+    state = _load_managed_local_runtime_state(db_bind=db_bind, session_id=session_id)
+    if state is None:
+        return False
+    if str(getattr(state, "phase", "") or "").strip() != str(getattr(event, "phase", "") or "").strip():
+        return False
+    return normalize_utc(getattr(state, "last_runtime_signal_at", None)) == normalize_utc(getattr(event, "occurred_at", None))
+
+
 async def await_managed_local_hook_phase_update(
     *,
     db_bind,
@@ -192,6 +217,12 @@ async def await_managed_local_hook_phase_update(
         for event in events:
             cursor = max(cursor, int(getattr(event, "id", 0) or 0))
             phase = str(getattr(event, "phase", "") or "").strip()
+            if not _hook_runtime_event_matches_canonical_state(
+                db_bind=db_bind,
+                session_id=session_id,
+                event=event,
+            ):
+                continue
             if phases is None or phase in phases:
                 return ManagedLocalPhaseUpdate(
                     phase=phase,
@@ -232,6 +263,12 @@ async def await_managed_local_turn_terminal(
         for event in events:
             cursor = max(cursor, int(getattr(event, "id", 0) or 0))
             phase = str(getattr(event, "phase", "") or "").strip()
+            if not _hook_runtime_event_matches_canonical_state(
+                db_bind=db_bind,
+                session_id=session_id,
+                event=event,
+            ):
+                continue
             if phase in _MANAGED_LOCAL_ACTIVE_HOOK_PHASES:
                 continue
             if phase not in _MANAGED_LOCAL_TERMINAL_PHASE_TO_CONTROL_STATUS:

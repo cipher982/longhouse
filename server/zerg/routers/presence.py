@@ -47,10 +47,13 @@ from zerg.models.agents import AgentSession
 from zerg.services.session_messages import deliver_queued_session_messages
 from zerg.services.session_messages import is_session_message_deliverable_state
 from zerg.services.session_messages import resolve_session_message_owner_id
+from zerg.services.session_runtime import RuntimeEventBatchResult
 from zerg.services.session_runtime import RuntimeEventIngest
 from zerg.services.session_runtime import coerce_session_uuid
 from zerg.services.session_runtime import ingest_runtime_events
+from zerg.services.session_runtime import load_runtime_state_map
 from zerg.services.session_runtime import phase_freshness_ms
+from zerg.services.session_runtime import resolve_runtime_overlay
 from zerg.services.session_runtime import runtime_key_for_session
 from zerg.services.write_serializer import get_write_serializer
 from zerg.utils.time import UTCBaseModel
@@ -121,37 +124,53 @@ async def upsert_presence(
     )
 
     auto_resume = payload.state in _AUTO_RESUME_STATES
-    _session_id_str = payload.session_id
     _now = now
+    session_uuid: UUID | None
+    try:
+        session_uuid = UUID(payload.session_id)
+    except ValueError:
+        session_uuid = None
 
-    def _do_presence_writes(write_db: Session) -> None:
-        ingest_runtime_events(write_db, [runtime_event])
-        if auto_resume:
-            try:
-                session_uuid = UUID(_session_id_str)
-                write_db.query(AgentSession).filter(
-                    AgentSession.id == session_uuid,
-                    AgentSession.user_state == "snoozed",
-                ).update(
-                    {"user_state": "active", "user_state_at": _now},
-                    synchronize_session=False,
-                )
-            except (ValueError, AttributeError):
-                pass
+    def _canonical_presence_state(write_db: Session, target_session_uuid: UUID | None) -> str | None:
+        if target_session_uuid is None:
+            return None
+        session = write_db.query(AgentSession).filter(AgentSession.id == target_session_uuid).first()
+        if session is None:
+            return None
+        runtime_state_map = load_runtime_state_map(write_db, [target_session_uuid])
+        return resolve_runtime_overlay(
+            session,
+            last_activity_at=session.last_activity_at,
+            runtime_state_map=runtime_state_map,
+            now=_now,
+        ).presence_state
+
+    def _do_presence_writes(write_db: Session) -> str | None:
+        ingest_result: RuntimeEventBatchResult = ingest_runtime_events(write_db, [runtime_event])
+        canonical_presence_state = _canonical_presence_state(write_db, session_uuid)
+        if (
+            auto_resume
+            and runtime_key in ingest_result.updated_runtime_keys
+            and canonical_presence_state in _AUTO_RESUME_STATES
+            and session_uuid is not None
+        ):
+            write_db.query(AgentSession).filter(
+                AgentSession.id == session_uuid,
+                AgentSession.user_state == "snoozed",
+            ).update(
+                {"user_state": "active", "user_state_at": _now},
+                synchronize_session=False,
+            )
+        return canonical_presence_state
 
     ws = get_write_serializer()
-    await ws.execute_or_direct(_do_presence_writes, db, label="presence")
+    canonical_presence_state = await ws.execute_or_direct(_do_presence_writes, db, label="presence")
 
-    if is_session_message_deliverable_state(payload.state):
-        try:
-            session_uuid = UUID(payload.session_id)
-        except ValueError:
-            session_uuid = None
-        if session_uuid is not None:
-            await deliver_queued_session_messages(
-                db=db,
-                owner_id=resolve_session_message_owner_id(db, _token),
-                target_session_id=session_uuid,
-                target_presence_state=payload.state,
-            )
+    if session_uuid is not None and is_session_message_deliverable_state(canonical_presence_state):
+        await deliver_queued_session_messages(
+            db=db,
+            owner_id=resolve_session_message_owner_id(db, _token),
+            target_session_id=session_uuid,
+            target_presence_state=canonical_presence_state,
+        )
     return Response(status_code=status.HTTP_204_NO_CONTENT)

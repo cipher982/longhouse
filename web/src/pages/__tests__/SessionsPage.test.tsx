@@ -623,83 +623,90 @@ describe("SessionsPage", () => {
   });
 
   it("renders query compatibility cards from the matched detail session instead of speculative head state", async () => {
-    const detail = makeSession({
-      id: "matched-continuation",
-      project: "search-hit-project",
-      summary_title: "Matched continuation",
-      summary: "Older matched continuation summary",
-      started_at: "2026-03-20T12:00:00Z",
-      last_activity_at: "2026-03-20T12:30:00Z",
-      match_event_id: 42,
-      match_snippet: "needle in the older continuation",
-      thread_root_session_id: "thread-1",
-      thread_head_session_id: "head-session",
-      thread_continuation_count: 3,
-      home_label: null,
-      status: "completed",
-      display_phase: "Completed",
-    });
-    const head = makeSession({
-      id: "head-session",
-      project: "current-head-project",
-      summary_title: "Current writable head",
-      summary: "Newest head summary",
-      started_at: "2026-03-21T12:00:00Z",
-      last_activity_at: "2026-03-21T12:45:00Z",
-      thread_root_session_id: "thread-1",
-      thread_head_session_id: "head-session",
-      thread_continuation_count: 3,
-      home_label: "On this Mac",
-      status: "working",
-      presence_state: "running",
-      display_phase: "Running bash",
-      active_tool: "bash",
-      capabilities: makeCapabilities({
-        live_control_available: true,
-        host_reattach_available: true,
-        reply_to_live_session_available: true,
-      }),
-    });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-21T12:45:00Z"));
 
-    mockUseAgentSessions.mockReturnValue({
-      data: {
-        sessions: [
-          makeTimelineCard(detail, {
-            thread_id: "thread-1",
-            head,
-            detail,
-            root: makeSession({
-              id: "root-session",
-              project: "root-project",
-              thread_root_session_id: "thread-1",
-              thread_head_session_id: "head-session",
+      const detail = makeSession({
+        id: "matched-continuation",
+        project: "search-hit-project",
+        summary_title: "Matched continuation",
+        summary: "Older matched continuation summary",
+        started_at: "2026-03-20T12:00:00Z",
+        last_activity_at: "2026-03-20T12:30:00Z",
+        match_event_id: 42,
+        match_snippet: "needle in the older continuation",
+        thread_root_session_id: "thread-1",
+        thread_head_session_id: "head-session",
+        thread_continuation_count: 3,
+        home_label: null,
+        status: "completed",
+        display_phase: "Completed",
+      });
+      const head = makeSession({
+        id: "head-session",
+        project: "current-head-project",
+        summary_title: "Current writable head",
+        summary: "Newest head summary",
+        started_at: "2026-03-21T12:00:00Z",
+        last_activity_at: "2026-03-21T12:45:00Z",
+        thread_root_session_id: "thread-1",
+        thread_head_session_id: "head-session",
+        thread_continuation_count: 3,
+        home_label: "On this Mac",
+        status: "working",
+        presence_state: "running",
+        display_phase: "Running bash",
+        active_tool: "bash",
+        capabilities: makeCapabilities({
+          live_control_available: true,
+          host_reattach_available: true,
+          reply_to_live_session_available: true,
+        }),
+      });
+
+      mockUseAgentSessions.mockReturnValue({
+        data: {
+          sessions: [
+            makeTimelineCard(detail, {
+              thread_id: "thread-1",
+              head,
+              detail,
+              root: makeSession({
+                id: "root-session",
+                project: "root-project",
+                thread_root_session_id: "thread-1",
+                thread_head_session_id: "head-session",
+              }),
+              continuation_count: 3,
+              started_origin_label: "On this Mac",
+              head_origin_label: "Cloud",
             }),
-            continuation_count: 3,
-            started_origin_label: "On this Mac",
-            head_origin_label: "Cloud",
-          }),
-        ],
-        total: 1,
-        has_real_sessions: true,
-        compatibility_mode: "query_grouped",
-        compatibility_has_more: false,
-        compatibility_source_count: 1,
-      },
-      isLoading: false,
-      error: null,
-      refetch: vi.fn(),
-    });
+          ],
+          total: 1,
+          has_real_sessions: true,
+          compatibility_mode: "query_grouped",
+          compatibility_has_more: false,
+          compatibility_source_count: 1,
+        },
+        isLoading: false,
+        error: null,
+        refetch: vi.fn(),
+      });
 
-    renderSessionsPage("/timeline?query=needle");
+      renderSessionsPage("/timeline?query=needle");
 
-    expect(await screen.findByText("Matched continuation")).toBeInTheDocument();
-    expect(screen.queryByText("Current writable head")).not.toBeInTheDocument();
-    expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Head:/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Started:/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/continuations/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Open match: Matched continuation" })).toBeInTheDocument();
-    expect(screen.getByText(/^Matched .*ago$/)).toBeInTheDocument();
+      expect(screen.getByText("Matched continuation")).toBeInTheDocument();
+      expect(screen.queryByText("Current writable head")).not.toBeInTheDocument();
+      expect(screen.queryByText("Running bash")).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Head:/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^Started:/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/continuations/)).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Open match: Matched continuation" })).toBeInTheDocument();
+      expect(screen.getByText(/^Matched .*ago$/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refreshes relative time labels while the timeline stays open", async () => {

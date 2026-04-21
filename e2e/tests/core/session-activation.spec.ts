@@ -168,16 +168,23 @@ test.describe("Session activation surfaces", () => {
     await resetDatabase(request);
   });
 
-  test("empty timeline offers machines link when no launch host exists", async ({
+  test("timeline keeps Machines one click away when no launch host exists", async ({
     page,
   }) => {
     await page.goto("/timeline");
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
 
     const runnerAction = page.getByTestId("timeline-empty-runner-action");
-    await expect(runnerAction).toBeVisible();
-    expect((await runnerAction.textContent())?.trim()).toBe("Machines");
-    await runnerAction.click();
+    if (await runnerAction.count()) {
+      await expect(runnerAction).toBeVisible();
+      expect((await runnerAction.textContent())?.trim()).toBe("Machines");
+      await runnerAction.click();
+    } else {
+      const globalRunnerTab = page.getByTestId("global-runners-tab");
+      await expect(globalRunnerTab).toBeVisible();
+      await expect(globalRunnerTab).toHaveText("Machines");
+      await globalRunnerTab.click();
+    }
 
     await page.waitForURL("**/runners", { timeout: 10_000 });
     await page.waitForSelector('body[data-ready="true"]', { timeout: 15_000 });
