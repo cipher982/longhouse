@@ -89,16 +89,28 @@ class TestResolveDirty:
         (repo / "tracked.txt").write_text("b\n")
         assert gbi.resolve_dirty(repo, {}) is True
 
+    def test_staged_edit_is_dirty(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "tracked.txt").write_text("b\n")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=repo, check=True)
+        assert gbi.resolve_dirty(repo, {}) is True
+
+    def test_tracked_deletion_is_dirty(self, tmp_path: Path) -> None:
+        repo = _init_repo(tmp_path)
+        (repo / "tracked.txt").unlink()
+        assert gbi.resolve_dirty(repo, {}) is True
+
     def test_untracked_file_is_not_dirty(self, tmp_path: Path) -> None:
         """Shared-worktree reality: other agents' WIP should not pollute provenance."""
         repo = _init_repo(tmp_path)
         (repo / "untracked.txt").write_text("someone else's WIP\n")
         assert gbi.resolve_dirty(repo, {}) is False
 
-    def test_ci_always_clean(self, tmp_path: Path) -> None:
+    def test_ci_tracked_mutation_still_reports_dirty(self, tmp_path: Path) -> None:
+        """No CI shortcut. If CI mutates tracked files pre-package, surface it."""
         repo = _init_repo(tmp_path)
         (repo / "tracked.txt").write_text("edit\n")
-        assert gbi.resolve_dirty(repo, {"GITHUB_SHA": "abc"}) is False
+        assert gbi.resolve_dirty(repo, {"GITHUB_SHA": "a" * 40}) is True
 
 
 class TestResolveChannel:
@@ -107,8 +119,13 @@ class TestResolveChannel:
         [
             ("refs/tags/v0.2.0", "release"),
             ("refs/tags/v1.0.0-rc1", "release"),
+            ("refs/tags/v10.20.30-beta.2", "release"),
+            ("refs/tags/v1.2.3+build.123", "release"),
             ("refs/heads/main", "dev"),
             ("refs/tags/not-a-version", "dev"),
+            ("refs/tags/v1junk", "dev"),  # strict semver only
+            ("refs/tags/v1.2", "dev"),  # missing patch component
+            ("refs/tags/v1.2.3.4", "dev"),
             ("", "dev"),
         ],
     )

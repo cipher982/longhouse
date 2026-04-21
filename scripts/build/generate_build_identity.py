@@ -37,7 +37,8 @@ DEFAULT_OUTPUT = REPO_ROOT / ".build" / "build-identity.json"
 PYPROJECT_PATH = REPO_ROOT / "server" / "pyproject.toml"
 
 VERSION_RE = re.compile(r'^version\s*=\s*"([^"]+)"', re.MULTILINE)
-TAG_REF_RE = re.compile(r"^refs/tags/v\d")
+# refs/tags/vX.Y.Z, optionally followed by -prerelease (rc1, beta.2, etc.) or +buildmeta.
+TAG_REF_RE = re.compile(r"^refs/tags/v\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$")
 
 
 def read_version(pyproject_path: Path) -> str:
@@ -67,12 +68,13 @@ def resolve_commit(repo_root: Path, env: dict[str, str]) -> str:
 
 
 def resolve_dirty(repo_root: Path, env: dict[str, str]) -> bool:
-    # CI builds are never dirty — GitHub's checkout is a clean tree and
-    # `git diff --quiet HEAD` would flag any generator rerun as dirty
-    # on a detached HEAD checkout where the worktree differs from the
-    # tag commit. Trust CI's environment instead.
-    if env.get("GITHUB_SHA"):
-        return False
+    # Tracked-only: staged, unstaged, and deleted files all count;
+    # untracked files do not (shared-worktree reality — other agents
+    # routinely have WIP in the same directory).
+    # Not CI-special: a CI build that has somehow mutated tracked files
+    # before packaging should surface as dirty — that is a real
+    # provenance red flag, not something to paper over.
+    del env  # currently unused; kept for future CI-specific tweaks
     proc = subprocess.run(
         ["git", "diff", "--quiet", "HEAD"],
         cwd=repo_root,
