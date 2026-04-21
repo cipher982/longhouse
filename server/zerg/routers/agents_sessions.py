@@ -24,6 +24,8 @@ from zerg.dependencies.agents_auth import verify_agents_token
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
+from zerg.services.session_archive import SessionArchiveBundleResponse
+from zerg.services.session_archive import build_session_archive_bundle
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
@@ -1458,6 +1460,31 @@ async def export_session(
         media_type="application/x-ndjson",
         headers=headers,
     )
+
+
+@router.get("/sessions/{session_id}/archive-bundle", response_model=SessionArchiveBundleResponse)
+async def export_session_archive_bundle(
+    session_id: UUID,
+    branch_mode: str = Query("head", description="Archive bundle branch projection mode. v1 supports head only."),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionArchiveBundleResponse:
+    """Export a versioned archive bundle for the current session head."""
+    if branch_mode != "head":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="branch_mode must be 'head' for archive bundle export",
+        )
+
+    result = build_session_archive_bundle(db, session_id, branch_mode=branch_mode)
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session {session_id} not found",
+        )
+
+    return result
 
 
 class SessionMessageCreate(UTCBaseModel):
