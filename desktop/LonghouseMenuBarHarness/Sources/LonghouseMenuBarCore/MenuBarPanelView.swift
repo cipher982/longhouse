@@ -591,30 +591,36 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    /// The secondary line under the workspace. Keep it to signal that the
-    /// pill doesn't already carry (e.g. reason codes, heartbeat staleness).
-    /// Provider is already encoded in the left dot, and liveness state is in
-    /// the pill, so don't repeat them here.
+    /// The secondary line under the workspace should only explain abnormal
+    /// control-path state. Healthy attached rows already communicate the
+    /// session name, branch, attention pill, and recent activity age; adding a
+    /// second timestamp from a lower-level bridge file just creates two clocks
+    /// that disagree for no user-visible reason.
     private func managedSessionDetail(_ session: ManagedSessionSnapshot) -> String {
-        var parts: [String] = []
-
-        parts.append(contentsOf: (session.reasonCodes ?? []).prefix(1).map { HealthSnapshot.humanizeManagedReason($0) })
-
-        // Only surface heartbeat age when it's stale enough to matter. A fresh
-        // heartbeat on an attached bridge is noise; a minutes-old one on a
-        // session the user thinks is live is a real signal.
-        if let heartbeatAt = session.bridgeHeartbeatAt,
-           let parsed = HealthSnapshot.parseISO8601(heartbeatAt) {
-            let age = presentationDate.timeIntervalSince(parsed)
-            if age >= 120 {
-                let heartbeatLabel = snapshot.compactTimestampLabel(heartbeatAt, relativeTo: presentationDate)
-                if heartbeatLabel != "-" {
-                    parts.append("heartbeat \(heartbeatLabel)")
-                }
+        switch session.normalizedState {
+        case "attached":
+            return ""
+        case "detached":
+            return "Window closed. Session still running in background."
+        case "degraded":
+            let reasons = (session.reasonCodes ?? []).prefix(2).map { HealthSnapshot.humanizeManagedReason($0) }
+            if reasons.isEmpty {
+                return "Live control degraded."
             }
+            return reasons.joined(separator: " · ")
+        case "unknown":
+            return "Longhouse cannot classify this managed session yet."
+        default:
+            let reasons = (session.reasonCodes ?? []).prefix(2).map { HealthSnapshot.humanizeManagedReason($0) }
+            if !reasons.isEmpty {
+                return reasons.joined(separator: " · ")
+            }
+            let normalized = session.normalizedState.trimmingCharacters(in: .whitespacesAndNewlines)
+            if normalized.isEmpty {
+                return ""
+            }
+            return normalized.replacingOccurrences(of: "_", with: " ").capitalized
         }
-
-        return parts.joined(separator: " · ")
     }
 
     private func orphanBridgeDetail(_ bridge: OrphanBridgeSnapshot) -> String {
