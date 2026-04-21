@@ -54,6 +54,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let managedSessions: [ManagedSessionSnapshot]?
     public let orphanBridges: [OrphanBridgeSnapshot]?
     public let launchReadiness: LaunchReadinessSnapshot?
+    public let build: BuildIdentitySnapshot?
     public let updateInfo: UpdateInfoSnapshot?
 
     public init(
@@ -72,6 +73,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         managedSessions: [ManagedSessionSnapshot]? = nil,
         orphanBridges: [OrphanBridgeSnapshot]? = nil,
         launchReadiness: LaunchReadinessSnapshot?,
+        build: BuildIdentitySnapshot? = nil,
         updateInfo: UpdateInfoSnapshot? = nil
     ) {
         self.schemaVersion = schemaVersion
@@ -89,6 +91,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.managedSessions = managedSessions
         self.orphanBridges = orphanBridges
         self.launchReadiness = launchReadiness
+        self.build = build
         self.updateInfo = updateInfo
     }
 
@@ -459,6 +462,13 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var installedVersionLabel: String {
+        // Prefer the qualified build identity ("0.2.0-dev+b672fcca[.dirty]"
+        // or "0.2.0 (b672fcca)"). It is the only string that can tell two
+        // different commits apart. Fall back to the legacy update_info
+        // version only when no identity is available.
+        if let qualified = build?.cli?.qualified {
+            return qualified
+        }
         guard let installed = updateInfo?.installedVersion,
               !installed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return "v?"
@@ -467,10 +477,30 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var hasResolvedInstalledVersion: Bool {
+        if build?.cli?.qualified != nil {
+            return true
+        }
         guard let installed = updateInfo?.installedVersion else {
             return false
         }
         return !installed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// True when menu bar can see that CLI, engine, or app short SHAs
+    /// disagree — a "build drift" warning to surface in the header.
+    public var hasBuildDrift: Bool {
+        build?.drift == true
+    }
+
+    /// Short chip string for the drifting components.
+    public var buildDriftChipLabel: String? {
+        guard hasBuildDrift else { return nil }
+        let components = build?.components ?? []
+        if components.isEmpty {
+            return "BUILD DRIFT"
+        }
+        let parts = components.map { "\($0.name) \($0.commitShort)" }
+        return "BUILD DRIFT · \(parts.joined(separator: " vs "))"
     }
 
     public var statusItemSummaryLabel: String {
@@ -973,6 +1003,54 @@ public struct EngineStatusSnapshot: Codable, Equatable, Sendable {
     public let error: String?
 }
 
+/// Build identity block emitted by `longhouse local-health --json` (the
+/// `build` key on the top-level snapshot). Shows CLI + engine short SHAs
+/// and whether they agree — the "build drift" surface.
+public struct BuildIdentitySnapshot: Codable, Equatable, Sendable {
+    public let cli: BuildIdentityRecord?
+    public let engine: BuildIdentityRecord?
+    public let drift: Bool?
+    public let components: [BuildIdentityComponent]?
+
+    public init(
+        cli: BuildIdentityRecord?,
+        engine: BuildIdentityRecord?,
+        drift: Bool?,
+        components: [BuildIdentityComponent]?
+    ) {
+        self.cli = cli
+        self.engine = engine
+        self.drift = drift
+        self.components = components
+    }
+}
+
+public struct BuildIdentityRecord: Codable, Equatable, Sendable {
+    public let version: String?
+    public let commit: String?
+    public let commitShort: String?
+    public let dirty: Bool?
+    public let builtAt: String?
+    public let channel: String?
+    /// Set by the Python loader when identity is absent or unreadable.
+    public let error: String?
+    public let detail: String?
+
+    public var qualified: String? {
+        guard let version, let commitShort else { return nil }
+        if channel == "release" {
+            return "\(version) (\(commitShort))"
+        }
+        let suffix = (dirty == true) ? "\(commitShort).dirty" : commitShort
+        return "\(version)-dev+\(suffix)"
+    }
+}
+
+public struct BuildIdentityComponent: Codable, Equatable, Sendable {
+    public let name: String
+    public let commitShort: String
+}
+
 public struct EngineStatusPayload: Codable, Equatable, Sendable {
     public let version: String?
     public let daemonPid: Int?
@@ -985,6 +1063,37 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
     public let isOffline: Bool?
     public let recentDeadLetters: [DeadLetterSnapshot]?
     public let lastUpdated: String?
+    /// Engine-compiled build identity (from build.rs). Same shape as the
+    /// CLI and wheel identity records.
+    public let build: BuildIdentityRecord?
+
+    public init(
+        version: String?,
+        daemonPid: Int?,
+        lastShipAt: String?,
+        spoolPendingCount: Int?,
+        spoolDeadCount: Int?,
+        parseErrorCount1H: Int?,
+        consecutiveShipFailures: Int?,
+        diskFreeBytes: UInt64?,
+        isOffline: Bool?,
+        recentDeadLetters: [DeadLetterSnapshot]?,
+        lastUpdated: String?,
+        build: BuildIdentityRecord? = nil
+    ) {
+        self.version = version
+        self.daemonPid = daemonPid
+        self.lastShipAt = lastShipAt
+        self.spoolPendingCount = spoolPendingCount
+        self.spoolDeadCount = spoolDeadCount
+        self.parseErrorCount1H = parseErrorCount1H
+        self.consecutiveShipFailures = consecutiveShipFailures
+        self.diskFreeBytes = diskFreeBytes
+        self.isOffline = isOffline
+        self.recentDeadLetters = recentDeadLetters
+        self.lastUpdated = lastUpdated
+        self.build = build
+    }
 
     enum CodingKeys: String, CodingKey {
         case version
@@ -998,6 +1107,7 @@ public struct EngineStatusPayload: Codable, Equatable, Sendable {
         case isOffline
         case recentDeadLetters
         case lastUpdated
+        case build
     }
 }
 

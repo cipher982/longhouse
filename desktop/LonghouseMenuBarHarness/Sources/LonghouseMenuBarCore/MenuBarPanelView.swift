@@ -264,6 +264,10 @@ public struct MenuBarPanelView: View {
                     if let updateChip = snapshot.updateAvailableChipLabel {
                         subtleChip(title: updateChip, tint: .yellow)
                     }
+
+                    if let driftChip = snapshot.buildDriftChipLabel {
+                        subtleChip(title: driftChip, tint: .orange)
+                    }
                 }
 
                 Text(snapshot.missionSummaryLabel(relativeTo: presentationDate))
