@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Build a demo SQLite database with seeded data.
+"""Build a demo SQLite database with seeded Longhouse demo sessions.
 
 Usage:
   uv run python server/scripts/build_demo_db.py
   uv run python server/scripts/build_demo_db.py --output /path/to/demo.db
-  uv run python server/scripts/build_demo_db.py --scenario swarm-mvp
 """
 
 from __future__ import annotations
@@ -24,8 +23,6 @@ from zerg.database import _ensure_agents_fts
 from zerg.database import make_engine
 from zerg.models.agents import AgentsBase
 from zerg.models.models import User
-from zerg.scenarios.seed import ScenarioError
-from zerg.scenarios.seed import seed_scenario
 from zerg.services.agents_store import AgentsStore
 from zerg.services.demo_sessions import build_demo_agent_sessions
 from zerg.utils.time import utc_now_naive
@@ -57,8 +54,6 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Build a demo SQLite database")
     parser.add_argument("--output", default=str(default_output), help="Output SQLite file path")
-    parser.add_argument("--scenario", default="swarm-mvp", help="Scenario name to seed (default: swarm-mvp)")
-    parser.add_argument("--skip-scenario", action="store_true", help="Skip scenario seeding")
     parser.add_argument("--owner-email", default="dev@local", help="Owner email for seeded runs")
     parser.add_argument("--force", action="store_true", help="Overwrite existing DB if present")
 
@@ -81,17 +76,7 @@ def main() -> int:
     SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False, expire_on_commit=False)
     db = SessionLocal()
     try:
-        owner = ensure_owner(db, args.owner_email)
-
-        if not args.skip_scenario:
-            seed_scenario(
-                db,
-                args.scenario,
-                owner_id=owner.id,
-                target="demo_db",
-                namespace="demo",
-                clean=True,  # Demo DB is built fresh, so clean is OK
-            )
+        ensure_owner(db, args.owner_email)
 
         # Create FTS5 virtual table + triggers before inserting events
         _ensure_agents_fts(engine)
@@ -103,9 +88,6 @@ def main() -> int:
         db.commit()
 
         print(f"Demo DB created: {output_path}")
-    except ScenarioError as exc:
-        print(f"Scenario error: {exc}")
-        return 2
     finally:
         db.close()
 
