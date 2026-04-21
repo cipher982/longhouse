@@ -59,8 +59,12 @@ struct SettingsView: View {
         switch BuildIdentityLoader.loadFromMainBundle() {
         case .success(let identity):
             return identity.qualifiedVersion
-        case .failure:
+        case .failure(.resourceMissing):
             return "build identity missing"
+        case .failure(.decodeFailed):
+            return "build identity: decode failed"
+        case .failure(.invalidPayload(let reason)):
+            return "build identity: invalid (\(reason))"
         }
     }
 }
