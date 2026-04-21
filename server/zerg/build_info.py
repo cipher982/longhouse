@@ -55,22 +55,38 @@ class BuildIdentity:
         return asdict(self)
 
 
+_ALLOWED_CHANNELS = ("dev", "release")
+
+
 def _parse(raw: str, source: str) -> BuildIdentity:
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise BuildIdentityMissing(f"build identity at {source} is not valid JSON: {exc}") from exc
     try:
-        return BuildIdentity(
-            version=payload["version"],
-            commit=payload["commit"],
-            commit_short=payload["commit_short"],
-            dirty=bool(payload["dirty"]),
-            built_at=payload["built_at"],
-            channel=payload["channel"],
-        )
+        version = payload["version"]
+        commit = payload["commit"]
+        commit_short = payload["commit_short"]
+        dirty = payload["dirty"]
+        built_at = payload["built_at"]
+        channel = payload["channel"]
     except KeyError as exc:
         raise BuildIdentityMissing(f"build identity at {source} missing key {exc}") from exc
+    if not isinstance(dirty, bool):
+        raise BuildIdentityMissing(f"build identity at {source} has non-bool dirty={dirty!r}")
+    if channel not in _ALLOWED_CHANNELS:
+        raise BuildIdentityMissing(f"build identity at {source} has invalid channel={channel!r}; expected one of {_ALLOWED_CHANNELS}")
+    for name, value in (("version", version), ("commit", commit), ("commit_short", commit_short), ("built_at", built_at)):
+        if not isinstance(value, str) or not value:
+            raise BuildIdentityMissing(f"build identity at {source} has invalid {name}={value!r}")
+    return BuildIdentity(
+        version=version,
+        commit=commit,
+        commit_short=commit_short,
+        dirty=dirty,
+        built_at=built_at,
+        channel=channel,
+    )
 
 
 def _load_from_env(path_str: str) -> BuildIdentity:
@@ -96,7 +112,12 @@ def _load_from_resource() -> BuildIdentity:
 
 def _load_uncached() -> BuildIdentity:
     env_path = os.environ.get(ENV_VAR)
-    if env_path:
+    if env_path is not None:
+        if not env_path.strip():
+            raise BuildIdentityMissing(
+                f"{ENV_VAR} is set but empty. Unset it to fall back to the bundled resource, "
+                "or point it at a real .build/build-identity.json."
+            )
         return _load_from_env(env_path)
     return _load_from_resource()
 

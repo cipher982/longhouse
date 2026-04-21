@@ -43,30 +43,44 @@ app = typer.Typer(
 )
 
 
-def _version_callback(value: bool) -> None:
-    if not value:
-        return
+def _emit_version(json_output: bool) -> None:
     try:
         identity = load_build_identity()
     except BuildIdentityMissing as exc:
-        typer.echo(f"longhouse: build identity missing — rebuild. ({exc})", err=True)
+        if json_output:
+            typer.echo(json.dumps({"error": "build identity missing — rebuild", "detail": str(exc)}, indent=2))
+        else:
+            typer.echo(f"longhouse: build identity missing — rebuild. ({exc})", err=True)
         raise typer.Exit(code=2)
-    typer.echo(f"longhouse {identity.qualified_version}")
+    if json_output:
+        typer.echo(json.dumps({"installed_version": identity.qualified_version, "build": identity.as_dict()}, indent=2))
+    else:
+        typer.echo(f"longhouse {identity.qualified_version}")
     raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def app_callback(
+    ctx: typer.Context,
     version: bool = typer.Option(
         False,
         "--version",
         help="Show Longhouse version and exit.",
-        callback=_version_callback,
-        is_eager=True,
+    ),
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="When paired with --version, emit JSON instead of text.",
+        hidden=True,
     ),
 ) -> None:
     """Longhouse AI Agent Platform CLI."""
+    if version:
+        _emit_version(json_output)
     maybe_notify_update(sys.argv[1:])
+    if ctx.invoked_subcommand is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit()
 
 
 config_app = typer.Typer(help="Configuration management")
