@@ -1,0 +1,53 @@
+# Lockstep release versioning for Longhouse.
+#
+# One semver advances all five component manifests in one shot. Edited
+# only by `bump-my-version bump` via `scripts/ops/release.sh` (or
+# `make release VERSION=vX.Y.Z`). Hand-editing these files drifts the
+# monorepo — if you need to bump mid-flight, run the tool instead.
+#
+# See docs/specs/release-and-build-identity.md for the "why lockstep"
+# reasoning; the short version is one developer, one repo, one cadence.
+
+[tool.bumpversion]
+current_version = "0.1.15"
+# Only bump on explicit --new-version; we don't use semantic components.
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+serialize = ["{major}.{minor}.{patch}"]
+allow_dirty = true
+# release.sh commits + tags separately (after build identity regenerates
+# and we verify the push), so bump-my-version should only rewrite files.
+commit = false
+tag = false
+
+# Server wheel — the launch CLI. This is the "anchor" version; everything
+# else matches it. Pinned to the literal "version = " line so other
+# version-like strings in pyproject.toml (dependency pins, etc.) don't
+# get rewritten.
+[[tool.bumpversion.files]]
+filename = "server/pyproject.toml"
+search = "version = \"{current_version}\""
+replace = "version = \"{new_version}\""
+
+# Rust engine.
+[[tool.bumpversion.files]]
+filename = "engine/Cargo.toml"
+search = "version = \"{current_version}\""
+replace = "version = \"{new_version}\""
+
+# Bun runner.
+[[tool.bumpversion.files]]
+filename = "runner/package.json"
+search = "\"version\": \"{current_version}\""
+replace = "\"version\": \"{new_version}\""
+
+# Control plane (hosted-only).
+[[tool.bumpversion.files]]
+filename = "control-plane/pyproject.toml"
+search = "version = \"{current_version}\""
+replace = "version = \"{new_version}\""
+
+# iOS app + widget targets share this xcconfig, so one edit covers both.
+[[tool.bumpversion.files]]
+filename = "ios/XcodeHarness/Configs/Version.xcconfig"
+search = "MARKETING_VERSION = {current_version}"
+replace = "MARKETING_VERSION = {new_version}"
