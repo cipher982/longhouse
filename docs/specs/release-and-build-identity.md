@@ -105,9 +105,13 @@ Every artifact carries its identity **inside itself**. No home-directory or othe
 ### Python (server, control-plane)
 
 - `generate_build_identity.py` runs before any `uv build`.
-- Hatch's `[tool.hatch.build.targets.wheel.force-include]` bundles `.build/build-identity.json` as package data at `zerg/build_identity.json`.
-- Runtime reader: `zerg.build_info.load()` reads the bundled resource via `importlib.resources`. Missing resource → raise `BuildIdentityMissing`; the CLI surfaces that as "build identity missing — rebuild."
+- Hatch's `[tool.hatch.build.targets.wheel.force-include]` bundles `.build/build-identity.json` as package data.
+  - server wheel → `zerg/build_identity.json`
+  - control-plane wheel → `longhouse_control_plane/build_identity.json`
+  - Each package reads its own copy via `importlib.resources` — no cross-package imports.
+- Runtime reader: `zerg.build_info.load()` (and sibling in control-plane) reads the bundled resource. Missing resource → raise `BuildIdentityMissing`; the CLI surfaces that as "build identity missing — rebuild."
 - No editable-install fallback. `./dev refresh` / `make dogfood-refresh` builds a wheel and installs it, not `uv pip install -e`. Wheel build adds ~25s per refresh; correctness is worth it.
+- **`make dev` (source-run backend):** `scripts/dev.sh` runs `generate_build_identity.py` and exports `LONGHOUSE_BUILD_IDENTITY_PATH=$PWD/.build/build-identity.json`. `build_info.load()` has exactly one read path — `importlib.resources` for installed wheels, or the explicit env-var path for source runs — chosen by whether the env var is set. This is not a fallback; source-run is a distinct deterministic mode with its own declared input. If the env var is set but the file is missing → `BuildIdentityMissing`. If neither applies → `BuildIdentityMissing`. Always explicit, never inferred.
 
 ### Rust (engine)
 
