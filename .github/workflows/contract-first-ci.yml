@@ -228,6 +228,11 @@ jobs:
     - name: Install XcodeGen
       run: brew install xcodegen
 
+    - name: Stage build identity for iOS bundle
+      run: |
+        python3 scripts/build/generate_build_identity.py
+        bash scripts/build/stage_ios_build_identity.sh
+
     - name: Generate Xcode project
       run: xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
 
