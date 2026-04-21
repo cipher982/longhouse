@@ -1,6 +1,6 @@
 import * as React from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -170,6 +170,50 @@ function makeTurn(overrides: Partial<AgentSessionTurn> = {}): AgentSessionTurn {
   };
 }
 
+function mockWorkspaceState({
+  session,
+  model,
+  turns = [],
+}: {
+  session: AgentSession;
+  model: ReturnType<typeof buildTimelineModel>;
+  turns?: AgentSessionTurn[];
+}) {
+  workspaceMocks.useSessionWorkspace.mockImplementation(() => {
+    const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
+    return {
+      session,
+      sessionLoading: false,
+      sessionError: null,
+      turns,
+      turnsLoading: false,
+      turnsError: null,
+      threadSessions: [session],
+      currentThreadSession: session,
+      headThreadSession: session,
+      isViewingHead: true,
+      totalEntries: model.items.length,
+      loadedEntryCount: model.items.length,
+      items: model.items,
+      eventsLoading: false,
+      eventsError: null,
+      fetchPreviousPage: vi.fn(),
+      hasPreviousPage: false,
+      isFetchingPreviousPage: false,
+      abandonedEvents: 0,
+      showAbandonedBranches: false,
+      setShowAbandonedBranches: vi.fn(),
+      selectedKey,
+      selectedSelection: selectedKey
+        ? (model.selectionMap.get(selectedKey) ?? null)
+        : null,
+      selectKey: setSelectedKey,
+      handleVisibleSelectionChange: vi.fn(),
+      registerTimelineList: vi.fn(),
+    };
+  });
+}
+
 describe("SessionDetailPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -222,40 +266,7 @@ describe("SessionDetailPage", () => {
       },
     ];
     const model = buildTimelineModel(projectionItems);
-
-    workspaceMocks.useSessionWorkspace.mockImplementation(() => {
-      const [selectedKey, setSelectedKey] = React.useState<string | null>(null);
-      return {
-        session,
-        sessionLoading: false,
-        sessionError: null,
-        turns: [],
-        turnsLoading: false,
-        turnsError: null,
-        threadSessions: [session],
-        currentThreadSession: session,
-        headThreadSession: session,
-        isViewingHead: true,
-        totalEntries: model.items.length,
-        loadedEntryCount: model.items.length,
-        items: model.items,
-        eventsLoading: false,
-        eventsError: null,
-        fetchPreviousPage: vi.fn(),
-        hasPreviousPage: false,
-        isFetchingPreviousPage: false,
-        abandonedEvents: 0,
-        showAbandonedBranches: false,
-        setShowAbandonedBranches: vi.fn(),
-        selectedKey,
-        selectedSelection: selectedKey
-          ? (model.selectionMap.get(selectedKey) ?? null)
-          : null,
-        selectKey: setSelectedKey,
-        handleVisibleSelectionChange: vi.fn(),
-        registerTimelineList: vi.fn(),
-      };
-    });
+    mockWorkspaceState({ session, model });
   });
 
   it("renders managed-local Codex detail with live-session controls and preserved tool inspector labels", async () => {
@@ -315,6 +326,122 @@ describe("SessionDetailPage", () => {
     await user.click(toolRow);
 
     expect(screen.getByText("Output")).toBeInTheDocument();
+  });
+
+  it("keeps unresolved live tool calls pending from the row into the inspector", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-22T22:04:30Z"));
+      const session = makeSession({
+        ended_at: null,
+        status: "working",
+        presence_state: "running",
+        active_tool: "Bash",
+        runtime_source: "managed_local_transport",
+        confidence: "live",
+        display_phase: "Running Bash",
+        last_live_at: "2026-03-22T22:04:30Z",
+      });
+      const model = buildTimelineModel([
+        {
+          kind: "event",
+          session_id: session.id,
+          timestamp: "2026-03-22T22:04:00Z",
+          event: {
+            id: 1,
+            role: "assistant",
+            content_text: null,
+            tool_name: "Bash",
+            tool_input_json: null,
+            tool_output_text: null,
+            tool_call_id: "tc-pending",
+            timestamp: "2026-03-22T22:04:00Z",
+            in_active_context: true,
+          },
+        },
+      ]);
+
+      mockWorkspaceState({ session, model });
+      renderSessionDetailPage();
+
+      expect(screen.getByText("Waiting for tool result...")).toBeInTheDocument();
+
+      const toolLabel = screen.getByText("Bash");
+      const toolRow = toolLabel.closest("button");
+      if (!(toolRow instanceof HTMLButtonElement)) {
+        throw new Error("Expected the tool label to live inside a clickable row");
+      }
+
+      fireEvent.click(toolRow);
+
+      const statusItem = screen.getByText("Status").closest(".inspector-meta-item");
+      if (!(statusItem instanceof HTMLElement)) {
+        throw new Error("Expected status metadata in the inspector");
+      }
+      expect(statusItem).toHaveTextContent("Pending");
+      expect(screen.getByText("Result not recorded yet.")).toBeInTheDocument();
+      expect(
+        screen.queryByText("Tool call dropped \u2014 no result was ever recorded."),
+      ).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("marks unresolved ended-session tool calls as dropped in both row and inspector", () => {
+    const session = makeSession({
+      ended_at: "2026-03-22T22:05:00Z",
+      status: "completed",
+      presence_state: "idle",
+      active_tool: null,
+      runtime_source: "managed_local_transport",
+      confidence: "stale",
+      display_phase: "Completed",
+      last_live_at: "2026-03-22T22:05:00Z",
+    });
+    const model = buildTimelineModel([
+      {
+        kind: "event",
+        session_id: session.id,
+        timestamp: "2026-03-22T22:04:00Z",
+        event: {
+          id: 1,
+          role: "assistant",
+          content_text: null,
+          tool_name: "Bash",
+          tool_input_json: null,
+          tool_output_text: null,
+          tool_call_id: "tc-dropped",
+          timestamp: "2026-03-22T22:04:00Z",
+          in_active_context: true,
+        },
+      },
+    ]);
+
+    mockWorkspaceState({ session, model });
+    renderSessionDetailPage();
+
+    expect(
+      screen.getByText("Result not recorded \u2014 tool call dropped."),
+    ).toBeInTheDocument();
+
+    const toolLabel = screen.getByText("Bash");
+    const toolRow = toolLabel.closest("button");
+    if (!(toolRow instanceof HTMLButtonElement)) {
+      throw new Error("Expected the tool label to live inside a clickable row");
+    }
+
+    fireEvent.click(toolRow);
+
+    const statusItem = screen.getByText("Status").closest(".inspector-meta-item");
+    if (!(statusItem instanceof HTMLElement)) {
+      throw new Error("Expected status metadata in the inspector");
+    }
+    expect(statusItem).toHaveTextContent("Dropped");
+    expect(
+      screen.getByText("Tool call dropped \u2014 no result was ever recorded."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Result not recorded yet.")).not.toBeInTheDocument();
   });
 
   it("shows the active turn elapsed counter in the header and control strip", () => {
