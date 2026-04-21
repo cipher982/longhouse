@@ -60,6 +60,9 @@ jobs:
           ref: ${{ needs.gate.outputs.head_sha }}
           fetch-depth: 1
 
+      - name: Stage build identity for runtime image
+        run: python3 scripts/build/generate_build_identity.py
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
