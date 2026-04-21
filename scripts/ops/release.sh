@@ -11,7 +11,10 @@ Usage: release.sh VERSION
 
 Cuts a stable Longhouse release:
   1. Bumps every component manifest (server, engine, runner, control-plane,
-     iOS xcconfig) in lockstep via bump-my-version.
+     iOS xcconfig) to the same shared release version via bump-my-version.
+     Note: this is the release version, not the per-commit build identity.
+     Build identity advances on every commit; release version only moves
+     when you run this script.
   2. Commits + pushes the bump to main.
   3. Creates the GitHub release with tag VERSION (fires publish.yml + local-runtime-release.yml).
   4. Waits for both workflows to finish. Notarization can take up to ~330m in the worst case.
@@ -79,11 +82,11 @@ if [[ "$CURRENT_VERSION" == "$PYVER" ]]; then
   exit 1
 fi
 
-echo "Bumping all manifests from $CURRENT_VERSION to $PYVER (lockstep)..."
+echo "Bumping all manifests from $CURRENT_VERSION to $PYVER (shared release version)..."
 # bump-my-version edits every file listed in .bumpversion.toml and bails
 # if any of them don't contain the expected old version — that's the
-# lockstep guarantee. If you see a mismatch error here, another agent
-# likely hand-edited one of the manifests.
+# shared-version guarantee. If you see a mismatch error here, another
+# agent likely hand-edited one of the manifests.
 (cd "$ROOT" && bump-my-version bump --new-version "$PYVER")
 
 git -C "$ROOT" add \

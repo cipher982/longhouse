@@ -138,14 +138,13 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 longhouse
 
 WORKDIR /app
 
-# Copy backend with virtual environment (includes pysqlite3 from builder)
+# Copy backend with virtual environment (includes pysqlite3 from builder).
+# build-identity.json is already staged into server/zerg/ by
+# scripts/build/generate_build_identity.py before the Docker build
+# context is sent, so importlib.resources.files("zerg") / "build_identity.json"
+# resolves inside the container with no extra COPY.
 COPY --from=backend-builder --chown=longhouse:longhouse /repo/server /app
 COPY --from=backend-builder --chown=longhouse:longhouse /app/longhouse_shared /app/longhouse_shared
-
-# Copy build identity into the package so importlib.resources can find it.
-# `uv sync` installs the project in editable-ish mode that skips force-include,
-# so we materialize the file the same way a wheel would.
-COPY --chown=longhouse:longhouse .build/build-identity.json /app/zerg/build_identity.json
 
 # Copy frontend dist to where backend expects it
 COPY --from=frontend-builder --chown=longhouse:longhouse /app/dist /app/web/dist

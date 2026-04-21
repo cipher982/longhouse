@@ -18,7 +18,23 @@ from zerg.cli.main import app
 from zerg.cli import update_manager
 
 
+class _FakeResource:
+    def __init__(self, raw: str | None) -> None:
+        self._raw = raw
+
+    def is_file(self) -> bool:
+        return self._raw is not None
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        assert self._raw is not None
+        return self._raw
+
+    def __truediv__(self, _other: str) -> "_FakeResource":
+        return self
+
+
 def _install_fake_build_identity(tmp_path: Path, monkeypatch, **overrides) -> dict:
+    del tmp_path  # kept for signature parity; importlib.resources path used instead
     payload = {
         "version": "0.1.5",
         "commit": "cafebabedeadbeefcafebabedeadbeefcafebabe",
@@ -28,9 +44,8 @@ def _install_fake_build_identity(tmp_path: Path, monkeypatch, **overrides) -> di
         "channel": "release",
     }
     payload.update(overrides)
-    identity_file = tmp_path / "build-identity.json"
-    identity_file.write_text(json.dumps(payload))
-    monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(identity_file))
+    raw = json.dumps(payload)
+    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _FakeResource(raw))
     build_info.reset_cache()
     return payload
 
@@ -139,17 +154,8 @@ def test_version_command_json_includes_build_block(monkeypatch, tmp_path):
 
 
 def test_version_command_reports_missing_build_identity(monkeypatch):
-    monkeypatch.delenv("LONGHOUSE_BUILD_IDENTITY_PATH", raising=False)
+    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _FakeResource(None))
     build_info.reset_cache()
-
-    class _MissingRef:
-        def is_file(self) -> bool:
-            return False
-
-        def __truediv__(self, other: str) -> "_MissingRef":
-            return self
-
-    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _MissingRef())
 
     runner = CliRunner()
     result = runner.invoke(app, ["version"])

@@ -35,6 +35,10 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT = REPO_ROOT / ".build" / "build-identity.json"
 PYPROJECT_PATH = REPO_ROOT / "server" / "pyproject.toml"
+# Python loads identity as a package resource. The generator stages it
+# directly into the source tree so editable installs, source runs, and
+# wheels all read the same file with no env-var fallback.
+PYTHON_PACKAGE_OUTPUT = REPO_ROOT / "server" / "zerg" / "build_identity.json"
 
 VERSION_RE = re.compile(r'^version\s*=\s*"([^"]+)"', re.MULTILINE)
 # refs/tags/vX.Y.Z, optionally followed by -prerelease (rc1, beta.2, etc.) or +buildmeta.
@@ -145,10 +149,21 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="also print the JSON to stdout",
     )
+    parser.add_argument(
+        "--skip-python-package",
+        action="store_true",
+        help="skip writing the staged copy under server/zerg/build_identity.json "
+        "(used by unit tests that pass a custom --output in a temp repo).",
+    )
     args = parser.parse_args(argv)
 
     identity = build_identity(repo_root=REPO_ROOT, pyproject_path=args.pyproject_path)
     write_identity(identity, args.output)
+    if not args.skip_python_package:
+        # Stage the same bytes into the Python package tree so
+        # `importlib.resources.files("zerg") / "build_identity.json"` always
+        # resolves, regardless of install mode (editable, wheel, docker).
+        write_identity(identity, PYTHON_PACKAGE_OUTPUT)
     if args.print:
         print(json.dumps(identity, indent=2))
     return 0

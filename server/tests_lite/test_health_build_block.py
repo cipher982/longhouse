@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -31,6 +30,27 @@ VALID_PAYLOAD = {
 }
 
 
+class _FakeResource:
+    def __init__(self, raw: str | None) -> None:
+        self._raw = raw
+
+    def is_file(self) -> bool:
+        return self._raw is not None
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        assert self._raw is not None
+        return self._raw
+
+    def __truediv__(self, _other: str) -> "_FakeResource":
+        return self
+
+
+def _install_resource(monkeypatch: pytest.MonkeyPatch, payload: dict | None) -> None:
+    raw = None if payload is None else json.dumps(payload)
+    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _FakeResource(raw))
+    build_info.reset_cache()
+
+
 @pytest.fixture
 def client():
     from zerg.main import app
@@ -46,11 +66,8 @@ def _reset_cache():
     build_info.reset_cache()
 
 
-def test_health_exposes_build_block(client, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    identity_file = tmp_path / "build-identity.json"
-    identity_file.write_text(json.dumps(VALID_PAYLOAD), encoding="utf-8")
-    monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(identity_file))
-    build_info.reset_cache()
+def test_health_exposes_build_block(client, monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_resource(monkeypatch, VALID_PAYLOAD)
 
     resp = client.get("/api/health")
     assert resp.status_code == 200
@@ -61,17 +78,7 @@ def test_health_exposes_build_block(client, tmp_path: Path, monkeypatch: pytest.
 
 
 def test_health_unhealthy_when_build_identity_missing(client, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LONGHOUSE_BUILD_IDENTITY_PATH", raising=False)
-
-    class _MissingRef:
-        def is_file(self) -> bool:
-            return False
-
-        def __truediv__(self, _other: str) -> "_MissingRef":
-            return self
-
-    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _MissingRef())
-    build_info.reset_cache()
+    _install_resource(monkeypatch, None)
 
     resp = client.get("/api/health")
     body = resp.json()

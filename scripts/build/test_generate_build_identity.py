@@ -220,10 +220,27 @@ class TestMain:
         monkeypatch.setattr(gbi, "PYPROJECT_PATH", pyproject)
 
         out = tmp_path / "out.json"
-        rc = gbi.main(["--output", str(out)])
+        rc = gbi.main(["--output", str(out), "--skip-python-package"])
 
         assert rc == 0
         data = json.loads(out.read_text())
         assert data["version"] == "9.9.9"
         assert data["channel"] == "dev"
         assert data["dirty"] is False
+
+    def test_main_also_stages_python_package(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        repo = _init_repo(tmp_path)
+        pyproject = _write_pyproject(repo, "9.9.9")
+        package_output = tmp_path / "server" / "zerg" / "build_identity.json"
+        monkeypatch.setattr(gbi, "REPO_ROOT", repo)
+        monkeypatch.setattr(gbi, "PYPROJECT_PATH", pyproject)
+        monkeypatch.setattr(gbi, "PYTHON_PACKAGE_OUTPUT", package_output)
+
+        out = tmp_path / "out.json"
+        rc = gbi.main(["--output", str(out)])
+
+        assert rc == 0
+        # Both files must be present with identical content.
+        assert out.exists()
+        assert package_output.exists()
+        assert json.loads(out.read_text()) == json.loads(package_output.read_text())

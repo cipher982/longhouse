@@ -42,10 +42,11 @@ if ! command -v bun &> /dev/null; then
     exit 1
 fi
 
-# Generate build identity for this source run
+# Generate build identity for this source run.
+# The generator stages it both at .build/build-identity.json (for engine builds)
+# and server/zerg/build_identity.json (for Python importlib.resources).
 echo "🔖 Generating build identity..."
 python3 scripts/build/generate_build_identity.py
-export LONGHOUSE_BUILD_IDENTITY_PATH="$PWD/.build/build-identity.json"
 
 # Install backend deps if needed
 if [ ! -d "server/.venv" ]; then

@@ -1,12 +1,13 @@
-# Lockstep release versioning for Longhouse.
+# Shared release version for Longhouse.
 #
 # One semver advances all five component manifests in one shot. Edited
 # only by `bump-my-version bump` via `scripts/ops/release.sh` (or
 # `make release VERSION=vX.Y.Z`). Hand-editing these files drifts the
 # monorepo — if you need to bump mid-flight, run the tool instead.
 #
-# See docs/specs/release-and-build-identity.md for the "why lockstep"
-# reasoning; the short version is one developer, one repo, one cadence.
+# Release version is NOT the same as build identity. Release version
+# moves only on explicit release ceremonies; build identity advances
+# every commit. See docs/specs/release-and-build-identity.md.
 
 [tool.bumpversion]
 current_version = "0.1.15"

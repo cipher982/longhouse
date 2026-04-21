@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 
 import pytest
 from cryptography.fernet import Fernet
@@ -28,6 +27,27 @@ CLI_PAYLOAD = {
 }
 
 
+class _FakeResource:
+    def __init__(self, raw: str | None) -> None:
+        self._raw = raw
+
+    def is_file(self) -> bool:
+        return self._raw is not None
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        assert self._raw is not None
+        return self._raw
+
+    def __truediv__(self, _other: str) -> "_FakeResource":
+        return self
+
+
+def _install_resource(monkeypatch: pytest.MonkeyPatch, payload: dict | None) -> None:
+    raw = None if payload is None else json.dumps(payload)
+    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _FakeResource(raw))
+    build_info.reset_cache()
+
+
 def _engine_status(build: dict | None) -> dict:
     payload: dict = {"version": "0.2.0"}
     if build is not None:
@@ -43,11 +63,8 @@ def _reset_cache():
 
 
 @pytest.fixture
-def _install_cli_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    identity_file = tmp_path / "build-identity.json"
-    identity_file.write_text(json.dumps(CLI_PAYLOAD), encoding="utf-8")
-    monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(identity_file))
-    build_info.reset_cache()
+def _install_cli_identity(monkeypatch: pytest.MonkeyPatch):
+    _install_resource(monkeypatch, CLI_PAYLOAD)
 
 
 def test_no_drift_when_cli_and_engine_agree(_install_cli_identity) -> None:
@@ -112,17 +129,7 @@ def test_engine_build_not_a_mapping_is_tolerated(_install_cli_identity) -> None:
 
 
 def test_cli_identity_missing_surfaces_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LONGHOUSE_BUILD_IDENTITY_PATH", raising=False)
-
-    class _MissingRef:
-        def is_file(self) -> bool:
-            return False
-
-        def __truediv__(self, _other: str) -> "_MissingRef":
-            return self
-
-    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _MissingRef())
-    build_info.reset_cache()
+    _install_resource(monkeypatch, None)
 
     engine_build = {**CLI_PAYLOAD, "commit_short": "ccccc111"}
     result = local_health_service._collect_build_identity(

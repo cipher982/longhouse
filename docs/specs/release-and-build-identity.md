@@ -16,7 +16,7 @@ This spec fixes both.
 
 Every build now has two orthogonal identities:
 
-1. **Release version** — a single semver that advances in lockstep across the whole repo (server, engine, runner, control-plane, ios). Only moves when someone runs `./dev release vX.Y.Z`. This is the user-facing "Longhouse version."
+1. **Release version** — a single shared semver that advances across the whole repo (server, engine, runner, control-plane, ios) in one shot. Only moves when someone runs `make release VERSION=vX.Y.Z`. This is the user-facing "Longhouse version."
 2. **Build identity** — a per-build record: `{version, commit, commit_short, dirty, built_at, channel}`. Stamped at build time, embedded in every artifact. This is the "which commit specifically."
 
 Release version without build identity is a lie for any non-tagged build. Build identity without release version is hard for users to compare. We want both, everywhere.
@@ -52,9 +52,9 @@ Generator lives at `scripts/build/generate_build_identity.py`. Outputs to `.buil
 
 Never show bare semver. If a surface only has room for one string, show the dev/dirty-qualified form — matching plain semver with a non-release build was the bug that started this work.
 
-## Lockstep versioning
+## Shared release versioning
 
-One release number advances all four component manifests plus iOS in one shot.
+One release number advances all four component manifests plus iOS in one shot. This is the release version, not build identity — release version moves only on explicit release ceremonies; build identity advances every commit.
 
 **Tool:** `bump-my-version` (maintained successor to `bump2version`). Config in `.bumpversion.toml` at repo root. Files it edits:
 
@@ -64,17 +64,15 @@ One release number advances all four component manifests plus iOS in one shot.
 - `control-plane/pyproject.toml`
 - `ios/XcodeHarness/Configs/Version.xcconfig` — **new**; `MARKETING_VERSION` / `CURRENT_PROJECT_VERSION` move out of `project.yml` `settings.base` into this xcconfig so a key=value editor can touch them cleanly. `project.yml` gets `Version.xcconfig` added to `configFiles` so XcodeGen picks it up.
 
-`./dev release vX.Y.Z` (replaces `make release VERSION=vX.Y.Z`):
+`make release VERSION=vX.Y.Z`:
 1. Preflight: clean tree, on main, local == origin/main, tag doesn't exist.
-2. Run `bump-my-version bump --new-version X.Y.Z`. This edits all five files, commits, tags `vX.Y.Z`.
-3. Push the bump commit and tag.
-4. Create GitHub release, wait for `publish.yml` + `local-runtime-release.yml`, verify assets + notarization.
+2. Run `bump-my-version bump --new-version X.Y.Z`. This edits all five files.
+3. Commit the bump, push to main, create GitHub release.
+4. Wait for `publish.yml` + `local-runtime-release.yml`, verify assets + notarization.
 
-Steps 3–4 reuse the existing `scripts/ops/release.sh` machinery; we only replace step 2.
+### Why share one number
 
-### Why lockstep
-
-Split semvers exist to serve independent release cadence or external consumers. Longhouse has neither. Engine, runner, control-plane, and iOS ship from one monorepo with one dev. Lockstep is the less-complex option — one number to reason about, one release to cut. iOS "wastes" a rebuild when iOS code didn't change; that's ~30s of Xcode for product coherence.
+Split semvers exist to serve independent release cadence or external consumers. Longhouse has neither. Engine, runner, control-plane, and iOS ship from one monorepo with one dev. One shared number is the less-complex option — one number to reason about, one release to cut. iOS "wastes" a rebuild when iOS code didn't change; that's ~30s of Xcode for product coherence.
 
 If we ever hire someone who owns `runner` as a product with its own cadence, split then. Unsplitting a drifted repo is the hard direction.
 
@@ -104,19 +102,17 @@ Every artifact carries its identity **inside itself**. No home-directory or othe
 
 ### Python (server, control-plane)
 
-- `generate_build_identity.py` runs before any `uv build`.
-- Hatch's `[tool.hatch.build.targets.wheel.force-include]` bundles `.build/build-identity.json` as package data.
-  - server wheel → `zerg/build_identity.json`
-  - control-plane wheel → `longhouse_control_plane/build_identity.json`
-  - Each package reads its own copy via `importlib.resources` — no cross-package imports.
-- Runtime reader: `zerg.build_info.load()` (and sibling in control-plane) reads the bundled resource. Missing resource → raise `BuildIdentityMissing`; the CLI surfaces that as "build identity missing — rebuild."
-- No editable-install fallback. `./dev refresh` / `make dogfood-refresh` builds a wheel and installs it, not `uv pip install -e`. Wheel build adds ~25s per refresh; correctness is worth it.
-- **`make dev` (source-run backend):** `scripts/dev.sh` runs `generate_build_identity.py` and exports `LONGHOUSE_BUILD_IDENTITY_PATH=$PWD/.build/build-identity.json`. `build_info.load()` has exactly one read path — `importlib.resources` for installed wheels, or the explicit env-var path for source runs — chosen by whether the env var is set. This is not a fallback; source-run is a distinct deterministic mode with its own declared input. If the env var is set but the file is missing → `BuildIdentityMissing`. If neither applies → `BuildIdentityMissing`. Always explicit, never inferred.
+- `generate_build_identity.py` runs before any `uv build`. It writes `.build/build-identity.json` and simultaneously stages the file into each Python package tree (e.g. `server/zerg/build_identity.json`).
+- Each package reads its own copy via `importlib.resources` — no cross-package imports.
+- Runtime reader: `zerg.build_info.load()` (and sibling in control-plane) reads the staged resource. Missing resource → raise `BuildIdentityMissing`; the CLI surfaces that as "build identity missing — rebuild."
+- No editable-install fallback. `make dogfood-refresh` builds a wheel and installs it, not `uv pip install -e`. Wheel build adds ~25s per refresh; correctness is worth it.
+- **`make dev` (source-run backend):** `scripts/dev.sh` runs `generate_build_identity.py` first, which stages the resource into `server/zerg/build_identity.json`. Source runs read via `importlib.resources` like installed wheels — one read path, no env-var fallback. If the resource is missing → `BuildIdentityMissing`. Always explicit, never inferred.
 
 ### Rust (engine)
 
 - Minimal `build.rs` at `engine/build.rs`: reads `../.build/build-identity.json`, parses JSON, emits `cargo::rustc-env=LONGHOUSE_BUILD_{VERSION,COMMIT,COMMIT_SHORT,DIRTY,BUILT_AT,CHANNEL}`.
-- Declares exactly one `cargo::rerun-if-changed=../.build/build-identity.json` plus `cargo::rerun-if-env-changed=LONGHOUSE_BUILD_IDENTITY_PATH` to keep rebuilds surgical. Cargo only re-runs the build script when the identity file changes.
+- Declares `cargo::rerun-if-changed=../.build/build-identity.json` to keep rebuilds surgical. Cargo only re-runs the build script when the identity file changes.
+- Freshness guard: when `git` is available in the build environment, `build.rs` compares the staged identity's `commit` field to `git rev-parse HEAD` and fails the build on mismatch. Catches the case where cargo runs before `generate_build_identity.py` regenerates the file.
 - Engine source: `const BUILD: &str = env!("LONGHOUSE_BUILD_COMMIT_SHORT");` etc., aggregated into a `BuildIdentity` struct. Missing env vars → compile error (build-identity.json absent ⇒ build fails).
 - `longhouse-engine --version` prints the qualified string.
 - On startup, engine writes its identity into `~/.claude/engine-status.json` under a `build` key. Menu bar reads from there.
@@ -156,7 +152,7 @@ The Makefile / `scripts/` sprawl problem is real but orthogonal. Tracked as a se
 
 - Hardcoded `"0.1.15-local"` fallback strings wherever they appear.
 - `/api/version` and version-duplicating fields on `/api/system/info` (collapsed into `/api/health`).
-- The `0.1.0` placeholder versions in `engine/Cargo.toml`, `runner/package.json`, `control-plane/pyproject.toml`, iOS xcconfig — all become lockstep.
+- The `0.1.0` placeholder versions in `engine/Cargo.toml`, `runner/package.json`, `control-plane/pyproject.toml`, iOS xcconfig — all share the one release number.
 - `release.sh`'s custom Python in-line semver rewriter (replaced by `bump-my-version`).
 
 ## Phases
@@ -166,7 +162,7 @@ The Makefile / `scripts/` sprawl problem is real but orthogonal. Tracked as a se
 3. **P2** — Python build-identity module, CLI `--version`, `/api/health` `build` block. Wheel force-includes the JSON. `make dogfood-refresh` switches to wheel build+install.
 4. **P3** — Engine `build.rs` + `BuildIdentity` struct. `longhouse-engine --version` prints qualified string. Engine stamps identity into `~/.claude/engine-status.json`. Menu bar reads and displays. Drift detection (CLI vs engine vs app short SHAs).
 5. **P4** — iOS xcconfig + XcodeGen build phase + Swift reader + About screen.
-6. **P5** — `.bumpversion.toml` + lockstep wrapper replacing the in-line semver rewriter in `release.sh`.
+6. **P5** — `.bumpversion.toml` + shared-version wrapper replacing the in-line semver rewriter in `release.sh`.
 7. **P6** — cleanup: strip hardcoded `0.1.15-local` fallback strings, kill `/api/version` if redundant, record AGENTS.md learning.
 
 After each phase: commit, Codex hatch review, address findings, then move on.

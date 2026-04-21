@@ -27,10 +27,9 @@ docker/*
 !docker/runtime.dockerfile
 !docker/entrypoint.sh
 
-# Build identity is generated per-build by scripts/build/generate_build_identity.py.
-# The runtime image copies it so /api/health can report provenance.
-!.build/
-!.build/build-identity.json
+# Build identity is generated per-build by scripts/build/generate_build_identity.py
+# and staged directly into server/zerg/build_identity.json, so it rides along
+# via the `!server/` allowlist above — no extra .build/ allowlist needed.
 
 # Ignore heavyweight/generated content inside the allowlisted trees.
 server/.venv

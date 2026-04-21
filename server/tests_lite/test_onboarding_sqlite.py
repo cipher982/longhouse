@@ -111,32 +111,43 @@ print("SUCCESS: All SQLite onboarding tests passed")
         env["SINGLE_TENANT"] = "1"
         env["FERNET_SECRET"] = Fernet.generate_key().decode()
 
-        # Provide a build-identity file so /api/health can load one without
-        # needing a real build to have run. Without this /api/health flips
-        # to unhealthy because build identity is missing.
+        # Ensure a build-identity resource exists for the subprocess. The
+        # loader reads `importlib.resources.files("zerg") / "build_identity.json"`,
+        # so we stage a placeholder inside the live `zerg/` package directory if
+        # the dev/CI generator has not run yet. The subprocess honors whichever
+        # file is present at subprocess launch.
         import json as _json
-        identity_file = Path(tmp_dir) / "build-identity.json"
-        identity_file.write_text(
-            _json.dumps(
-                {
-                    "version": "0.0.0",
-                    "commit": "0" * 40,
-                    "commit_short": "00000000",
-                    "dirty": False,
-                    "built_at": "2026-04-21T00:00:00Z",
-                    "channel": "dev",
-                }
+        staged = Path(__file__).resolve().parent.parent / "zerg" / "build_identity.json"
+        staged_existed = staged.exists()
+        if not staged_existed:
+            staged.write_text(
+                _json.dumps(
+                    {
+                        "version": "0.0.0",
+                        "commit": "0" * 40,
+                        "commit_short": "00000000",
+                        "dirty": False,
+                        "built_at": "2026-04-21T00:00:00Z",
+                        "channel": "dev",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
             )
-        )
-        env["LONGHOUSE_BUILD_IDENTITY_PATH"] = str(identity_file)
 
-        result = subprocess.run(
-            [sys.executable, "-c", script],
-            capture_output=True,
-            text=True,
-            cwd=Path(__file__).parent.parent,  # Run from backend dir
-            env=env,
-        )
+        try:
+            result = subprocess.run(
+                [sys.executable, "-c", script],
+                capture_output=True,
+                text=True,
+                cwd=Path(__file__).parent.parent,  # Run from backend dir
+                env=env,
+            )
+        finally:
+            # Only clean up a placeholder we wrote ourselves — never delete a
+            # real generator-staged identity that the rest of the suite relies on.
+            if not staged_existed and staged.exists():
+                staged.unlink()
 
         # Print output for debugging
         if result.stdout:

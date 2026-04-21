@@ -258,3 +258,4 @@ video/public/audio/
 # Build identity — regenerated per build by scripts/build/generate_build_identity.py
 .build/
 ios/Resources/build-identity.json
+server/zerg/build_identity.json
