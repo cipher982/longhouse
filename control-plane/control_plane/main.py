@@ -49,7 +49,7 @@ async def _lifespan(_app: FastAPI):
         _reconciler_task.cancel()
 
 
-app = FastAPI(title="Longhouse Control Plane", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="Longhouse Control Plane", lifespan=_lifespan)
 
 app.state.limiter = auth.limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
