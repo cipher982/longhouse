@@ -1,0 +1,4 @@
+// Top-level xcconfig for the Longhouse app + widget targets.
+// Chains in Signing (local team) and Version (lockstep release number).
+#include "Signing.xcconfig"
+#include "Version.xcconfig"

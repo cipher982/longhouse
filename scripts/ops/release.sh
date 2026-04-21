@@ -10,7 +10,8 @@ Usage: release.sh VERSION
   VERSION is the tag to cut (e.g. v0.1.13).
 
 Cuts a stable Longhouse release:
-  1. Bumps server/pyproject.toml version to match VERSION.
+  1. Bumps every component manifest (server, engine, runner, control-plane,
+     iOS xcconfig) in lockstep via bump-my-version.
   2. Commits + pushes the bump to main.
   3. Creates the GitHub release with tag VERSION (fires publish.yml + local-runtime-release.yml).
   4. Waits for both workflows to finish. Notarization can take up to ~330m in the worst case.
@@ -67,33 +68,31 @@ if git -C "$ROOT" ls-remote --tags origin "refs/tags/$VERSION" | grep -q "$VERSI
   exit 1
 fi
 
+if ! command -v bump-my-version >/dev/null 2>&1; then
+  echo "bump-my-version not found on PATH. Install with: uv tool install bump-my-version" >&2
+  exit 1
+fi
+
 CURRENT_VERSION="$(grep -E '^version\s*=' "$PYPROJECT" | head -1 | sed -E 's/version *= *"([^"]+)".*/\1/')"
 if [[ "$CURRENT_VERSION" == "$PYVER" ]]; then
   echo "pyproject.toml is already at $PYVER. Bump to a new version first." >&2
   exit 1
 fi
 
-echo "Bumping pyproject.toml from $CURRENT_VERSION to $PYVER..."
-python3 -c "
-import sys
-from pathlib import Path
-path = Path('$PYPROJECT')
-text = path.read_text()
-new = []
-found = False
-for line in text.splitlines(keepends=True):
-    if not found and line.startswith('version'):
-        new.append(f'version = \"$PYVER\"\n')
-        found = True
-    else:
-        new.append(line)
-if not found:
-    print('Could not find version line', file=sys.stderr)
-    sys.exit(1)
-path.write_text(''.join(new))
-"
+echo "Bumping all manifests from $CURRENT_VERSION to $PYVER (lockstep)..."
+# bump-my-version edits every file listed in .bumpversion.toml and bails
+# if any of them don't contain the expected old version — that's the
+# lockstep guarantee. If you see a mismatch error here, another agent
+# likely hand-edited one of the manifests.
+(cd "$ROOT" && bump-my-version bump --new-version "$PYVER")
 
-git -C "$ROOT" add server/pyproject.toml
+git -C "$ROOT" add \
+  server/pyproject.toml \
+  engine/Cargo.toml \
+  runner/package.json \
+  control-plane/pyproject.toml \
+  ios/XcodeHarness/Configs/Version.xcconfig \
+  .bumpversion.toml
 git -C "$ROOT" commit -m "Bump version to $PYVER"
 BUMP_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 echo "Bump commit: ${BUMP_SHA:0:10}"
