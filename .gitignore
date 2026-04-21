@@ -9,6 +9,7 @@ __pycache__/
 # Distribution / packaging
 .Python
 build/
+!scripts/build/
 develop-eggs/
 dist/
 downloads/
@@ -253,3 +254,6 @@ video/out/
 video/public/clips/
 video/public/audio-clips/
 video/public/audio/
+
+# Build identity — regenerated per build by scripts/build/generate_build_identity.py
+.build/
