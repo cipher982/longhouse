@@ -108,6 +108,73 @@ struct BuildIdentityTests {
     }
 
     @Test
+    func rejectsDirtyAsString() throws {
+        // Same footgun the Rust build.rs and Python loader already reject:
+        // a JSON string "true" for dirty instead of a bool. If Swift
+        // accepted this silently, the qualified-version formatter would
+        // crash-default to the clean-dev branch.
+        let payload = Self.dirtyDevPayload.replacingOccurrences(
+            of: "\"dirty\": true",
+            with: "\"dirty\": \"true\""
+        )
+        let data = try #require(payload.data(using: .utf8))
+        switch BuildIdentityLoader.decode(data) {
+        case .success(let identity):
+            Issue.record("expected failure, got \(identity)")
+        case .failure(let err):
+            if case .decodeFailed = err {
+                // JSONDecoder's type mismatch surfaces as decodeFailed —
+                // matches the Rust `non-bool dirty value` rejection.
+            } else {
+                Issue.record("expected decodeFailed, got \(err)")
+            }
+        }
+    }
+
+    @Test
+    func loadFromBundleReturnsResourceMissingWhenJsonAbsent() throws {
+        // Empty temp directory has no bundles inside it; Bundle init
+        // returns a bundle whose url(forResource:withExtension:) always
+        // fails. That exercises the actual load(from:) code path — not
+        // just decode().
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BuildIdentityTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let bundle = try #require(Bundle(url: tempDir))
+        switch BuildIdentityLoader.load(from: bundle) {
+        case .success(let identity):
+            Issue.record("expected failure, got \(identity)")
+        case .failure(let err):
+            #expect(err == .resourceMissing)
+        }
+    }
+
+    @Test
+    func loadFromBundleDecodesBundledJson() throws {
+        // Write a valid identity into a bundle directory and round-trip
+        // through load(from:) so we cover the actual resource-loading
+        // path, not just raw decode().
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BuildIdentityTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let jsonURL = tempDir.appendingPathComponent("build-identity.json")
+        let data = try #require(Self.releasePayload.data(using: .utf8))
+        try data.write(to: jsonURL)
+
+        let bundle = try #require(Bundle(url: tempDir))
+        switch BuildIdentityLoader.load(from: bundle) {
+        case .success(let identity):
+            #expect(identity.qualifiedVersion == "0.2.0 (b672fcca)")
+        case .failure(let err):
+            Issue.record("expected success, got \(err)")
+        }
+    }
+
+    @Test
     func rejectsMalformedJson() throws {
         let data = try #require("not json".data(using: .utf8))
         switch BuildIdentityLoader.decode(data) {
