@@ -3309,6 +3309,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/sessions/archive-manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Archive Manifest
+         * @description List sessions for archive sync/backfill without product-surface pagination limits.
+         *
+         *     `days_back` applies to recent session activity, not strictly to session start.
+         *     Full-fidelity archival callers should pass `include_test=true` and
+         *     `hide_autonomous=false` explicitly.
+         */
+        get: operations["list_archive_manifest_agents_sessions_archive_manifest_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/sessions/startup-context": {
         parameters: {
             query?: never;
@@ -6767,6 +6791,59 @@ export interface components {
             session: components["schemas"]["SessionArchiveSessionResponse"];
             /** @description Encoded raw archive payload */
             archive: components["schemas"]["SessionArchivePayloadResponse"];
+        };
+        /** SessionArchiveManifestItemResponse */
+        SessionArchiveManifestItemResponse: {
+            /**
+             * Id
+             * @description Session UUID
+             */
+            id: string;
+            /**
+             * Started At
+             * Format: date-time
+             * @description Session start time
+             */
+            started_at: string;
+            /**
+             * Last Activity At
+             * @description Latest transcript activity timestamp
+             */
+            last_activity_at?: string | null;
+            /**
+             * Transcript Revision
+             * @description Current transcript revision
+             */
+            transcript_revision: number;
+            /**
+             * Provider
+             * @description Session provider
+             */
+            provider: string;
+            /**
+             * Project
+             * @description Project name
+             */
+            project?: string | null;
+            /**
+             * Is Sidechain
+             * @description True when session is a task/sub-agent session
+             * @default false
+             */
+            is_sidechain: boolean;
+        };
+        /** SessionArchiveManifestResponse */
+        SessionArchiveManifestResponse: {
+            /**
+             * Sessions
+             * @description Archive-eligible sessions
+             */
+            sessions: components["schemas"]["SessionArchiveManifestItemResponse"][];
+            /**
+             * Total
+             * @description Total matching sessions
+             */
+            total: number;
         };
         /** SessionArchivePayloadResponse */
         SessionArchivePayloadResponse: {
@@ -14178,6 +14255,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SessionsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_archive_manifest_agents_sessions_archive_manifest_get: {
+        parameters: {
+            query?: {
+                /** @description Include test/e2e sessions in archive enumeration */
+                include_test?: boolean;
+                /** @description Hide autonomous sessions from archive enumeration */
+                hide_autonomous?: boolean;
+                /** @description Days to look back */
+                days_back?: number;
+                /** @description Max results */
+                limit?: number;
+                /** @description Offset for pagination */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArchiveManifestResponse"];
                 };
             };
             /** @description Validation Error */
