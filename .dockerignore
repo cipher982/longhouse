@@ -27,6 +27,11 @@ docker/*
 !docker/runtime.dockerfile
 !docker/entrypoint.sh
 
+# Build identity is generated per-build by scripts/build/generate_build_identity.py.
+# The runtime image copies it so /api/health can report provenance.
+!.build/
+!.build/build-identity.json
+
 # Ignore heavyweight/generated content inside the allowlisted trees.
 server/.venv
 server/.venv/**
