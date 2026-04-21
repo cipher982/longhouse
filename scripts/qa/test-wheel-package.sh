@@ -16,6 +16,9 @@ require_cmd bun
 require_cmd uv
 require_cmd python3
 
+echo "🔖 Generating build identity..."
+python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
+
 echo "🏗️  Building frontend dist for wheel packaging..."
 (
   cd "$ROOT_DIR"

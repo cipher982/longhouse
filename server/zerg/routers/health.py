@@ -118,8 +118,18 @@ async def readyz_check():
 @router.head("/health", operation_id="health_check_head", include_in_schema=False)
 async def health_check():
     """Readiness probe: core dependencies are available."""
+    from zerg.build_info import BuildIdentityMissing
+    from zerg.build_info import load as load_build_identity
+
     _settings = get_settings()
     health_status = {"status": "healthy", "message": "Longhouse API is running"}
+
+    try:
+        health_status["build"] = load_build_identity().as_dict()
+    except BuildIdentityMissing as exc:
+        health_status["status"] = "unhealthy"
+        health_status["build"] = {"error": "missing", "detail": str(exc)}
+
     checks = {}
 
     # 0. Single-tenant violation check

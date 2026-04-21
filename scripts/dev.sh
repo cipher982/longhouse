@@ -42,6 +42,11 @@ if ! command -v bun &> /dev/null; then
     exit 1
 fi
 
+# Generate build identity for this source run
+echo "🔖 Generating build identity..."
+python3 scripts/build/generate_build_identity.py
+export LONGHOUSE_BUILD_IDENTITY_PATH="$PWD/.build/build-identity.json"
+
 # Install backend deps if needed
 if [ ! -d "server/.venv" ]; then
     echo "📦 Installing backend dependencies..."

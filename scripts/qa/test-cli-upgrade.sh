@@ -132,6 +132,10 @@ prepare_pkg() {
   cp -R "$ROOT_DIR/desktop/LonghouseMenuBarHarness/Sources" "$target/desktop/LonghouseMenuBarHarness/Sources"
   cp -R "$ROOT_DIR/desktop/LonghouseMenuBarHarness/Fixtures" "$target/desktop/LonghouseMenuBarHarness/Fixtures"
   perl -0pi -e 's/^version = "[^"]+"/version = "'"$version"'"/m' "$target/server/pyproject.toml"
+  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" \
+    --output "$target/.build/build-identity.json" \
+    --pyproject-path "$target/server/pyproject.toml" \
+    >/dev/null
   (
     cd "$target/server"
     uv build --wheel >/dev/null

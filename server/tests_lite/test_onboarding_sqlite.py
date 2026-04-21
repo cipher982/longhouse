@@ -111,6 +111,25 @@ print("SUCCESS: All SQLite onboarding tests passed")
         env["SINGLE_TENANT"] = "1"
         env["FERNET_SECRET"] = Fernet.generate_key().decode()
 
+        # Provide a build-identity file so /api/health can load one without
+        # needing a real build to have run. Without this /api/health flips
+        # to unhealthy because build identity is missing.
+        import json as _json
+        identity_file = Path(tmp_dir) / "build-identity.json"
+        identity_file.write_text(
+            _json.dumps(
+                {
+                    "version": "0.0.0",
+                    "commit": "0" * 40,
+                    "commit_short": "00000000",
+                    "dirty": False,
+                    "built_at": "2026-04-21T00:00:00Z",
+                    "channel": "dev",
+                }
+            )
+        )
+        env["LONGHOUSE_BUILD_IDENTITY_PATH"] = str(identity_file)
+
         result = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True,

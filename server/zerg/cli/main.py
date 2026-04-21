@@ -2,11 +2,12 @@
 
 import json
 import sys
-from importlib import metadata
 
 import typer
 
 import zerg.bootstrap_sqlite  # noqa: F401
+from zerg.build_info import BuildIdentityMissing
+from zerg.build_info import load as load_build_identity
 from zerg.cli.claude import claude
 from zerg.cli.claude_channel import app as claude_channel_app
 from zerg.cli.codex import codex
@@ -45,7 +46,12 @@ app = typer.Typer(
 def _version_callback(value: bool) -> None:
     if not value:
         return
-    typer.echo(f"longhouse {metadata.version('longhouse')}")
+    try:
+        identity = load_build_identity()
+    except BuildIdentityMissing as exc:
+        typer.echo(f"longhouse: build identity missing — rebuild. ({exc})", err=True)
+        raise typer.Exit(code=2)
+    typer.echo(f"longhouse {identity.qualified_version}")
     raise typer.Exit()
 
 
