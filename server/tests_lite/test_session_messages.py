@@ -595,6 +595,78 @@ def test_presence_safe_transition_stops_drain_when_session_leaves_safe_boundary(
         api_app_ref.dependency_overrides = {}
 
 
+def test_presence_stale_safe_payload_does_not_deliver_when_canonical_state_is_busy(monkeypatch, tmp_path):
+    session_local = _make_db(tmp_path)
+
+    with session_local() as db:
+        from_session = _seed_session(db, execution_home="legacy")
+        to_session = _seed_session(
+            db,
+            execution_home="managed_local",
+            managed_transport="claude_channel_bridge",
+            source_runner_id=7,
+            source_runner_name="cinder",
+            device_id="cinder",
+            device_name="cinder",
+        )
+        db.add(
+            SessionMessage(
+                from_session_id=from_session.id,
+                to_session_id=to_session.id,
+                body="Do not deliver from stale idle.",
+                delivery_status="queued",
+            )
+        )
+        db.commit()
+
+    async def fail_if_called(**_kwargs):
+        raise AssertionError("stale safe payload should not deliver when canonical state stays blocked")
+
+    monkeypatch.setattr("zerg.services.live_session_dispatch.send_text_to_live_session", fail_if_called)
+
+    client, api_app_ref = _make_client(session_local)
+    now = datetime.now(timezone.utc)
+    try:
+        blocked_response = client.post(
+            "/api/agents/presence",
+            json={
+                "session_id": str(to_session.id),
+                "state": "blocked",
+                "tool_name": "Bash",
+                "cwd": "/Users/davidrose/git/zerg",
+                "provider": "claude",
+                "occurred_at": now.isoformat(),
+                "dedupe_key": "blocked-new",
+            },
+        )
+        assert blocked_response.status_code == 204, blocked_response.text
+
+        stale_idle_response = client.post(
+            "/api/agents/presence",
+            json={
+                "session_id": str(to_session.id),
+                "state": "idle",
+                "cwd": "/Users/davidrose/git/zerg",
+                "provider": "claude",
+                "occurred_at": (now - timedelta(seconds=30)).isoformat(),
+                "dedupe_key": "idle-old",
+            },
+        )
+        assert stale_idle_response.status_code == 204, stale_idle_response.text
+
+        with session_local() as verify_db:
+            message = verify_db.query(SessionMessage).one()
+            assert message.delivery_status == "queued"
+            state = (
+                verify_db.query(SessionRuntimeState)
+                .filter(SessionRuntimeState.session_id == to_session.id)
+                .one()
+            )
+            assert state.phase == "blocked"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
 def test_create_message_stored_only_for_unmanaged_target(monkeypatch, tmp_path):
     session_local = _make_db(tmp_path)
 

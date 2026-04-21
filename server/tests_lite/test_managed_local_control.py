@@ -19,6 +19,7 @@ from zerg.database import make_sessionmaker
 from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionRuntimeEvent
+from zerg.models.agents import SessionRuntimeState
 from zerg.models.enums import UserRole
 from zerg.models.models import Runner
 from zerg.models.user import User
@@ -87,6 +88,71 @@ def _seed_user_runner_and_session(db, *, provider: str = "claude"):
     db.commit()
     db.refresh(session)
     return user, runner, session
+
+
+def _materialize_hook_runtime_state(
+    db,
+    *,
+    session: AgentSession,
+    phase: str,
+    occurred_at: datetime,
+    event_id: int | None = None,
+    tool_name: str | None = None,
+):
+    runtime_key = f"{session.provider}:{session.id}"
+    event = SessionRuntimeEvent(
+        id=event_id,
+        runtime_key=runtime_key,
+        session_id=session.id,
+        provider=session.provider,
+        device_id=session.device_id,
+        source="claude_hook",
+        kind="phase_signal",
+        phase=phase,
+        tool_name=tool_name,
+        occurred_at=occurred_at,
+        freshness_ms=90_000,
+        dedupe_key=f"hook:{session.id}:{phase}:{occurred_at.timestamp()}",
+        payload_json="{}",
+    )
+    db.add(event)
+    db.flush()
+
+    state = db.query(SessionRuntimeState).filter(SessionRuntimeState.runtime_key == runtime_key).first()
+    if state is None:
+        state = SessionRuntimeState(
+            runtime_key=runtime_key,
+            session_id=session.id,
+            provider=session.provider,
+            device_id=session.device_id,
+            phase=phase,
+            phase_source="semantic",
+            active_tool=tool_name,
+            phase_started_at=occurred_at,
+            last_runtime_signal_at=occurred_at,
+            last_progress_at=None,
+            last_live_at=occurred_at,
+            timeline_anchor_at=occurred_at,
+            freshness_expires_at=occurred_at,
+            terminal_state=None,
+            terminal_at=None,
+            runtime_version=1,
+        )
+        db.add(state)
+    else:
+        state.phase = phase
+        state.phase_source = "semantic"
+        state.active_tool = tool_name
+        state.phase_started_at = occurred_at
+        state.last_runtime_signal_at = occurred_at
+        state.last_live_at = occurred_at
+        state.timeline_anchor_at = occurred_at
+        state.freshness_expires_at = occurred_at
+        state.terminal_state = None
+        state.terminal_at = None
+        state.runtime_version = int(getattr(state, "runtime_version", 0) or 0) + 1
+    db.flush()
+    return event
 
 
 class _FakeDispatcher:
@@ -262,6 +328,60 @@ def test_send_text_to_managed_local_session_supports_repeated_claude_sends(monke
         assert "continue alpha" in first_command
         assert "exec longhouse claude-channel send --session-id" in second_command
         assert "status? [ok]" in second_command
+
+
+def test_await_managed_local_hook_phase_update_ignores_stale_active_event_inserted_after_cursor(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        baseline_event = _materialize_hook_runtime_state(
+            db,
+            session=session,
+            phase="thinking",
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.commit()
+        baseline_runtime_event_id = int(baseline_event.id)
+        baseline_occurred_at = baseline_event.occurred_at
+
+        async def _insert_later():
+            await asyncio.sleep(0.05)
+            with SessionLocal() as event_db:
+                event_db.add(
+                    SessionRuntimeEvent(
+                        runtime_key=f"claude:{session.id}",
+                        session_id=session.id,
+                        provider="claude",
+                        device_id="cinder",
+                        source="claude_hook",
+                        kind="phase_signal",
+                        phase="running",
+                        tool_name="Bash",
+                        occurred_at=baseline_occurred_at,
+                        freshness_ms=600_000,
+                        dedupe_key=f"hook:{session.id}:running-stale-after-cursor",
+                        payload_json="{}",
+                    )
+                )
+                event_db.commit()
+
+        async def _run_wait():
+            writer = asyncio.create_task(_insert_later())
+            try:
+                return await await_managed_local_hook_phase_update(
+                    db_bind=db.get_bind(),
+                    session_id=session.id,
+                    after_runtime_event_id=baseline_runtime_event_id,
+                    phases={"thinking", "running"},
+                    timeout_secs=0.2,
+                    poll_interval_secs=0.02,
+                )
+            finally:
+                await writer
+
+        result = asyncio.run(_run_wait())
+        assert result is None
 
 
 def test_send_text_to_managed_local_session_uses_claude_channel_bridge_command(monkeypatch, tmp_path):
@@ -540,37 +660,18 @@ def test_await_managed_local_turn_terminal_returns_blocked_after_active_hook_pha
         async def _insert_later():
             await asyncio.sleep(0.05)
             with SessionLocal() as event_db:
-                event_db.add_all(
-                    [
-                        SessionRuntimeEvent(
-                            runtime_key=f"claude:{session.id}",
-                            session_id=session.id,
-                            provider="claude",
-                            device_id="cinder",
-                            source="claude_hook",
-                            kind="phase_signal",
-                            phase="thinking",
-                            tool_name=None,
-                            occurred_at=datetime.now(timezone.utc),
-                            freshness_ms=90_000,
-                            dedupe_key=f"hook:{session.id}:thinking",
-                            payload_json="{}",
-                        ),
-                        SessionRuntimeEvent(
-                            runtime_key=f"claude:{session.id}",
-                            session_id=session.id,
-                            provider="claude",
-                            device_id="cinder",
-                            source="claude_hook",
-                            kind="phase_signal",
-                            phase="blocked",
-                            tool_name="Bash",
-                            occurred_at=datetime.now(timezone.utc),
-                            freshness_ms=86_400_000,
-                            dedupe_key=f"hook:{session.id}:blocked",
-                            payload_json="{}",
-                        ),
-                    ]
+                _materialize_hook_runtime_state(
+                    event_db,
+                    session=session,
+                    phase="thinking",
+                    occurred_at=datetime.now(timezone.utc),
+                )
+                _materialize_hook_runtime_state(
+                    event_db,
+                    session=session,
+                    phase="blocked",
+                    tool_name="Bash",
+                    occurred_at=datetime.now(timezone.utc),
                 )
                 event_db.commit()
 
@@ -598,21 +699,12 @@ def test_await_managed_local_turn_terminal_ignores_terminal_before_runtime_curso
 
     with SessionLocal() as db:
         _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
-        stale_event = SessionRuntimeEvent(
-            runtime_key=f"claude:{session.id}",
-            session_id=session.id,
-            provider="claude",
-            device_id="cinder",
-            source="claude_hook",
-            kind="phase_signal",
+        stale_event = _materialize_hook_runtime_state(
+            db,
+            session=session,
             phase="idle",
-            tool_name=None,
             occurred_at=datetime.now(timezone.utc),
-            freshness_ms=600_000,
-            dedupe_key=f"hook:{session.id}:idle",
-            payload_json="{}",
         )
-        db.add(stale_event)
         db.commit()
         baseline_runtime_event_id = int(stale_event.id)
 
@@ -638,21 +730,11 @@ def test_await_managed_local_turn_terminal_accepts_runtime_terminal_without_acti
         async def _insert_later():
             await asyncio.sleep(0.05)
             with SessionLocal() as event_db:
-                event_db.add(
-                    SessionRuntimeEvent(
-                        runtime_key=f"claude:{session.id}",
-                        session_id=session.id,
-                        provider="claude",
-                        device_id="cinder",
-                        source="claude_hook",
-                        kind="phase_signal",
-                        phase="idle",
-                        tool_name=None,
-                        occurred_at=datetime.now(timezone.utc),
-                        freshness_ms=600_000,
-                        dedupe_key=f"hook:{session.id}:idle",
-                        payload_json="{}",
-                    )
+                _materialize_hook_runtime_state(
+                    event_db,
+                    session=session,
+                    phase="idle",
+                    occurred_at=datetime.now(timezone.utc),
                 )
                 event_db.commit()
 
@@ -674,6 +756,59 @@ def test_await_managed_local_turn_terminal_accepts_runtime_terminal_without_acti
         assert result is not None
         assert result.phase == "idle"
         assert result.control_status == "completed"
+
+
+def test_await_managed_local_turn_terminal_ignores_stale_terminal_inserted_after_cursor(tmp_path):
+    SessionLocal = _make_db(tmp_path)
+
+    with SessionLocal() as db:
+        _user, _runner, session = _seed_user_runner_and_session(db, provider="claude")
+        baseline_event = _materialize_hook_runtime_state(
+            db,
+            session=session,
+            phase="thinking",
+            occurred_at=datetime.now(timezone.utc),
+        )
+        db.commit()
+        baseline_runtime_event_id = int(baseline_event.id)
+        baseline_occurred_at = baseline_event.occurred_at
+
+        async def _insert_later():
+            await asyncio.sleep(0.05)
+            with SessionLocal() as event_db:
+                event_db.add(
+                    SessionRuntimeEvent(
+                        runtime_key=f"claude:{session.id}",
+                        session_id=session.id,
+                        provider="claude",
+                        device_id="cinder",
+                        source="claude_hook",
+                        kind="phase_signal",
+                        phase="idle",
+                        tool_name=None,
+                        occurred_at=baseline_occurred_at,
+                        freshness_ms=600_000,
+                        dedupe_key=f"hook:{session.id}:idle-stale-after-cursor",
+                        payload_json="{}",
+                    )
+                )
+                event_db.commit()
+
+        async def _run_wait():
+            writer = asyncio.create_task(_insert_later())
+            try:
+                return await await_managed_local_turn_terminal(
+                    db_bind=db.get_bind(),
+                    session_id=session.id,
+                    after_runtime_event_id=baseline_runtime_event_id,
+                    timeout_secs=0.2,
+                    poll_interval_secs=0.02,
+                )
+            finally:
+                await writer
+
+        result = asyncio.run(_run_wait())
+        assert result is None
 
 
 def test_send_text_to_managed_local_session_verifies_claude_channel_bridge_via_persisted_prompt(monkeypatch, tmp_path):

@@ -558,3 +558,62 @@ def test_active_sessions_recent_progress_fallback_is_non_executing(tmp_path):
         assert row["display_phase"] == "Recent progress"
         assert row["runtime_phase"] == "idle"
         assert row["confidence"] == "inferred"
+
+
+def test_sessions_surfaces_ignore_stale_presence_payload_after_newer_blocked_signal(tmp_path):
+    factory = _make_db(tmp_path, "stale_presence_surface.db")
+    now = datetime.now(timezone.utc)
+
+    db = factory()
+    try:
+        session = _seed_session(
+            db,
+            started_at=now - timedelta(hours=1),
+            ended_at=None,
+            project="stale-presence-surface",
+        )
+    finally:
+        db.close()
+
+    for client in _client(factory):
+        blocked = client.post(
+            "/agents/presence",
+            json={
+                "session_id": str(session.id),
+                "state": "blocked",
+                "tool_name": "Bash",
+                "provider": "claude",
+                "occurred_at": now.isoformat(),
+                "dedupe_key": "blocked-new",
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert blocked.status_code == 204, blocked.text
+
+        stale_idle = client.post(
+            "/agents/presence",
+            json={
+                "session_id": str(session.id),
+                "state": "idle",
+                "provider": "claude",
+                "occurred_at": (now - timedelta(seconds=30)).isoformat(),
+                "dedupe_key": "idle-old",
+            },
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert stale_idle.status_code == 204, stale_idle.text
+
+        active_resp = client.get("/agents/sessions/active?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        assert active_resp.status_code == 200, active_resp.text
+        active_row = next(item for item in active_resp.json()["sessions"] if item["id"] == str(session.id))
+        assert active_row["status"] == "active"
+        assert active_row["presence_state"] == "blocked"
+        assert active_row["display_phase"] == "Blocked on Bash"
+        assert active_row["runtime_phase"] == "blocked"
+        assert active_row["confidence"] == "live"
+
+        list_resp = client.get("/agents/sessions?days_back=14&limit=5", headers={"X-Agents-Token": "dev"})
+        assert list_resp.status_code == 200, list_resp.text
+        list_row = next(item for item in list_resp.json()["sessions"] if item["id"] == str(session.id))
+        assert list_row["presence_state"] == "blocked"
+        assert list_row["display_phase"] == "Blocked on Bash"

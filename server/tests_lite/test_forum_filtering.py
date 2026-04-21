@@ -10,7 +10,7 @@ Covers:
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -253,6 +253,48 @@ def test_presence_auto_resumes_snoozed_on_thinking(tmp_path):
         )
         assert resp.status_code == 204
         assert _get_user_state(factory, sid) == "active"
+    finally:
+        from zerg.main import api_app
+        api_app.dependency_overrides.clear()
+
+
+def test_stale_presence_does_not_auto_resume_snoozed_session(tmp_path):
+    """Older thinking after a newer blocked signal must not resume the session."""
+    factory = _make_db(tmp_path, "stale_auto_resume.db")
+    sid = _seed(factory, user_state="snoozed")
+    now = datetime.now(timezone.utc)
+
+    client = _client(factory)
+    try:
+        blocked = client.post(
+            "/agents/presence",
+            json={
+                "session_id": sid,
+                "state": "blocked",
+                "tool_name": "Bash",
+                "provider": "claude",
+                "occurred_at": now.isoformat(),
+                "dedupe_key": "blocked-new",
+            },
+            headers={"X-Device-Token": "dev"},
+        )
+        assert blocked.status_code == 204
+
+        thinking = client.post(
+            "/agents/presence",
+            json={
+                "session_id": sid,
+                "state": "thinking",
+                "provider": "claude",
+                "occurred_at": (now - timedelta(seconds=30)).isoformat(),
+                "dedupe_key": "thinking-old",
+            },
+            headers={"X-Device-Token": "dev"},
+        )
+        assert thinking.status_code == 204
+
+        assert _get_user_state(factory, sid) == "snoozed"
+        assert _get_presence_row(factory, sid) == ("blocked", "Bash")
     finally:
         from zerg.main import api_app
         api_app.dependency_overrides.clear()
