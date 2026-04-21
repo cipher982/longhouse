@@ -23,8 +23,13 @@ targets:
         createIntermediateGroups: true
       - path: ../Sources/Shared
         createIntermediateGroups: true
-    resources:
       - path: ../Resources/Assets.xcassets
+        buildPhase: resources
+        createIntermediateGroups: true
+      - path: ../Resources/build-identity.json
+        buildPhase: resources
+        createIntermediateGroups: true
+        optional: true
     dependencies:
       - package: GoogleSignIn
         product: GoogleSignIn
@@ -35,6 +40,16 @@ targets:
     configFiles:
       Debug: Configs/Signing.xcconfig
       Release: Configs/Signing.xcconfig
+    preBuildScripts:
+      # Keep bundled build-identity.json current. Declaring inputs/outputs lets
+      # Xcode cache this phase so clean rebuilds stay fast.
+      - script: "\"$PROJECT_DIR/../../scripts/build/stage_ios_build_identity.sh\""
+        name: Stage build identity
+        inputFiles:
+          - $(PROJECT_DIR)/../../.build/build-identity.json
+        outputFiles:
+          - $(PROJECT_DIR)/../Resources/build-identity.json
+        basedOnDependencyAnalysis: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: ai.longhouse.ios

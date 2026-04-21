@@ -56,8 +56,11 @@ struct SettingsView: View {
     }
 
     private var appVersion: String {
-        let short = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
-        return "\(short) (\(build))"
+        switch BuildIdentityLoader.loadFromMainBundle() {
+        case .success(let identity):
+            return identity.qualifiedVersion
+        case .failure:
+            return "build identity missing"
+        }
     }
 }

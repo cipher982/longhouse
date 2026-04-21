@@ -55,6 +55,8 @@ test: ## Backend unit tests (tests_lite/, ~10s)
 	@cd server && ./run_backend_tests_lite.sh
 
 test-ios: ## iOS unit + smoke tests (simulator)
+	@python3 scripts/build/generate_build_identity.py
+	@bash scripts/build/stage_ios_build_identity.sh
 	@xcodegen --spec ios/XcodeHarness/project.yml --project-root ios/XcodeHarness
 	@DESTINATION="$$(python3 scripts/ci/select_ios_simulator.py ios/XcodeHarness/LonghouseIOS.xcodeproj Longhouse)"; \
 	./scripts/ci/run_ios_tests.sh "$$DESTINATION"
