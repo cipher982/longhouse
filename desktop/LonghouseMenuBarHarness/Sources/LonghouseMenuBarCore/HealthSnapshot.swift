@@ -462,28 +462,18 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var installedVersionLabel: String {
-        // Prefer the qualified build identity ("0.2.0-dev+b672fcca[.dirty]"
-        // or "0.2.0 (b672fcca)"). It is the only string that can tell two
-        // different commits apart. Fall back to the legacy update_info
-        // version only when no identity is available.
+        // Only the qualified build identity ("0.2.0-dev+b672fcca[.dirty]"
+        // or "0.2.0 (b672fcca)") can tell two different commits apart.
+        // If it's missing, surface that loudly — never fall back to PyPI's
+        // raw release version, which made drift invisible for the user.
         if let qualified = build?.cli?.qualified {
             return qualified
         }
-        guard let installed = updateInfo?.installedVersion,
-              !installed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return "v?"
-        }
-        return installed.hasPrefix("v") ? installed : "v\(installed)"
+        return "BUILD IDENTITY MISSING"
     }
 
     public var hasResolvedInstalledVersion: Bool {
-        if build?.cli?.qualified != nil {
-            return true
-        }
-        guard let installed = updateInfo?.installedVersion else {
-            return false
-        }
-        return !installed.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        build?.cli?.qualified != nil
     }
 
     /// True when menu bar can see that CLI, engine, or app short SHAs

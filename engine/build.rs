@@ -8,12 +8,12 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 fn repo_identity_path() -> PathBuf {
-    if let Ok(override_path) = env::var("LONGHOUSE_BUILD_IDENTITY_PATH") {
-        return PathBuf::from(override_path);
-    }
     // engine/Cargo.toml lives one level below the repo root.
+    // The path is fixed: generate_build_identity.py writes here, build.rs
+    // reads here. No override, no fallback.
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR unset");
     Path::new(&manifest_dir)
         .parent()
@@ -50,7 +50,6 @@ fn extract_string(raw: &str, key: &str) -> Option<String> {
 fn main() {
     let path = repo_identity_path();
     println!("cargo::rerun-if-changed={}", path.display());
-    println!("cargo::rerun-if-env-changed=LONGHOUSE_BUILD_IDENTITY_PATH");
 
     let raw = match fs::read_to_string(&path) {
         Ok(text) => text,
@@ -131,4 +130,35 @@ fn main() {
         format!("{version}-dev+{short}")
     };
     println!("cargo::rustc-env=LONGHOUSE_BUILD_QUALIFIED={}", qualified);
+
+    // Freshness guard: if git is available in this build context, make sure
+    // the staged identity's commit matches HEAD. This catches the dogfood
+    // bug where cargo runs before generate_build_identity.py regenerates
+    // the file and silently stamps a stale SHA into the binary.
+    //
+    // Inside Docker/CI stages without git, we skip — those paths already
+    // run the generator in the enclosing workflow step by construction.
+    let staged_commit = fields.get("commit").expect("commit missing");
+    if let Ok(output) = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(
+            Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap())
+                .parent()
+                .unwrap(),
+        )
+        .output()
+    {
+        if output.status.success() {
+            let head = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !head.is_empty() && head != *staged_commit {
+                fail(&format!(
+                    "build identity at {} is stale: commit={} but git HEAD={}. \
+                     Run scripts/build/generate_build_identity.py and rebuild.",
+                    path.display(),
+                    staged_commit,
+                    head
+                ));
+            }
+        }
+    }
 }

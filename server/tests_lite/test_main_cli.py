@@ -15,7 +15,7 @@ from zerg import build_info
 from zerg.cli.main import app
 
 
-def _write_identity(tmp_path: Path, **overrides) -> Path:
+def _make_payload(**overrides) -> dict:
     payload = {
         "version": "0.2.0",
         "commit": "b672fccae990c020de56139d38dcd9990bae7aa0",
@@ -25,15 +25,32 @@ def _write_identity(tmp_path: Path, **overrides) -> Path:
         "channel": "release",
     }
     payload.update(overrides)
-    path = tmp_path / "build-identity.json"
-    path.write_text(json.dumps(payload))
-    return path
+    return payload
 
 
-def test_longhouse_version_flag_release(tmp_path, monkeypatch):
-    identity_file = _write_identity(tmp_path)
-    monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(identity_file))
+class _FakeResource:
+    def __init__(self, raw: str | None) -> None:
+        self._raw = raw
+
+    def is_file(self) -> bool:
+        return self._raw is not None
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        assert self._raw is not None
+        return self._raw
+
+    def __truediv__(self, _other: str) -> "_FakeResource":
+        return self
+
+
+def _install_resource(monkeypatch, payload: dict | None) -> None:
+    raw = None if payload is None else json.dumps(payload)
+    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _FakeResource(raw))
     build_info.reset_cache()
+
+
+def test_longhouse_version_flag_release(monkeypatch):
+    _install_resource(monkeypatch, _make_payload())
 
     runner = CliRunner()
     result = runner.invoke(app, ["--version"])
@@ -42,10 +59,8 @@ def test_longhouse_version_flag_release(tmp_path, monkeypatch):
     assert result.output.strip() == "longhouse 0.2.0 (b672fcca)"
 
 
-def test_longhouse_version_flag_dev_dirty(tmp_path, monkeypatch):
-    identity_file = _write_identity(tmp_path, channel="dev", dirty=True)
-    monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(identity_file))
-    build_info.reset_cache()
+def test_longhouse_version_flag_dev_dirty(monkeypatch):
+    _install_resource(monkeypatch, _make_payload(channel="dev", dirty=True))
 
     runner = CliRunner()
     result = runner.invoke(app, ["--version"])
@@ -54,10 +69,8 @@ def test_longhouse_version_flag_dev_dirty(tmp_path, monkeypatch):
     assert result.output.strip() == "longhouse 0.2.0-dev+b672fcca.dirty"
 
 
-def test_longhouse_version_flag_json(tmp_path, monkeypatch):
-    identity_file = _write_identity(tmp_path, channel="dev", dirty=True)
-    monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(identity_file))
-    build_info.reset_cache()
+def test_longhouse_version_flag_json(monkeypatch):
+    _install_resource(monkeypatch, _make_payload(channel="dev", dirty=True))
 
     runner = CliRunner()
     result = runner.invoke(app, ["--version", "--json"])
@@ -71,17 +84,7 @@ def test_longhouse_version_flag_json(tmp_path, monkeypatch):
 
 
 def test_longhouse_version_flag_missing_identity(monkeypatch):
-    monkeypatch.delenv("LONGHOUSE_BUILD_IDENTITY_PATH", raising=False)
-
-    class _MissingRef:
-        def is_file(self) -> bool:
-            return False
-
-        def __truediv__(self, _other: str) -> "_MissingRef":
-            return self
-
-    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _MissingRef())
-    build_info.reset_cache()
+    _install_resource(monkeypatch, None)
 
     runner = CliRunner(mix_stderr=False)
     result = runner.invoke(app, ["--version"])
@@ -89,3 +92,7 @@ def test_longhouse_version_flag_missing_identity(monkeypatch):
     assert result.exit_code == 2, result.output
     combined = (result.output or "") + (result.stderr or "")
     assert "build identity missing" in combined
+
+
+# Silence unused-path parameter if any pytest collector insists.
+_ = Path

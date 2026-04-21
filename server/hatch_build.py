@@ -4,7 +4,7 @@ from pathlib import Path
 
 from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 
-BUILD_IDENTITY_REL = "../.build/build-identity.json"
+STAGED_IDENTITY_REL = "zerg/build_identity.json"
 
 
 class LonghouseBuildHook(BuildHookInterface):
@@ -13,7 +13,7 @@ class LonghouseBuildHook(BuildHookInterface):
     1. Editable installs get a placeholder for the frontend dist path so
        the package imports cleanly without a prebuilt web bundle.
     2. Any non-editable build (wheel, sdist) demands that
-       `.build/build-identity.json` already exists at the repo root.
+       `server/zerg/build_identity.json` already exists.
        `scripts/build/generate_build_identity.py` must be run first.
        No fallback — missing identity = loud failure.
     """
@@ -25,7 +25,7 @@ class LonghouseBuildHook(BuildHookInterface):
             }
             return
 
-        identity_path = Path(self.root) / BUILD_IDENTITY_REL
+        identity_path = Path(self.root) / STAGED_IDENTITY_REL
         if not identity_path.is_file():
             raise RuntimeError(
                 f"build identity missing at {identity_path.resolve()}. "

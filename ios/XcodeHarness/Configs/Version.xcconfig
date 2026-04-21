@@ -1,5 +1,6 @@
-// Lockstep iOS version. Edited by `bump-my-version bump`; see
-// .bumpversion.toml at the repo root. Do not hand-edit unless you're
-// cutting a release outside the normal flow.
+// Shared iOS release version. Edited by `bump-my-version bump`; see
+// .bumpversion.toml at the repo root. Not the same as build identity —
+// build identity is per-commit and lives in .build/build-identity.json.
+// Do not hand-edit unless you're cutting a release outside the normal flow.
 MARKETING_VERSION = 0.1.15
 CURRENT_PROJECT_VERSION = 1
