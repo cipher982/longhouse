@@ -147,9 +147,24 @@ install_engine_from_source() {
 
 install_cli_from_source() {
   require_cmd uv
+  require_cmd python3
 
-  log "==> Installing Longhouse CLI from current repo source"
-  uv tool install --editable "$SERVER_PROJECT" --force >/dev/null
+  log "==> Generating build identity"
+  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py"
+
+  log "==> Building Longhouse CLI wheel from current repo source"
+  local wheel_dir="$ROOT_DIR/.build/wheel"
+  rm -rf "$wheel_dir"
+  mkdir -p "$wheel_dir"
+  (cd "$SERVER_PROJECT" && uv build --wheel --out-dir "$wheel_dir" >/dev/null)
+
+  local wheel_path
+  wheel_path="$(ls -1 "$wheel_dir"/longhouse-*.whl 2>/dev/null | head -n1)"
+  [[ -n "$wheel_path" ]] || fail "wheel build produced no artifact under $wheel_dir"
+
+  log "==> Installing CLI from wheel ($(basename "$wheel_path"))"
+  uv tool install --force "$wheel_path" >/dev/null
+
   log "CLI ready at $(command -v longhouse)"
   log "CLI version: $(longhouse --version)"
 }

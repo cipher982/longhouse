@@ -135,13 +135,19 @@ def main(argv: list[str] | None = None) -> int:
         help="output path (default: .build/build-identity.json at repo root)",
     )
     parser.add_argument(
+        "--pyproject-path",
+        type=Path,
+        default=PYPROJECT_PATH,
+        help="pyproject.toml to read version from (default: server/pyproject.toml)",
+    )
+    parser.add_argument(
         "--print",
         action="store_true",
         help="also print the JSON to stdout",
     )
     args = parser.parse_args(argv)
 
-    identity = build_identity(repo_root=REPO_ROOT, pyproject_path=PYPROJECT_PATH)
+    identity = build_identity(repo_root=REPO_ROOT, pyproject_path=args.pyproject_path)
     write_identity(identity, args.output)
     if args.print:
         print(json.dumps(identity, indent=2))

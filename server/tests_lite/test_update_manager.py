@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
@@ -11,8 +13,26 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg import build_info
 from zerg.cli.main import app
 from zerg.cli import update_manager
+
+
+def _install_fake_build_identity(tmp_path: Path, monkeypatch, **overrides) -> dict:
+    payload = {
+        "version": "0.1.5",
+        "commit": "cafebabedeadbeefcafebabedeadbeefcafebabe",
+        "commit_short": "cafebabe",
+        "dirty": False,
+        "built_at": "2026-04-21T18:03:12Z",
+        "channel": "release",
+    }
+    payload.update(overrides)
+    identity_file = tmp_path / "build-identity.json"
+    identity_file.write_text(json.dumps(payload))
+    monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(identity_file))
+    build_info.reset_cache()
+    return payload
 
 
 def test_write_install_metadata_persists_file(monkeypatch, tmp_path):
@@ -86,17 +106,60 @@ def test_detect_install_metadata_prefers_runtime_editable_path_over_stale_record
     assert metadata_payload.installed_at == "2026-04-07T00:00:00+00:00"
 
 
-def test_version_command_reports_installed_version(monkeypatch):
+def test_version_command_reports_installed_version(monkeypatch, tmp_path):
+    _install_fake_build_identity(tmp_path, monkeypatch)
     runner = CliRunner()
-    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.5")
 
     result = runner.invoke(app, ["version"])
 
     assert result.exit_code == 0, result.output
-    assert result.output.strip() == "longhouse 0.1.5"
+    assert result.output.strip() == "longhouse 0.1.5 (cafebabe)"
 
 
-def test_version_command_check_reports_update(monkeypatch):
+def test_version_command_reports_dev_dirty(monkeypatch, tmp_path):
+    _install_fake_build_identity(tmp_path, monkeypatch, channel="dev", dirty=True)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["version"])
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "longhouse 0.1.5-dev+cafebabe.dirty"
+
+
+def test_version_command_json_includes_build_block(monkeypatch, tmp_path):
+    payload = _install_fake_build_identity(tmp_path, monkeypatch)
+    runner = CliRunner()
+
+    result = runner.invoke(app, ["version", "--json"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["installed_version"] == "0.1.5 (cafebabe)"
+    assert data["build"] == payload
+
+
+def test_version_command_reports_missing_build_identity(monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_BUILD_IDENTITY_PATH", raising=False)
+    build_info.reset_cache()
+
+    class _MissingRef:
+        def is_file(self) -> bool:
+            return False
+
+        def __truediv__(self, other: str) -> "_MissingRef":
+            return self
+
+    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _MissingRef())
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["version"])
+
+    assert result.exit_code == 2, result.output
+    assert "build identity missing" in result.output
+
+
+def test_version_command_check_reports_update(monkeypatch, tmp_path):
+    _install_fake_build_identity(tmp_path, monkeypatch)
     runner = CliRunner()
     monkeypatch.setattr(
         update_manager,
@@ -115,21 +178,21 @@ def test_version_command_check_reports_update(monkeypatch):
     result = runner.invoke(app, ["version", "--check"])
 
     assert result.exit_code == 0, result.output
-    assert "Installed: 0.1.5" in result.output
+    assert "Installed: 0.1.5 (cafebabe)" in result.output
     assert "Latest:    0.1.6" in result.output
     assert "Update available." in result.output
     assert "uv tool upgrade longhouse" in result.output
 
 
-def test_version_command_check_returns_json_error_on_failure(monkeypatch):
+def test_version_command_check_returns_json_error_on_failure(monkeypatch, tmp_path):
+    _install_fake_build_identity(tmp_path, monkeypatch)
     runner = CliRunner()
-    monkeypatch.setattr(update_manager, "current_installed_version", lambda package_name="longhouse": "0.1.5")
     monkeypatch.setattr(update_manager, "check_for_updates", lambda package_name="longhouse": (_ for _ in ()).throw(RuntimeError("boom")))
 
     result = runner.invoke(app, ["version", "--check", "--json"])
 
     assert result.exit_code == 1, result.output
-    assert '"installed_version": "0.1.5"' in result.output
+    assert '"installed_version": "0.1.5 (cafebabe)"' in result.output
     assert '"error": "boom"' in result.output
 
 

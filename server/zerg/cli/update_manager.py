@@ -457,22 +457,36 @@ def version_command(
         help="Emit machine-readable JSON.",
     ),
 ) -> None:
-    """Show the installed Longhouse version."""
+    """Show the installed Longhouse version and build identity."""
+    from zerg.build_info import BuildIdentityMissing
+    from zerg.build_info import load as load_build_identity
 
-    installed_version = current_installed_version()
-    if not check:
-        payload = {"installed_version": installed_version}
+    try:
+        identity = load_build_identity()
+    except BuildIdentityMissing as exc:
+        payload = {"error": "build identity missing — rebuild", "detail": str(exc)}
         if json_output:
             typer.echo(json.dumps(payload, indent=2))
+        else:
+            typer.secho(f"longhouse: {payload['error']} ({exc})", fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+
+    qualified = identity.qualified_version
+    build_block = identity.as_dict()
+
+    if not check:
+        if json_output:
+            typer.echo(json.dumps({"installed_version": qualified, "build": build_block}, indent=2))
             return
-        typer.echo(f"longhouse {installed_version}")
+        typer.echo(f"longhouse {qualified}")
         return
 
     try:
         result = check_for_updates()
     except Exception as exc:
         payload = {
-            "installed_version": installed_version,
+            "installed_version": qualified,
+            "build": build_block,
             "error": str(exc),
         }
         if json_output:
@@ -482,7 +496,8 @@ def version_command(
         raise typer.Exit(code=1)
 
     payload = {
-        "installed_version": result.installed_version,
+        "installed_version": qualified,
+        "build": build_block,
         "latest_version": result.latest_version,
         "update_available": result.update_available,
         "install_method": result.install_method,
@@ -493,7 +508,7 @@ def version_command(
         typer.echo(json.dumps(payload, indent=2))
         return
 
-    typer.echo(f"Installed: {result.installed_version}")
+    typer.echo(f"Installed: {qualified}")
     typer.echo(f"Latest:    {result.latest_version}")
     if result.update_available:
         typer.secho("Update available.", fg=typer.colors.YELLOW)

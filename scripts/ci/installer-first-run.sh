@@ -664,6 +664,8 @@ if [[ "$BUILD_WHEEL" == "1" && "$INSTALLER_MODE" == "local" ]]; then
   ensure_frontend_dist
 
   require_cmd uv
+  log "🔖 Generating build identity..."
+  python3 "$ROOT_DIR/scripts/build/generate_build_identity.py" >/dev/null
   log "📦 Building wheel from server/ ..."
   (
     cd "$ROOT_DIR/server"

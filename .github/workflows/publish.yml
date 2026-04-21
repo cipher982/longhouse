@@ -37,6 +37,9 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
+      - name: Generate build identity
+        run: python3 scripts/build/generate_build_identity.py
+
       - name: Build package
         working-directory: server
         run: uv build --wheel
