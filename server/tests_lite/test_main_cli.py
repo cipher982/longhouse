@@ -52,3 +52,40 @@ def test_longhouse_version_flag_dev_dirty(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "longhouse 0.2.0-dev+b672fcca.dirty"
+
+
+def test_longhouse_version_flag_json(tmp_path, monkeypatch):
+    identity_file = _write_identity(tmp_path, channel="dev", dirty=True)
+    monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(identity_file))
+    build_info.reset_cache()
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["--version", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["installed_version"] == "0.2.0-dev+b672fcca.dirty"
+    assert payload["build"]["commit_short"] == "b672fcca"
+    assert payload["build"]["channel"] == "dev"
+    assert payload["build"]["dirty"] is True
+
+
+def test_longhouse_version_flag_missing_identity(monkeypatch):
+    monkeypatch.delenv("LONGHOUSE_BUILD_IDENTITY_PATH", raising=False)
+
+    class _MissingRef:
+        def is_file(self) -> bool:
+            return False
+
+        def __truediv__(self, _other: str) -> "_MissingRef":
+            return self
+
+    monkeypatch.setattr(build_info.resources, "files", lambda _pkg: _MissingRef())
+    build_info.reset_cache()
+
+    runner = CliRunner(mix_stderr=False)
+    result = runner.invoke(app, ["--version"])
+
+    assert result.exit_code == 2, result.output
+    combined = (result.output or "") + (result.stderr or "")
+    assert "build identity missing" in combined

@@ -80,6 +80,29 @@ class TestEnvMode:
         with pytest.raises(BuildIdentityMissing, match="commit_short"):
             build_info.load()
 
+    def test_empty_env_var_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", "   ")
+        with pytest.raises(BuildIdentityMissing, match="set but empty"):
+            build_info.load()
+
+    def test_invalid_channel_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bad = _write(tmp_path / "bad.json", {**VALID_PAYLOAD, "channel": "rc"})
+        monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(bad))
+        with pytest.raises(BuildIdentityMissing, match="invalid channel"):
+            build_info.load()
+
+    def test_non_bool_dirty_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bad = _write(tmp_path / "bad.json", {**VALID_PAYLOAD, "dirty": "yes"})
+        monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(bad))
+        with pytest.raises(BuildIdentityMissing, match="non-bool dirty"):
+            build_info.load()
+
+    def test_empty_string_field_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        bad = _write(tmp_path / "bad.json", {**VALID_PAYLOAD, "commit": ""})
+        monkeypatch.setenv("LONGHOUSE_BUILD_IDENTITY_PATH", str(bad))
+        with pytest.raises(BuildIdentityMissing, match="invalid commit"):
+            build_info.load()
+
 
 class TestResourceMode:
     def test_missing_resource_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
