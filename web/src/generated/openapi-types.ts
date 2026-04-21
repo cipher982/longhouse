@@ -3656,6 +3656,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/sessions/{session_id}/archive-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Session Archive Bundle
+         * @description Export a versioned archive bundle for the current session head.
+         */
+        get: operations["export_session_archive_bundle_agents_sessions__session_id__archive_bundle_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/messages": {
         parameters: {
             query?: never;
@@ -5779,7 +5799,7 @@ export interface components {
             loop_mode: components["schemas"]["SessionLoopMode"];
             /**
              * Machine Name
-             * @description Optional local Longhouse machine label override used to resolve this device's runner
+             * @description Optional local Longhouse machine label override stored on the launched session
              */
             machine_name?: string | null;
             /**
@@ -6729,6 +6749,177 @@ export interface components {
             session_id: string;
             /** User State */
             user_state: string;
+        };
+        /** SessionArchiveBundleResponse */
+        SessionArchiveBundleResponse: {
+            /**
+             * Bundle Version
+             * @description Archive bundle schema version
+             */
+            bundle_version: number;
+            /**
+             * Exported At
+             * Format: date-time
+             * @description When the bundle was generated
+             */
+            exported_at: string;
+            /** @description Session metadata */
+            session: components["schemas"]["SessionArchiveSessionResponse"];
+            /** @description Encoded raw archive payload */
+            archive: components["schemas"]["SessionArchivePayloadResponse"];
+        };
+        /** SessionArchivePayloadResponse */
+        SessionArchivePayloadResponse: {
+            /**
+             * Format
+             * @description Raw archive payload format
+             */
+            format: string;
+            /**
+             * Branch Mode
+             * @description Branch projection mode used to build the archive
+             */
+            branch_mode: string;
+            /**
+             * Sha256
+             * @description SHA-256 of the raw JSONL payload
+             */
+            sha256: string;
+            /**
+             * Bytes
+             * @description Raw JSONL payload size in bytes
+             */
+            bytes: number;
+            /**
+             * Jsonl B64 Gzip
+             * @description Gzip-compressed raw JSONL payload, base64-encoded
+             */
+            jsonl_b64_gzip: string;
+        };
+        /** SessionArchiveSessionResponse */
+        SessionArchiveSessionResponse: {
+            /**
+             * Id
+             * @description Session UUID
+             */
+            id: string;
+            /**
+             * Provider
+             * @description Session provider
+             */
+            provider: string;
+            /**
+             * Provider Session Id
+             * @description Provider-native session identifier
+             */
+            provider_session_id?: string | null;
+            /**
+             * Project
+             * @description Project name
+             */
+            project?: string | null;
+            /**
+             * Device Id
+             * @description Machine identifier
+             */
+            device_id?: string | null;
+            /**
+             * Device Name
+             * @description Human-friendly machine name
+             */
+            device_name?: string | null;
+            /**
+             * Cwd
+             * @description Working directory
+             */
+            cwd?: string | null;
+            /**
+             * Git Repo
+             * @description Git remote URL
+             */
+            git_repo?: string | null;
+            /**
+             * Git Branch
+             * @description Git branch
+             */
+            git_branch?: string | null;
+            /**
+             * Started At
+             * Format: date-time
+             * @description Session start time
+             */
+            started_at: string;
+            /**
+             * Ended At
+             * @description Session end time
+             */
+            ended_at?: string | null;
+            /**
+             * Last Activity At
+             * @description Latest transcript activity timestamp
+             */
+            last_activity_at?: string | null;
+            /**
+             * Thread Root Session Id
+             * @description Logical thread root session UUID
+             */
+            thread_root_session_id: string;
+            /**
+             * Continued From Session Id
+             * @description Parent continuation session UUID
+             */
+            continued_from_session_id?: string | null;
+            /**
+             * Continuation Kind
+             * @description Continuation kind: local|cloud|runner
+             */
+            continuation_kind?: string | null;
+            /**
+             * Origin Label
+             * @description User-facing execution origin label
+             */
+            origin_label?: string | null;
+            /**
+             * Execution Home
+             * @description Execution home classification
+             */
+            execution_home?: string | null;
+            /**
+             * Managed Transport
+             * @description Managed transport identifier
+             */
+            managed_transport?: string | null;
+            /**
+             * Summary Title
+             * @description Short session title
+             */
+            summary_title?: string | null;
+            /**
+             * Summary
+             * @description Session summary
+             */
+            summary?: string | null;
+            /**
+             * Transcript Revision
+             * @description Current transcript revision
+             */
+            transcript_revision: number;
+            /**
+             * Summary Revision
+             * @description Current summary revision
+             */
+            summary_revision: number;
+            /**
+             * Embedding Revision
+             * @description Current embedding revision
+             */
+            embedding_revision: number;
+            /**
+             * Is Sidechain
+             * @description True when session is a task/sub-agent session
+             * @default false
+             */
+            is_sidechain: boolean;
         };
         /** SessionCapabilitiesResponse */
         SessionCapabilitiesResponse: {
@@ -14611,6 +14802,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_session_archive_bundle_agents_sessions__session_id__archive_bundle_get: {
+        parameters: {
+            query?: {
+                /** @description Archive bundle branch projection mode. v1 supports head only. */
+                branch_mode?: string;
+            };
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionArchiveBundleResponse"];
                 };
             };
             /** @description Validation Error */
