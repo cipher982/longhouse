@@ -390,14 +390,19 @@ describe("SessionsPage", () => {
     const scroller = document.querySelector(".page-shell");
     expect(scroller).not.toBeNull();
 
-    fireEvent.scroll(scroller!);
-    fireEvent.mouseEnter(card);
+    vi.useFakeTimers();
+    try {
+      fireEvent.scroll(scroller!);
+      fireEvent.mouseEnter(card);
 
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 220));
-    });
+      act(() => {
+        vi.advanceTimersByTime(220);
+      });
 
-    expect(prefetchSpy).not.toHaveBeenCalled();
+      expect(prefetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("disables timeline card hover transitions while the user is actively scrolling", async () => {
