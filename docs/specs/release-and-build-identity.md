@@ -38,7 +38,7 @@ One JSON file, one source of truth, every component reads it:
 
 - `version` — release semver from the bumped manifests.
 - `commit` / `commit_short` — `GITHUB_SHA` in CI, `git rev-parse HEAD` locally.
-- `dirty` — true if the working tree has uncommitted changes when the build ran.
+- `dirty` — true iff tracked files differ from `HEAD` (`git diff --quiet HEAD`). Untracked files are ignored — shared-worktree reality means other agents routinely have WIP in the same directory and that noise is not our provenance.
 - `built_at` — UTC ISO 8601.
 - `channel` — `release` for tagged builds (CI on tag), `dev` for everything else (local, push-to-main hosted builds that aren't tagged).
 
@@ -84,10 +84,10 @@ Every surface that shows a version reads `build-identity.json`. Never re-infer, 
 
 | Surface | Where it reads from | What it shows |
 |---|---|---|
-| `longhouse --version` | wheel resource, else `~/.longhouse/build-identity.json` | `longhouse 0.2.0 (b672fcca)` |
+| `longhouse --version` | bundled wheel resource (only) | `longhouse 0.2.0 (b672fcca)` |
 | `longhouse --version --json` | same | full JSON |
-| `/api/health` | wheel resource | adds `build: {...}` field |
-| `~/.claude/engine-status.json` | file next to engine binary, else `~/.longhouse/build-identity.json` | new `build` field |
+| `/api/health` | bundled wheel resource | adds `build: {...}` field |
+| `~/.claude/engine-status.json` | written by engine from its compiled-in identity | new `build` field |
 | Menu bar footer | reads engine-status.json | `0.2.0 (b672fcca)` |
 | iOS About screen | bundled `build-identity.json` resource | `0.2.0 (b672fcca)` |
 | Docker image | `/app/build-identity.json` + OCI `org.opencontainers.image.revision` label | same file + registry metadata |
@@ -100,25 +100,27 @@ We collapse `/api/version` and `/api/system/info` version-adjacent fields into `
 
 ## Build-time wiring
 
-Per research, the primary mechanism is **runtime file lookup**, not compile-time embedding. Compile-time embedding in Rust/Swift causes build-script cascades and fights caching. File-first keeps builds fast.
+Every artifact carries its identity **inside itself**. No home-directory or other shared mutable fallback — that would let two different binaries report the same SHA because they read the same external file. If a build surface can't find its bundled identity, that's a build bug, not a runtime case to paper over — fail loudly.
 
 ### Python (server, control-plane)
 
-- `generate_build_identity.py` runs before `uv build`.
-- Hatch's `[tool.hatch.build.targets.wheel.force-include]` bundles `.build/build-identity.json` as package data at `zerg/build-identity.json`.
-- Runtime reader: `zerg.build_info.load()` checks the bundled resource first; falls back to `~/.longhouse/build-identity.json` for editable/dogfood installs; falls back to a stub `{version: "0.0.0-dev+unknown", ...}` if both miss.
+- `generate_build_identity.py` runs before any `uv build`.
+- Hatch's `[tool.hatch.build.targets.wheel.force-include]` bundles `.build/build-identity.json` as package data at `zerg/build_identity.json`.
+- Runtime reader: `zerg.build_info.load()` reads the bundled resource via `importlib.resources`. Missing resource → raise `BuildIdentityMissing`; the CLI surfaces that as "build identity missing — rebuild."
+- No editable-install fallback. `./dev refresh` / `make dogfood-refresh` builds a wheel and installs it, not `uv pip install -e`. Wheel build adds ~25s per refresh; correctness is worth it.
 
 ### Rust (engine)
 
-- No `build.rs` changes required for primary path.
-- Engine reads `build-identity.json` from: file next to binary, else `~/.longhouse/build-identity.json`, else `../../.build/build-identity.json` (dev convenience).
+- Minimal `build.rs` at `engine/build.rs`: reads `../.build/build-identity.json`, parses JSON, emits `cargo::rustc-env=LONGHOUSE_BUILD_{VERSION,COMMIT,COMMIT_SHORT,DIRTY,BUILT_AT,CHANNEL}`.
+- Declares exactly one `cargo::rerun-if-changed=../.build/build-identity.json` plus `cargo::rerun-if-env-changed=LONGHOUSE_BUILD_IDENTITY_PATH` to keep rebuilds surgical. Cargo only re-runs the build script when the identity file changes.
+- Engine source: `const BUILD: &str = env!("LONGHOUSE_BUILD_COMMIT_SHORT");` etc., aggregated into a `BuildIdentity` struct. Missing env vars → compile error (build-identity.json absent ⇒ build fails).
 - `longhouse-engine --version` prints the qualified string.
-- On startup, engine copies the loaded identity into `~/.claude/engine-status.json` under a `build` key.
+- On startup, engine writes its identity into `~/.claude/engine-status.json` under a `build` key. Menu bar reads from there.
 
 ### Swift (iOS)
 
-- XcodeGen run-script phase: copies `.build/build-identity.json` into `Resources/build-identity.json` during build. Declare `inputFiles` / `outputFiles` so Xcode caches correctly.
-- Swift reader: `Bundle.main.url(forResource: "build-identity", withExtension: "json")`. About screen displays the qualified string.
+- XcodeGen run-script phase in `ios/XcodeHarness/project.yml`: copies `.build/build-identity.json` into bundled `Resources/build-identity.json`. Declare `inputFiles` / `outputFiles` so Xcode caches it correctly.
+- Swift reader: `Bundle.main.url(forResource: "build-identity", withExtension: "json")`. About screen displays the qualified string. Missing → the About screen shows "build identity missing," not a fake version.
 
 ### Docker (hosted runtime image)
 
@@ -127,31 +129,17 @@ Per research, the primary mechanism is **runtime file lookup**, not compile-time
 
 ## Dev loop
 
-`./dev refresh` (new; replaces `make dogfood-refresh` over time) runs:
+`make dogfood-refresh` becomes:
 1. `scripts/build/generate_build_identity.py` → writes `.build/build-identity.json` with `channel=dev`.
-2. Copies a sibling to `~/.longhouse/build-identity.json` so installed-but-not-rebuilt binaries can still find it.
-3. Then the existing dogfood runtime rebuild.
+2. Builds a wheel (`uv build`) and installs it — **not** an editable install. ~25s slower than editable; in return, every refresh produces a CLI whose identity is compiled-in and correct.
+3. Rebuilds the engine (picks up the identity via `build.rs` rerun-if-changed).
+4. Rebuilds the app bundle if the macOS app changed.
 
-Net: every local build has a traceable identity. Two different commits never both present as `0.2.0`.
+Net: every local build has a traceable, binary-local identity. Two different commits never both present as `0.2.0`. An old binary doesn't read a newer shared file and lie about its SHA.
 
-## Entrypoint consolidation
+## Entrypoint consolidation — out of scope for this initiative
 
-`./dev` at repo root, Python + typer. One front door for the common verbs:
-
-| Command | Calls |
-|---|---|
-| `./dev up` | existing `scripts/dev.sh` |
-| `./dev down` | existing kill logic |
-| `./dev test [tier]` | routes to the right test tier |
-| `./dev ship` | existing `scripts/ops/ship.sh` |
-| `./dev release vX.Y.Z` | new bump-my-version flow + existing release.sh tail |
-| `./dev refresh` | existing dogfood + build-identity write |
-| `./dev doctor` | new: tool versions, env vars, build-identity drift check |
-| `./dev version` | print current repo build identity |
-
-Makefile keeps existing targets as thin forwarders (`make dev` → `./dev up`) so muscle memory survives. No new Make targets added after this.
-
-Scripts in `scripts/` are implementation detail called by `./dev`; they stop being first-class. We don't delete them wholesale — we stop growing the top-level surface.
+The Makefile / `scripts/` sprawl problem is real but orthogonal. Tracked as a separate docket item. This spec stays focused on release trust and build identity.
 
 ## Out of scope for v1
 
@@ -164,20 +152,17 @@ Scripts in `scripts/` are implementation detail called by `./dev`; they stop bei
 
 - Hardcoded `"0.1.15-local"` fallback strings wherever they appear.
 - `/api/version` and version-duplicating fields on `/api/system/info` (collapsed into `/api/health`).
-- Any Makefile target that was only a one-liner around a script — subsumed by `./dev`.
 - The `0.1.0` placeholder versions in `engine/Cargo.toml`, `runner/package.json`, `control-plane/pyproject.toml`, iOS xcconfig — all become lockstep.
 - `release.sh`'s custom Python in-line semver rewriter (replaced by `bump-my-version`).
 
 ## Phases
 
-1. **P0** — this spec + docket item (done when committed).
+1. **P0** — this spec + docket item (done).
 2. **P1** — `generate_build_identity.py` + tests.
-3. **P2** — Python CLI / `/api/health` expose build identity; runtime reader with both bundled and dogfood paths.
-4. **P3** — Engine stamps build identity into `engine-status.json`; menu bar reads and displays it; mismatch detection.
+3. **P2** — Python build-identity module, CLI `--version`, `/api/health` `build` block. Wheel force-includes the JSON. `make dogfood-refresh` switches to wheel build+install.
+4. **P3** — Engine `build.rs` + `BuildIdentity` struct. `longhouse-engine --version` prints qualified string. Engine stamps identity into `~/.claude/engine-status.json`. Menu bar reads and displays. Drift detection (CLI vs engine vs app short SHAs).
 5. **P4** — iOS xcconfig + XcodeGen build phase + Swift reader + About screen.
-6. **P5** — `.bumpversion.toml` + lockstep wrapper replacing `release.sh` step 1.
-7. **P6** — `./dev` Python entrypoint.
-8. **P7** — `dogfood-refresh` writes `~/.longhouse/build-identity.json`.
-9. **P8** — cleanup + AGENTS.md learning.
+6. **P5** — `.bumpversion.toml` + lockstep wrapper replacing the in-line semver rewriter in `release.sh`.
+7. **P6** — cleanup: strip hardcoded `0.1.15-local` fallback strings, kill `/api/version` if redundant, record AGENTS.md learning.
 
-After each phase I'll commit and have a Codex hatch review the change before moving on, per the pattern from the Stage 4/5 runtime-truth work.
+After each phase: commit, Codex hatch review, address findings, then move on.
