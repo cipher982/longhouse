@@ -55,6 +55,21 @@ class SessionArchiveSessionResponse(UTCBaseModel):
     is_sidechain: bool = Field(False, description="True when session is a task/sub-agent session")
 
 
+class SessionArchiveManifestItemResponse(UTCBaseModel):
+    id: str = Field(..., description="Session UUID")
+    started_at: datetime = Field(..., description="Session start time")
+    last_activity_at: Optional[datetime] = Field(None, description="Latest transcript activity timestamp")
+    transcript_revision: int = Field(..., description="Current transcript revision")
+    provider: str = Field(..., description="Session provider")
+    project: Optional[str] = Field(None, description="Project name")
+    is_sidechain: bool = Field(False, description="True when session is a task/sub-agent session")
+
+
+class SessionArchiveManifestResponse(BaseModel):
+    sessions: list[SessionArchiveManifestItemResponse] = Field(..., description="Archive-eligible sessions")
+    total: int = Field(..., ge=0, description="Total matching sessions")
+
+
 class SessionArchiveBundleResponse(UTCBaseModel):
     bundle_version: int = Field(..., description="Archive bundle schema version")
     exported_at: datetime = Field(..., description="When the bundle was generated")
@@ -125,8 +140,23 @@ def build_session_archive_bundle(
     )
 
 
+def build_session_archive_manifest_item(session) -> SessionArchiveManifestItemResponse:
+    return SessionArchiveManifestItemResponse(
+        id=str(session.id),
+        started_at=session.started_at,
+        last_activity_at=session.last_activity_at,
+        transcript_revision=int(getattr(session, "transcript_revision", 0) or 0),
+        provider=session.provider,
+        project=session.project,
+        is_sidechain=bool(getattr(session, "is_sidechain", 0)),
+    )
+
+
 __all__ = [
     "BUNDLE_VERSION",
     "SessionArchiveBundleResponse",
+    "SessionArchiveManifestItemResponse",
+    "SessionArchiveManifestResponse",
+    "build_session_archive_manifest_item",
     "build_session_archive_bundle",
 ]

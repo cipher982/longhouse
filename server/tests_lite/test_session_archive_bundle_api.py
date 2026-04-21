@@ -150,6 +150,48 @@ def _ingest_fixture_session(client: TestClient, provider: str, session_id: str) 
     return fixture.read_text(encoding="utf-8")
 
 
+def _ingest_inline_session(
+    client: TestClient,
+    *,
+    session_id: str,
+    started_at: str,
+    provider: str = "claude",
+    environment: str = "production",
+    is_sidechain: bool = False,
+) -> None:
+    source_path = f"/tmp/{session_id}.jsonl"
+    payload = {
+        "id": session_id,
+        "provider": provider,
+        "environment": environment,
+        "project": "archive-manifest",
+        "device_id": "test-device",
+        "cwd": "/tmp/archive-manifest",
+        "started_at": started_at,
+        "provider_session_id": f"{provider}-{session_id}",
+        "events": [
+            {
+                "role": "user",
+                "content_text": "hello",
+                "timestamp": started_at,
+                "source_path": source_path,
+                "source_offset": 0,
+                "raw_json": json.dumps({"type": "user", "timestamp": started_at, "text": "hello"}),
+            }
+        ],
+        "source_lines": [
+            {
+                "source_path": source_path,
+                "source_offset": 0,
+                "raw_json": json.dumps({"type": "user", "timestamp": started_at, "text": "hello"}),
+            }
+        ],
+        "is_sidechain": is_sidechain,
+    }
+    ingest = client.post("/agents/ingest", json=payload, headers={"X-Agents-Token": "dev"})
+    assert ingest.status_code == 200, ingest.text
+
+
 def _decode_archive_payload(encoded: str) -> bytes:
     return gzip.decompress(base64.b64decode(encoded.encode("ascii")))
 
@@ -232,3 +274,36 @@ def test_archive_bundle_rejects_non_head_branch_mode(tmp_path):
         assert "branch_mode" in response.text
     finally:
         api_app.dependency_overrides.clear()
+
+
+def test_archive_manifest_lists_sessions_beyond_90_days(tmp_path):
+    client = _make_client(tmp_path)
+    try:
+        older_session_id = "10000000-0000-4000-8000-000000000001"
+        recent_session_id = "10000000-0000-4000-8000-000000000002"
+        _ingest_inline_session(client, session_id=older_session_id, started_at="2025-08-01T12:00:00Z")
+        _ingest_inline_session(client, session_id=recent_session_id, started_at="2026-04-20T12:00:00Z")
+
+        response = client.get(
+            "/agents/sessions/archive-manifest",
+            params={"days_back": 3650, "limit": 10, "offset": 0},
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert response.status_code == 200, response.text
+
+        payload = response.json()
+        assert payload["total"] == 2
+        assert [item["id"] for item in payload["sessions"]] == [recent_session_id, older_session_id]
+        assert payload["sessions"][1]["transcript_revision"] == 1
+    finally:
+        api_app.dependency_overrides.clear()
+
+
+def test_archive_manifest_route_requires_agents_token_dependency():
+    route = next(
+        candidate
+        for candidate in api_app.routes
+        if str(getattr(candidate, "path", "") or "").endswith("/agents/sessions/archive-manifest")
+    )
+    dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
+    assert verify_agents_token in dependency_calls
