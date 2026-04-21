@@ -149,6 +149,8 @@ export function EventInspectorPane({ selection, sessionEnded = false, onSelectKe
   const hasInput =
     selection.interaction.callEvent?.tool_input_json != null &&
     Object.keys(selection.interaction.callEvent.tool_input_json).length > 0;
+  const awaitingResult =
+    !selection.interaction.resultEvent && selection.interaction.pairing !== "orphan";
   const dropped = isToolInteractionDropped(selection.interaction, sessionEnded);
 
   return (
@@ -230,7 +232,7 @@ export function EventInspectorPane({ selection, sessionEnded = false, onSelectKe
             <div className="inspector-empty-block">
               {dropped
                 ? "Tool call dropped \u2014 no result was ever recorded."
-                : selection.interaction.pairing === "pending"
+                : awaitingResult
                   ? "Result not recorded yet."
                   : "No output recorded."}
             </div>
