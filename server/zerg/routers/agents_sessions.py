@@ -501,7 +501,7 @@ async def list_sessions(
 
 @router.get("/sessions/archive-manifest", response_model=SessionArchiveManifestResponse)
 async def list_archive_manifest(
-    include_test: bool = Query(True, description="Include test/e2e sessions in archive enumeration"),
+    include_test: bool = Query(False, description="Include test/e2e sessions in archive enumeration"),
     hide_autonomous: bool = Query(False, description="Hide autonomous sessions from archive enumeration"),
     days_back: int = Query(90, ge=1, le=3650, description="Days to look back"),
     limit: int = Query(100, ge=1, le=200, description="Max results"),
@@ -510,7 +510,12 @@ async def list_archive_manifest(
     _auth: None = Depends(verify_agents_token),
     _single: None = Depends(require_single_tenant),
 ) -> SessionArchiveManifestResponse:
-    """List sessions for archive sync/backfill without product-surface pagination limits."""
+    """List sessions for archive sync/backfill without product-surface pagination limits.
+
+    `days_back` applies to recent session activity, not strictly to session start.
+    Full-fidelity archival callers should pass `include_test=true` and
+    `hide_autonomous=false` explicitly.
+    """
     try:
         since = datetime.now(timezone.utc) - timedelta(days=days_back)
         store = AgentsStore(db)

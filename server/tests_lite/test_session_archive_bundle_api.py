@@ -299,6 +299,33 @@ def test_archive_manifest_lists_sessions_beyond_90_days(tmp_path):
         api_app.dependency_overrides.clear()
 
 
+def test_archive_manifest_excludes_test_sessions_by_default(tmp_path):
+    client = _make_client(tmp_path)
+    try:
+        prod_session_id = "20000000-0000-4000-8000-000000000001"
+        test_session_id = "20000000-0000-4000-8000-000000000002"
+        _ingest_inline_session(client, session_id=prod_session_id, started_at="2026-04-20T12:00:00Z", environment="production")
+        _ingest_inline_session(client, session_id=test_session_id, started_at="2026-04-20T13:00:00Z", environment="test")
+
+        default_response = client.get(
+            "/agents/sessions/archive-manifest",
+            params={"days_back": 3650, "limit": 10, "offset": 0},
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert default_response.status_code == 200, default_response.text
+        assert [item["id"] for item in default_response.json()["sessions"]] == [prod_session_id]
+
+        explicit_response = client.get(
+            "/agents/sessions/archive-manifest",
+            params={"days_back": 3650, "limit": 10, "offset": 0, "include_test": "true"},
+            headers={"X-Agents-Token": "dev"},
+        )
+        assert explicit_response.status_code == 200, explicit_response.text
+        assert [item["id"] for item in explicit_response.json()["sessions"]] == [test_session_id, prod_session_id]
+    finally:
+        api_app.dependency_overrides.clear()
+
+
 def test_archive_manifest_route_requires_agents_token_dependency():
     route = next(
         candidate
