@@ -61,15 +61,11 @@ fn main() {
         )),
     };
 
+    // String fields must be present and non-empty. Mirror the strict
+    // validation in server/zerg/build_info.py so the engine refuses to
+    // compile against a malformed identity the Python side would reject.
     let mut fields = std::collections::HashMap::new();
-    for key in [
-        "version",
-        "commit",
-        "commit_short",
-        "dirty",
-        "built_at",
-        "channel",
-    ] {
+    for key in ["version", "commit", "commit_short", "built_at", "channel"] {
         let value = match extract_string(&raw, key) {
             Some(v) => v,
             None => fail(&format!(
@@ -78,20 +74,55 @@ fn main() {
                 key
             )),
         };
+        if value.trim().is_empty() {
+            fail(&format!(
+                "build identity at {} has empty {:?} field",
+                path.display(),
+                key
+            ));
+        }
         let env_name = format!("LONGHOUSE_BUILD_{}", key.to_uppercase());
         println!("cargo::rustc-env={}={}", env_name, value);
         fields.insert(key, value);
+    }
+
+    // `dirty` must be a JSON bool (true/false). Reject numeric, string,
+    // or missing variants so Python and Rust can never disagree on dev
+    // vs release formatting.
+    let raw_dirty = match extract_string(&raw, "dirty") {
+        Some(v) => v,
+        None => fail(&format!(
+            "build identity at {} missing field \"dirty\"",
+            path.display()
+        )),
+    };
+    let dirty = match raw_dirty.as_str() {
+        "true" => true,
+        "false" => false,
+        other => fail(&format!(
+            "build identity at {} has non-bool dirty value {:?}",
+            path.display(),
+            other
+        )),
+    };
+    println!("cargo::rustc-env=LONGHOUSE_BUILD_DIRTY={}", dirty);
+
+    // Channel must be one of the values Python allows, otherwise the
+    // qualified format drifts (e.g. an "rc" channel would silently fall
+    // into the dev branch and emit "-dev+..." for a real release).
+    let channel = fields.get("channel").expect("channel missing").as_str();
+    if channel != "release" && channel != "dev" {
+        fail(&format!(
+            "build identity at {} has invalid channel {:?} (expected \"dev\" or \"release\")",
+            path.display(),
+            channel
+        ));
     }
 
     // Pre-format the display string at build time so clap's `version = ...`
     // can take a `&'static str`. Mirrors BuildIdentity::qualified().
     let version = fields.get("version").expect("version missing");
     let short = fields.get("commit_short").expect("commit_short missing");
-    let channel = fields.get("channel").expect("channel missing").as_str();
-    let dirty = matches!(
-        fields.get("dirty").map(String::as_str),
-        Some("true" | "True" | "1")
-    );
     let qualified = if channel == "release" {
         format!("{version} ({short})")
     } else if dirty {

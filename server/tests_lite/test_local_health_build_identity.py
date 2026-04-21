@@ -87,6 +87,30 @@ def test_engine_missing_build_block_does_not_drift(_install_cli_identity) -> Non
     assert names == ["cli"]
 
 
+def test_engine_payload_not_a_mapping_is_tolerated(_install_cli_identity) -> None:
+    """Corrupt engine-status.json whose payload is not an object must
+    not crash local-health — treat it as "no engine build block"."""
+    engine_status = {"path": "/tmp/x", "exists": True, "payload": "nonsense", "error": None}
+    result = local_health_service._collect_build_identity(engine_status=engine_status)
+
+    assert result["drift"] is False
+    assert result["engine"] is None
+    assert [c["name"] for c in result["components"]] == ["cli"]
+
+
+def test_engine_build_not_a_mapping_is_tolerated(_install_cli_identity) -> None:
+    engine_status = {
+        "path": "/tmp/x",
+        "exists": True,
+        "payload": {"version": "0.2.0", "build": ["unexpected", "shape"]},
+        "error": None,
+    }
+    result = local_health_service._collect_build_identity(engine_status=engine_status)
+
+    assert result["drift"] is False
+    assert result["engine"] is None
+
+
 def test_cli_identity_missing_surfaces_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LONGHOUSE_BUILD_IDENTITY_PATH", raising=False)
 
