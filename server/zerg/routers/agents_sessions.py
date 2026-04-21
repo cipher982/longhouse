@@ -25,7 +25,9 @@ from zerg.models.agents import AgentEvent
 from zerg.models.agents import AgentSession
 from zerg.services.agents_store import AgentsStore
 from zerg.services.session_archive import SessionArchiveBundleResponse
+from zerg.services.session_archive import SessionArchiveManifestResponse
 from zerg.services.session_archive import build_session_archive_bundle
+from zerg.services.session_archive import build_session_archive_manifest_item
 from zerg.services.session_coordination import acknowledge_session_message as acknowledge_session_message_for_session
 from zerg.services.session_coordination import list_session_messages
 from zerg.services.session_coordination import load_session_tail
@@ -494,6 +496,43 @@ async def list_sessions(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to list sessions",
+        )
+
+
+@router.get("/sessions/archive-manifest", response_model=SessionArchiveManifestResponse)
+async def list_archive_manifest(
+    include_test: bool = Query(True, description="Include test/e2e sessions in archive enumeration"),
+    hide_autonomous: bool = Query(False, description="Hide autonomous sessions from archive enumeration"),
+    days_back: int = Query(90, ge=1, le=3650, description="Days to look back"),
+    limit: int = Query(100, ge=1, le=200, description="Max results"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(verify_agents_token),
+    _single: None = Depends(require_single_tenant),
+) -> SessionArchiveManifestResponse:
+    """List sessions for archive sync/backfill without product-surface pagination limits."""
+    try:
+        since = datetime.now(timezone.utc) - timedelta(days=days_back)
+        store = AgentsStore(db)
+        sessions, total = store.list_sessions(
+            include_test=include_test,
+            since=since,
+            limit=limit,
+            offset=offset,
+            hide_autonomous=hide_autonomous,
+            anchor_on_activity=True,
+        )
+        return SessionArchiveManifestResponse(
+            sessions=[build_session_archive_manifest_item(session) for session in sessions],
+            total=total,
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Failed to list archive manifest")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to list archive manifest",
         )
 
 
