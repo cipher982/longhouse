@@ -69,10 +69,12 @@ function SeamRow({ seam }: { seam: TimelineSeam }) {
 
 function MessageRow({
   event,
-  onRawClick,
+  isSelected,
+  onSelect,
 }: {
   event: Extract<TimelineItem, { kind: "message" }>["event"];
-  onRawClick: () => void;
+  isSelected: boolean;
+  onSelect: () => void;
 }) {
   const preview = getTimelineMessagePreview(event);
   const outside = isOutsideActiveContext(event);
@@ -85,7 +87,18 @@ function MessageRow({
       data-testid="session-timeline-row"
       data-row-kind="message"
       data-message-role={event.role}
-      className={`tl-msg tl-msg--${event.role}`}
+      className={`tl-msg tl-msg--${event.role}${isSelected ? " is-selected" : ""}`}
+      // Clicking anywhere on the message selects it and opens the raw-event
+      // inspector. Text selection still works — we use mousedown state to
+      // suppress the click if the user is selecting text, not just clicking.
+      onClick={(e) => {
+        const sel = window.getSelection();
+        if (sel && sel.toString().length > 0) return;
+        // Don't steal clicks on links/buttons inside the markdown body.
+        const target = e.target as HTMLElement;
+        if (target.closest("a, button")) return;
+        onSelect();
+      }}
     >
       <div className="tl-msg__head">
         <span className="tl-msg__who">
@@ -98,7 +111,10 @@ function MessageRow({
         <button
           type="button"
           className="tl-raw-btn"
-          onClick={onRawClick}
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelect();
+          }}
           title="Inspect raw event"
           aria-label="Inspect raw event"
         >
@@ -200,6 +216,8 @@ function ActionCard({
 
   const statusTone = dropped ? "error" : pending ? "pending" : exitCode != null && exitCode !== 0 ? "error" : "ok";
 
+  const detailId = `${rowId}-detail`;
+
   return (
     <div
       id={rowId}
@@ -208,29 +226,42 @@ function ActionCard({
       data-tool-tier="action"
       className={`tl-action${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}`}
     >
-      <button
-        type="button"
-        className="tl-action__head"
-        onClick={() => {
-          onSelect();
-          onToggleExpand();
-        }}
-      >
+      <div className="tl-action__head">
         <span className="tl-action__accent" style={{ background: info.color }} data-tone={statusTone} />
-        <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
-        <span className="tl-action__name">{agentType || info.displayName}</span>
-        {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
-        <span className="tl-action__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
+        <button
+          type="button"
+          className="tl-action__main"
+          onClick={onSelect}
+          aria-label={`Inspect ${info.displayName}`}
+        >
+          <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
+          <span className="tl-action__name">{agentType || info.displayName}</span>
+          {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
+          <span className="tl-action__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
+        </button>
         <span className="tl-action__meta">
           {exitCode != null && exitCode !== 0 ? <span className="tl-chip tl-chip--error">exit {exitCode}</span> : null}
           {pending ? <span className="tl-chip tl-chip--pending">running</span> : null}
           {dropped ? <span className="tl-chip tl-chip--warning">dropped</span> : null}
           {outside ? <span className="tl-chip tl-chip--warning">outside</span> : null}
           {duration ? <span className="tl-action__time">{duration}</span> : null}
-          <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
+          <button
+            type="button"
+            className={`tl-action__chev${expanded ? " is-open" : ""}`}
+            onClick={onToggleExpand}
+            aria-expanded={expanded}
+            aria-controls={detailId}
+            aria-label={expanded ? "Collapse details" : "Expand details"}
+          >
+            ›
+          </button>
         </span>
-      </button>
-      {expanded ? <ToolDetail interaction={interaction} sessionEnded={sessionEnded} /> : null}
+      </div>
+      {expanded ? (
+        <div id={detailId}>
+          <ToolDetail interaction={interaction} sessionEnded={sessionEnded} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -259,6 +290,7 @@ function ContextLine({
   const dropped = awaitingResult && isToolInteractionDropped(interaction, sessionEnded);
   const pending = awaitingResult && !dropped;
 
+  const detailId = `${rowId}-detail`;
   return (
     <div
       id={rowId}
@@ -274,6 +306,8 @@ function ContextLine({
           onSelect();
           onToggleExpand();
         }}
+        aria-expanded={expanded}
+        aria-controls={detailId}
       >
         <span className="tl-context__arrow">↳</span>
         <span className="tl-context__label" style={{ color: info.color }}>{info.displayName}</span>
@@ -284,7 +318,11 @@ function ContextLine({
           {duration ? <span className="tl-context__time">{duration}</span> : null}
         </span>
       </button>
-      {expanded ? <ToolDetail interaction={interaction} sessionEnded={sessionEnded} /> : null}
+      {expanded ? (
+        <div id={detailId}>
+          <ToolDetail interaction={interaction} sessionEnded={sessionEnded} />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -333,6 +371,7 @@ function NoiseChip({
           onSelect();
           onToggleExpand();
         }}
+        aria-expanded={expanded}
       >
         <span className="tl-noise__arrow">↳</span>
         <span className="tl-noise__label">Explored</span>
@@ -677,11 +716,13 @@ export function TimelinePane({
             }
 
             if (item.kind === "message") {
+              const selectionKey = `message:${item.event.id}`;
               return (
                 <MessageRow
                   key={item.event.id}
                   event={item.event}
-                  onRawClick={() => onSelectKey(`message:${item.event.id}`)}
+                  isSelected={selectedKey === selectionKey}
+                  onSelect={() => onSelectKey(selectionKey)}
                 />
               );
             }
