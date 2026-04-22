@@ -812,6 +812,10 @@ _MANAGED_FINISHED_RETENTION_SECONDS = 10 * 60
 
 
 def _should_keep_managed_phase_row(row: Mapping[str, str | None], *, now: datetime) -> bool:
+    # `finished` is a transient turn marker, not the steady-state idle phase.
+    # Keep it briefly so local-health can show recent completion, then let it
+    # age out. Other phases remain the canonical current state until a newer
+    # signal replaces them, so they are intentionally not freshness-gated here.
     phase = _normalize_optional_string(row.get("phase"))
     observed_raw = _normalize_optional_string(row.get("observed_at"))
     if phase != "finished" or observed_raw is None:
