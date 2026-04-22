@@ -148,6 +148,9 @@ final class MenuBarStatusController: NSObject {
         guard let snapshot = store.snapshot else {
             return nil
         }
+        if snapshot.isInstallLocationBlocked || snapshot.isSetupRequired {
+            return .systemRed
+        }
         if let managedSeverity = snapshot.managedAttentionSeverity {
             switch managedSeverity {
             case .yellow:
@@ -158,16 +161,13 @@ final class MenuBarStatusController: NSObject {
                 break
             }
         }
-        guard snapshot.needsMenuBarAttention else {
-            return nil
-        }
         switch snapshot.parsedSeverity {
         case .yellow:
             return .systemOrange
         case .red:
             return .systemRed
         case .green, .gray:
-            return .systemRed
+            return nil
         }
     }
 
