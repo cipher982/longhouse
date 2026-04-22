@@ -36,10 +36,11 @@ magick "${PUBLIC_DIR}/favicon-512.png" -resize 180x180 "${PUBLIC_DIR}/apple-touc
 
 echo "Generating panel status variants from master logo geometry…"
 mkdir -p "$(dirname "${PANEL_GREEN_OUT}")"
-node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_GREEN_OUT}" 72 72 green
-node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_WARNING_OUT}" 72 72 yellow
-node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_CRITICAL_OUT}" 72 72 red
-node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_NEUTRAL_OUT}" 72 72 gray
+# Source icon geometry should be edge-to-edge; panel variants add their own inset.
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_GREEN_OUT}" 72 72 green 0.08
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_WARNING_OUT}" 72 72 yellow 0.08
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_CRITICAL_OUT}" 72 72 red 0.08
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_NEUTRAL_OUT}" 72 72 gray 0.08
 
 echo "Generating macOS app icon (AppIcon.icns)…"
 ICNS_OUT="${ROOT_DIR}/../artifacts/runtime-packaging/stage/Longhouse.app/Contents/Resources/AppIcon.icns"

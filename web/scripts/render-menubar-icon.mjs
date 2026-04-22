@@ -2,14 +2,17 @@
 
 import { chromium } from "playwright";
 import { readFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import os from "node:os";
 import path from "node:path";
 
 function usage() {
-  console.error("Usage: render-menubar-icon.mjs <master.svg> <output.png> <width> <height> [tone]");
+  console.error("Usage: render-menubar-icon.mjs <master.svg> <output.png> <width> <height> [tone] [paddingRatio]");
   process.exit(2);
 }
 
-const [, , inputPath, outputPath, widthRaw, heightRaw, toneRaw] = process.argv;
+const [, , inputPath, outputPath, widthRaw, heightRaw, toneRaw, paddingRatioRaw] = process.argv;
 
 if (!inputPath || !outputPath || !widthRaw || !heightRaw) {
   usage();
@@ -18,12 +21,9 @@ if (!inputPath || !outputPath || !widthRaw || !heightRaw) {
 const width = Number(widthRaw);
 const height = Number(heightRaw);
 const tone = toneRaw ?? "menu";
-const opticalInsetPx = Math.max(1, Math.round(Math.min(width, height) * 0.03));
-const verticalOffsetPx = opticalInsetPx;
-const innerWidth = width - opticalInsetPx * 2;
-const innerHeight = height - opticalInsetPx * 2;
+const paddingRatio = paddingRatioRaw == null ? 0 : Number(paddingRatioRaw);
 
-if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0 || !Number.isFinite(paddingRatio) || paddingRatio < 0 || paddingRatio >= 0.5) {
   usage();
 }
 
@@ -154,33 +154,35 @@ const svg = deriveMenubarSvg(masterSvg, tone);
 const browser = await chromium.launch({ headless: true });
 
 try {
+  const renderScale = 8;
+  const renderWidth = width * renderScale;
+  const renderHeight = height * renderScale;
   const page = await browser.newPage({
-    viewport: { width, height },
+    viewport: { width: renderWidth, height: renderHeight },
     deviceScaleFactor: 1,
   });
 
   await page.setContent(
     `<!doctype html>
     <html>
-      <body style="margin:0; width:${width}px; height:${height}px; display:grid; place-items:center; background:transparent; overflow:hidden;">
+      <body style="margin:0; width:${renderWidth}px; height:${renderHeight}px; display:grid; place-items:center; background:transparent; overflow:hidden;">
         <style>
           html, body {
-            width: ${width}px;
-            height: ${height}px;
+            width: ${renderWidth}px;
+            height: ${renderHeight}px;
           }
 
           .asset-frame {
-            width: ${width}px;
-            height: ${height}px;
+            width: ${renderWidth}px;
+            height: ${renderHeight}px;
             display: grid;
             place-items: center;
           }
 
           .asset-frame > svg {
-            width: ${innerWidth}px;
-            height: ${innerHeight}px;
+            width: 100%;
+            height: 100%;
             display: block;
-            transform: translateY(${verticalOffsetPx}px);
           }
         </style>
         <div class="asset-frame">
@@ -191,10 +193,34 @@ try {
     { waitUntil: "load" }
   );
 
-  await page.screenshot({
-    path: path.resolve(outputPath),
-    omitBackground: true,
-  });
+  const tempDirectory = await mkdtemp(path.join(os.tmpdir(), "longhouse-icon-"));
+  const rawOutputPath = path.join(tempDirectory, "raw.png");
+
+  try {
+    await page.screenshot({
+      path: rawOutputPath,
+      omitBackground: true,
+    });
+
+    const innerWidth = Math.max(1, Math.round(width * (1 - paddingRatio * 2)));
+    const innerHeight = Math.max(1, Math.round(height * (1 - paddingRatio * 2)));
+    execFileSync("magick", [
+      rawOutputPath,
+      "-trim",
+      "+repage",
+      "-resize",
+      `${innerWidth}x${innerHeight}`,
+      "-gravity",
+      "center",
+      "-background",
+      "none",
+      "-extent",
+      `${width}x${height}`,
+      path.resolve(outputPath),
+    ]);
+  } finally {
+    await rm(tempDirectory, { recursive: true, force: true });
+  }
 } finally {
   await browser.close();
 }

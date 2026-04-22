@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 
@@ -15,6 +16,35 @@ private struct ManagedPhaseContractCase: Decodable {
 }
 
 struct LonghouseMenuBarCoreTests {
+    @Test
+    func statusItemSourceIconHasZeroPadding() throws {
+        let iconURL = try #require(Bundle.module.url(forResource: "LonghouseMenuIcon", withExtension: "png"))
+        let data = try Data(contentsOf: iconURL)
+        let rep = try #require(NSBitmapImageRep(data: data))
+
+        var minX = rep.pixelsWide
+        var minY = rep.pixelsHigh
+        var maxX = -1
+        var maxY = -1
+
+        for y in 0..<rep.pixelsHigh {
+            for x in 0..<rep.pixelsWide {
+                guard let color = rep.colorAt(x: x, y: y), color.alphaComponent > 0.001 else {
+                    continue
+                }
+                minX = min(minX, x)
+                minY = min(minY, y)
+                maxX = max(maxX, x)
+                maxY = max(maxY, y)
+            }
+        }
+
+        #expect(minX == 0)
+        #expect(minY == 0)
+        #expect(maxX == rep.pixelsWide - 1)
+        #expect(maxY == rep.pixelsHigh - 1)
+    }
+
     @Test
     func decodesHealthyFixture() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
