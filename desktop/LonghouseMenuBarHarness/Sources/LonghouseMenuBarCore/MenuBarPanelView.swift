@@ -218,7 +218,7 @@ public struct MenuBarPanelView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            longhouseBrandEmblem(color: snapshot.parsedSeverity.accentColor)
+            longhouseBrandEmblem(severity: snapshot.displaySeverity)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
             VStack(alignment: .leading, spacing: 8) {

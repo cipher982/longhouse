@@ -10,7 +10,7 @@ public enum SnapshotRenderer {
         presentationDate: Date = Date(),
         headerSummaryVariant: HeaderSummaryVariant = .default
     ) throws {
-        let view = MenuBarPanelView(
+        let rootView = MenuBarPanelView(
             snapshot: snapshot,
             history: [],
             presentationDate: presentationDate,
@@ -24,14 +24,20 @@ public enum SnapshotRenderer {
         .environment(\.colorScheme, .dark)
         .background(Color.black)
 
-        let renderer = ImageRenderer(content: view)
-        renderer.scale = 2
+        let hostingView = NSHostingView(rootView: rootView)
+        let fittingSize = hostingView.fittingSize
+        let renderSize = NSSize(
+            width: max(MenuBarPanelLayout.panelWidth, fittingSize.width),
+            height: max(MenuBarPanelLayout.defaultWindowHeight, fittingSize.height)
+        )
+        hostingView.frame = NSRect(origin: .zero, size: renderSize)
+        hostingView.layoutSubtreeIfNeeded()
 
-        guard let cgImage = renderer.cgImage else {
+        guard let rep = hostingView.bitmapImageRepForCachingDisplay(in: hostingView.bounds) else {
             throw SnapshotSourceError.commandFailed("Failed to render snapshot image")
         }
-
-        let rep = NSBitmapImageRep(cgImage: cgImage)
+        rep.size = renderSize
+        hostingView.cacheDisplay(in: hostingView.bounds, to: rep)
         guard let pngData = rep.representation(using: NSBitmapImageRep.FileType.png, properties: [:]) else {
             throw SnapshotSourceError.commandFailed("Failed to encode PNG snapshot")
         }
