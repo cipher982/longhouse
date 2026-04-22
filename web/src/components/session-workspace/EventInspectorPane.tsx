@@ -88,19 +88,19 @@ export function EventInspectorPane({ selection, sessionEnded = false, onSelectKe
     );
   }
 
-  if (selection.kind === "tool_batch") {
+  if (selection.kind === "noise_group") {
     return (
       <div className="event-inspector">
         <div className="event-inspector__header">
-          <div className="event-inspector__title">Parallel tool batch</div>
+          <div className="event-inspector__title">Explored</div>
           <div className="event-inspector__subtitle">
-            {selection.batch.interactions.length} tool calls at {formatFullDate(selection.batch.timestamp)}
+            {selection.group.interactions.length} passive calls at {formatFullDate(selection.group.timestamp)}
           </div>
         </div>
         <div className="event-inspector__body">
           <InspectorSection label="Tools">
             <div className="inspector-tool-list">
-              {selection.batch.interactions.map((interaction) => {
+              {selection.group.interactions.map((interaction) => {
                 const info = getToolDisplayInfo(interaction.toolName);
                 const exitCode = getToolExitCode(interaction);
                 const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);

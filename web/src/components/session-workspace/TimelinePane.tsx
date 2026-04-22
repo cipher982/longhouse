@@ -1,10 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { EmptyState, Spinner } from "../ui";
 import { FunnelIcon } from "../icons";
 import type {
-  TimelineSeam,
+  NoiseGroup,
   TimelineItem,
-  ToolBatch,
+  TimelineSeam,
   ToolInteraction,
 } from "../../lib/sessionWorkspace";
 import {
@@ -15,9 +17,11 @@ import {
   getToolDuration,
   getToolExitCode,
   getToolSummary,
+  getToolTier,
   isAgentToolInteraction,
   isOutsideActiveContext,
   isToolInteractionDropped,
+  parseLonghouseOutput,
   timelineItemContainsSelection,
 } from "../../lib/sessionWorkspace";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
@@ -52,171 +56,337 @@ interface TimelinePaneProps {
 
 function SeamRow({ seam }: { seam: TimelineSeam }) {
   return (
-    <div className="timeline-boundary" data-testid="session-timeline-seam">
-      <div className="timeline-boundary__rule" />
-      <div className="timeline-boundary__body">
-        <span className="timeline-boundary__label">{seam.label}</span>
-        <span className="timeline-boundary__description">{seam.description}</span>
+    <div className="tl-seam" data-testid="session-timeline-seam">
+      <div className="tl-seam__rule" />
+      <div className="tl-seam__body">
+        <span className="tl-seam__label">{seam.label}</span>
+        <span className="tl-seam__description">{seam.description}</span>
       </div>
-      <div className="timeline-boundary__stamp">{formatContinuationStamp(seam.timestamp)}</div>
+      <div className="tl-seam__stamp">{formatContinuationStamp(seam.timestamp)}</div>
     </div>
   );
 }
 
 function MessageRow({
-  item,
-  isSelected,
-  onSelect,
+  event,
+  onRawClick,
 }: {
-  item: Extract<TimelineItem, { kind: "message" }>;
-  isSelected: boolean;
-  onSelect: () => void;
+  event: Extract<TimelineItem, { kind: "message" }>["event"];
+  onRawClick: () => void;
 }) {
-  const preview = getTimelineMessagePreview(item.event);
-  const outsideActiveContext = isOutsideActiveContext(item.event);
+  const preview = getTimelineMessagePreview(event);
+  const outside = isOutsideActiveContext(event);
+  const isUser = event.role === "user";
+  const isAssistant = event.role === "assistant";
 
   return (
-    <button
-      type="button"
-      id={`event-${item.event.id}`}
+    <div
+      id={`event-${event.id}`}
       data-testid="session-timeline-row"
       data-row-kind="message"
-      data-message-role={item.event.role}
-      className={`timeline-row timeline-row--message event-item${isSelected ? " is-selected event-highlight" : ""}`}
-      onClick={onSelect}
+      data-message-role={event.role}
+      className={`tl-msg tl-msg--${event.role}`}
     >
-      <div className="timeline-row__meta">
-        <span className={`timeline-row__role timeline-row__role--${item.event.role}`}>
-          {item.event.role === "user" ? "You" : item.event.role === "assistant" ? "AI" : item.event.role}
+      <div className="tl-msg__head">
+        <span className="tl-msg__who">
+          {isUser ? "You" : isAssistant ? "AI" : event.role}
         </span>
-        <span className="timeline-row__time">{formatTime(item.event.timestamp)}</span>
+        <span className="tl-msg__time">{formatTime(event.timestamp)}</span>
+        {outside ? (
+          <span className="tl-chip tl-chip--warning">outside active context</span>
+        ) : null}
+        <button
+          type="button"
+          className="tl-raw-btn"
+          onClick={onRawClick}
+          title="Inspect raw event"
+          aria-label="Inspect raw event"
+        >
+          {"{}"}
+        </button>
       </div>
-      <div className="timeline-row__content timeline-row__content--message">{preview}</div>
-      {outsideActiveContext ? (
-        <div className="timeline-row__badges">
-          <span className="timeline-row__badge timeline-row__badge--warning">Outside active context</span>
-        </div>
-      ) : null}
-    </button>
+      <div className="tl-msg__body">
+        {isAssistant || isUser ? (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              a: ({ node: _node, ...props }) => (
+                <a {...props} target="_blank" rel="noreferrer noopener" />
+              ),
+            }}
+          >
+            {preview}
+          </ReactMarkdown>
+        ) : (
+          <div className="tl-msg__plain">{preview}</div>
+        )}
+      </div>
+    </div>
   );
 }
 
-function ToolRow({
+/** Inline metadata row rendered underneath an expanded tool row. */
+function ToolDetail({ interaction, sessionEnded }: { interaction: ToolInteraction; sessionEnded: boolean }) {
+  const hasInput =
+    interaction.callEvent?.tool_input_json != null &&
+    Object.keys(interaction.callEvent.tool_input_json).length > 0;
+  const parsedOutput = interaction.resultEvent?.tool_output_text
+    ? parseLonghouseOutput(interaction.resultEvent.tool_output_text)
+    : null;
+  const outputText = parsedOutput
+    ? parsedOutput.output
+    : interaction.resultEvent?.tool_output_text || null;
+  const awaitingResult = !interaction.resultEvent && interaction.pairing !== "orphan";
+  const dropped = isToolInteractionDropped(interaction, sessionEnded);
+
+  return (
+    <div className="tl-detail">
+      {hasInput ? (
+        <section className="tl-detail__block">
+          <div className="tl-detail__label">input</div>
+          <pre className="tl-code">
+            {JSON.stringify(interaction.callEvent?.tool_input_json, null, 2)}
+          </pre>
+        </section>
+      ) : null}
+      <section className="tl-detail__block">
+        <div className="tl-detail__label">output</div>
+        {outputText ? (
+          <pre className="tl-code tl-code--output">{outputText}</pre>
+        ) : (
+          <div className="tl-detail__empty">
+            {dropped
+              ? "Tool call dropped — no result was ever recorded."
+              : awaitingResult
+                ? "Result not recorded yet."
+                : "No output recorded."}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function ActionCard({
   interaction,
   rowId,
+  expanded,
   isSelected,
   sessionEnded,
   onSelect,
+  onToggleExpand,
 }: {
   interaction: ToolInteraction;
   rowId: string;
+  expanded: boolean;
   isSelected: boolean;
   sessionEnded: boolean;
   onSelect: () => void;
+  onToggleExpand: () => void;
 }) {
   const info = getToolDisplayInfo(interaction.toolName);
   const summary = getToolSummary(interaction);
   const exitCode = getToolExitCode(interaction);
   const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
-  const outsideActiveContext =
-    isOutsideActiveContext(interaction.callEvent) || isOutsideActiveContext(interaction.resultEvent);
   const awaitingResult = !interaction.resultEvent && interaction.pairing !== "orphan";
   const dropped = awaitingResult && isToolInteractionDropped(interaction, sessionEnded);
   const pending = awaitingResult && !dropped;
   const isAgent = isAgentToolInteraction(interaction);
-  const agentType = isAgent ? (interaction.callEvent?.tool_input_json as Record<string, unknown> | null)?.subagent_type as string | undefined : undefined;
+  const agentType = isAgent
+    ? ((interaction.callEvent?.tool_input_json as Record<string, unknown> | null)?.subagent_type as string | undefined)
+    : undefined;
+  const outside =
+    isOutsideActiveContext(interaction.callEvent) || isOutsideActiveContext(interaction.resultEvent);
+
+  const statusTone = dropped ? "error" : pending ? "pending" : exitCode != null && exitCode !== 0 ? "error" : "ok";
 
   return (
-    <button
-      type="button"
+    <div
       id={rowId}
       data-testid="session-timeline-row"
       data-row-kind="tool"
-      className={`timeline-row timeline-row--tool${isAgent ? " timeline-row--agent" : ""} event-item${isSelected ? " is-selected event-highlight" : ""}`}
-      onClick={onSelect}
+      data-tool-tier="action"
+      className={`tl-action${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}`}
     >
-      <div className="timeline-row__meta">
-        <span className="timeline-row__tool-title">
-          <span className="timeline-row__tool-icon" style={{ backgroundColor: info.color }}>
-            {info.icon}
-          </span>
-          <span className="timeline-row__tool-name">{agentType || info.displayName}</span>
-          {info.mcpNamespace ? <span className="timeline-row__tool-namespace">{info.mcpNamespace}</span> : null}
+      <button
+        type="button"
+        className="tl-action__head"
+        onClick={() => {
+          onSelect();
+          onToggleExpand();
+        }}
+      >
+        <span className="tl-action__accent" style={{ background: info.color }} data-tone={statusTone} />
+        <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
+        <span className="tl-action__name">{agentType || info.displayName}</span>
+        {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
+        <span className="tl-action__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
+        <span className="tl-action__meta">
+          {exitCode != null && exitCode !== 0 ? <span className="tl-chip tl-chip--error">exit {exitCode}</span> : null}
+          {pending ? <span className="tl-chip tl-chip--pending">running</span> : null}
+          {dropped ? <span className="tl-chip tl-chip--warning">dropped</span> : null}
+          {outside ? <span className="tl-chip tl-chip--warning">outside</span> : null}
+          {duration ? <span className="tl-action__time">{duration}</span> : null}
+          <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
         </span>
-        <span className="timeline-row__time">
-          {formatTime(interaction.callEvent?.timestamp ?? interaction.resultEvent?.timestamp ?? interaction.timestamp)}
-        </span>
-      </div>
-      <div className="timeline-row__content timeline-row__content--tool">
-        {summary || (
-          dropped
-            ? "Result not recorded \u2014 tool call dropped."
-            : pending
-            ? "Waiting for tool result..."
-            : "No input or output recorded"
-        )}
-      </div>
-      <div className="timeline-row__badges">
-        {exitCode != null ? (
-          <span className={`timeline-row__badge ${exitCode === 0 ? "timeline-row__badge--success" : "timeline-row__badge--error"}`}>
-            exit {exitCode}
-          </span>
-        ) : null}
-        {duration ? <span className="timeline-row__badge">{duration}</span> : null}
-        {pending ? <span className="timeline-row__badge">Pending</span> : null}
-        {dropped ? <span className="timeline-row__badge timeline-row__badge--warning">Dropped</span> : null}
-        {outsideActiveContext ? (
-          <span className="timeline-row__badge timeline-row__badge--warning">Outside active context</span>
-        ) : null}
-      </div>
-    </button>
+      </button>
+      {expanded ? <ToolDetail interaction={interaction} sessionEnded={sessionEnded} /> : null}
+    </div>
   );
 }
 
-function ToolBatchRow({
-  batch,
+function ContextLine({
+  interaction,
+  rowId,
+  expanded,
   isSelected,
+  sessionEnded,
   onSelect,
+  onToggleExpand,
 }: {
-  batch: ToolBatch;
+  interaction: ToolInteraction;
+  rowId: string;
+  expanded: boolean;
   isSelected: boolean;
+  sessionEnded: boolean;
   onSelect: () => void;
+  onToggleExpand: () => void;
 }) {
-  const allAgents = batch.interactions.every(isAgentToolInteraction);
+  const info = getToolDisplayInfo(interaction.toolName);
+  const summary = getToolSummary(interaction);
+  const duration = getToolDuration(interaction.callEvent, interaction.resultEvent);
+  const awaitingResult = !interaction.resultEvent && interaction.pairing !== "orphan";
+  const dropped = awaitingResult && isToolInteractionDropped(interaction, sessionEnded);
+  const pending = awaitingResult && !dropped;
 
   return (
-    <button
-      type="button"
-      id={`event-${batch.anchorId}`}
+    <div
+      id={rowId}
       data-testid="session-timeline-row"
-      data-row-kind="tool-batch"
-      className={`timeline-row timeline-row--batch${allAgents ? " timeline-row--agent" : ""} event-item${isSelected ? " is-selected event-highlight" : ""}`}
-      onClick={onSelect}
+      data-row-kind="tool"
+      data-tool-tier="context"
+      className={`tl-context${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
     >
-      <div className="timeline-row__meta">
-        <span className="timeline-row__batch-label">
-          <span className={`timeline-row__badge${allAgents ? "" : " timeline-row__badge--accent"}`}>
-            {batch.interactions.length} {allAgents ? "agents" : "parallel"}
-          </span>
-          {allAgents ? null : <span>Tool burst</span>}
+      <button
+        type="button"
+        className="tl-context__head"
+        onClick={() => {
+          onSelect();
+          onToggleExpand();
+        }}
+      >
+        <span className="tl-context__arrow">↳</span>
+        <span className="tl-context__label" style={{ color: info.color }}>{info.displayName}</span>
+        <span className="tl-context__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
+        <span className="tl-context__meta">
+          {pending ? <span className="tl-chip tl-chip--pending">running</span> : null}
+          {dropped ? <span className="tl-chip tl-chip--warning">dropped</span> : null}
+          {duration ? <span className="tl-context__time">{duration}</span> : null}
         </span>
-        <span className="timeline-row__time">{formatTime(batch.timestamp)}</span>
-      </div>
-      <div className="timeline-row__batch-list">
-        {batch.interactions.map((interaction) => {
-          const info = getToolDisplayInfo(interaction.toolName);
-          return (
-            <span key={interaction.key} className="timeline-row__batch-chip">
-              <span className="timeline-row__batch-chip-icon" style={{ color: info.color }}>
-                {info.icon}
-              </span>
-              {getToolSummary(interaction) || info.displayName}
-            </span>
-          );
-        })}
-      </div>
-    </button>
+      </button>
+      {expanded ? <ToolDetail interaction={interaction} sessionEnded={sessionEnded} /> : null}
+    </div>
   );
+}
+
+function NoiseChip({
+  group,
+  rowId,
+  expanded,
+  isSelected,
+  sessionEnded,
+  expandedInteractionKey,
+  onSelect,
+  onToggleExpand,
+  onToggleInteraction,
+}: {
+  group: NoiseGroup;
+  rowId: string;
+  expanded: boolean;
+  isSelected: boolean;
+  sessionEnded: boolean;
+  expandedInteractionKey: string | null;
+  onSelect: () => void;
+  onToggleExpand: () => void;
+  onToggleInteraction: (key: string) => void;
+}) {
+  const counts = new Map<string, number>();
+  for (const interaction of group.interactions) {
+    const info = getToolDisplayInfo(interaction.toolName);
+    counts.set(info.displayName, (counts.get(info.displayName) ?? 0) + 1);
+  }
+  const summary = Array.from(counts.entries())
+    .map(([name, n]) => (n > 1 ? `${name} × ${n}` : name))
+    .join(", ");
+
+  return (
+    <div
+      id={rowId}
+      data-testid="session-timeline-row"
+      data-row-kind="noise-group"
+      className={`tl-noise${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}`}
+    >
+      <button
+        type="button"
+        className="tl-noise__head"
+        onClick={() => {
+          onSelect();
+          onToggleExpand();
+        }}
+      >
+        <span className="tl-noise__arrow">↳</span>
+        <span className="tl-noise__label">Explored</span>
+        <span className="tl-noise__summary">{summary}</span>
+        <span className="tl-noise__count">{group.interactions.length}</span>
+        <span className={`tl-noise__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
+      </button>
+      {expanded ? (
+        <div className="tl-noise__list">
+          {group.interactions.map((interaction) => {
+            const info = getToolDisplayInfo(interaction.toolName);
+            const sum = getToolSummary(interaction);
+            const isOpen = expandedInteractionKey === interaction.key;
+            return (
+              <div
+                key={interaction.key}
+                className={`tl-noise__item${isOpen ? " is-expanded" : ""}`}
+              >
+                <button
+                  type="button"
+                  className="tl-noise__item-head"
+                  onClick={() => onToggleInteraction(interaction.key)}
+                >
+                  <span className="tl-noise__item-label" style={{ color: info.color }}>
+                    {info.displayName}
+                  </span>
+                  <span className="tl-noise__item-summary">{sum || "—"}</span>
+                </button>
+                {isOpen ? <ToolDetail interaction={interaction} sessionEnded={sessionEnded} /> : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ToolRow(props: {
+  interaction: ToolInteraction;
+  rowId: string;
+  expanded: boolean;
+  isSelected: boolean;
+  sessionEnded: boolean;
+  onSelect: () => void;
+  onToggleExpand: () => void;
+}) {
+  const tier = getToolTier(props.interaction);
+  if (tier === "context" || tier === "noise") {
+    // A solo noise tool renders identically to a context line — one row
+    // is already compact, no need for the chip/expand wrapper.
+    return <ContextLine {...props} />;
+  }
+  return <ActionCard {...props} />;
 }
 
 export function TimelinePane({
@@ -240,14 +410,28 @@ export function TimelinePane({
   dock = null,
   listRef,
 }: TimelinePaneProps) {
-  // Filter and search state — owned here, not passed in
   const [eventFilter, setEventFilter] = useState<EventFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Auto-fetch older events when the top sentinel scrolls into view.
-  // The sentinel lives inside timeline-pane__list (the scroll container),
-  // so we pass that div as `root` — otherwise the viewport-based observer
-  // never fires when the user scrolls within the inner div.
+  // Expand state: per-tool-row and per-noise-group. Kept local so we don't
+  // pollute the URL/selection with transient UI state. Selection ≠ expanded.
+  const [expandedTools, setExpandedTools] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const toggleTool = (key: string) =>
+    setExpandedTools((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const toggleGroup = (key: string) =>
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
   const topSentinelRef = useRef<HTMLDivElement | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   useScrollToLoad({
@@ -258,10 +442,6 @@ export function TimelinePane({
     onLoad: onFetchPreviousPage,
   });
 
-  // Scroll anchoring: when a new page prepends items, preserve the user's
-  // visual position by offsetting scrollTop by the added height. This moves
-  // the sentinel off-screen so the observer can fire again on the next
-  // scroll-up — no "scroll down to reset" needed.
   const prevScrollHeightRef = useRef(0);
   const prevLoadedEntriesRef = useRef(0);
   useLayoutEffect(() => {
@@ -270,7 +450,6 @@ export function TimelinePane({
     const newScrollHeight = container.scrollHeight;
     const prevLoaded = prevLoadedEntriesRef.current;
     prevLoadedEntriesRef.current = loadedEntries;
-    // Only anchor after the initial load (prevLoaded > 0), not on first render.
     if (prevLoaded > 0 && loadedEntries > prevLoaded) {
       const diff = newScrollHeight - prevScrollHeightRef.current;
       if (diff > 0) container.scrollTop += diff;
@@ -283,17 +462,16 @@ export function TimelinePane({
     () => items.filter((item) => item.kind === "message").length,
     [items],
   );
-
   const toolRowCount = useMemo(
-    () => items.filter((item) => item.kind === "tool" || item.kind === "tool_batch").length,
+    () => items.filter((item) => item.kind === "tool" || item.kind === "noise_group").length,
     [items],
   );
-
   const outsideActiveCount = useMemo(
-    () => items.reduce((count, item) => {
-      if (item.kind === "message" && item.event.in_active_context === false) return count + 1;
-      return count;
-    }, 0),
+    () =>
+      items.reduce((count, item) => {
+        if (item.kind === "message" && item.event.in_active_context === false) return count + 1;
+        return count;
+      }, 0),
     [items],
   );
 
@@ -303,7 +481,7 @@ export function TimelinePane({
     if (eventFilter === "messages") {
       result = result.filter((item) => item.kind === "message");
     } else if (eventFilter === "tools") {
-      result = result.filter((item) => item.kind === "tool" || item.kind === "tool_batch");
+      result = result.filter((item) => item.kind === "tool" || item.kind === "noise_group");
     }
 
     if (!debouncedSearch.trim()) return result;
@@ -316,12 +494,11 @@ export function TimelinePane({
           item.seam.description.toLowerCase().includes(query)
         );
       }
-
       if (item.kind === "message") {
         return item.event.content_text?.toLowerCase().includes(query);
       }
-
-      const interactions = item.kind === "tool_batch" ? item.batch.interactions : [item.interaction];
+      const interactions =
+        item.kind === "noise_group" ? item.group.interactions : [item.interaction];
       return interactions.some((interaction) => {
         if (interaction.toolName.toLowerCase().includes(query)) return true;
         if (
@@ -330,15 +507,12 @@ export function TimelinePane({
         ) {
           return true;
         }
-        if (interaction.resultEvent?.tool_output_text?.toLowerCase().includes(query)) {
-          return true;
-        }
+        if (interaction.resultEvent?.tool_output_text?.toLowerCase().includes(query)) return true;
         return false;
       });
     });
   }, [items, eventFilter, debouncedSearch]);
 
-  // Tell the parent when the selected key becomes hidden/visible due to local filtering
   const visibleSelectedKey = useMemo(() => {
     if (!selectedKey) return null;
     return filteredItems.some((item) => timelineItemContainsSelection(item, selectedKey))
@@ -354,7 +528,6 @@ export function TimelinePane({
     }
   }, [visibleSelectedKey, onVisibleSelectionChange]);
 
-  const toolFilterLabel = `Tools (${toolRowCount})`;
   const [filtersExpanded, setFiltersExpanded] = useState(false);
   const showFilters = filtersExpanded || eventFilter !== "all" || searchQuery.trim().length > 0;
 
@@ -389,11 +562,7 @@ export function TimelinePane({
             ) : null}
           </button>
         </div>
-        {headerRight && (
-          <div className="timeline-pane__header-right">
-            {headerRight}
-          </div>
-        )}
+        {headerRight && <div className="timeline-pane__header-right">{headerRight}</div>}
       </div>
 
       {showFilters ? (
@@ -418,7 +587,7 @@ export function TimelinePane({
               className={`timeline-pane__filter${eventFilter === "tools" ? " is-active" : ""}`}
               onClick={() => setEventFilter("tools")}
             >
-              {toolFilterLabel}
+              Tools ({toolRowCount})
             </button>
           </div>
           <div className="timeline-pane__header-actions">
@@ -453,7 +622,9 @@ export function TimelinePane({
               className="timeline-pane__status-chip"
               onClick={() => onShowAbandonedBranchesChange(!showAbandonedBranches)}
             >
-              {showAbandonedBranches ? "Showing head + abandoned branches" : `${abandonedEvents} abandoned branch events hidden`}
+              {showAbandonedBranches
+                ? "Showing head + abandoned branches"
+                : `${abandonedEvents} abandoned branch events hidden`}
             </button>
           ) : null}
         </div>
@@ -509,9 +680,8 @@ export function TimelinePane({
               return (
                 <MessageRow
                   key={item.event.id}
-                  item={item}
-                  isSelected={timelineItemContainsSelection(item, selectedKey)}
-                  onSelect={() => onSelectKey(`message:${item.event.id}`)}
+                  event={item.event}
+                  onRawClick={() => onSelectKey(`message:${item.event.id}`)}
                 />
               );
             }
@@ -523,19 +693,31 @@ export function TimelinePane({
                   key={item.interaction.key}
                   interaction={item.interaction}
                   rowId={`event-${item.interaction.anchorId}`}
+                  expanded={expandedTools.has(item.interaction.key)}
                   isSelected={selectedKey === selectionKey}
                   sessionEnded={sessionEnded}
                   onSelect={() => onSelectKey(selectionKey)}
+                  onToggleExpand={() => toggleTool(item.interaction.key)}
                 />
               );
             }
 
+            const groupKey = `group:${item.group.key}`;
+            const expandedChild = Array.from(expandedTools).find((k) =>
+              item.group.interactions.some((i) => i.key === k),
+            );
             return (
-              <ToolBatchRow
-                key={item.batch.key}
-                batch={item.batch}
+              <NoiseChip
+                key={item.group.key}
+                group={item.group}
+                rowId={`event-${item.group.anchorId}`}
+                expanded={expandedGroups.has(item.group.key)}
                 isSelected={timelineItemContainsSelection(item, selectedKey)}
-                onSelect={() => onSelectKey(`batch:${item.batch.key}`)}
+                sessionEnded={sessionEnded}
+                expandedInteractionKey={expandedChild ?? null}
+                onSelect={() => onSelectKey(groupKey)}
+                onToggleExpand={() => toggleGroup(item.group.key)}
+                onToggleInteraction={(k) => toggleTool(k)}
               />
             );
           })

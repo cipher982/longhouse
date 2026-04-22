@@ -12,7 +12,12 @@ export type ToolInteraction = {
   timestamp: string;
 };
 
-export type ToolBatch = {
+/**
+ * Run of 2+ consecutive low-signal tool calls (Grep/Glob/LS/ToolSearch/…).
+ * Collapses into a single "Explored N" chip; expand reveals each call as
+ * a one-liner.
+ */
+export type NoiseGroup = {
   key: string;
   interactions: ToolInteraction[];
   timestamp: string;
@@ -31,7 +36,7 @@ export type TimelineItem =
   | { kind: "seam"; seam: TimelineSeam }
   | { kind: "message"; event: AgentEvent }
   | { kind: "tool"; interaction: ToolInteraction }
-  | { kind: "tool_batch"; batch: ToolBatch };
+  | { kind: "noise_group"; group: NoiseGroup };
 
 export type TimelineSelection =
   | {
@@ -45,20 +50,20 @@ export type TimelineSelection =
       key: string;
       rowId: string;
       interaction: ToolInteraction;
-      parentBatchKey: string | null;
+      parentGroupKey: string | null;
     }
   | {
-      kind: "tool_batch";
+      kind: "noise_group";
       key: string;
       rowId: string;
-      batch: ToolBatch;
+      group: NoiseGroup;
     };
 
 export type TimelineModel = {
   events: AgentEvent[];
   items: TimelineItem[];
   toolItems: ToolInteraction[];
-  toolBatches: ToolBatch[];
+  noiseGroups: NoiseGroup[];
   selectionMap: Map<string, TimelineSelection>;
   eventIdToSelectionKey: Map<number, string>;
   eventIdToRowId: Map<number, string>;

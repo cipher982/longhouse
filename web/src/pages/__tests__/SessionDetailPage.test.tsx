@@ -364,7 +364,11 @@ describe("SessionDetailPage", () => {
       mockWorkspaceState({ session, model });
       renderSessionDetailPage();
 
-      expect(screen.getByText("Waiting for tool result...")).toBeInTheDocument();
+      {
+        const label = screen.getByText("Bash");
+        const row = label.closest("[data-row-kind=\"tool\"]");
+        expect(row).toHaveTextContent("running");
+      }
 
       const toolLabel = screen.getByText("Bash");
       const toolRow = toolLabel.closest("button");
@@ -379,10 +383,12 @@ describe("SessionDetailPage", () => {
         throw new Error("Expected status metadata in the inspector");
       }
       expect(statusItem).toHaveTextContent("Pending");
-      expect(screen.getByText("Result not recorded yet.")).toBeInTheDocument();
-      expect(
-        screen.queryByText("Tool call dropped \u2014 no result was ever recorded."),
-      ).not.toBeInTheDocument();
+      const inspectorBody1 = statusItem.closest(".event-inspector__body");
+      expect(inspectorBody1).not.toBeNull();
+      expect(inspectorBody1).toHaveTextContent("Result not recorded yet.");
+      expect(inspectorBody1).not.toHaveTextContent(
+        "Tool call dropped \u2014 no result was ever recorded.",
+      );
     } finally {
       vi.useRealTimers();
     }
@@ -421,9 +427,11 @@ describe("SessionDetailPage", () => {
     mockWorkspaceState({ session, model });
     renderSessionDetailPage();
 
-    expect(
-      screen.getByText("Result not recorded \u2014 tool call dropped."),
-    ).toBeInTheDocument();
+    {
+      const label = screen.getByText("Bash");
+      const row = label.closest("[data-row-kind=\"tool\"]");
+      expect(row).toHaveTextContent("dropped");
+    }
 
     const toolLabel = screen.getByText("Bash");
     const toolRow = toolLabel.closest("button");
@@ -438,10 +446,12 @@ describe("SessionDetailPage", () => {
       throw new Error("Expected status metadata in the inspector");
     }
     expect(statusItem).toHaveTextContent("Dropped");
-    expect(
-      screen.getByText("Tool call dropped \u2014 no result was ever recorded."),
-    ).toBeInTheDocument();
-    expect(screen.queryByText("Result not recorded yet.")).not.toBeInTheDocument();
+    const inspectorBody2 = statusItem.closest(".event-inspector__body");
+    expect(inspectorBody2).not.toBeNull();
+    expect(inspectorBody2).toHaveTextContent(
+      "Tool call dropped \u2014 no result was ever recorded.",
+    );
+    expect(inspectorBody2).not.toHaveTextContent("Result not recorded yet.");
   });
 
   it("shows the active turn elapsed counter in the header and control strip", () => {

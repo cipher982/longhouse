@@ -1,15 +1,17 @@
 export type {
   EventFilter,
   ManagedLaunchSuggestion,
+  NoiseGroup,
   SessionInteractionCapabilities,
   SessionInteractionMode,
   TimelineItem,
   TimelineModel,
   TimelineSeam,
   TimelineSelection,
-  ToolBatch,
   ToolInteraction,
 } from "./types";
+
+export type { ToolTier } from "./toolTiers.generated";
 
 export {
   formatContinuationStamp,
@@ -31,6 +33,7 @@ export {
   getToolDuration,
   getToolExitCode,
   getToolSummary,
+  getToolTier,
   isAgentToolInteraction,
   isOutsideActiveContext,
   isToolInteractionDropped,
