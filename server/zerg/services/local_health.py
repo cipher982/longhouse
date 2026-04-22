@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from zerg.managed_phase_contract import display_label_for_phase
+from zerg.managed_phase_contract import is_known_raw_phase
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -808,6 +809,13 @@ def _phase_display_label(phase: str | None, tool_name: str | None) -> str | None
     return display_label_for_phase(_normalize_optional_string(phase), _normalize_optional_string(tool_name))
 
 
+def _managed_phase_is_unknown(raw_phase: str | None) -> bool:
+    normalized_phase = _normalize_optional_string(raw_phase)
+    if normalized_phase is None:
+        return False
+    return not is_known_raw_phase(normalized_phase)
+
+
 _MANAGED_FINISHED_RETENTION_SECONDS = 10 * 60
 
 
@@ -1022,6 +1030,7 @@ def _collect_managed_codex_summary(
                 "workspace_label": Path(str(state.get("cwd") or "")).name or None,
                 "branch": None,
                 "state": normalized_state,
+                "raw_phase": phase_state.get("phase") if phase_state else None,
                 "phase": _phase_display_label(
                     phase_state.get("phase") if phase_state else None,
                     phase_state.get("tool_name") if phase_state else None,
@@ -1167,6 +1176,7 @@ def _collect_managed_sessions_by_process(
                     "started_at": started_at,
                     "branch": None,
                     "state": "attached",
+                    "raw_phase": phase_state.get("phase") if phase_state else None,
                     "phase": _phase_display_label(
                         phase_state.get("phase") if phase_state else None,
                         phase_state.get("tool_name") if phase_state else None,
@@ -1394,6 +1404,7 @@ def _classify_health(
     outbox: dict[str, Any],
     launch_readiness: dict[str, Any],
     managed_summary: dict[str, Any] | None,
+    managed_sessions: list[dict[str, Any]],
 ) -> tuple[str, str, str, list[str], list[str]]:
     reasons: list[str] = []
     actions: list[str] = []
@@ -1421,6 +1432,7 @@ def _classify_health(
     managed_detached = int((managed_summary or {}).get("detached_count") or 0)
     managed_degraded = int((managed_summary or {}).get("degraded_count") or 0)
     orphan_bridge_count = int((managed_summary or {}).get("orphan_bridge_count") or 0)
+    unknown_managed_phase_count = sum(1 for session in managed_sessions if _managed_phase_is_unknown(session.get("raw_phase")))
     repair_action = _repair_command(
         can_reconcile_from_state=_can_reconcile_launch_from_state(
             state_exists=bool(launch_readiness.get("state_exists")),
@@ -1489,6 +1501,10 @@ def _classify_health(
         reasons.append("managed_session_detached")
         _with_action(actions, "Reattach or stop detached managed sessions from Longhouse.app")
 
+    if unknown_managed_phase_count > 0:
+        reasons.append("managed_unknown_phase")
+        _with_action(actions, "Update the managed phase contract before trusting this managed-session status")
+
     if outbox_count >= DEGRADED_BACKLOG_COUNT:
         reasons.append("outbox_backlog")
     if outbox_count > 0 and outbox_oldest is not None and outbox_oldest > OUTBOX_DEGRADED_AGE_SECONDS:
@@ -1520,7 +1536,7 @@ def _classify_health(
     elif launch_state == "degraded":
         degraded = True
 
-    if orphan_bridge_count > 0 or managed_degraded > 0:
+    if orphan_bridge_count > 0 or managed_degraded > 0 or unknown_managed_phase_count > 0:
         broken = True
     elif managed_detached > 0:
         degraded = True
@@ -1591,6 +1607,8 @@ def _classify_health(
             headline = "Longhouse has orphaned managed sessions"
         elif "managed_session_control_degraded" in reasons:
             headline = "Longhouse lost managed session control"
+        elif "managed_unknown_phase" in reasons:
+            headline = "Longhouse saw an unknown managed phase"
         return ("broken", "red", headline, reasons, actions)
 
     if degraded:
@@ -1644,6 +1662,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         outbox=outbox,
         launch_readiness=launch_readiness,
         managed_summary=managed_summary,
+        managed_sessions=managed_sessions,
     )
     build_identity = _collect_build_identity(engine_status=engine_status)
 

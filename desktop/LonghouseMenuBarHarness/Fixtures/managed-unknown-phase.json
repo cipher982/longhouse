@@ -1,0 +1,109 @@
+{
+  "schema_version": 1,
+  "collected_at": "2026-04-22T03:00:00Z",
+  "health_state": "broken",
+  "severity": "red",
+  "headline": "Longhouse saw an unknown managed phase",
+  "reasons": [
+    "managed_unknown_phase"
+  ],
+  "suggested_actions": [
+    "Update the managed phase contract before trusting this managed-session status"
+  ],
+  "service": {
+    "platform": "macos",
+    "status": "running",
+    "service_name": "com.longhouse.shipper",
+    "service_file": "/Users/test/Library/LaunchAgents/com.longhouse.shipper.plist",
+    "log_path": "/Users/test/.longhouse/agent/logs/engine.log.*"
+  },
+  "engine_status": {
+    "path": "/Users/test/.longhouse/agent/engine-status.json",
+    "exists": true,
+    "fresh": true,
+    "age_seconds": 4,
+    "payload": {
+      "version": "0.1.15",
+      "daemon_pid": 24653,
+      "last_ship_at": "2026-04-22T02:59:57Z",
+      "spool_pending_count": 0,
+      "spool_dead_count": 0,
+      "parse_error_count_1h": 0,
+      "consecutive_ship_failures": 0,
+      "disk_free_bytes": 42949672960,
+      "is_offline": false,
+      "recent_dead_letters": [],
+      "last_updated": "2026-04-22T03:00:00Z"
+    },
+    "error": null
+  },
+  "outbox": {
+    "path": "/Users/test/.longhouse/agent/outbox",
+    "file_count": 0,
+    "oldest_age_seconds": null
+  },
+  "activity_summary": {
+    "path": "/Users/test/.longhouse/agent/longhouse-shipper.db",
+    "exists": true,
+    "error": null,
+    "sessions_today": 12,
+    "sessions_recent": 1,
+    "provider_counts_today": {
+      "codex": 7,
+      "claude": 5
+    },
+    "provider_counts_recent": {
+      "codex": 1
+    },
+    "recent_touches": [
+      { "provider": "codex", "workspace_label": "assistants-service", "last_updated": "2026-04-22T02:59:57Z", "branch": "main" }
+    ],
+    "latest_activity_at": "2026-04-22T02:59:57Z",
+    "recent_window_minutes": 15
+  },
+  "managed_summary": {
+    "attached_count": 1,
+    "detached_count": 0,
+    "degraded_count": 0,
+    "orphan_bridge_count": 0,
+    "latest_activity_at": "2026-04-22T02:59:57Z"
+  },
+  "managed_sessions": [
+    {
+      "session_id": "sess-unknown-phase",
+      "provider": "codex",
+      "workspace_label": "assistants-service",
+      "branch": "main",
+      "state": "attached",
+      "raw_phase": "future_magic",
+      "phase": "unknown phase",
+      "phase_observed_at": "2026-04-22T02:59:54Z",
+      "last_activity_at": "2026-04-22T02:59:57Z",
+      "bridge_status": "ready",
+      "bridge_pid": 27771,
+      "bridge_heartbeat_at": "2026-04-22T03:00:00Z",
+      "reason_codes": []
+    }
+  ],
+  "orphan_bridges": [],
+  "launch_readiness": {
+    "state": "ready",
+    "headline": "Managed launch configuration looks coherent",
+    "reasons": [],
+    "suggested_actions": [],
+    "stored_url": "https://example.longhouse.test",
+    "machine_name": "test-machine",
+    "service_machine_name": "test-machine",
+    "runner": {
+      "path": "/Users/test/.config/longhouse/runner.env",
+      "exists": true,
+      "error": null,
+      "runner_name": "test-machine",
+      "runner_id": null,
+      "runner_urls": [
+        "https://example.longhouse.test"
+      ],
+      "install_mode": "desktop"
+    }
+  }
+}

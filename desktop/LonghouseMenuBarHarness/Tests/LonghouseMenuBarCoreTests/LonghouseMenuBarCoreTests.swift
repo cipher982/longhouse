@@ -706,6 +706,23 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func decodesManagedUnknownPhaseFixture() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/managed-unknown-phase.json")
+
+        let snapshot = try FixtureHealthSnapshotSource(fileURL: fixtureURL).load()
+        let session = try #require(snapshot.currentManagedSessions.first)
+
+        #expect(snapshot.healthState == "broken")
+        #expect(snapshot.managedAttentionSeverity == .red)
+        #expect(session.menuBarAttentionKind == .unknown("unknown phase"))
+        #expect(session.rawPhase == "future_magic")
+    }
+
+    @Test
     func orphanBridgesPromoteMenuBarAttention() throws {
         let data = Data("""
         {
@@ -789,6 +806,94 @@ struct LonghouseMenuBarCoreTests {
         )
 
         #expect(session.menuBarAttentionKind == .idle)
+    }
+
+    @Test
+    func attachedManagedSessionWithUnknownPhaseUsesUnknownAttention() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "sess-unknown-phase",
+            provider: "codex",
+            workspaceLabel: "assistants-service",
+            branch: nil,
+            state: "attached",
+            phase: "unknown phase",
+            rawPhase: "future_magic",
+            phaseObservedAt: "2026-04-22T02:43:47Z",
+            lastActivityAt: "2026-04-22T02:43:47Z",
+            bridgeStatus: "ready",
+            bridgePid: 95434,
+            bridgeHeartbeatAt: "2026-04-22T02:43:47Z",
+            reasonCodes: []
+        )
+
+        #expect(session.menuBarAttentionKind == .unknown("unknown phase"))
+    }
+
+    @Test
+    func managedSessionWithBlankStateUsesGenericUnknownAttention() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "sess-blank-state",
+            provider: "codex",
+            workspaceLabel: "assistants-service",
+            branch: nil,
+            state: "",
+            phase: nil,
+            phaseObservedAt: nil,
+            lastActivityAt: "2026-04-22T02:43:47Z",
+            bridgeStatus: "ready",
+            bridgePid: 95434,
+            bridgeHeartbeatAt: "2026-04-22T02:43:47Z",
+            reasonCodes: []
+        )
+
+        #expect(session.normalizedState == "unknown")
+        #expect(session.menuBarAttentionKind == .unknown("unknown"))
+    }
+
+    @Test
+    func unknownManagedPhasePromotesManagedAttentionSeverity() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-22T03:00:00Z",
+            healthState: "broken",
+            severity: "red",
+            headline: "Longhouse saw an unknown managed phase",
+            reasons: ["managed_unknown_phase"],
+            suggestedActions: ["Update the managed phase contract before trusting this managed-session status"],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            managedSummary: ManagedSummarySnapshot(
+                attachedCount: 1,
+                detachedCount: 0,
+                degradedCount: 0,
+                orphanBridgeCount: 0,
+                latestActivityAt: "2026-04-22T02:43:47Z"
+            ),
+            managedSessions: [
+                ManagedSessionSnapshot(
+                    sessionId: "sess-unknown-phase",
+                    provider: "codex",
+                    workspaceLabel: "assistants-service",
+                    branch: nil,
+                    state: "attached",
+                    phase: "unknown phase",
+                    rawPhase: "future_magic",
+                    phaseObservedAt: "2026-04-22T02:43:47Z",
+                    lastActivityAt: "2026-04-22T02:43:47Z",
+                    bridgeStatus: "ready",
+                    bridgePid: 95434,
+                    bridgeHeartbeatAt: "2026-04-22T02:43:47Z",
+                    reasonCodes: []
+                )
+            ],
+            orphanBridges: [],
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.managedAttentionSeverity == .red)
+        #expect(snapshot.needsMenuBarAttention == true)
     }
 
     @Test

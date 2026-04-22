@@ -608,6 +608,19 @@ public struct MenuBarPanelView: View {
     /// second timestamp from a lower-level bridge file just creates two clocks
     /// that disagree for no user-visible reason.
     private func managedSessionDetail(_ session: ManagedSessionSnapshot) -> String {
+        if session.normalizedState == "attached",
+           case .unknown = session.menuBarAttentionKind {
+            if let rawPhase = session.rawPhase?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rawPhase.isEmpty {
+                return "Unexpected local phase: \(rawPhase)"
+            }
+            if let phase = session.phase?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !phase.isEmpty {
+                return "Unexpected local phase label: \(phase)"
+            }
+            return "Longhouse cannot classify this managed phase yet."
+        }
+
         switch session.normalizedState {
         case "attached":
             return ""

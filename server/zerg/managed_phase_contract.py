@@ -58,13 +58,24 @@ def managed_phase_definition_by_raw() -> dict[str, ManagedPhaseDefinition]:
     return {item.normalized_raw_phase: item for item in managed_phase_definitions()}
 
 
+def definition_for_raw_phase(raw_phase: str | None) -> ManagedPhaseDefinition | None:
+    normalized_phase = (raw_phase or "").strip().lower()
+    if not normalized_phase:
+        return None
+    return managed_phase_definition_by_raw().get(normalized_phase)
+
+
+def is_known_raw_phase(raw_phase: str | None) -> bool:
+    return definition_for_raw_phase(raw_phase) is not None
+
+
 def display_label_for_phase(raw_phase: str | None, tool_name: str | None) -> str | None:
     normalized_phase = (raw_phase or "").strip().lower()
     if not normalized_phase:
         return None
-    definition = managed_phase_definition_by_raw().get(normalized_phase)
+    definition = definition_for_raw_phase(raw_phase)
     if definition is None:
-        return normalized_phase.replace("_", " ")
+        return "unknown phase"
     return definition.display_for_tool(tool_name)
 
 
