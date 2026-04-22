@@ -1098,11 +1098,76 @@ def _session_id_from_argv(cmdline: list[str]) -> str | None:
     return None
 
 
+def _scan_provider_processes() -> list[dict[str, Any]]:
+    """Collect live Claude/Codex CLI processes owned by the current user."""
+
+    try:
+        import psutil  # imported lazily to keep module import cheap
+    except ImportError:
+        return []
+
+    me = os.getuid()
+    processes: list[dict[str, Any]] = []
+
+    for proc in psutil.process_iter(["pid", "cmdline", "create_time"]):
+        try:
+            if proc.uids().real != me:
+                continue
+
+            info = proc.info
+            cmdline = info.get("cmdline") or []
+            executable = cmdline[0].rsplit("/", 1)[-1] if cmdline else ""
+            if executable == "longhouse-codex":
+                continue
+            provider = _provider_for_cmdline(cmdline)
+            if not provider:
+                continue
+            if provider == "codex" and any(arg == "app-server" for arg in cmdline[1:]):
+                continue
+
+            try:
+                env = proc.environ()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                env = {}
+
+            session_id = None
+            if env:
+                session_id = _normalize_optional_string(env.get("LONGHOUSE_MANAGED_SESSION_ID"))
+            if not session_id:
+                session_id = _session_id_from_argv(cmdline)
+
+            device_id = env.get("LONGHOUSE_DEVICE_ID") if env else None
+
+            try:
+                cwd = proc.cwd()
+            except (psutil.AccessDenied, psutil.NoSuchProcess):
+                cwd = None
+
+            started_at = datetime.fromtimestamp(info["create_time"], tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+            processes.append(
+                {
+                    "session_id": session_id,
+                    "provider": provider,
+                    "pid": info["pid"],
+                    "cwd": cwd,
+                    "workspace_label": Path(cwd).name if cwd else None,
+                    "device_id": device_id,
+                    "started_at": started_at,
+                }
+            )
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+
+    return processes
+
+
 def _collect_managed_sessions_by_process(
     *,
     now: datetime,
     existing_session_ids: set[str],
     phase_overlay: dict[str, dict[str, str | None]] | None = None,
+    scanned_processes: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Detect live managed provider processes (Claude/Codex) via same-uid scan.
 
@@ -1117,83 +1182,87 @@ def _collect_managed_sessions_by_process(
     `existing_session_ids` lets callers deduplicate against rows already built
     from bridge-file scans, so the same Codex session isn't reported twice.
     """
-    try:
-        import psutil  # imported lazily to keep module import cheap
-    except ImportError:
-        return []
-
-    me = os.getuid()
+    scanned_rows = scanned_processes if scanned_processes is not None else _scan_provider_processes()
     sessions: list[dict[str, Any]] = []
     seen: set[str] = set()
     for session_id in existing_session_ids:
         seen.add(session_id)
 
-    for proc in psutil.process_iter(["pid", "cmdline", "create_time"]):
-        try:
-            if proc.uids().real != me:
-                continue
-            info = proc.info
-            cmdline = info.get("cmdline") or []
-            provider = _provider_for_cmdline(cmdline)
-            if not provider:
-                continue
-
-            try:
-                env = proc.environ()
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                env = {}
-
-            session_id: str | None = None
-            if env:
-                session_id = _normalize_optional_string(env.get("LONGHOUSE_MANAGED_SESSION_ID"))
-            if not session_id:
-                session_id = _session_id_from_argv(cmdline)
-            if not session_id or session_id in seen:
-                continue
-
-            # Only pull the specific managed-session keys we care about. The
-            # rest of the env (hook tokens, API keys, provider state) stays
-            # out of the health payload by construction.
-            device_id = env.get("LONGHOUSE_DEVICE_ID") if env else None
-
-            try:
-                cwd = proc.cwd()
-            except (psutil.AccessDenied, psutil.NoSuchProcess):
-                cwd = None
-
-            started_at = datetime.fromtimestamp(info["create_time"], tz=timezone.utc).isoformat().replace("+00:00", "Z")
-            phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
-            phase_observed_at = phase_state.get("observed_at") if phase_state else None
-
-            sessions.append(
-                {
-                    "session_id": session_id,
-                    "provider": provider,
-                    "pid": info["pid"],
-                    "workspace_label": Path(cwd).name if cwd else None,
-                    "cwd": cwd,
-                    "device_id": device_id,
-                    "started_at": started_at,
-                    "branch": None,
-                    "state": "attached",
-                    "raw_phase": phase_state.get("phase") if phase_state else None,
-                    "phase": _phase_display_label(
-                        phase_state.get("phase") if phase_state else None,
-                        phase_state.get("tool_name") if phase_state else None,
-                    ),
-                    "phase_observed_at": phase_observed_at,
-                    "last_activity_at": _max_rfc3339(started_at, phase_observed_at) or started_at,
-                    "bridge_status": None,
-                    "bridge_pid": None,
-                    "bridge_heartbeat_at": None,
-                    "reason_codes": [],
-                }
-            )
-            seen.add(session_id)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
+    for proc_row in scanned_rows:
+        session_id = _normalize_optional_string(proc_row.get("session_id"))
+        if not session_id or session_id in seen:
             continue
 
+        started_at = _normalize_optional_string(proc_row.get("started_at"))
+        if not started_at:
+            continue
+
+        provider = _normalize_optional_string(proc_row.get("provider")) or "unknown"
+        phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
+        phase_observed_at = phase_state.get("observed_at") if phase_state else None
+
+        sessions.append(
+            {
+                "session_id": session_id,
+                "provider": provider,
+                "pid": proc_row.get("pid"),
+                "workspace_label": _normalize_optional_string(proc_row.get("workspace_label")),
+                "cwd": _normalize_optional_string(proc_row.get("cwd")),
+                "device_id": _normalize_optional_string(proc_row.get("device_id")),
+                "started_at": started_at,
+                "branch": None,
+                "state": "attached",
+                "raw_phase": phase_state.get("phase") if phase_state else None,
+                "phase": _phase_display_label(
+                    phase_state.get("phase") if phase_state else None,
+                    phase_state.get("tool_name") if phase_state else None,
+                ),
+                "phase_observed_at": phase_observed_at,
+                "last_activity_at": _max_rfc3339(started_at, phase_observed_at) or started_at,
+                "bridge_status": None,
+                "bridge_pid": None,
+                "bridge_heartbeat_at": None,
+                "reason_codes": [],
+            }
+        )
+        seen.add(session_id)
+
     return sessions
+
+
+def _collect_unmanaged_processes(
+    *,
+    scanned_processes: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Collect live bare Claude/Codex CLI processes not owned by Longhouse."""
+
+    scanned_rows = scanned_processes if scanned_processes is not None else _scan_provider_processes()
+    processes: list[dict[str, Any]] = []
+
+    for proc_row in scanned_rows:
+        if _normalize_optional_string(proc_row.get("session_id")):
+            continue
+
+        started_at = _normalize_optional_string(proc_row.get("started_at"))
+        if not started_at:
+            continue
+
+        processes.append(
+            {
+                "provider": _normalize_optional_string(proc_row.get("provider")),
+                "pid": proc_row.get("pid"),
+                "workspace_label": _normalize_optional_string(proc_row.get("workspace_label")),
+                "cwd": _normalize_optional_string(proc_row.get("cwd")),
+                "branch": None,
+                "started_at": started_at,
+            }
+        )
+
+    processes.sort(
+        key=lambda row: _parse_rfc3339(row.get("started_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return processes
 
 
 def _merge_managed_sessions(
@@ -1639,6 +1708,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
+    provider_processes = _scan_provider_processes()
     bridge_summary, bridge_sessions, orphan_bridges = _collect_managed_codex_summary(
         resolved_base_dir,
         phase_overlay=phase_overlay,
@@ -1648,7 +1718,9 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         now=now,
         existing_session_ids=bridge_session_ids,
         phase_overlay=phase_overlay,
+        scanned_processes=provider_processes,
     )
+    unmanaged_processes = _collect_unmanaged_processes(scanned_processes=provider_processes)
     managed_summary, managed_sessions, orphan_bridges = _merge_managed_sessions(
         bridge_summary=bridge_summary,
         bridge_sessions=bridge_sessions,
@@ -1680,6 +1752,7 @@ def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]
         "activity_summary": activity_summary,
         "managed_summary": managed_summary,
         "managed_sessions": managed_sessions,
+        "unmanaged_processes": unmanaged_processes,
         "orphan_bridges": orphan_bridges,
         "launch_readiness": launch_readiness,
         "build": build_identity,

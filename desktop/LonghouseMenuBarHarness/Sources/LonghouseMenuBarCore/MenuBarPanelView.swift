@@ -371,36 +371,28 @@ public struct MenuBarPanelView: View {
 
             managedRuntimeSurface
 
-            if !unmanagedActivityEntries.isEmpty || !snapshot.providerCountsRecent.isEmpty {
+            if !unmanagedActivityEntries.isEmpty {
                 sectionDivider.padding(.horizontal, 4)
 
-                PanelSection(title: "Also on this Mac", trailing: snapshot.recentActivitySummaryLabel) {
-                    if unmanagedActivityEntries.isEmpty {
-                        Text("Everything touched recently is managed.")
-                            .font(.system(size: 12, weight: .medium))
+                PanelSection(title: "Also on this Mac", trailing: snapshot.liveUnmanagedSummaryLabel) {
+                    UnmanagedActivityList(entries: unmanagedActivityEntries)
+
+                    sectionDivider
+
+                    HStack(alignment: .center, spacing: 8) {
+                        Text("Live now")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(Color.secondary)
-                    } else {
-                        UnmanagedActivityList(entries: unmanagedActivityEntries)
-                    }
+                            .tracking(0.55)
 
-                    if !snapshot.providerCountsRecent.isEmpty {
-                        sectionDivider
+                        Spacer(minLength: 8)
 
-                        HStack(alignment: .center, spacing: 8) {
-                            Text("Active now")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Color.secondary)
-                                .tracking(0.55)
-
-                            Spacer(minLength: 8)
-
-                            Text(snapshot.recentProviderMixLabel)
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(Color.primary)
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.82)
-                                .monospacedDigit()
-                        }
+                        Text(snapshot.liveUnmanagedProviderMixLabel)
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(Color.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                            .monospacedDigit()
                     }
                 }
             }
@@ -447,7 +439,7 @@ public struct MenuBarPanelView: View {
                 tone: snapshot.parsedSeverity.accentColor
             ),
             PanelReadout(
-                label: "Active",
+                label: "Recent",
                 value: snapshot.sessionsRecentLabel,
                 detail: snapshot.recentWindowCompactLabel,
                 tone: snapshot.providerCountsRecent.isEmpty ? .primary : snapshot.parsedSeverity.accentColor
@@ -479,7 +471,7 @@ public struct MenuBarPanelView: View {
     private var headerTelemetryItems: [HeaderRailMetric] {
         [
             HeaderRailMetric(label: "Ship", value: snapshot.lastShipCompactLabel(relativeTo: presentationDate), tint: snapshot.parsedSeverity.accentColor),
-            HeaderRailMetric(label: "Active", value: snapshot.sessionsRecentLabel, tint: snapshot.providerCountsRecent.isEmpty ? .primary : snapshot.parsedSeverity.accentColor),
+            HeaderRailMetric(label: "Recent", value: snapshot.sessionsRecentLabel, tint: snapshot.providerCountsRecent.isEmpty ? .primary : snapshot.parsedSeverity.accentColor),
             HeaderRailMetric(label: "Managed", value: "\(snapshot.currentManagedSessions.count)", tint: managedChipTint),
             HeaderRailMetric(label: "Queue", value: queueBoardValue, tint: queueBoardTone),
         ]
@@ -495,34 +487,20 @@ public struct MenuBarPanelView: View {
         }
     }
 
-    /// Activity touches we know aren't owned by a managed session on this Mac.
-    /// Managed sessions already have their own card in "Managed now"; reprinting
-    /// them here doubles the same row and blurs the purpose of this section.
-    /// What's left over is exactly what the user should wrap next time: bare
-    /// CLI runs and sessions Longhouse cannot steer.
+    /// Live provider CLIs Longhouse does not own on this Mac right now.
+    /// This is explicit process truth, not recent transcript activity.
     private var unmanagedActivityEntries: [UnmanagedActivityEntry] {
-        let managedKeys = Set(
-            snapshot.currentManagedSessions.map { managedTouchKey(provider: $0.provider, workspace: $0.workspaceLabel) }
-        )
-        return snapshot.recentTouches.compactMap { touch -> UnmanagedActivityEntry? in
-            let key = managedTouchKey(provider: touch.provider, workspace: touch.workspaceLabel)
-            if managedKeys.contains(key) {
-                return nil
-            }
+        snapshot.currentUnmanagedProcesses.map { process in
+            let workspace = (process.workspaceLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let provider = (process.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             return UnmanagedActivityEntry(
-                id: key,
-                provider: (touch.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
-                title: snapshot.recentTouchTitle(touch),
-                branch: (touch.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : touch.branch,
-                age: snapshot.recentTouchAgeLabel(touch, relativeTo: presentationDate)
+                id: process.id,
+                provider: provider.isEmpty ? "unknown" : provider,
+                title: workspace.isEmpty ? HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider) : workspace,
+                branch: (process.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : process.branch,
+                age: snapshot.compactTimestampLabel(process.startedAt, relativeTo: presentationDate)
             )
         }
-    }
-
-    private func managedTouchKey(provider: String?, workspace: String?) -> String {
-        let p = (provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let w = (workspace ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return "\(p)|\(w)"
     }
 
     private var managedSessionEntries: [ManagedSessionEntry] {

@@ -29,6 +29,9 @@ from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
 
+_REAL_SCAN_PROVIDER_PROCESSES = local_health_service._scan_provider_processes
+_REAL_COLLECT_MANAGED_SESSIONS_BY_PROCESS = local_health_service._collect_managed_sessions_by_process
+
 
 def _service_info(
     status: str,
@@ -181,10 +184,11 @@ def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     # Stub the live process scan by default so tests don't pick up the dev
     # box's real Claude/Codex processes. Tests that want process-scan output
     # override this explicitly.
+    monkeypatch.setattr(local_health_service, "_scan_provider_processes", lambda: [])
     monkeypatch.setattr(
         local_health_service,
         "_collect_managed_sessions_by_process",
-        lambda *, now, existing_session_ids, phase_overlay=None: [],
+        lambda *, now, existing_session_ids, phase_overlay=None, scanned_processes=None: [],
     )
 
 
@@ -1221,6 +1225,127 @@ def test_collect_local_health_recent_touches_use_workspace_context_and_ignore_me
     ]
 
 
+def test_collect_local_health_surfaces_live_unmanaged_processes_separately_from_recent_activity(
+    monkeypatch, tmp_path: Path
+):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "_scan_provider_processes", _REAL_SCAN_PROVIDER_PROCESSES)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_managed_sessions_by_process",
+        _REAL_COLLECT_MANAGED_SESSIONS_BY_PROCESS,
+    )
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+
+    now = datetime(2026, 4, 22, 18, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: now)
+
+    managed_a = "55c61956-7554-4713-8c9b-fb0fa6164c2c"
+    managed_b = "918ec866-e194-4339-a227-d41c8bf48ea9"
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                managed_a,
+                "claude",
+                "/Users/test/git/zeta/athena-horizon",
+                "athena-horizon",
+                "thinking",
+                "Read",
+                "claude_hook",
+                (now - timedelta(seconds=20)).isoformat().replace("+00:00", "Z"),
+                (now - timedelta(seconds=20)).isoformat().replace("+00:00", "Z"),
+            ),
+            (
+                managed_b,
+                "claude",
+                "/Users/test/git/zeta/athena-horizon",
+                "athena-horizon",
+                "needs_user",
+                None,
+                "claude_hook",
+                (now - timedelta(seconds=10)).isoformat().replace("+00:00", "Z"),
+                (now - timedelta(seconds=10)).isoformat().replace("+00:00", "Z"),
+            ),
+        ],
+    )
+    _write_shipper_db(
+        tmp_path,
+        [
+            (
+                "/Users/test/.claude/projects/-Users-test-git-zeta-athena-horizon/55c61956-7554-4713-8c9b-fb0fa6164c2c.jsonl",
+                "claude",
+                managed_a,
+                managed_a,
+                (now - timedelta(minutes=1)).isoformat(),
+            ),
+            (
+                "/Users/test/.claude/projects/-Users-test-git-zeta-athena-horizon/918ec866-e194-4339-a227-d41c8bf48ea9.jsonl",
+                "claude",
+                managed_b,
+                managed_b,
+                (now - timedelta(minutes=2)).isoformat(),
+            ),
+            (
+                "/Users/test/.codex/sessions/2026/04/22/rollout-mayagents.jsonl",
+                "codex",
+                "019db63d-983b-77e0-9324-38ffa734d9a5",
+                "019db63d-983b-77e0-9324-38ffa734d9a5",
+                (now - timedelta(minutes=3)).isoformat(),
+            ),
+        ],
+    )
+    _patch_process_iter(
+        monkeypatch,
+        [
+            _FakeProc(
+                pid=48145,
+                cmdline=["claude", "--session-id", managed_a],
+                create_time=(now - timedelta(minutes=28)).timestamp(),
+                env={"LONGHOUSE_MANAGED_SESSION_ID": managed_a},
+                cwd="/Users/test/git/zeta/athena-horizon",
+            ),
+            _FakeProc(
+                pid=72211,
+                cmdline=["claude", "--session-id", managed_b],
+                create_time=(now - timedelta(minutes=5)).timestamp(),
+                env={"LONGHOUSE_MANAGED_SESSION_ID": managed_b},
+                cwd="/Users/test/git/zeta/athena-horizon",
+            ),
+            _FakeProc(
+                pid=48047,
+                cmdline=[
+                    "/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex",
+                    "-m",
+                    "gpt-5.4",
+                ],
+                create_time=(now - timedelta(minutes=16)).timestamp(),
+                env={},
+                cwd="/Users/test/git/zerg",
+            ),
+            _FakeProc(
+                pid=55478,
+                cmdline=[
+                    "/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex",
+                    "-m",
+                    "gpt-5.4",
+                ],
+                create_time=(now - timedelta(minutes=24)).timestamp(),
+                env={},
+                cwd="/Users/test/git/me/myagents",
+            ),
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert [row["workspace_label"] for row in snapshot["unmanaged_processes"]] == ["zerg", "myagents"]
+    assert {row["provider"] for row in snapshot["unmanaged_processes"]} == {"codex"}
+    assert {row["session_id"] for row in snapshot["managed_sessions"]} == {managed_a, managed_b}
+    assert snapshot["activity_summary"]["provider_counts_recent"] == {"claude": 2, "codex": 1}
+
+
 def test_local_health_menubar_requires_installed_app(monkeypatch, tmp_path: Path):
     runner = CliRunner()
     calls: list[dict[str, object]] = []
@@ -1872,6 +1997,99 @@ def test_process_scan_skips_unmanaged_bare_cli(monkeypatch):
     rows = local_health_service._collect_managed_sessions_by_process(
         now=now, existing_session_ids=set()
     )
+    assert rows == []
+
+
+def test_collect_unmanaged_processes_reports_live_bare_provider_clis(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    managed_claude = _FakeProc(
+        pid=11467,
+        cmdline=["claude", "--session-id", "11111111-2222-3333-4444-555555555555"],
+        create_time=now.timestamp(),
+        env={"LONGHOUSE_MANAGED_SESSION_ID": "11111111-2222-3333-4444-555555555555"},
+        cwd="/Users/test/git/zeta/athena-horizon",
+    )
+    unmanaged_zerg_codex = _FakeProc(
+        pid=11468,
+        cmdline=[
+            "/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex",
+            "-m",
+            "gpt-5.4",
+        ],
+        create_time=(now + timedelta(seconds=30)).timestamp(),
+        env={},
+        cwd="/Users/test/git/zerg",
+    )
+    unmanaged_myagents_codex = _FakeProc(
+        pid=11469,
+        cmdline=[
+            "/opt/homebrew/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex/codex",
+            "-m",
+            "gpt-5.4",
+        ],
+        create_time=(now + timedelta(seconds=60)).timestamp(),
+        env={},
+        cwd="/Users/test/git/me/myagents",
+    )
+    _patch_process_iter(monkeypatch, [managed_claude, unmanaged_zerg_codex, unmanaged_myagents_codex])
+
+    rows = local_health_service._collect_unmanaged_processes()
+
+    assert rows == [
+        {
+            "provider": "codex",
+            "pid": 11469,
+            "workspace_label": "myagents",
+            "cwd": "/Users/test/git/me/myagents",
+            "branch": None,
+            "started_at": "2026-04-19T00:01:00Z",
+        },
+        {
+            "provider": "codex",
+            "pid": 11468,
+            "workspace_label": "zerg",
+            "cwd": "/Users/test/git/zerg",
+            "branch": None,
+            "started_at": "2026-04-19T00:00:30Z",
+        },
+    ]
+
+
+def test_collect_unmanaged_processes_skips_codex_app_server_helpers(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    app_server = _FakeProc(
+        pid=11470,
+        cmdline=["/Applications/Codex.app/Contents/Resources/codex", "app-server", "--analytics-default-enabled"],
+        create_time=now.timestamp(),
+        env={},
+    )
+    _patch_process_iter(monkeypatch, [app_server])
+
+    rows = local_health_service._collect_unmanaged_processes()
+
+    assert rows == []
+
+
+def test_collect_unmanaged_processes_skips_longhouse_codex_managed_wrappers(monkeypatch):
+    now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
+    managed_wrapper = _FakeProc(
+        pid=11471,
+        cmdline=[
+            "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--enable",
+            "tui_app_server",
+            "--remote",
+            "ws://127.0.0.1:51077",
+        ],
+        create_time=now.timestamp(),
+        env={},
+        cwd="/Users/test/git/zeta/athena-horizon",
+    )
+    _patch_process_iter(monkeypatch, [managed_wrapper])
+
+    rows = local_health_service._collect_unmanaged_processes()
+
     assert rows == []
 
 
