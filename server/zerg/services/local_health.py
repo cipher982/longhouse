@@ -808,13 +808,30 @@ def _phase_display_label(phase: str | None, tool_name: str | None) -> str | None
     return display_label_for_phase(_normalize_optional_string(phase), _normalize_optional_string(tool_name))
 
 
-def _load_managed_session_phase_state(base_dir: Path) -> dict[str, dict[str, str | None]]:
+_MANAGED_FINISHED_RETENTION_SECONDS = 10 * 60
+
+
+def _should_keep_managed_phase_row(row: Mapping[str, str | None], *, now: datetime) -> bool:
+    phase = _normalize_optional_string(row.get("phase"))
+    observed_raw = _normalize_optional_string(row.get("observed_at"))
+    if phase != "finished" or observed_raw is None:
+        return True
+    observed_at = _parse_rfc3339(observed_raw)
+    if observed_at is None:
+        return False
+    age = (now - observed_at).total_seconds()
+    return age <= _MANAGED_FINISHED_RETENTION_SECONDS
+
+
+def _load_managed_session_phase_state(base_dir: Path, *, now: datetime) -> dict[str, dict[str, str | None]]:
     merged = _load_persisted_managed_session_phase_rows(base_dir)
     for session_id, row in _load_outbox_session_phase_rows(base_dir).items():
         current = merged.get(session_id)
         if current is None or _max_rfc3339(row.get("observed_at"), current.get("observed_at")) == row.get("observed_at"):
-            merged[session_id] = row
-    return merged
+            next_row = dict(row)
+            next_row["last_activity_at"] = _max_rfc3339(row.get("last_activity_at"), current.get("last_activity_at") if current else None)
+            merged[session_id] = next_row
+    return {session_id: row for session_id, row in merged.items() if _should_keep_managed_phase_row(row, now=now)}
 
 
 def _bridge_process_exists(process_rows: list[dict[str, Any]], pid: int) -> bool:
@@ -1594,7 +1611,7 @@ def _classify_health(
 def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]:
     now = _utc_now()
     resolved_base_dir = _coerce_path(claude_dir)
-    phase_overlay = _load_managed_session_phase_state(resolved_base_dir)
+    phase_overlay = _load_managed_session_phase_state(resolved_base_dir, now=now)
     service = _collect_service(resolved_base_dir)
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)

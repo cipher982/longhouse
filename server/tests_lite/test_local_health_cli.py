@@ -1431,7 +1431,7 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
     rows = local_health_service._collect_managed_sessions_by_process(
         now=now,
         existing_session_ids=set(),
-        phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path),
+        phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path, now=now),
     )
 
     assert len(rows) == 1
@@ -1471,7 +1471,7 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
     rows = local_health_service._collect_managed_sessions_by_process(
         now=now,
         existing_session_ids=set(),
-        phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path),
+        phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path, now=now),
     )
 
     assert len(rows) == 1
@@ -1561,10 +1561,49 @@ def test_managed_session_phase_state_keeps_persisted_rows_without_freshness_gati
         ],
     )
 
-    overlay = local_health_service._load_managed_session_phase_state(tmp_path)
+    overlay = local_health_service._load_managed_session_phase_state(tmp_path, now=now)
 
     assert overlay["sess-stale"]["phase"] == "running"
     assert overlay["sess-stale"]["observed_at"] == stale_observed_at
+
+
+def test_managed_session_phase_state_drops_stale_finished_rows_after_retention(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
+    recent_observed_at = (now - timedelta(minutes=2)).isoformat().replace("+00:00", "Z")
+    stale_observed_at = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                "sess-recent",
+                "claude",
+                "/Users/test/git/citi",
+                "citi",
+                "finished",
+                None,
+                "claude_hook",
+                recent_observed_at,
+                recent_observed_at,
+            ),
+            (
+                "sess-stale",
+                "claude",
+                "/Users/test/git/citi",
+                "citi",
+                "finished",
+                None,
+                "claude_hook",
+                stale_observed_at,
+                stale_observed_at,
+            ),
+        ],
+    )
+
+    overlay = local_health_service._load_managed_session_phase_state(tmp_path, now=now)
+
+    assert overlay["sess-recent"]["phase"] == "finished"
+    assert "sess-stale" not in overlay
 
 
 def test_managed_session_phase_state_prefers_newer_outbox_signal(monkeypatch, tmp_path: Path):
@@ -1588,10 +1627,47 @@ def test_managed_session_phase_state_prefers_newer_outbox_signal(monkeypatch, tm
     )
     _write_outbox_file(tmp_path, age_seconds=0, name="prs.sess-outbox.json")
 
-    overlay = local_health_service._load_managed_session_phase_state(tmp_path)
+    overlay = local_health_service._load_managed_session_phase_state(tmp_path, now=now)
 
     assert overlay["sess-1"]["phase"] == "thinking"
     assert overlay["sess-1"]["source"] == "claude_hook"
+
+
+def test_managed_session_phase_state_keeps_newer_stored_last_activity_when_outbox_wins_phase(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
+    stored_phase_at = (now - timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+    stored_last_activity_at = (now - timedelta(seconds=10)).isoformat().replace("+00:00", "Z")
+    outbox_observed_at = (now - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                "sess-1",
+                "claude",
+                "/Users/test/git/citi",
+                "citi",
+                "idle",
+                None,
+                "claude_hook",
+                stored_phase_at,
+                stored_last_activity_at,
+            )
+        ],
+    )
+    _write_outbox_phase_signal(
+        tmp_path,
+        session_id="sess-1",
+        state="thinking",
+        occurred_at=outbox_observed_at,
+        name="prs.sess-1.phase.json",
+    )
+
+    overlay = local_health_service._load_managed_session_phase_state(tmp_path, now=now)
+
+    assert overlay["sess-1"]["phase"] == "thinking"
+    assert overlay["sess-1"]["observed_at"] == outbox_observed_at
+    assert overlay["sess-1"]["last_activity_at"] == stored_last_activity_at
 
 
 def test_process_scan_falls_back_to_argv_when_env_empty(monkeypatch, tmp_path: Path):
