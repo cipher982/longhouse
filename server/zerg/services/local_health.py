@@ -822,6 +822,7 @@ def _should_keep_managed_phase_row(row: Mapping[str, str | None], *, now: dateti
         return True
     observed_at = _parse_rfc3339(observed_raw)
     if observed_at is None:
+        # A malformed transient completion marker should not linger forever.
         return False
     age = (now - observed_at).total_seconds()
     return age <= _MANAGED_FINISHED_RETENTION_SECONDS

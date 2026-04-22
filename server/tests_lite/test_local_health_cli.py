@@ -1609,7 +1609,9 @@ def test_managed_session_phase_state_drops_stale_finished_rows_after_retention(m
 def test_managed_session_phase_state_keeps_finished_rows_at_retention_boundary(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
-    boundary_observed_at = (now - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+    boundary_observed_at = (
+        now - timedelta(seconds=local_health_service._MANAGED_FINISHED_RETENTION_SECONDS)
+    ).isoformat().replace("+00:00", "Z")
     _write_managed_session_state_rows(
         tmp_path,
         [
