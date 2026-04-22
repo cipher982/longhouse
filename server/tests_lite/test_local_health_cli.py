@@ -24,6 +24,7 @@ from zerg import managed_phase_contract
 from zerg.cli import local_health as local_health_cli
 from zerg.cli.main import app
 from zerg.services import local_health as local_health_service
+from zerg.services import session_runtime
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
@@ -240,37 +241,69 @@ def _write_session_binding_rows(tmp_path: Path, rows: list[tuple[str, str, str, 
     conn.close()
 
 
-def _write_session_phase_rows(
+def _write_managed_session_state_rows(
     tmp_path: Path,
-    rows: list[tuple[str, str, str, str | None, str, str]],
+    rows: list[tuple[str, str, str | None, str | None, str, str | None, str, str, str | None]],
 ) -> None:
     db_path = get_agent_db_path(tmp_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute(
         """
-        CREATE TABLE IF NOT EXISTS session_phase_state (
+        CREATE TABLE IF NOT EXISTS managed_session_state (
             session_id TEXT PRIMARY KEY,
             provider TEXT NOT NULL,
-            phase TEXT NOT NULL,
+            workspace_path TEXT,
+            workspace_label TEXT,
+            phase_kind TEXT,
             tool_name TEXT,
-            source TEXT NOT NULL,
-            observed_at TEXT NOT NULL
+            phase_source TEXT,
+            phase_observed_at TEXT,
+            last_activity_at TEXT,
+            updated_at TEXT NOT NULL
         )
         """
     )
     conn.executemany(
         """
-        INSERT INTO session_phase_state (session_id, provider, phase, tool_name, source, observed_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO managed_session_state (
+            session_id,
+            provider,
+            workspace_path,
+            workspace_label,
+            phase_kind,
+            tool_name,
+            phase_source,
+            phase_observed_at,
+            last_activity_at,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(session_id) DO UPDATE SET
             provider = excluded.provider,
-            phase = excluded.phase,
+            workspace_path = excluded.workspace_path,
+            workspace_label = excluded.workspace_label,
+            phase_kind = excluded.phase_kind,
             tool_name = excluded.tool_name,
-            source = excluded.source,
-            observed_at = excluded.observed_at
+            phase_source = excluded.phase_source,
+            phase_observed_at = excluded.phase_observed_at,
+            last_activity_at = excluded.last_activity_at,
+            updated_at = excluded.updated_at
         """,
-        rows,
+        [
+            (
+                session_id,
+                provider,
+                workspace_path,
+                workspace_label,
+                phase_kind,
+                tool_name,
+                phase_source,
+                phase_observed_at,
+                last_activity_at,
+                phase_observed_at,
+            )
+            for session_id, provider, workspace_path, workspace_label, phase_kind, tool_name, phase_source, phase_observed_at, last_activity_at in rows
+        ],
     )
     conn.commit()
     conn.close()
@@ -459,7 +492,7 @@ def test_collect_local_health_flags_orphaned_managed_bridge(monkeypatch, tmp_pat
     ]
 
 
-def test_collect_local_health_uses_local_phase_overlay_for_codex_bridge_session(monkeypatch, tmp_path: Path):
+def test_collect_local_health_uses_managed_session_phase_state_for_codex_bridge_session(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
     _write_engine_status(tmp_path, age_seconds=5)
@@ -473,15 +506,18 @@ def test_collect_local_health_uses_local_phase_overlay_for_codex_bridge_session(
         tmp_path,
         [(str(rollout_path), "sess-attached", "codex", "2026-04-17T17:30:36Z")],
     )
-    _write_session_phase_rows(
+    _write_managed_session_state_rows(
         tmp_path,
         [
             (
                 "sess-attached",
                 "codex",
+                "/Users/test/git/zerg",
+                "zerg",
                 "blocked",
                 "shell",
                 "codex_bridge",
+                "2026-04-17T17:31:30Z",
                 "2026-04-17T17:31:30Z",
             )
         ],
@@ -524,7 +560,7 @@ def test_collect_local_health_uses_local_phase_overlay_for_codex_bridge_session(
     assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:31:30Z"
 
 
-def test_collect_local_health_falls_back_to_idle_for_attached_codex_when_stale_overlay_aged_out(
+def test_collect_local_health_keeps_attached_codex_idle_from_managed_session_state(
     monkeypatch, tmp_path: Path
 ):
     _disable_real_runner_env(monkeypatch, tmp_path)
@@ -540,15 +576,18 @@ def test_collect_local_health_falls_back_to_idle_for_attached_codex_when_stale_o
         tmp_path,
         [(str(rollout_path), "sess-attached", "codex", "2026-04-17T17:30:36Z")],
     )
-    _write_session_phase_rows(
+    _write_managed_session_state_rows(
         tmp_path,
         [
             (
                 "sess-attached",
                 "codex",
+                "/Users/test/git/zerg",
+                "zerg",
                 "idle",
                 None,
                 "codex_bridge",
+                "2026-04-17T17:31:30Z",
                 "2026-04-17T17:31:30Z",
             )
         ],
@@ -590,11 +629,11 @@ def test_collect_local_health_falls_back_to_idle_for_attached_codex_when_stale_o
 
     assert snapshot["managed_sessions"][0]["state"] == "attached"
     assert snapshot["managed_sessions"][0]["phase"] == "idle"
-    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:43:00Z"
+    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:31:30Z"
     assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:43:00Z"
 
 
-def test_collect_local_health_falls_back_to_thinking_for_attached_codex_with_active_turn_and_no_fresh_overlay(
+def test_collect_local_health_shows_unknown_phase_for_attached_codex_without_managed_session_phase_state(
     monkeypatch, tmp_path: Path
 ):
     _disable_real_runner_env(monkeypatch, tmp_path)
@@ -646,8 +685,8 @@ def test_collect_local_health_falls_back_to_thinking_for_attached_codex_with_act
     snapshot = local_health_service.collect_local_health(tmp_path)
 
     assert snapshot["managed_sessions"][0]["state"] == "attached"
-    assert snapshot["managed_sessions"][0]["phase"] == "thinking"
-    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:43:00Z"
+    assert snapshot["managed_sessions"][0]["phase"] is None
+    assert snapshot["managed_sessions"][0]["phase_observed_at"] is None
     assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:43:00Z"
 
 
@@ -1372,15 +1411,18 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
         cwd="/Users/test/git/zerg",
     )
     _patch_process_iter(monkeypatch, [proc])
-    _write_session_phase_rows(
+    _write_managed_session_state_rows(
         tmp_path,
         [
             (
                 session_id,
                 "claude",
+                "/Users/test/git/zerg",
+                "zerg",
                 "running",
                 "Bash",
                 "claude_hook",
+                "2026-04-19T00:04:00Z",
                 "2026-04-19T00:04:00Z",
             )
         ],
@@ -1389,7 +1431,7 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
     rows = local_health_service._collect_managed_sessions_by_process(
         now=now,
         existing_session_ids=set(),
-        phase_overlay=local_health_service._load_managed_session_phase_overlay(tmp_path, now=now),
+        phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path),
     )
 
     assert len(rows) == 1
@@ -1409,15 +1451,18 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
         cwd="/Users/test/git/citi",
     )
     _patch_process_iter(monkeypatch, [proc])
-    _write_session_phase_rows(
+    _write_managed_session_state_rows(
         tmp_path,
         [
             (
                 session_id,
                 "claude",
+                "/Users/test/git/citi",
+                "citi",
                 "needs_user",
                 None,
                 "claude_hook",
+                "2026-04-19T00:04:30Z",
                 "2026-04-19T00:04:30Z",
             )
         ],
@@ -1426,7 +1471,7 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
     rows = local_health_service._collect_managed_sessions_by_process(
         now=now,
         existing_session_ids=set(),
-        phase_overlay=local_health_service._load_managed_session_phase_overlay(tmp_path, now=now),
+        phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path),
     )
 
     assert len(rows) == 1
@@ -1437,7 +1482,7 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
 
 def test_local_health_phase_contract_covers_every_known_raw_phase():
     contract_raw_phases = {case.raw_phase for case in _load_managed_phase_contract()}
-    assert contract_raw_phases == set(local_health_service._PHASE_FRESHNESS_SECONDS)
+    assert contract_raw_phases == set(session_runtime.KNOWN_PHASES)
 
 
 def test_local_health_phase_contract_matches_display_labels():
@@ -1495,78 +1540,55 @@ def test_local_health_command_surfaces_managed_phase_contract_from_raw_hook_even
         assert managed_session["phase"] == case.display_for_tool(tool_name)
 
 
-def test_phase_overlay_drops_stale_rows_past_freshness_window(monkeypatch, tmp_path: Path):
-    """Old running/thinking rows from a prior runtime must not show phantom phases.
-
-    Phase-specific freshness: `running` is 10 minutes. A row older than that
-    should be suppressed so the menu bar renders "Phase unknown" instead of an
-    out-of-date activity label.
-    """
+def test_managed_session_phase_state_keeps_persisted_rows_without_freshness_gating(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
     stale_observed_at = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
-    _write_session_phase_rows(
+    _write_managed_session_state_rows(
         tmp_path,
         [
             (
                 "sess-stale",
                 "claude",
+                "/Users/test/git/citi",
+                "citi",
                 "running",
                 "Bash",
                 "claude_hook",
+                stale_observed_at,
                 stale_observed_at,
             )
         ],
     )
 
-    overlay = local_health_service._load_managed_session_phase_overlay(tmp_path, now=now)
+    overlay = local_health_service._load_managed_session_phase_state(tmp_path)
 
-    assert "sess-stale" not in overlay
-
-
-def test_phase_overlay_surfaces_recent_finished_row(monkeypatch, tmp_path: Path):
-    """`finished` rows are shown for 10 minutes then drop.
-
-    A recent terminal signal should render as a managed session so the menu
-    bar can display the shutdown event, but stale ones should age out.
-    """
-    _disable_real_runner_env(monkeypatch, tmp_path)
-    now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
-    recent_observed_at = (now - timedelta(minutes=2)).isoformat().replace("+00:00", "Z")
-    stale_observed_at = (now - timedelta(minutes=30)).isoformat().replace("+00:00", "Z")
-    _write_session_phase_rows(
-        tmp_path,
-        [
-            ("sess-recent", "claude", "finished", None, "claude_hook", recent_observed_at),
-            ("sess-stale", "claude", "finished", None, "claude_hook", stale_observed_at),
-        ],
-    )
-
-    overlay = local_health_service._load_managed_session_phase_overlay(tmp_path, now=now)
-
-    assert overlay["sess-recent"]["phase"] == "finished"
-    assert "sess-stale" not in overlay
+    assert overlay["sess-stale"]["phase"] == "running"
+    assert overlay["sess-stale"]["observed_at"] == stale_observed_at
 
 
-def test_phase_overlay_prefers_newer_outbox_signal(monkeypatch, tmp_path: Path):
+def test_managed_session_phase_state_prefers_newer_outbox_signal(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     now = datetime.now(tz=timezone.utc)
-    _write_session_phase_rows(
+    _write_managed_session_state_rows(
         tmp_path,
         [
             (
                 "sess-1",
                 "claude",
+                "/Users/test/git/citi",
+                "citi",
                 "idle",
                 None,
                 "claude_hook",
+                (now - timedelta(seconds=30)).isoformat().replace("+00:00", "Z"),
                 (now - timedelta(seconds=30)).isoformat().replace("+00:00", "Z"),
             )
         ],
     )
     _write_outbox_file(tmp_path, age_seconds=0, name="prs.sess-outbox.json")
 
-    overlay = local_health_service._load_managed_session_phase_overlay(tmp_path, now=now)
+    overlay = local_health_service._load_managed_session_phase_state(tmp_path)
 
     assert overlay["sess-1"]["phase"] == "thinking"
     assert overlay["sess-1"]["source"] == "claude_hook"
@@ -1904,40 +1926,12 @@ def test_bridge_is_alive_purges_when_lock_missing(tmp_path: Path) -> None:
     assert local_health_service._bridge_is_alive(state_file) is False
 
 
-def test_phase_freshness_local_health_matches_session_runtime() -> None:
-    """Drift guard: the two copies of the phase freshness map must agree on
-    the phases both sides handle.
+def test_phase_freshness_rust_engine_matches_runtime_reducer() -> None:
+    """Drift guard: engine phase freshness must stay aligned with the runtime reducer.
 
-    `_PHASE_FRESHNESS_SECONDS` in local_health.py is duplicated from
-    `PHASE_FRESHNESS` in session_runtime.py because the CLI path cannot
-    import the server runtime module (it transitively requires
-    `DATABASE_URL`). This test catches drift between the two copies.
-
-    local_health adds `finished` on top of the runtime map (see comment on
-    `_PHASE_FRESHNESS_SECONDS`). That extra key is allowed; everything the
-    runtime knows must still be in the local copy with the same window.
-    """
-    from zerg.services.session_runtime import PHASE_FRESHNESS
-
-    local_copy = local_health_service._PHASE_FRESHNESS_SECONDS
-    for phase, window in PHASE_FRESHNESS.items():
-        assert phase in local_copy, f"{phase} missing from local_health._PHASE_FRESHNESS_SECONDS"
-        assert local_copy[phase] == int(window.total_seconds()), (
-            f"{phase}: local={local_copy[phase]}s vs runtime={int(window.total_seconds())}s"
-        )
-    extras = set(local_copy) - set(PHASE_FRESHNESS)
-    assert extras <= {"finished"}, f"unexpected local-health-only phases: {extras - {'finished'}}"
-
-
-def test_phase_freshness_rust_engine_matches_python() -> None:
-    """Drift guard: engine/src/state/session_phase.rs PHASE_FRESHNESS_SECONDS
-    must agree with the Python map exactly.
-
-    The Rust engine emits `phase_ledger[]` in engine-status.json, filtered by
-    its own freshness map. If the Rust and Python maps diverge, consumers
-    that read the ledger rows will see different rows than readers that
-    re-filter via Python. Parse the Rust const directly so the test fails
-    loudly when either side is edited in isolation.
+    The engine still filters `phase_ledger[]` using its own freshness map before
+    exposing it in engine-status.json. That Rust map must match the hosted
+    runtime map, plus the local-engine-only `finished` row window.
     """
     import re
 
@@ -1962,5 +1956,6 @@ def test_phase_freshness_rust_engine_matches_python() -> None:
         # are already stripped.
         rust_map[m.group("phase")] = int(eval(m.group("expr"), {"__builtins__": {}}))
 
-    local_copy = local_health_service._PHASE_FRESHNESS_SECONDS
-    assert rust_map == local_copy, f"rust={rust_map} python={local_copy}"
+    expected = {phase: int(window.total_seconds()) for phase, window in session_runtime.PHASE_FRESHNESS.items()}
+    expected["finished"] = 10 * 60
+    assert rust_map == expected, f"rust={rust_map} expected={expected}"
