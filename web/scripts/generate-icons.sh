@@ -2,13 +2,16 @@
 set -euo pipefail
 
 # Generate brand assets from the canonical SVG master.
-# The menu bar icon is a two-tone derivative generated from the same geometry.
+# The menu bar and panel icons are severity variants generated from the same geometry.
 # Requires ImageMagick and Playwright's Chromium runtime.
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${ROOT_DIR}/branding/longhouse-logo-master.svg"
 PUBLIC_DIR="${ROOT_DIR}/public"
 MENUBAR_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghouseMenuIcon.png"
+MENUBAR_WARNING_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghouseMenuIconYellow.png"
+MENUBAR_CRITICAL_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghouseMenuIconRed.png"
+MENUBAR_NEUTRAL_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghouseMenuIconGray.png"
 
 if [[ ! -f "${SRC}" ]]; then
   echo "Master logo not found at ${SRC}" >&2
@@ -31,9 +34,12 @@ magick "${PUBLIC_DIR}/favicon-16.png" "${PUBLIC_DIR}/favicon-32.png" "${PUBLIC_D
 echo "Generating Apple touch icon (180px)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 180x180 "${PUBLIC_DIR}/apple-touch-icon.png"
 
-echo "Generating menu bar icon from master logo geometry…"
+echo "Generating menu bar and panel status variants from master logo geometry…"
 mkdir -p "$(dirname "${MENUBAR_OUT}")"
-node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_OUT}" 36 36
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_OUT}" 72 72 green
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_WARNING_OUT}" 72 72 yellow
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_CRITICAL_OUT}" 72 72 red
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_NEUTRAL_OUT}" 72 72 gray
 
 echo "Generating macOS app icon (AppIcon.icns)…"
 ICNS_OUT="${ROOT_DIR}/../artifacts/runtime-packaging/stage/Longhouse.app/Contents/Resources/AppIcon.icns"

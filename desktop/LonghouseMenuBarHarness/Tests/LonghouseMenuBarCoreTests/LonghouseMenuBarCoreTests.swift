@@ -465,6 +465,21 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func managedAttentionOverridesDisplaySeverity() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/managed-degraded.json")
+
+        let snapshot = try FixtureHealthSnapshotSource(fileURL: fixtureURL).load()
+
+        #expect(snapshot.parsedSeverity == .green)
+        #expect(snapshot.managedAttentionSeverity == .red)
+        #expect(snapshot.displaySeverity == .red)
+    }
+
+    @Test
     func setupInvocationUsesBundledSetupScript() {
         let invocation = LonghouseCLI.setupInvocation(resourceBundle: .module)
 

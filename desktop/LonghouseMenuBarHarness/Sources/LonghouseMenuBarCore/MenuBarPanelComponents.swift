@@ -955,18 +955,14 @@ func statusEmblem(color: Color, systemImage: String) -> some View {
 }
 
 @MainActor
-func longhouseBrandEmblem(color: Color) -> some View {
-    ZStack {
-        Circle()
-            .fill(color.opacity(0.14))
-            .frame(width: 34, height: 34)
-        MenuBarBrandIcon.brandImage
-            .resizable()
-            .renderingMode(.template)
-            .aspectRatio(contentMode: .fit)
-            .frame(width: 22, height: 22)
-            .foregroundStyle(color)
-    }
+func longhouseBrandEmblem(severity: HarnessSeverity) -> some View {
+    MenuBarBrandIcon.panelImage(severity: severity)
+        .resizable()
+        .interpolation(.high)
+        .antialiased(true)
+        .aspectRatio(contentMode: .fit)
+        .frame(width: 30, height: 30)
+        .shadow(color: severity.accentColor.opacity(0.18), radius: 8, x: 0, y: 3)
 }
 
 func providerColor(_ raw: String) -> Color {

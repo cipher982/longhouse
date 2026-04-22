@@ -99,6 +99,14 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         HarnessSeverity(rawValue: severity) ?? .gray
     }
 
+    public var displaySeverity: HarnessSeverity {
+        if let managedAttentionSeverity,
+           managedAttentionSeverity == .yellow || managedAttentionSeverity == .red {
+            return managedAttentionSeverity
+        }
+        return parsedSeverity
+    }
+
     public var isSetupRequired: Bool {
         if launchReadiness?.state == "setup-required" {
             return true
