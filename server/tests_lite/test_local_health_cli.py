@@ -1606,6 +1606,57 @@ def test_managed_session_phase_state_drops_stale_finished_rows_after_retention(m
     assert "sess-stale" not in overlay
 
 
+def test_managed_session_phase_state_keeps_finished_rows_at_retention_boundary(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
+    boundary_observed_at = (now - timedelta(minutes=10)).isoformat().replace("+00:00", "Z")
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                "sess-boundary",
+                "claude",
+                "/Users/test/git/citi",
+                "citi",
+                "finished",
+                None,
+                "claude_hook",
+                boundary_observed_at,
+                boundary_observed_at,
+            )
+        ],
+    )
+
+    overlay = local_health_service._load_managed_session_phase_state(tmp_path, now=now)
+
+    assert overlay["sess-boundary"]["phase"] == "finished"
+
+
+def test_managed_session_phase_state_drops_finished_rows_with_invalid_timestamp(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    now = datetime(2026, 4, 20, 12, 0, 0, tzinfo=timezone.utc)
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                "sess-invalid",
+                "claude",
+                "/Users/test/git/citi",
+                "citi",
+                "finished",
+                None,
+                "claude_hook",
+                "not-a-timestamp",
+                "not-a-timestamp",
+            )
+        ],
+    )
+
+    overlay = local_health_service._load_managed_session_phase_state(tmp_path, now=now)
+
+    assert "sess-invalid" not in overlay
+
+
 def test_managed_session_phase_state_prefers_newer_outbox_signal(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     now = datetime.now(tz=timezone.utc)

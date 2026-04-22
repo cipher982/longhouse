@@ -28,8 +28,9 @@ impl<'a> ManagedSessionStateStore<'a> {
 
     /// Upsert current managed-session phase state.
     ///
-    /// The newest `phase_observed_at` wins. Workspace metadata is sticky:
-    /// writers that do not know the cwd do not erase a previously known value.
+    /// The newest `phase_observed_at` wins. Writers that do not know the cwd
+    /// do not erase a previously known workspace, but a newer non-null value
+    /// can correct older metadata.
     ///
     /// Unknown phases are rejected so the local current-state row stays inside
     /// the same closed vocabulary as the shipping/runtime phase ledger.
@@ -61,14 +62,14 @@ impl<'a> ManagedSessionStateStore<'a> {
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8)
             ON CONFLICT(session_id) DO UPDATE SET
                 provider = excluded.provider,
-                workspace_path = CASE
-                    WHEN managed_session_state.workspace_path IS NULL THEN excluded.workspace_path
-                    ELSE managed_session_state.workspace_path
-                END,
-                workspace_label = CASE
-                    WHEN managed_session_state.workspace_label IS NULL THEN excluded.workspace_label
-                    ELSE managed_session_state.workspace_label
-                END,
+                workspace_path = COALESCE(
+                    excluded.workspace_path,
+                    managed_session_state.workspace_path
+                ),
+                workspace_label = COALESCE(
+                    excluded.workspace_label,
+                    managed_session_state.workspace_label
+                ),
                 phase_kind = excluded.phase_kind,
                 tool_name = excluded.tool_name,
                 phase_source = excluded.phase_source,
@@ -254,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn record_phase_keeps_original_workspace_when_newer_signal_disagrees() {
+    fn record_phase_updates_workspace_when_newer_signal_has_new_value() {
         let (_tmp, conn) = setup();
         let store = ManagedSessionStateStore::new(&conn);
 
@@ -297,8 +298,8 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(row.0, "/Users/test/git/assistants-service");
-        assert_eq!(row.1, "assistants-service");
+        assert_eq!(row.0, "/tmp/wrong-workspace");
+        assert_eq!(row.1, "wrong-workspace");
         assert_eq!(row.2, "idle");
     }
 }
