@@ -3,6 +3,17 @@ import Testing
 
 @testable import LonghouseMenuBarCore
 
+private struct ManagedPhaseContractFile: Decodable {
+    let cases: [ManagedPhaseContractCase]
+}
+
+private struct ManagedPhaseContractCase: Decodable {
+    let rawPhase: String
+    let toolName: String?
+    let displayPhase: String
+    let attention: String
+}
+
 struct LonghouseMenuBarCoreTests {
     @Test
     func decodesHealthyFixture() throws {
@@ -686,31 +697,31 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func managedSessionAttentionClassifiesAttachedPhases() {
-        let cases: [(phase: String, expected: ManagedAttentionKind)] = [
-            ("thinking", .working),
-            ("needs you", .needsYou),
-            ("needs user", .needsYou),
-            ("idle", .idle),
-        ]
-
-        for (phase, expected) in cases {
-            let session = ManagedSessionSnapshot(
-                sessionId: "sess-\(phase)",
-                provider: "claude",
-                workspaceLabel: "citi",
-                branch: nil,
-                state: "attached",
-                phase: phase,
-                phaseObservedAt: "2026-04-22T01:56:59Z",
-                lastActivityAt: "2026-04-22T01:56:59Z",
-                bridgeStatus: nil,
-                bridgePid: nil,
-                bridgeHeartbeatAt: nil,
-                reasonCodes: []
-            )
-
-            #expect(session.menuBarAttentionKind == expected)
+    func managedSessionAttentionMatchesSharedPhaseContract() throws {
+        for item in try loadManagedPhaseContract() {
+            let data = Data("""
+            {
+              "health_state": "healthy",
+              "severity": "green",
+              "headline": "Longhouse shipping healthy",
+              "reasons": [],
+              "suggested_actions": [],
+              "managed_sessions": [
+                {
+                  "session_id": "sess-\(item.rawPhase)",
+                  "provider": "claude",
+                  "workspace_label": "citi",
+                  "state": "attached",
+                  "phase": "\(item.displayPhase)",
+                  "phase_observed_at": "2026-04-22T01:56:59Z",
+                  "last_activity_at": "2026-04-22T01:56:59Z"
+                }
+              ]
+            }
+            """.utf8)
+            let snapshot = try HealthSnapshotDecoder.decode(data: data)
+            let session = try #require(snapshot.managedSessions?.first)
+            #expect(session.menuBarAttentionKind == managedAttentionKind(for: item.attention))
         }
     }
 
@@ -732,5 +743,37 @@ struct LonghouseMenuBarCoreTests {
             ofItemAtPath: executableURL.path
         )
         return executableURL
+    }
+
+    private func loadManagedPhaseContract() throws -> [ManagedPhaseContractCase] {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/managed-phase-contract.json")
+        let data = try Data(contentsOf: fixtureURL)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(ManagedPhaseContractFile.self, from: data).cases
+    }
+
+    private func managedAttentionKind(for raw: String) -> ManagedAttentionKind {
+        switch raw {
+        case "working":
+            return .working
+        case "needsYou":
+            return .needsYou
+        case "blocked":
+            return .blocked
+        case "idle":
+            return .idle
+        case "detached":
+            return .detached
+        case "degraded":
+            return .degraded
+        default:
+            Issue.record("Unknown attention kind in managed phase contract: \(raw)")
+            return .unknown(raw)
+        }
     }
 }

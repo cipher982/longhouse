@@ -141,6 +141,12 @@ def _write_service_plist(
     return path
 
 
+def _load_managed_phase_contract() -> list[dict]:
+    root = Path(__file__).resolve().parents[2]
+    contract_path = root / "desktop" / "LonghouseMenuBarHarness" / "Fixtures" / "managed-phase-contract.json"
+    return json.loads(contract_path.read_text())["cases"]
+
+
 def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
     # Stub the live process scan by default so tests don't pick up the dev
@@ -1272,6 +1278,16 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
     assert rows[0]["phase"] == "needs you"
     assert rows[0]["phase_observed_at"] == "2026-04-19T00:04:30Z"
     assert rows[0]["last_activity_at"] == "2026-04-19T00:04:30Z"
+
+
+def test_local_health_phase_contract_covers_every_known_raw_phase():
+    contract_raw_phases = {case["raw_phase"] for case in _load_managed_phase_contract()}
+    assert contract_raw_phases == set(local_health_service._PHASE_FRESHNESS_SECONDS)
+
+
+def test_local_health_phase_contract_matches_display_labels():
+    for case in _load_managed_phase_contract():
+        assert local_health_service._phase_display_label(case["raw_phase"], case.get("tool_name")) == case["display_phase"]
 
 
 def test_phase_overlay_drops_stale_rows_past_freshness_window(monkeypatch, tmp_path: Path):
