@@ -34,57 +34,87 @@ function paletteForTone(rawTone) {
   switch (rawTone) {
     case "green":
       return {
-        shellFill: "#61D88C",
+        shellStart: "#8DECAF",
+        shellMid: "#58C97D",
+        shellEnd: "#2F8A53",
         shellStroke: "#236842",
-        visorFill: "#0A1711",
+        visorStart: "#1A2D22",
+        visorEnd: "#0A1711",
         visorStroke: "#C7FFE0",
-        detailFill: "#F1FFF8",
-        detailStroke: "#F1FFF8",
-        highlightFill: "rgba(255,255,255,0.22)",
-        sparkleFill: "rgba(255,255,255,0.14)",
+        detailFill: "#E9FFF1",
+        detailStroke: "#C7FFE0",
+        highlightStart: "#FFFFFF",
+        highlightStartOpacity: "0.28",
+        highlightEnd: "#FFFFFF",
+        highlightEndOpacity: "0",
+        sparkleFill: "rgba(255,255,255,0.18)",
       };
     case "yellow":
       return {
-        shellFill: "#E0B455",
+        shellStart: "#F2D98F",
+        shellMid: "#D8AD4A",
+        shellEnd: "#9B711E",
         shellStroke: "#7E5618",
-        visorFill: "#1E1408",
+        visorStart: "#342311",
+        visorEnd: "#1E1408",
         visorStroke: "#FFE2A1",
-        detailFill: "#FFF3CF",
-        detailStroke: "#FFF3CF",
-        highlightFill: "rgba(255,255,255,0.18)",
-        sparkleFill: "rgba(255,255,255,0.12)",
+        detailFill: "#FFF4CF",
+        detailStroke: "#FFE2A1",
+        highlightStart: "#FFFFFF",
+        highlightStartOpacity: "0.24",
+        highlightEnd: "#FFFFFF",
+        highlightEndOpacity: "0",
+        sparkleFill: "rgba(255,255,255,0.14)",
       };
     case "red":
       return {
-        shellFill: "#D96C58",
+        shellStart: "#F0998A",
+        shellMid: "#D16552",
+        shellEnd: "#922F24",
         shellStroke: "#732019",
-        visorFill: "#210C0A",
+        visorStart: "#341412",
+        visorEnd: "#210C0A",
         visorStroke: "#FFC0B3",
-        detailFill: "#FFE4DE",
-        detailStroke: "#FFE4DE",
-        highlightFill: "rgba(255,255,255,0.16)",
-        sparkleFill: "rgba(255,255,255,0.10)",
+        detailFill: "#FFE5DF",
+        detailStroke: "#FFC0B3",
+        highlightStart: "#FFFFFF",
+        highlightStartOpacity: "0.22",
+        highlightEnd: "#FFFFFF",
+        highlightEndOpacity: "0",
+        sparkleFill: "rgba(255,255,255,0.12)",
       };
     case "gray":
       return {
-        shellFill: "#AAB4BE",
+        shellStart: "#D4DCE5",
+        shellMid: "#A9B4BF",
+        shellEnd: "#6D7885",
         shellStroke: "#495360",
-        visorFill: "#0D131A",
+        visorStart: "#1C242D",
+        visorEnd: "#0D131A",
         visorStroke: "#E3EDF7",
-        detailFill: "#F5F9FD",
-        detailStroke: "#F5F9FD",
-        highlightFill: "rgba(255,255,255,0.15)",
-        sparkleFill: "rgba(255,255,255,0.10)",
+        detailFill: "#F4F9FD",
+        detailStroke: "#E3EDF7",
+        highlightStart: "#FFFFFF",
+        highlightStartOpacity: "0.20",
+        highlightEnd: "#FFFFFF",
+        highlightEndOpacity: "0",
+        sparkleFill: "rgba(255,255,255,0.12)",
       };
     case "menu":
       return {
-        shellFill: "#F8FAFC",
+        shellStart: "#FFFFFF",
+        shellMid: "#EEF3F8",
+        shellEnd: "#C9D3DE",
         shellStroke: "#7C8795",
-        visorFill: "#0B0F14",
+        visorStart: "#1C2128",
+        visorEnd: "#0B0F14",
         visorStroke: "#FFFFFF",
         detailFill: "#FFFFFF",
         detailStroke: "#FFFFFF",
-        highlightFill: "rgba(255,255,255,0.22)",
+        highlightStart: "#FFFFFF",
+        highlightStartOpacity: "0.24",
+        highlightEnd: "#FFFFFF",
+        highlightEndOpacity: "0",
         sparkleFill: "rgba(255,255,255,0.18)",
       };
     default:
@@ -96,17 +126,20 @@ function deriveMenubarSvg(svg, rawTone) {
   let derived = svg;
   const palette = paletteForTone(rawTone);
 
-  // Keep one geometry source of truth, but remap the full-color logo into
-  // a compact severity palette that preserves shell/visor/detail separation.
-  derived = derived.replace(/<defs>[\s\S]*?<\/defs>/, "");
-  derived = derived.replaceAll('fill="url(#helmetGrad)"', `fill="${palette.shellFill}"`);
+  // Keep one geometry source of truth and recolor the existing gradients
+  // rather than flattening the mark into a single fill.
+  derived = derived.replace('stop-color="#A883FF"', `stop-color="${palette.shellStart}"`);
+  derived = derived.replace('stop-color="#7A57E5"', `stop-color="${palette.shellMid}"`);
+  derived = derived.replace('stop-color="#5832B9"', `stop-color="${palette.shellEnd}"`);
+  derived = derived.replace('stop-color="#30245B"', `stop-color="${palette.visorStart}"`);
+  derived = derived.replace('stop-color="#17112E"', `stop-color="${palette.visorEnd}"`);
+  derived = derived.replace('stop-color="#ffffff" stop-opacity="0.34"', `stop-color="${palette.highlightStart}" stop-opacity="${palette.highlightStartOpacity}"`);
+  derived = derived.replace('stop-color="#ffffff" stop-opacity="0"', `stop-color="${palette.highlightEnd}" stop-opacity="${palette.highlightEndOpacity}"`);
   derived = derived.replaceAll('stroke="#2E1A62"', `stroke="${palette.shellStroke}"`);
-  derived = derived.replaceAll('fill="url(#visorGrad)"', `fill="${palette.visorFill}"`);
   derived = derived.replace('stroke="#8EF0AA"', `stroke="${palette.visorStroke}"`);
   derived = derived.replace('stroke="#AAFFD0"', `stroke="${palette.visorStroke}"`);
   derived = derived.replaceAll('fill="#9AF7A8"', `fill="${palette.detailFill}"`);
   derived = derived.replaceAll('stroke="#9AF7A8"', `stroke="${palette.detailStroke}"`);
-  derived = derived.replace('fill="url(#highlightGrad)"', `fill="${palette.highlightFill}"`);
   derived = derived.replace('fill="#ffffff" opacity="0.14"', `fill="${palette.sparkleFill}"`);
 
   // The master viewBox is already tight to content bounds.
