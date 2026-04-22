@@ -16,8 +16,10 @@ export type DiffLine = {
 };
 
 export function lineDiff(oldStr: string, newStr: string): DiffLine[] {
-  const a = oldStr.split("\n");
-  const b = newStr.split("\n");
+  // Empty-string edge cases: split("\n") on "" returns [""], which would
+  // render as a phantom blank line in the diff. Treat empty as zero lines.
+  const a = oldStr === "" ? [] : oldStr.split("\n");
+  const b = newStr === "" ? [] : newStr.split("\n");
   const m = a.length;
   const n = b.length;
 

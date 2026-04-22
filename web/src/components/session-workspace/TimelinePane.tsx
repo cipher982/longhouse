@@ -71,6 +71,27 @@ function SeamRow({ seam }: { seam: TimelineSeam }) {
 
 const MESSAGE_COLLAPSE_LINES = 24;
 
+/** Truncate preview to at most `maxLines` without leaving an unclosed fenced
+ *  code block — ReactMarkdown would otherwise treat the rest of the document
+ *  as "inside a code block" and render everything as code. */
+function truncateMarkdown(text: string, maxLines: number): string {
+  const lines = text.split("\n");
+  if (lines.length <= maxLines) return text;
+  let cut = maxLines;
+  // Count fences (``` or ~~~) up to the cut; if odd, we're inside a fence —
+  // drop lines back until the last open fence, then chop that opener too.
+  const isFence = (l: string) => /^\s*(```|~~~)/.test(l);
+  let fences = 0;
+  for (let i = 0; i < cut; i++) if (isFence(lines[i])) fences++;
+  if (fences % 2 === 1) {
+    // Walk back to the last opening fence and cut just before it.
+    for (let i = cut - 1; i >= 0; i--) {
+      if (isFence(lines[i])) { cut = i; break; }
+    }
+  }
+  return lines.slice(0, cut).join("\n");
+}
+
 function MessageRow({
   event,
   isSelected,
@@ -88,9 +109,9 @@ function MessageRow({
   const isLong = lineCount > MESSAGE_COLLAPSE_LINES;
   const [expanded, setExpanded] = useState(false);
   const visible = isLong && !expanded
-    ? preview.split("\n").slice(0, MESSAGE_COLLAPSE_LINES).join("\n")
+    ? truncateMarkdown(preview, MESSAGE_COLLAPSE_LINES)
     : preview;
-  const hiddenLines = lineCount - MESSAGE_COLLAPSE_LINES;
+  const hiddenLines = lineCount - visible.split("\n").length;
 
   return (
     <div
@@ -151,6 +172,7 @@ function MessageRow({
           <button
             type="button"
             className="tl-msg__expand"
+            aria-expanded={expanded}
             onClick={(e) => {
               e.stopPropagation();
               setExpanded((v) => !v);
@@ -164,15 +186,14 @@ function MessageRow({
   );
 }
 
+/** Only languages PrismLight registers in lib/syntaxHighlighter.ts.
+ *  Anything else falls back to a plain <pre> so we don't trigger a silent
+ *  no-highlight render. Extend both lists in lockstep. */
 const EXT_TO_LANG: Record<string, string> = {
   ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", mjs: "javascript",
-  py: "python", rs: "rust", go: "go", rb: "ruby", java: "java", kt: "kotlin",
-  swift: "swift", c: "c", h: "c", cpp: "cpp", cc: "cpp", hpp: "cpp",
-  cs: "csharp", php: "php", sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
-  json: "json", jsonc: "json", yaml: "yaml", yml: "yaml", toml: "toml",
-  md: "markdown", markdown: "markdown", html: "html", xml: "xml",
-  css: "css", scss: "scss", less: "less",
-  sql: "sql", dockerfile: "docker", gql: "graphql", graphql: "graphql",
+  cjs: "javascript", py: "python", sh: "bash", bash: "bash", zsh: "bash",
+  fish: "bash", json: "json", jsonc: "json", yaml: "yaml", yml: "yaml",
+  md: "markdown", markdown: "markdown", css: "css", sql: "sql",
 };
 
 function detectLanguage(text: string, hint: { filePath?: string | null; toolName?: string } = {}): string | null {
@@ -180,7 +201,6 @@ function detectLanguage(text: string, hint: { filePath?: string | null; toolName
   if (path) {
     const ext = path.includes(".") ? path.slice(path.lastIndexOf(".") + 1) : "";
     if (ext && EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
-    if (path.endsWith("/dockerfile") || path.endsWith("dockerfile")) return "docker";
     if (path.endsWith("/makefile") || path.endsWith("makefile")) return "bash";
   }
   const trimmed = text.trimStart();
