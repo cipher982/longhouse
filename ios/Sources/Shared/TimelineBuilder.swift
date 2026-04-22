@@ -38,17 +38,15 @@ enum TimelineItem: Identifiable, Sendable {
 }
 
 enum TimelineBuilder {
-    /// Tools that are passive reads/searches — safe to collapse into a single
-    /// row when they appear in a run within a turn. Covers both Claude
-    /// (Read, Grep, Glob, ...) and Codex (read_file, grep, list_files, ...)
-    /// primitives. Bash and Task are deliberately excluded: Bash can do
-    /// anything, Task spawns a subagent, and both deserve individual rows.
-    static let passiveToolNames: Set<String> = [
-        // Claude
-        "Read", "Grep", "Glob", "ToolSearch", "WebFetch", "WebSearch",
-        // Codex
-        "read_file", "grep", "list_files", "find", "codebase_search", "web_search",
-    ]
+    /// A tool is "passive" if its tier is `.noise` in config/tool-tiers.json —
+    /// a low-signal read/search safe to collapse into a single "Explored" row.
+    /// Context- and action-tier tools always render individually.
+    /// NOTE: iOS historically collapsed `.context` (Read, WebFetch) as well as
+    /// `.noise`. Kept that behavior here so the mobile surface doesn't regress.
+    static func isPassive(_ toolName: String) -> Bool {
+        let tier = ToolTiers.tier(toolName)
+        return tier == .noise || tier == .context
+    }
 
     /// Build a paired, renderable timeline from raw events.
     /// Mirrors the web pairing logic: assistant-with-tool_name registers in a
@@ -126,7 +124,7 @@ enum TimelineBuilder {
         for item in items {
             switch item {
             case .tool(let call, let result)
-                where passiveToolNames.contains(call.toolName ?? ""):
+                where Self.isPassive(call.toolName ?? ""):
                 buffer.append(PassiveCall(call: call, result: result))
             default:
                 flush()
