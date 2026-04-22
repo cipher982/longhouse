@@ -109,8 +109,11 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {{
   const mcp = parseMcp(toolName);
   if (mcp) {{
     const ns = mcp.namespace.toLowerCase();
+    // Exact match first, then word-boundary prefix (e.g. "longhouse-channel"
+    // matches "longhouse", but "webhook" doesn't match "web").
+    const nsParts = ns.split(/[-_]/);
     for (const [prefix, meta] of Object.entries(MCP_NAMESPACES)) {{
-      if (ns.includes(prefix)) {{
+      if (ns === prefix || nsParts.includes(prefix) || ns.startsWith(prefix + "-") || ns.startsWith(prefix + "_")) {{
         return {{
           tier: MCP_DEFAULT_TIER,
           icon: meta.icon,
@@ -218,10 +221,14 @@ public enum ToolTiers {{
     public static func resolve(_ name: String) -> Resolved {{
         if let mcp = parseMcp(name) {{
             let ns = mcp.namespace.lowercased()
-            for (prefix, meta) in mcpNamespaces where ns.contains(prefix) {{
-                return Resolved(tier: mcpDefaultTier, icon: meta.icon,
-                                label: mcp.method, color: meta.color,
-                                mcpNamespace: mcp.namespace)
+            let parts = Set(ns.split(whereSeparator: {{ $0 == "-" || $0 == "_" }}).map(String.init))
+            for (prefix, meta) in mcpNamespaces {{
+                if ns == prefix || parts.contains(prefix) ||
+                   ns.hasPrefix(prefix + "-") || ns.hasPrefix(prefix + "_") {{
+                    return Resolved(tier: mcpDefaultTier, icon: meta.icon,
+                                    label: mcp.method, color: meta.color,
+                                    mcpNamespace: mcp.namespace)
+                }}
             }}
             return Resolved(tier: mcpDefaultTier, icon: "M",
                             label: mcp.method, color: .muted,

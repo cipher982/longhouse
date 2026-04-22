@@ -52,6 +52,7 @@ public enum ToolTiers {
         "codebase_search": ToolTierMeta(tier: .noise, icon: "?", label: "search", color: .muted),
         "web_search": ToolTierMeta(tier: .context, icon: "S", label: "web_search", color: .secondary),
         "shell": ToolTierMeta(tier: .action, icon: "$", label: "shell", color: .warning),
+        "shell_command": ToolTierMeta(tier: .action, icon: "$", label: "shell", color: .warning),
         "exec_command": ToolTierMeta(tier: .action, icon: "$", label: "exec", color: .warning),
         "run_shell_command": ToolTierMeta(tier: .action, icon: "$", label: "shell", color: .warning),
         "write_stdin": ToolTierMeta(tier: .action, icon: "$", label: "stdin", color: .warning),
@@ -82,10 +83,14 @@ public enum ToolTiers {
     public static func resolve(_ name: String) -> Resolved {
         if let mcp = parseMcp(name) {
             let ns = mcp.namespace.lowercased()
-            for (prefix, meta) in mcpNamespaces where ns.contains(prefix) {
-                return Resolved(tier: mcpDefaultTier, icon: meta.icon,
-                                label: mcp.method, color: meta.color,
-                                mcpNamespace: mcp.namespace)
+            let parts = Set(ns.split(whereSeparator: { $0 == "-" || $0 == "_" }).map(String.init))
+            for (prefix, meta) in mcpNamespaces {
+                if ns == prefix || parts.contains(prefix) ||
+                   ns.hasPrefix(prefix + "-") || ns.hasPrefix(prefix + "_") {
+                    return Resolved(tier: mcpDefaultTier, icon: meta.icon,
+                                    label: mcp.method, color: meta.color,
+                                    mcpNamespace: mcp.namespace)
+                }
             }
             return Resolved(tier: mcpDefaultTier, icon: "M",
                             label: mcp.method, color: .muted,

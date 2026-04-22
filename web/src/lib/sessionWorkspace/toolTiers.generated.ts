@@ -44,6 +44,7 @@ export const TOOL_TIERS: Record<string, ToolTierMeta> = {
   "codebase_search": { tier: "noise", icon: "?", label: "search", color: "muted" },
   "web_search": { tier: "context", icon: "S", label: "web_search", color: "secondary" },
   "shell": { tier: "action", icon: "$", label: "shell", color: "warning" },
+  "shell_command": { tier: "action", icon: "$", label: "shell", color: "warning" },
   "exec_command": { tier: "action", icon: "$", label: "exec", color: "warning" },
   "run_shell_command": { tier: "action", icon: "$", label: "shell", color: "warning" },
   "write_stdin": { tier: "action", icon: "$", label: "stdin", color: "warning" },
@@ -98,8 +99,11 @@ export function resolveToolInfo(toolName: string): ResolvedToolInfo {
   const mcp = parseMcp(toolName);
   if (mcp) {
     const ns = mcp.namespace.toLowerCase();
+    // Exact match first, then word-boundary prefix (e.g. "longhouse-channel"
+    // matches "longhouse", but "webhook" doesn't match "web").
+    const nsParts = ns.split(/[-_]/);
     for (const [prefix, meta] of Object.entries(MCP_NAMESPACES)) {
-      if (ns.includes(prefix)) {
+      if (ns === prefix || nsParts.includes(prefix) || ns.startsWith(prefix + "-") || ns.startsWith(prefix + "_")) {
         return {
           tier: MCP_DEFAULT_TIER,
           icon: meta.icon,

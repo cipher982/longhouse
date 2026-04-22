@@ -30,6 +30,7 @@
     "codebase_search":  { "tier": "noise",   "icon": "?", "label": "search",    "color": "muted" },
     "web_search":       { "tier": "context", "icon": "S", "label": "web_search","color": "secondary" },
     "shell":            { "tier": "action",  "icon": "$", "label": "shell",     "color": "warning" },
+    "shell_command":    { "tier": "action",  "icon": "$", "label": "shell",     "color": "warning" },
     "exec_command":     { "tier": "action",  "icon": "$", "label": "exec",      "color": "warning" },
     "run_shell_command":{ "tier": "action",  "icon": "$", "label": "shell",     "color": "warning" },
     "write_stdin":      { "tier": "action",  "icon": "$", "label": "stdin",     "color": "warning" },
