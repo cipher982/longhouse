@@ -486,7 +486,7 @@ public struct MenuBarPanelView: View {
             HeaderSessionToken(
                 id: "\(index)-\((session.provider ?? "unknown").lowercased())",
                 provider: session.provider ?? "unknown",
-                attention: managedAttention(for: session)
+                attention: session.menuBarAttentionKind
             )
         }
     }
@@ -532,7 +532,7 @@ public struct MenuBarPanelView: View {
                 provider: provider.isEmpty ? "unknown" : provider,
                 workspace: workspace.isEmpty ? HealthSnapshot.providerDisplayName(provider.isEmpty ? "unknown" : provider) : workspace,
                 branch: (session.branch ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : session.branch,
-                attention: managedAttention(for: session),
+                attention: session.menuBarAttentionKind,
                 ageLabel: snapshot.compactTimestampLabel(session.lastActivityAt, relativeTo: presentationDate),
                 detail: managedSessionDetail(session),
                 stopAction: managedStopAction(for: session)
@@ -595,48 +595,6 @@ public struct MenuBarPanelView: View {
                     snapshot: snapshot
                 )
             )
-        }
-    }
-
-    /// Derive the user-facing attention state from raw bridge state + phase.
-    ///
-    /// The pill is the one thing a user should glance at to decide whether to
-    /// switch contexts, so it has to answer "is this session waiting on me?"
-    /// rather than "is Longhouse connected to it?". Treating `attached` as the
-    /// default and letting the phase drive the pill means managed sessions
-    /// that are just quietly running show *nothing* in the pill slot — and the
-    /// few amber pills on screen actually mean something.
-    private func managedAttention(for session: ManagedSessionSnapshot) -> ManagedAttentionKind {
-        switch session.normalizedState {
-        case "detached":
-            return .detached
-        case "degraded":
-            return .degraded
-        case "attached":
-            return attachedAttention(for: session)
-        case "":
-            return .unknown("")
-        default:
-            return .unknown(session.normalizedState)
-        }
-    }
-
-    private func attachedAttention(for session: ManagedSessionSnapshot) -> ManagedAttentionKind {
-        let phase = (session.phase ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let normalized = phase.replacingOccurrences(of: "_", with: " ")
-        switch normalized {
-        case "running", "running tools", "thinking":
-            return .working
-        case "needs user", "needs input", "waiting for input", "idle prompt":
-            return .needsYou
-        case "blocked":
-            return .blocked
-        case "", "idle", "finished":
-            return .idle
-        default:
-            // Unrecognized phase — treat as working so we don't flip it to
-            // "idle" and let the user assume it's their turn.
-            return .working
         }
     }
 

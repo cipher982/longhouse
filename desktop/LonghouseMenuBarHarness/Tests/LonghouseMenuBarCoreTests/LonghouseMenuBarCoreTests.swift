@@ -685,6 +685,26 @@ struct LonghouseMenuBarCoreTests {
         #expect(snapshot.managedAttentionSeverity == .red)
     }
 
+    @Test
+    func managedSessionAttentionTreatsNeedsYouAsNeedsYou() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "sess-1",
+            provider: "claude",
+            workspaceLabel: "citi",
+            branch: nil,
+            state: "attached",
+            phase: "needs you",
+            phaseObservedAt: "2026-04-22T01:56:59Z",
+            lastActivityAt: "2026-04-22T01:56:59Z",
+            bridgeStatus: nil,
+            bridgePid: nil,
+            bridgeHeartbeatAt: nil,
+            reasonCodes: []
+        )
+
+        #expect(session.menuBarAttentionKind == .needsYou)
+    }
+
     private func makeFakeHomeDirectory() throws -> URL {
         let tempDirectory = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
