@@ -61,8 +61,14 @@ impl<'a> ManagedSessionStateStore<'a> {
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8, ?8)
             ON CONFLICT(session_id) DO UPDATE SET
                 provider = excluded.provider,
-                workspace_path = COALESCE(excluded.workspace_path, managed_session_state.workspace_path),
-                workspace_label = COALESCE(excluded.workspace_label, managed_session_state.workspace_label),
+                workspace_path = CASE
+                    WHEN managed_session_state.workspace_path IS NULL THEN excluded.workspace_path
+                    ELSE managed_session_state.workspace_path
+                END,
+                workspace_label = CASE
+                    WHEN managed_session_state.workspace_label IS NULL THEN excluded.workspace_label
+                    ELSE managed_session_state.workspace_label
+                END,
                 phase_kind = excluded.phase_kind,
                 tool_name = excluded.tool_name,
                 phase_source = excluded.phase_source,
@@ -245,5 +251,54 @@ mod tests {
         assert_eq!(row.1, "assistants-service");
         assert_eq!(row.2, "idle");
         assert_eq!(row.3, "codex_bridge");
+    }
+
+    #[test]
+    fn record_phase_keeps_original_workspace_when_newer_signal_disagrees() {
+        let (_tmp, conn) = setup();
+        let store = ManagedSessionStateStore::new(&conn);
+
+        let old_time = DateTime::parse_from_rfc3339("2026-04-22T15:01:02Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let new_time = DateTime::parse_from_rfc3339("2026-04-22T15:05:02Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        store
+            .record_phase(&ManagedSessionPhaseSignal {
+                session_id: "sess-1".to_string(),
+                provider: "codex".to_string(),
+                workspace_path: Some("/Users/test/git/assistants-service".to_string()),
+                phase_kind: "thinking".to_string(),
+                tool_name: None,
+                phase_source: "codex_hook".to_string(),
+                observed_at: old_time,
+            })
+            .unwrap();
+        store
+            .record_phase(&ManagedSessionPhaseSignal {
+                session_id: "sess-1".to_string(),
+                provider: "codex".to_string(),
+                workspace_path: Some("/tmp/wrong-workspace".to_string()),
+                phase_kind: "idle".to_string(),
+                tool_name: None,
+                phase_source: "codex_bridge".to_string(),
+                observed_at: new_time,
+            })
+            .unwrap();
+
+        let row: (String, String, String) = conn
+            .query_row(
+                "SELECT workspace_path, workspace_label, phase_kind
+                 FROM managed_session_state
+                 WHERE session_id = 'sess-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "/Users/test/git/assistants-service");
+        assert_eq!(row.1, "assistants-service");
+        assert_eq!(row.2, "idle");
     }
 }

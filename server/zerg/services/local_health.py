@@ -699,7 +699,7 @@ def _load_session_binding_rows(base_dir: Path) -> list[dict[str, str | None]]:
         conn.close()
 
 
-def _load_persisted_session_phase_rows(base_dir: Path) -> dict[str, dict[str, str | None]]:
+def _load_persisted_managed_session_phase_rows(base_dir: Path) -> dict[str, dict[str, str | None]]:
     db_path = get_agent_db_path(base_dir)
     if not db_path.exists():
         return {}
@@ -712,9 +712,18 @@ def _load_persisted_session_phase_rows(base_dir: Path) -> dict[str, dict[str, st
     try:
         rows = conn.execute(
             """
-            SELECT session_id, provider, phase, tool_name, source, observed_at
-            FROM session_phase_state
-            ORDER BY observed_at DESC
+            SELECT
+                session_id,
+                provider,
+                workspace_path,
+                workspace_label,
+                phase_kind,
+                tool_name,
+                phase_source,
+                phase_observed_at,
+                last_activity_at
+            FROM managed_session_state
+            ORDER BY phase_observed_at DESC
             """
         ).fetchall()
     except sqlite3.Error:
@@ -723,18 +732,31 @@ def _load_persisted_session_phase_rows(base_dir: Path) -> dict[str, dict[str, st
         conn.close()
 
     merged: dict[str, dict[str, str | None]] = {}
-    for session_id, provider, phase, tool_name, source, observed_at in rows:
+    for (
+        session_id,
+        provider,
+        workspace_path,
+        workspace_label,
+        phase_kind,
+        tool_name,
+        phase_source,
+        phase_observed_at,
+        last_activity_at,
+    ) in rows:
         normalized_session_id = _normalize_optional_string(session_id)
-        normalized_phase = _normalize_optional_string(phase)
-        normalized_observed_at = _parse_rfc3339(str(observed_at or ""))
+        normalized_phase = _normalize_optional_string(phase_kind)
+        normalized_observed_at = _parse_rfc3339(str(phase_observed_at or ""))
         if normalized_session_id is None or normalized_phase is None or normalized_observed_at is None:
             continue
         merged[normalized_session_id] = {
             "provider": _normalize_optional_string(provider),
+            "workspace_path": _normalize_optional_string(workspace_path),
+            "workspace_label": _normalize_optional_string(workspace_label),
             "phase": normalized_phase,
             "tool_name": _normalize_optional_string(tool_name),
-            "source": _normalize_optional_string(source),
+            "source": _normalize_optional_string(phase_source),
             "observed_at": _to_rfc3339(normalized_observed_at),
+            "last_activity_at": _max_rfc3339(last_activity_at, phase_observed_at),
         }
     return merged
 
@@ -774,6 +796,7 @@ def _load_outbox_session_phase_rows(base_dir: Path) -> dict[str, dict[str, str |
             "tool_name": tool_name,
             "source": f"{provider}_hook",
             "observed_at": _to_rfc3339(observed_at),
+            "last_activity_at": _to_rfc3339(observed_at),
         }
         current = merged.get(session_id)
         if current is None or _max_rfc3339(next_row["observed_at"], current.get("observed_at")) == next_row["observed_at"]:
@@ -785,50 +808,13 @@ def _phase_display_label(phase: str | None, tool_name: str | None) -> str | None
     return display_label_for_phase(_normalize_optional_string(phase), _normalize_optional_string(tool_name))
 
 
-# Phase freshness windows, seconds. MUST mirror
-# `session_runtime.PHASE_FRESHNESS` for the non-terminal phases it covers —
-# duplicated here because importing session_runtime would pull in
-# `zerg.database`, which requires a real DATABASE_URL. The local-health CLI
-# must run without server settings. A drift test in
-# test_local_health_cli.py cross-checks the two copies.
-#
-# `finished` is local-health-only: the runtime reducer tracks it forever via
-# `terminal_state`, but a raw ledger row for `finished` is just a recent
-# shutdown signal — show it for the same window as `idle`, then drop.
-_PHASE_FRESHNESS_SECONDS: dict[str, int] = {
-    "thinking": 90,
-    "running": 10 * 60,
-    "idle": 10 * 60,
-    "blocked": 24 * 60 * 60,
-    "needs_user": 24 * 60 * 60,
-    "finished": 10 * 60,
-}
-
-
-def _phase_row_is_fresh(row: Mapping[str, str | None], now: datetime) -> bool:
-    """Apply phase-specific freshness windows so stale rows don't show phantom phases."""
-    phase = _normalize_optional_string(row.get("phase"))
-    observed_raw = _normalize_optional_string(row.get("observed_at"))
-    if phase is None or observed_raw is None:
-        return False
-    window_seconds = _PHASE_FRESHNESS_SECONDS.get(phase.lower())
-    if window_seconds is None:
-        return False
-    observed_at = _parse_rfc3339(observed_raw)
-    if observed_at is None:
-        return False
-    age = (now - observed_at).total_seconds()
-    # Tolerate small clock skew (negative age from bridge on another clock).
-    return age <= window_seconds
-
-
-def _load_managed_session_phase_overlay(base_dir: Path, *, now: datetime) -> dict[str, dict[str, str | None]]:
-    merged = _load_persisted_session_phase_rows(base_dir)
+def _load_managed_session_phase_state(base_dir: Path) -> dict[str, dict[str, str | None]]:
+    merged = _load_persisted_managed_session_phase_rows(base_dir)
     for session_id, row in _load_outbox_session_phase_rows(base_dir).items():
         current = merged.get(session_id)
         if current is None or _max_rfc3339(row.get("observed_at"), current.get("observed_at")) == row.get("observed_at"):
             merged[session_id] = row
-    return {session_id: row for session_id, row in merged.items() if _phase_row_is_fresh(row, now)}
+    return merged
 
 
 def _bridge_process_exists(process_rows: list[dict[str, Any]], pid: int) -> bool:
@@ -920,27 +906,6 @@ def _find_bridge_child_process(
     return None
 
 
-def _fallback_codex_bridge_phase_state(state: Mapping[str, Any]) -> dict[str, str | None] | None:
-    active_turn_id = _normalize_optional_string(state.get("active_turn_id"))
-    last_turn_status = _normalize_optional_string(state.get("last_turn_status"))
-    observed_at = _normalize_optional_string(state.get("updated_at"))
-    if observed_at is None:
-        return None
-    if active_turn_id is not None:
-        return {
-            "phase": "thinking",
-            "tool_name": None,
-            "observed_at": observed_at,
-        }
-    if last_turn_status is not None:
-        return {
-            "phase": "idle",
-            "tool_name": None,
-            "observed_at": observed_at,
-        }
-    return None
-
-
 def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
     rows = _load_session_binding_rows(base_dir)
     latest: dict[str, dict[str, str | None]] = {}
@@ -955,7 +920,6 @@ def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
 def _collect_managed_codex_summary(
     base_dir: Path,
     *,
-    now: datetime,
     phase_overlay: dict[str, dict[str, str | None]] | None = None,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
     state_dir = _codex_bridge_state_dir(base_dir)
@@ -1026,9 +990,8 @@ def _collect_managed_codex_summary(
         if reason_codes:
             normalized_state = "degraded"
         phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
-        if phase_state is None:
-            phase_state = _fallback_codex_bridge_phase_state(state)
         phase_observed_at = phase_state.get("observed_at") if phase_state else None
+        phase_last_activity_at = phase_state.get("last_activity_at") if phase_state else None
 
         sessions.append(
             {
@@ -1042,7 +1005,7 @@ def _collect_managed_codex_summary(
                     phase_state.get("tool_name") if phase_state else None,
                 ),
                 "phase_observed_at": phase_observed_at,
-                "last_activity_at": _max_rfc3339(bridge_updated_at, phase_observed_at),
+                "last_activity_at": _max_rfc3339(bridge_updated_at, phase_last_activity_at, phase_observed_at),
                 "bridge_status": bridge_status,
                 "bridge_pid": bridge_pid,
                 "bridge_heartbeat_at": bridge_heartbeat_at,
@@ -1631,14 +1594,13 @@ def _classify_health(
 def collect_local_health(claude_dir: str | Path | None = None) -> dict[str, Any]:
     now = _utc_now()
     resolved_base_dir = _coerce_path(claude_dir)
-    phase_overlay = _load_managed_session_phase_overlay(resolved_base_dir, now=now)
+    phase_overlay = _load_managed_session_phase_state(resolved_base_dir)
     service = _collect_service(resolved_base_dir)
     engine_status = _collect_engine_status(resolved_base_dir, now=now)
     outbox = _collect_outbox(resolved_base_dir, now=now)
     activity_summary = _collect_activity_summary(resolved_base_dir, now=now)
     bridge_summary, bridge_sessions, orphan_bridges = _collect_managed_codex_summary(
         resolved_base_dir,
-        now=now,
         phase_overlay=phase_overlay,
     )
     bridge_session_ids = {row.get("session_id") for row in bridge_sessions if row.get("session_id")}
