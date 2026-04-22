@@ -26,6 +26,7 @@ import {
 } from "../../lib/sessionWorkspace";
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useScrollToLoad } from "../../hooks/useScrollToLoad";
+import { collapseUnchanged, lineDiff } from "../../lib/sessionWorkspace/diff";
 
 type EventFilter = "all" | "messages" | "tools";
 
@@ -141,11 +142,49 @@ function MessageRow({
   );
 }
 
+/** Extract old/new strings from an Edit-shape input, if present. */
+function editPatchFromInput(
+  input: Record<string, unknown> | null | undefined,
+): { filePath: string | null; oldStr: string; newStr: string } | null {
+  if (!input) return null;
+  const oldStr = input.old_string;
+  const newStr = input.new_string;
+  if (typeof oldStr !== "string" || typeof newStr !== "string") return null;
+  const filePath = typeof input.file_path === "string" ? input.file_path : null;
+  return { filePath, oldStr, newStr };
+}
+
+function EditDiffView({ patch }: { patch: { filePath: string | null; oldStr: string; newStr: string } }) {
+  const lines = collapseUnchanged(lineDiff(patch.oldStr, patch.newStr), 2);
+  const removed = lines.filter((l) => l.kind === "remove").length;
+  const added = lines.filter((l) => l.kind === "add").length;
+  return (
+    <section className="tl-detail__block">
+      <div className="tl-detail__label">
+        diff
+        {patch.filePath ? <span className="tl-detail__path"> · {patch.filePath}</span> : null}
+        <span className="tl-detail__diff-stat tl-detail__diff-stat--remove"> −{removed}</span>
+        <span className="tl-detail__diff-stat tl-detail__diff-stat--add"> +{added}</span>
+      </div>
+      <div className="tl-diff">
+        {lines.map((line, i) => (
+          <div key={i} className={`tl-diff__line tl-diff__line--${line.kind}`}>
+            <span className="tl-diff__gutter">
+              {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : " "}
+            </span>
+            <span className="tl-diff__text">{line.text || " "}</span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /** Inline metadata row rendered underneath an expanded tool row. */
 function ToolDetail({ interaction, sessionEnded }: { interaction: ToolInteraction; sessionEnded: boolean }) {
-  const hasInput =
-    interaction.callEvent?.tool_input_json != null &&
-    Object.keys(interaction.callEvent.tool_input_json).length > 0;
+  const rawInput = interaction.callEvent?.tool_input_json as Record<string, unknown> | null | undefined;
+  const editPatch = editPatchFromInput(rawInput);
+  const hasInput = rawInput != null && Object.keys(rawInput).length > 0;
   const parsedOutput = interaction.resultEvent?.tool_output_text
     ? parseLonghouseOutput(interaction.resultEvent.tool_output_text)
     : null;
@@ -157,11 +196,13 @@ function ToolDetail({ interaction, sessionEnded }: { interaction: ToolInteractio
 
   return (
     <div className="tl-detail">
-      {hasInput ? (
+      {editPatch ? (
+        <EditDiffView patch={editPatch} />
+      ) : hasInput ? (
         <section className="tl-detail__block">
           <div className="tl-detail__label">input</div>
           <pre className="tl-code">
-            {JSON.stringify(interaction.callEvent?.tool_input_json, null, 2)}
+            {JSON.stringify(rawInput, null, 2)}
           </pre>
         </section>
       ) : null}
