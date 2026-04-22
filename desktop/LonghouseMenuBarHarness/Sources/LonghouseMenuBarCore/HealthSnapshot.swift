@@ -1200,11 +1200,15 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             switch normalizedPhase {
             case "running", "running tools", "thinking":
                 return .working
+            case let phase where phase.hasPrefix("running "):
+                return .working
             case "needs you", "needs user", "needs input", "waiting for input", "idle prompt":
                 return .needsYou
-            case "blocked":
+            case "blocked", "needs permission":
                 return .blocked
-            case "", "idle", "finished":
+            case let phase where phase.hasPrefix("blocked on "):
+                return .blocked
+            case "", "idle", "finished", "completed":
                 return .idle
             default:
                 // Unknown attached phases should stay non-interruptible until
