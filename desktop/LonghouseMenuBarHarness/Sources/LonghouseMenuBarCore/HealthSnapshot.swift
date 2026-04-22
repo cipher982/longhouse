@@ -406,6 +406,14 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     }
 
     public var managedAttentionSeverity: HarnessSeverity? {
+        if currentManagedSessions.contains(where: {
+            if case .unknown = $0.menuBarAttentionKind {
+                return true
+            }
+            return false
+        }) {
+            return .red
+        }
         if orphanBridgeCount > 0 || degradedManagedCount > 0 {
             return .red
         }
@@ -877,6 +885,8 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
             return "Longhouse needs setup on this Mac"
         case "desktop_app_wrong_install_location":
             return "Longhouse.app is not in /Applications"
+        case "managed_unknown_phase":
+            return "Longhouse saw an unknown managed phase"
         case "service_stopped":
             return "The local service is stopped"
         case "spool_dead":
@@ -1151,6 +1161,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     public let branch: String?
     public let state: String?
     public let phase: String?
+    public let rawPhase: String?
     public let phaseObservedAt: String?
     public let lastActivityAt: String?
     public let bridgeStatus: String?
@@ -1165,6 +1176,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         branch: String?,
         state: String?,
         phase: String?,
+        rawPhase: String? = nil,
         phaseObservedAt: String? = nil,
         lastActivityAt: String?,
         bridgeStatus: String?,
@@ -1178,6 +1190,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         self.branch = branch
         self.state = state
         self.phase = phase
+        self.rawPhase = rawPhase
         self.phaseObservedAt = phaseObservedAt
         self.lastActivityAt = lastActivityAt
         self.bridgeStatus = bridgeStatus
@@ -1191,7 +1204,11 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     }
 
     public var normalizedState: String {
-        state?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "unknown"
+        let normalized = state?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let normalized, !normalized.isEmpty {
+            return normalized
+        }
+        return "unknown"
     }
 
     var menuBarAttentionKind: ManagedAttentionKind {
@@ -1205,12 +1222,7 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
             if normalizedPhase.isEmpty {
                 return .idle
             }
-            // Unknown attached phases should stay non-interruptible until
-            // we explicitly classify them, rather than implying it's the
-            // user's turn.
-            return ManagedPhaseContract.attention(forDisplayPhase: phase) ?? .working
-        case "":
-            return .unknown("")
+            return ManagedPhaseContract.attention(forDisplayPhase: phase) ?? .unknown("unknown phase")
         default:
             return .unknown(normalizedState)
         }

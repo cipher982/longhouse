@@ -339,7 +339,7 @@ private struct SessionTokenRibbon: View {
         case .degraded:
             return Color(red: 0.86, green: 0.29, blue: 0.23).opacity(0.45)
         case .unknown:
-            return Color.secondary.opacity(0.18)
+            return Color(red: 0.86, green: 0.29, blue: 0.23).opacity(0.52)
         }
     }
 }
@@ -697,11 +697,8 @@ private func attentionPill(_ kind: ManagedAttentionKind, identifier: String? = n
         EmptyView()
     case .unknown(let label):
         let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            EmptyView()
-        } else {
-            statePill(title: trimmed.uppercased(), color: attentionColor(kind), identifier: identifier)
-        }
+        let title = trimmed.isEmpty ? "UNKNOWN" : trimmed.uppercased()
+        statePill(title: title, color: attentionColor(kind), identifier: identifier)
     }
 }
 
@@ -720,7 +717,7 @@ private func attentionColor(_ kind: ManagedAttentionKind) -> Color {
     case .idle:
         return Color.secondary
     case .unknown:
-        return Color.secondary
+        return Color(red: 0.86, green: 0.29, blue: 0.23)
     }
 }
 

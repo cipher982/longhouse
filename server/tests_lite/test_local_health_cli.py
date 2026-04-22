@@ -423,6 +423,7 @@ def test_collect_local_health_flags_detached_managed_session(monkeypatch, tmp_pa
             "workspace_label": "zerg",
             "branch": None,
             "state": "detached",
+            "raw_phase": None,
             "phase": None,
             "phase_observed_at": None,
             "last_activity_at": "2026-04-17T17:31:00Z",
@@ -688,6 +689,80 @@ def test_collect_local_health_shows_unknown_phase_for_attached_codex_without_man
     assert snapshot["managed_sessions"][0]["phase"] is None
     assert snapshot["managed_sessions"][0]["phase_observed_at"] is None
     assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:43:00Z"
+
+
+def test_collect_local_health_flags_unknown_managed_phase_contract_drift(monkeypatch, tmp_path: Path):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+    pinned_now = datetime(2026, 4, 17, 18, 5, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: pinned_now)
+
+    rollout_path = tmp_path / "sessions" / "2026" / "04" / "17" / "rollout-zerg.jsonl"
+    rollout_path.parent.mkdir(parents=True, exist_ok=True)
+    rollout_path.write_text("{}\n")
+    _write_session_binding_rows(
+        tmp_path,
+        [(str(rollout_path), "sess-unknown-phase", "codex", "2026-04-17T17:30:36Z")],
+    )
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                "sess-unknown-phase",
+                "codex",
+                "/Users/test/git/zerg",
+                "zerg",
+                "future_magic",
+                None,
+                "codex_bridge",
+                "2026-04-17T17:31:30Z",
+                "2026-04-17T17:31:30Z",
+            )
+        ],
+    )
+
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-unknown-phase",
+        {
+            "session_id": "sess-unknown-phase",
+            "pid": 7771,
+            "ws_url": "ws://127.0.0.1:49760",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "updated_at": "2026-04-17T17:43:00Z",
+            "thread_path": str(rollout_path),
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-unknown-phase"},
+            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {
+                "pid": 7773,
+                "ppid": 7000,
+                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49760",
+            },
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["health_state"] == "broken"
+    assert snapshot["severity"] == "red"
+    assert snapshot["headline"] == "Longhouse saw an unknown managed phase"
+    assert "managed_unknown_phase" in snapshot["reasons"]
+    assert any("Update the managed phase contract" in action for action in snapshot["suggested_actions"])
+    assert snapshot["managed_sessions"][0]["state"] == "attached"
+    assert snapshot["managed_sessions"][0]["raw_phase"] == "future_magic"
+    assert snapshot["managed_sessions"][0]["phase"] == "unknown phase"
+    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:31:30Z"
 
 
 def test_collect_local_health_recognizes_remote_tui_attach_without_resume_token(monkeypatch, tmp_path: Path):
@@ -1478,6 +1553,46 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
     assert rows[0]["phase"] == "needs you"
     assert rows[0]["phase_observed_at"] == "2026-04-19T00:04:30Z"
     assert rows[0]["last_activity_at"] == "2026-04-19T00:04:30Z"
+
+
+def test_process_scan_marks_unknown_phase_contract_drift(monkeypatch, tmp_path: Path):
+    now = datetime(2026, 4, 19, 0, 6, 0, tzinfo=timezone.utc)
+    session_id = "66666666-7777-8888-9999-000000000000"
+    proc = _FakeProc(
+        pid=55509,
+        cmdline=["claude", "--session-id", session_id],
+        create_time=now.timestamp() - 60,
+        env={"LONGHOUSE_MANAGED_SESSION_ID": session_id},
+        cwd="/Users/test/git/citi",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+    _write_managed_session_state_rows(
+        tmp_path,
+        [
+            (
+                session_id,
+                "claude",
+                "/Users/test/git/citi",
+                "citi",
+                "future_magic",
+                None,
+                "claude_hook",
+                "2026-04-19T00:05:30Z",
+                "2026-04-19T00:05:30Z",
+            )
+        ],
+    )
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now,
+        existing_session_ids=set(),
+        phase_overlay=local_health_service._load_managed_session_phase_state(tmp_path, now=now),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["raw_phase"] == "future_magic"
+    assert rows[0]["phase"] == "unknown phase"
+    assert rows[0]["phase_observed_at"] == "2026-04-19T00:05:30Z"
 
 
 def test_local_health_phase_contract_covers_every_known_raw_phase():
