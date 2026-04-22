@@ -524,6 +524,133 @@ def test_collect_local_health_uses_local_phase_overlay_for_codex_bridge_session(
     assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:31:30Z"
 
 
+def test_collect_local_health_falls_back_to_idle_for_attached_codex_when_stale_overlay_aged_out(
+    monkeypatch, tmp_path: Path
+):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+    pinned_now = datetime(2026, 4, 17, 18, 5, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: pinned_now)
+
+    rollout_path = tmp_path / "sessions" / "2026" / "04" / "17" / "rollout-zerg.jsonl"
+    rollout_path.parent.mkdir(parents=True, exist_ok=True)
+    rollout_path.write_text("{}\n")
+    _write_session_binding_rows(
+        tmp_path,
+        [(str(rollout_path), "sess-attached", "codex", "2026-04-17T17:30:36Z")],
+    )
+    _write_session_phase_rows(
+        tmp_path,
+        [
+            (
+                "sess-attached",
+                "codex",
+                "idle",
+                None,
+                "codex_bridge",
+                "2026-04-17T17:31:30Z",
+            )
+        ],
+    )
+
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-attached",
+        {
+            "session_id": "sess-attached",
+            "pid": 7771,
+            "ws_url": "ws://127.0.0.1:49760",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "updated_at": "2026-04-17T17:43:00Z",
+            "thread_path": str(rollout_path),
+            "active_turn_id": None,
+            "last_turn_status": "completed",
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-attached"},
+            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {
+                "pid": 7773,
+                "ppid": 7000,
+                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49760",
+            },
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["managed_sessions"][0]["state"] == "attached"
+    assert snapshot["managed_sessions"][0]["phase"] == "idle"
+    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:43:00Z"
+    assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:43:00Z"
+
+
+def test_collect_local_health_falls_back_to_thinking_for_attached_codex_with_active_turn_and_no_fresh_overlay(
+    monkeypatch, tmp_path: Path
+):
+    _disable_real_runner_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path, age_seconds=5)
+    pinned_now = datetime(2026, 4, 17, 18, 5, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(local_health_service, "_utc_now", lambda: pinned_now)
+
+    rollout_path = tmp_path / "sessions" / "2026" / "04" / "17" / "rollout-zerg.jsonl"
+    rollout_path.parent.mkdir(parents=True, exist_ok=True)
+    rollout_path.write_text("{}\n")
+    _write_session_binding_rows(
+        tmp_path,
+        [(str(rollout_path), "sess-attached", "codex", "2026-04-17T17:30:36Z")],
+    )
+
+    state_dir = tmp_path / ".claude" / "managed-local" / "codex-bridge"
+    _write_codex_bridge_state(
+        state_dir,
+        "sess-attached",
+        {
+            "session_id": "sess-attached",
+            "pid": 7771,
+            "ws_url": "ws://127.0.0.1:49760",
+            "cwd": "/Users/test/git/zerg",
+            "status": "ready",
+            "updated_at": "2026-04-17T17:43:00Z",
+            "thread_path": str(rollout_path),
+            "active_turn_id": "turn-live",
+            "last_turn_status": "inProgress",
+        },
+    )
+    monkeypatch.setattr(local_health_service, "_codex_bridge_state_dir", lambda base_dir: state_dir)
+    _stub_bridge_alive(monkeypatch)
+    monkeypatch.setattr(
+        local_health_service,
+        "_collect_process_rows",
+        lambda: [
+            {"pid": 7771, "ppid": 1, "command": "longhouse-engine codex-bridge run --session-id sess-attached"},
+            {"pid": 7772, "ppid": 7771, "command": "longhouse-codex app-server --listen ws://127.0.0.1:0"},
+            {
+                "pid": 7773,
+                "ppid": 7000,
+                "command": "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex --enable tui_app_server --remote ws://127.0.0.1:49760",
+            },
+        ],
+    )
+
+    snapshot = local_health_service.collect_local_health(tmp_path)
+
+    assert snapshot["managed_sessions"][0]["state"] == "attached"
+    assert snapshot["managed_sessions"][0]["phase"] == "thinking"
+    assert snapshot["managed_sessions"][0]["phase_observed_at"] == "2026-04-17T17:43:00Z"
+    assert snapshot["managed_sessions"][0]["last_activity_at"] == "2026-04-17T17:43:00Z"
+
+
 def test_collect_local_health_recognizes_remote_tui_attach_without_resume_token(monkeypatch, tmp_path: Path):
     _disable_real_runner_env(monkeypatch, tmp_path)
     monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))

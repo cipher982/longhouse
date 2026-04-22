@@ -920,6 +920,27 @@ def _find_bridge_child_process(
     return None
 
 
+def _fallback_codex_bridge_phase_state(state: Mapping[str, Any]) -> dict[str, str | None] | None:
+    active_turn_id = _normalize_optional_string(state.get("active_turn_id"))
+    last_turn_status = _normalize_optional_string(state.get("last_turn_status"))
+    observed_at = _normalize_optional_string(state.get("updated_at"))
+    if observed_at is None:
+        return None
+    if active_turn_id is not None:
+        return {
+            "phase": "thinking",
+            "tool_name": None,
+            "observed_at": observed_at,
+        }
+    if last_turn_status is not None:
+        return {
+            "phase": "idle",
+            "tool_name": None,
+            "observed_at": observed_at,
+        }
+    return None
+
+
 def _binding_by_session_id(base_dir: Path) -> dict[str, dict[str, str | None]]:
     rows = _load_session_binding_rows(base_dir)
     latest: dict[str, dict[str, str | None]] = {}
@@ -1005,6 +1026,8 @@ def _collect_managed_codex_summary(
         if reason_codes:
             normalized_state = "degraded"
         phase_state = phase_overlay.get(session_id or "") if phase_overlay else None
+        if phase_state is None:
+            phase_state = _fallback_codex_bridge_phase_state(state)
         phase_observed_at = phase_state.get("observed_at") if phase_state else None
 
         sessions.append(
