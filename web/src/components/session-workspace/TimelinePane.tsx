@@ -27,6 +27,7 @@ import {
 import { useDebouncedValue } from "../../hooks/useDebouncedValue";
 import { useScrollToLoad } from "../../hooks/useScrollToLoad";
 import { collapseUnchanged, lineDiff } from "../../lib/sessionWorkspace/diff";
+import { SyntaxHighlighter, oneDark } from "../../lib/syntaxHighlighter";
 
 type EventFilter = "all" | "messages" | "tools";
 
@@ -142,6 +143,68 @@ function MessageRow({
   );
 }
 
+const EXT_TO_LANG: Record<string, string> = {
+  ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", mjs: "javascript",
+  py: "python", rs: "rust", go: "go", rb: "ruby", java: "java", kt: "kotlin",
+  swift: "swift", c: "c", h: "c", cpp: "cpp", cc: "cpp", hpp: "cpp",
+  cs: "csharp", php: "php", sh: "bash", bash: "bash", zsh: "bash", fish: "bash",
+  json: "json", jsonc: "json", yaml: "yaml", yml: "yaml", toml: "toml",
+  md: "markdown", markdown: "markdown", html: "html", xml: "xml",
+  css: "css", scss: "scss", less: "less",
+  sql: "sql", dockerfile: "docker", gql: "graphql", graphql: "graphql",
+};
+
+function detectLanguage(text: string, hint: { filePath?: string | null; toolName?: string } = {}): string | null {
+  const path = hint.filePath?.toLowerCase() ?? "";
+  if (path) {
+    const ext = path.includes(".") ? path.slice(path.lastIndexOf(".") + 1) : "";
+    if (ext && EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
+    if (path.endsWith("/dockerfile") || path.endsWith("dockerfile")) return "docker";
+    if (path.endsWith("/makefile") || path.endsWith("makefile")) return "bash";
+  }
+  const trimmed = text.trimStart();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try { JSON.parse(trimmed); return "json"; } catch { /* not json */ }
+  }
+  if (hint.toolName && /bash|shell|exec/i.test(hint.toolName)) return "bash";
+  return null;
+}
+
+function CodeBlock({
+  text,
+  language,
+  variant = "input",
+}: {
+  text: string;
+  language: string | null;
+  variant?: "input" | "output";
+}) {
+  const maxHeight = variant === "output" ? 420 : 320;
+  if (!language) {
+    return <pre className={`tl-code${variant === "output" ? " tl-code--output" : ""}`}>{text}</pre>;
+  }
+  return (
+    <SyntaxHighlighter
+      language={language}
+      style={oneDark}
+      customStyle={{
+        margin: 0,
+        padding: "8px 10px",
+        borderRadius: "var(--radius-md)",
+        border: "1px solid rgba(158, 124, 90, 0.14)",
+        fontSize: "11.5px",
+        lineHeight: 1.5,
+        maxHeight,
+        background: "rgba(12, 10, 8, 0.78)",
+      }}
+      codeTagProps={{ style: { fontFamily: "var(--font-family-mono)" } }}
+      wrapLongLines
+    >
+      {text}
+    </SyntaxHighlighter>
+  );
+}
+
 /** Extract old/new strings from an Edit-shape input, if present. */
 function editPatchFromInput(
   input: Record<string, unknown> | null | undefined,
@@ -201,15 +264,20 @@ function ToolDetail({ interaction, sessionEnded }: { interaction: ToolInteractio
       ) : hasInput ? (
         <section className="tl-detail__block">
           <div className="tl-detail__label">input</div>
-          <pre className="tl-code">
-            {JSON.stringify(rawInput, null, 2)}
-          </pre>
+          <CodeBlock text={JSON.stringify(rawInput, null, 2)} language="json" variant="input" />
         </section>
       ) : null}
       <section className="tl-detail__block">
         <div className="tl-detail__label">output</div>
         {outputText ? (
-          <pre className="tl-code tl-code--output">{outputText}</pre>
+          <CodeBlock
+            text={outputText}
+            language={detectLanguage(outputText, {
+              filePath: typeof rawInput?.file_path === "string" ? rawInput.file_path : null,
+              toolName: interaction.toolName,
+            })}
+            variant="output"
+          />
         ) : (
           <div className="tl-detail__empty">
             {dropped
