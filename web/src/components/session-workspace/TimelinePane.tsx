@@ -69,6 +69,8 @@ function SeamRow({ seam }: { seam: TimelineSeam }) {
   );
 }
 
+const MESSAGE_COLLAPSE_LINES = 24;
+
 function MessageRow({
   event,
   isSelected,
@@ -82,6 +84,13 @@ function MessageRow({
   const outside = isOutsideActiveContext(event);
   const isUser = event.role === "user";
   const isAssistant = event.role === "assistant";
+  const lineCount = preview.split("\n").length;
+  const isLong = lineCount > MESSAGE_COLLAPSE_LINES;
+  const [expanded, setExpanded] = useState(false);
+  const visible = isLong && !expanded
+    ? preview.split("\n").slice(0, MESSAGE_COLLAPSE_LINES).join("\n")
+    : preview;
+  const hiddenLines = lineCount - MESSAGE_COLLAPSE_LINES;
 
   return (
     <div
@@ -133,11 +142,23 @@ function MessageRow({
               ),
             }}
           >
-            {preview}
+            {visible}
           </ReactMarkdown>
         ) : (
-          <div className="tl-msg__plain">{preview}</div>
+          <div className="tl-msg__plain">{visible}</div>
         )}
+        {isLong ? (
+          <button
+            type="button"
+            className="tl-msg__expand"
+            onClick={(e) => {
+              e.stopPropagation();
+              setExpanded((v) => !v);
+            }}
+          >
+            {expanded ? "Show less" : `Show ${hiddenLines} more line${hiddenLines === 1 ? "" : "s"}`}
+          </button>
+        ) : null}
       </div>
     </div>
   );

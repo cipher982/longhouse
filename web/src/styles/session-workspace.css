@@ -1195,6 +1195,23 @@
   }
   .tl-msg__plain { white-space: pre-wrap; }
 
+  .tl-msg__expand {
+    align-self: flex-start;
+    margin-top: 4px;
+    border: 0;
+    background: transparent;
+    color: var(--color-brand-accent);
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .tl-msg__expand:hover {
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--color-brand-primary);
+  }
+
   /* --- Action cards: compact, single header line, accent stripe. --- */
   .tl-action {
     position: relative;
