@@ -18,7 +18,8 @@ use uuid::Uuid;
 
 use crate::text::truncate_tail_chars;
 
-const BRIDGE_RUNTIME_SOURCE: &str = crate::state::session_phase::PhaseSource::CodexBridgeWs.as_str();
+const BRIDGE_RUNTIME_SOURCE: &str =
+    crate::state::session_phase::PhaseSource::CodexBridgeWs.as_str();
 const DEFAULT_PROGRESS_THROTTLE_MS: u64 = 1500;
 const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
@@ -164,6 +165,7 @@ struct BridgeRuntimeSink {
     api_url: String,
     api_token: String,
     session_id: String,
+    cwd: String,
     machine_name: Option<String>,
     thread_id: Option<String>,
     local_db_path: Option<PathBuf>,
@@ -573,6 +575,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             api_url: config.api_url.clone(),
             api_token: config.api_token.clone(),
             session_id: config.session_id.clone(),
+            cwd: config.cwd.display().to_string(),
             machine_name: config.machine_name.clone(),
             thread_id: None,
             local_db_path: resolve_bridge_agent_db_path(config.longhouse_home.as_deref()).ok(),
@@ -2080,6 +2083,23 @@ impl BridgeRuntimeSink {
                 self.session_id
             );
         }
+        let managed_signal = crate::state::managed_session_state::ManagedSessionPhaseSignal {
+            session_id: self.session_id.clone(),
+            provider: "codex".to_string(),
+            workspace_path: Some(self.cwd.clone()),
+            phase_kind: phase.to_string(),
+            tool_name: signal.tool_name.clone(),
+            phase_source: BRIDGE_RUNTIME_SOURCE.to_string(),
+            observed_at,
+        };
+        if let Err(err) = crate::state::managed_session_state::ManagedSessionStateStore::new(&conn)
+            .record_phase(&managed_signal)
+        {
+            eprintln!(
+                "[codex-bridge] persist managed session state failed for {}: {err}",
+                self.session_id
+            );
+        }
     }
 
     async fn post_progress(&self, dedupe_key: String) {
@@ -2367,6 +2387,7 @@ mod tests {
                 api_url: "http://127.0.0.1:9".to_string(),
                 api_token: "token".to_string(),
                 session_id: "session-123".to_string(),
+                cwd: temp.path().display().to_string(),
                 machine_name: Some("test-box".to_string()),
                 thread_id: None,
                 local_db_path: Some(resolve_bridge_agent_db_path(Some(temp.path())).unwrap()),
@@ -2457,6 +2478,7 @@ mod tests {
             api_url: "http://127.0.0.1:9".to_string(),
             api_token: "token".to_string(),
             session_id: "session-123".to_string(),
+            cwd: "/Users/test/git/assistants-service".to_string(),
             machine_name: Some("test-box".to_string()),
             thread_id: None,
             local_db_path: Some(db_path.clone()),
@@ -2481,6 +2503,30 @@ mod tests {
         assert_eq!(row.0, "running");
         assert_eq!(row.1, Some("shell".to_string()));
         assert_eq!(row.2, BRIDGE_RUNTIME_SOURCE);
+
+        let managed_row: (String, String, String, Option<String>, String) = conn
+            .query_row(
+                "SELECT provider, workspace_path, workspace_label, tool_name, phase_kind
+                 FROM managed_session_state
+                 WHERE session_id = 'session-123'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+
+        assert_eq!(managed_row.0, "codex");
+        assert_eq!(managed_row.1, "/Users/test/git/assistants-service");
+        assert_eq!(managed_row.2, "assistants-service");
+        assert_eq!(managed_row.3, Some("shell".to_string()));
+        assert_eq!(managed_row.4, "running");
     }
 
     #[test]

@@ -18,6 +18,7 @@ use serde::Deserialize;
 use tracing::warn;
 
 use crate::shipping::client::ShipperClient;
+use crate::state::managed_session_state::{ManagedSessionPhaseSignal, ManagedSessionStateStore};
 use crate::state::session_phase::{PhaseSource, SessionPhaseSignal, SessionPhaseStore};
 
 /// Maximum age for an outbox file before it is considered stale and deleted.
@@ -29,6 +30,8 @@ struct PresenceOutboxPayload {
     state: String,
     #[serde(default)]
     tool_name: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
     #[serde(default)]
     provider: Option<String>,
     #[serde(default)]
@@ -195,13 +198,30 @@ async fn drain_outbox_impl(
                 provider: provider.to_string(),
                 phase: payload.state.trim().to_string(),
                 tool_name: payload.tool_name.clone(),
-                source: PhaseSource::for_hook_provider(provider).as_str().to_string(),
+                source: PhaseSource::for_hook_provider(provider)
+                    .as_str()
+                    .to_string(),
                 observed_at,
             };
             if let Err(err) = SessionPhaseStore::new(conn).record(&signal) {
                 warn!(
                     "persisting local phase failed for session {}: {err}",
                     signal.session_id
+                );
+            }
+            let managed_signal = ManagedSessionPhaseSignal {
+                session_id: signal.session_id.clone(),
+                provider: signal.provider.clone(),
+                workspace_path: payload.cwd.clone(),
+                phase_kind: signal.phase.clone(),
+                tool_name: signal.tool_name.clone(),
+                phase_source: signal.source.clone(),
+                observed_at: signal.observed_at,
+            };
+            if let Err(err) = ManagedSessionStateStore::new(conn).record_phase(&managed_signal) {
+                warn!(
+                    "persisting managed session state failed for session {}: {err}",
+                    managed_signal.session_id
                 );
             }
         }
@@ -251,7 +271,6 @@ fn normalize_provider(provider: Option<&str>) -> &str {
         .filter(|value| !value.is_empty())
         .unwrap_or("claude")
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -734,6 +753,20 @@ mod tests {
         assert_eq!(row.0, "running");
         assert!(row.1.is_none());
         assert_eq!(row.2, "claude_hook");
+
+        let managed_row: (String, String, String, String) = conn
+            .query_row(
+                "SELECT phase_kind, workspace_path, workspace_label, phase_source
+                 FROM managed_session_state
+                 WHERE session_id = 'sess-phase'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(managed_row.0, "running");
+        assert_eq!(managed_row.1, "/tmp");
+        assert_eq!(managed_row.2, "tmp");
+        assert_eq!(managed_row.3, "claude_hook");
 
         server.abort();
     }
