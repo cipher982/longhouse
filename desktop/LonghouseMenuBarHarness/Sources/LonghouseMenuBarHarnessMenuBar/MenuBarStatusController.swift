@@ -135,20 +135,40 @@ final class MenuBarStatusController: NSObject {
             return
         }
 
-        button.image = MenuBarBrandIcon.statusItemImage(severity: statusItemSeverity())
+        button.image = MenuBarBrandIcon.image(attentionColor: statusItemAttentionColor())
         let tooltip = statusItemAttentionLabel() ?? store.snapshot?.statusItemSummaryLabel ?? "Longhouse"
         button.toolTip = tooltip
         button.setAccessibilityLabel(tooltip)
     }
 
-    private func statusItemSeverity() -> HarnessSeverity {
+    private func statusItemAttentionColor() -> NSColor? {
         if store.loadError != nil {
-            return .red
+            return .systemRed
         }
         guard let snapshot = store.snapshot else {
-            return .gray
+            return nil
         }
-        return snapshot.displaySeverity
+        if let managedSeverity = snapshot.managedAttentionSeverity {
+            switch managedSeverity {
+            case .yellow:
+                return .systemOrange
+            case .red:
+                return .systemRed
+            case .green, .gray:
+                break
+            }
+        }
+        guard snapshot.needsMenuBarAttention else {
+            return nil
+        }
+        switch snapshot.parsedSeverity {
+        case .yellow:
+            return .systemOrange
+        case .red:
+            return .systemRed
+        case .green, .gray:
+            return .systemRed
+        }
     }
 
     private func statusItemAttentionLabel() -> String? {

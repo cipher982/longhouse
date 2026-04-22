@@ -8,10 +8,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="${ROOT_DIR}/branding/longhouse-logo-master.svg"
 PUBLIC_DIR="${ROOT_DIR}/public"
-MENUBAR_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghouseMenuIcon.png"
-MENUBAR_WARNING_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghouseMenuIconYellow.png"
-MENUBAR_CRITICAL_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghouseMenuIconRed.png"
-MENUBAR_NEUTRAL_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghouseMenuIconGray.png"
+PANEL_GREEN_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghousePanelIconGreen.png"
+PANEL_WARNING_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghousePanelIconYellow.png"
+PANEL_CRITICAL_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghousePanelIconRed.png"
+PANEL_NEUTRAL_OUT="${ROOT_DIR}/../desktop/LonghouseMenuBarHarness/Sources/LonghouseMenuBarCore/Resources/LonghousePanelIconGray.png"
 
 if [[ ! -f "${SRC}" ]]; then
   echo "Master logo not found at ${SRC}" >&2
@@ -34,12 +34,12 @@ magick "${PUBLIC_DIR}/favicon-16.png" "${PUBLIC_DIR}/favicon-32.png" "${PUBLIC_D
 echo "Generating Apple touch icon (180px)…"
 magick "${PUBLIC_DIR}/favicon-512.png" -resize 180x180 "${PUBLIC_DIR}/apple-touch-icon.png"
 
-echo "Generating menu bar and panel status variants from master logo geometry…"
-mkdir -p "$(dirname "${MENUBAR_OUT}")"
-node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_OUT}" 72 72 green
-node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_WARNING_OUT}" 72 72 yellow
-node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_CRITICAL_OUT}" 72 72 red
-node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${MENUBAR_NEUTRAL_OUT}" 72 72 gray
+echo "Generating panel status variants from master logo geometry…"
+mkdir -p "$(dirname "${PANEL_GREEN_OUT}")"
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_GREEN_OUT}" 72 72 green
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_WARNING_OUT}" 72 72 yellow
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_CRITICAL_OUT}" 72 72 red
+node "${ROOT_DIR}/scripts/render-menubar-icon.mjs" "${SRC}" "${PANEL_NEUTRAL_OUT}" 72 72 gray
 
 echo "Generating macOS app icon (AppIcon.icns)…"
 ICNS_OUT="${ROOT_DIR}/../artifacts/runtime-packaging/stage/Longhouse.app/Contents/Resources/AppIcon.icns"
