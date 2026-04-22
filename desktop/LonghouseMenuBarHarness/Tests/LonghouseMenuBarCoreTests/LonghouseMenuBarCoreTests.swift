@@ -686,23 +686,32 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
-    func managedSessionAttentionTreatsNeedsYouAsNeedsYou() {
-        let session = ManagedSessionSnapshot(
-            sessionId: "sess-1",
-            provider: "claude",
-            workspaceLabel: "citi",
-            branch: nil,
-            state: "attached",
-            phase: "needs you",
-            phaseObservedAt: "2026-04-22T01:56:59Z",
-            lastActivityAt: "2026-04-22T01:56:59Z",
-            bridgeStatus: nil,
-            bridgePid: nil,
-            bridgeHeartbeatAt: nil,
-            reasonCodes: []
-        )
+    func managedSessionAttentionClassifiesAttachedPhases() {
+        let cases: [(phase: String, expected: ManagedAttentionKind)] = [
+            ("thinking", .working),
+            ("needs you", .needsYou),
+            ("needs user", .needsYou),
+            ("idle", .idle),
+        ]
 
-        #expect(session.menuBarAttentionKind == .needsYou)
+        for (phase, expected) in cases {
+            let session = ManagedSessionSnapshot(
+                sessionId: "sess-\(phase)",
+                provider: "claude",
+                workspaceLabel: "citi",
+                branch: nil,
+                state: "attached",
+                phase: phase,
+                phaseObservedAt: "2026-04-22T01:56:59Z",
+                lastActivityAt: "2026-04-22T01:56:59Z",
+                bridgeStatus: nil,
+                bridgePid: nil,
+                bridgeHeartbeatAt: nil,
+                reasonCodes: []
+            )
+
+            #expect(session.menuBarAttentionKind == expected)
+        }
     }
 
     private func makeFakeHomeDirectory() throws -> URL {

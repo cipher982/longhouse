@@ -1237,6 +1237,43 @@ def test_process_scan_uses_phase_overlay_when_available(monkeypatch, tmp_path: P
     assert rows[0]["last_activity_at"] == "2026-04-19T00:04:00Z"
 
 
+def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
+    now = datetime(2026, 4, 19, 0, 5, 0, tzinfo=timezone.utc)
+    session_id = "11111111-2222-3333-4444-555555555555"
+    proc = _FakeProc(
+        pid=55508,
+        cmdline=["claude", "--session-id", session_id],
+        create_time=now.timestamp() - 60,
+        env={"LONGHOUSE_MANAGED_SESSION_ID": session_id},
+        cwd="/Users/test/git/citi",
+    )
+    _patch_process_iter(monkeypatch, [proc])
+    _write_session_phase_rows(
+        tmp_path,
+        [
+            (
+                session_id,
+                "claude",
+                "needs_user",
+                None,
+                "claude_hook",
+                "2026-04-19T00:04:30Z",
+            )
+        ],
+    )
+
+    rows = local_health_service._collect_managed_sessions_by_process(
+        now=now,
+        existing_session_ids=set(),
+        phase_overlay=local_health_service._load_managed_session_phase_overlay(tmp_path, now=now),
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["phase"] == "needs you"
+    assert rows[0]["phase_observed_at"] == "2026-04-19T00:04:30Z"
+    assert rows[0]["last_activity_at"] == "2026-04-19T00:04:30Z"
+
+
 def test_phase_overlay_drops_stale_rows_past_freshness_window(monkeypatch, tmp_path: Path):
     """Old running/thinking rows from a prior runtime must not show phantom phases.
 
