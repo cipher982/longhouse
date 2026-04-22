@@ -215,6 +215,7 @@ If you touch a secondary area, either simplify it toward the core story or expla
 - If a tool or workflow already provides a completion signal, do not turn it into a polling loop.
 - `/api/timeline/sessions` caps `limit` at 100. Frontend URL parsing needs to clamp to that or the timeline can self-422 on oversized `limit` params.
 - Managed Codex now installs as a launcher at `~/.local/bin/longhouse-codex` with versioned payloads under `~/.longhouse/runtimes/codex/`; don’t mistake the launcher script for the actual runtime binary when debugging or migrating it.
+- Warp-style CLI agent detection appears to key off the final spawned executable basename in the PTY. For managed Codex, debug the attached `.../runtimes/codex/current/codex` process, not just the shell wrapper or alias that started it.
 - For `longhouse-engine codex-bridge` repros, `--state-root` isolates bridge files only; also set `--longhouse-home` to a temp dir or you will contaminate the live shipper DB/session_binding state under `~/.longhouse`.
 - **Codex and Claude managed sessions have completely different liveness models.** Codex runs a detached Rust daemon with a state file + flock sidecar under `~/.claude/managed-local/codex-bridge/`. Claude runs an MCP server inside the stdio stream — no daemon, no state file, no flock. Claude liveness comes from a process scan (`local_health._collect_managed_sessions_by_process`). When asked about "the bridge," clarify which provider.
 

@@ -2070,12 +2070,14 @@ def test_collect_unmanaged_processes_skips_codex_app_server_helpers(monkeypatch)
     assert rows == []
 
 
-def test_collect_unmanaged_processes_skips_longhouse_codex_managed_wrappers(monkeypatch):
+def test_collect_unmanaged_processes_skips_managed_codex_remote_tui(monkeypatch):
     now = datetime(2026, 4, 19, 0, 0, 0, tzinfo=timezone.utc)
     managed_wrapper = _FakeProc(
         pid=11471,
         cmdline=[
-            "/Users/test/.longhouse/runtimes/codex/current/longhouse-codex",
+            "/Users/test/.longhouse/runtimes/codex/current/codex",
+            "-c",
+            "check_for_update_on_startup=false",
             "--dangerously-bypass-approvals-and-sandbox",
             "--enable",
             "tui_app_server",
@@ -2083,7 +2085,7 @@ def test_collect_unmanaged_processes_skips_longhouse_codex_managed_wrappers(monk
             "ws://127.0.0.1:51077",
         ],
         create_time=now.timestamp(),
-        env={},
+        env={"LONGHOUSE_MANAGED_SESSION_ID": "sess-codex-managed"},
         cwd="/Users/test/git/zeta/athena-horizon",
     )
     _patch_process_iter(monkeypatch, [managed_wrapper])
@@ -2318,7 +2320,7 @@ def test_collect_local_health_reports_claude_managed_session_via_process_scan(mo
     monkeypatch.setattr(
         local_health_service,
         "_collect_managed_sessions_by_process",
-        lambda *, now, existing_session_ids, phase_overlay=None: [
+        lambda *, now, existing_session_ids, phase_overlay=None, scanned_processes=None: [
             {
                 "session_id": "bfb567fb-7e0f-4552-8411-24f682751484",
                 "provider": "claude",
