@@ -1185,6 +1185,39 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
     public var normalizedState: String {
         state?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "unknown"
     }
+
+    var menuBarAttentionKind: ManagedAttentionKind {
+        switch normalizedState {
+        case "detached":
+            return .detached
+        case "degraded":
+            return .degraded
+        case "attached":
+            let normalizedPhase = (phase ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+                .replacingOccurrences(of: "_", with: " ")
+            switch normalizedPhase {
+            case "running", "running tools", "thinking":
+                return .working
+            case "needs you", "needs user", "needs input", "waiting for input", "idle prompt":
+                return .needsYou
+            case "blocked":
+                return .blocked
+            case "", "idle", "finished":
+                return .idle
+            default:
+                // Unknown attached phases should stay non-interruptible until
+                // we explicitly classify them, rather than implying it's the
+                // user's turn.
+                return .working
+            }
+        case "":
+            return .unknown("")
+        default:
+            return .unknown(normalizedState)
+        }
+    }
 }
 
 public struct OrphanBridgeSnapshot: Codable, Equatable, Identifiable, Sendable {
