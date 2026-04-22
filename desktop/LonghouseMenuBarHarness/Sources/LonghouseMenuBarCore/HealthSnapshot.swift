@@ -1193,29 +1193,10 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         case "degraded":
             return .degraded
         case "attached":
-            let normalizedPhase = (phase ?? "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .lowercased()
-                .replacingOccurrences(of: "_", with: " ")
-            switch normalizedPhase {
-            case "running", "running tools", "thinking":
-                return .working
-            case let phase where phase.hasPrefix("running "):
-                return .working
-            case "needs you", "needs user", "needs input", "waiting for input", "idle prompt":
-                return .needsYou
-            case "blocked", "needs permission":
-                return .blocked
-            case let phase where phase.hasPrefix("blocked on "):
-                return .blocked
-            case "", "idle", "finished", "completed":
-                return .idle
-            default:
-                // Unknown attached phases should stay non-interruptible until
-                // we explicitly classify them, rather than implying it's the
-                // user's turn.
-                return .working
-            }
+            // Unknown attached phases should stay non-interruptible until
+            // we explicitly classify them, rather than implying it's the
+            // user's turn.
+            return ManagedPhaseContract.attention(forDisplayPhase: phase) ?? .working
         case "":
             return .unknown("")
         default:

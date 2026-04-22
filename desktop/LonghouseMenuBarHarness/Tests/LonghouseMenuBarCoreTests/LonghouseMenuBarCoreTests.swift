@@ -4,13 +4,13 @@ import Testing
 @testable import LonghouseMenuBarCore
 
 private struct ManagedPhaseContractFile: Decodable {
-    let cases: [ManagedPhaseContractCase]
+    let phases: [ManagedPhaseContractCase]
 }
 
 private struct ManagedPhaseContractCase: Decodable {
     let rawPhase: String
-    let toolName: String?
-    let displayPhase: String
+    let displayLabel: String
+    let toolDisplayFormat: String?
     let attention: String
 }
 
@@ -699,6 +699,7 @@ struct LonghouseMenuBarCoreTests {
     @Test
     func managedSessionAttentionMatchesSharedPhaseContract() throws {
         for item in try loadManagedPhaseContract() {
+            let displayPhase = contractDisplayPhase(for: item)
             let data = Data("""
             {
               "health_state": "healthy",
@@ -712,7 +713,7 @@ struct LonghouseMenuBarCoreTests {
                   "provider": "claude",
                   "workspace_label": "citi",
                   "state": "attached",
-                  "phase": "\(item.displayPhase)",
+                  "phase": "\(displayPhase)",
                   "phase_observed_at": "2026-04-22T01:56:59Z",
                   "last_activity_at": "2026-04-22T01:56:59Z"
                 }
@@ -722,6 +723,39 @@ struct LonghouseMenuBarCoreTests {
             let snapshot = try HealthSnapshotDecoder.decode(data: data)
             let session = try #require(snapshot.managedSessions?.first)
             #expect(session.menuBarAttentionKind == managedAttentionKind(for: item.attention))
+        }
+    }
+
+    @Test
+    @MainActor
+    func managedPhaseContractRendersStablePills() throws {
+        let outputDirectory = try makeFakeHomeDirectory()
+        defer { try? FileManager.default.removeItem(at: outputDirectory) }
+
+        let updateFixtures = ProcessInfo.processInfo.environment["LONGHOUSE_UPDATE_PHASE_SNAPSHOTS"] == "1"
+        let actionSink = SpyHealthActionSink(logURL: nil, uiURL: nil, effectMode: .logOnly)
+
+        for item in try loadManagedPhaseContract() {
+            let expectedURL = managedPhaseSnapshotFixtureURL(for: item.rawPhase)
+            let actualURL = outputDirectory.appendingPathComponent(expectedURL.lastPathComponent)
+            try SnapshotRenderer.renderPNG(
+                snapshot: managedPhaseSnapshot(for: item),
+                actionSink: actionSink,
+                outputURL: actualURL,
+                presentationDate: fixedManagedPhasePresentationDate
+            )
+
+            let actualData = try Data(contentsOf: actualURL)
+            if updateFixtures || !FileManager.default.fileExists(atPath: expectedURL.path) {
+                try FileManager.default.createDirectory(
+                    at: expectedURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try actualData.write(to: expectedURL)
+            }
+
+            let expectedData = try Data(contentsOf: expectedURL)
+            #expect(actualData == expectedData)
         }
     }
 
@@ -750,11 +784,99 @@ struct LonghouseMenuBarCoreTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/managed-phase-contract.json")
+            .appendingPathComponent("../../server/zerg/config/managed_phase_contract.json")
+            .standardizedFileURL
         let data = try Data(contentsOf: fixtureURL)
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try decoder.decode(ManagedPhaseContractFile.self, from: data).cases
+        return try decoder.decode(ManagedPhaseContractFile.self, from: data).phases
+    }
+
+    private var fixedManagedPhasePresentationDate: Date {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: "2026-04-22T02:09:59Z")!
+    }
+
+    private func managedPhaseSnapshotFixtureURL(for rawPhase: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/managed-phase-snapshots/managed-phase-\(rawPhase).png")
+    }
+
+    private func managedPhaseSnapshot(for item: ManagedPhaseContractCase) -> HealthSnapshot {
+        HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: "2026-04-22T02:09:59Z",
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: nil,
+            managedSummary: ManagedSummarySnapshot(
+                attachedCount: 1,
+                detachedCount: 0,
+                degradedCount: 0,
+                orphanBridgeCount: 0,
+                latestActivityAt: "2026-04-22T01:56:59Z"
+            ),
+            managedSessions: [
+                ManagedSessionSnapshot(
+                    sessionId: "sess-\(item.rawPhase)",
+                    provider: "claude",
+                    workspaceLabel: "phase-\(item.rawPhase.replacingOccurrences(of: "_", with: "-"))",
+                    branch: nil,
+                    state: "attached",
+                    phase: contractDisplayPhase(for: item),
+                    phaseObservedAt: "2026-04-22T01:56:59Z",
+                    lastActivityAt: "2026-04-22T01:56:59Z",
+                    bridgeStatus: nil,
+                    bridgePid: nil,
+                    bridgeHeartbeatAt: nil,
+                    reasonCodes: nil
+                )
+            ],
+            orphanBridges: [],
+            launchReadiness: nil,
+            build: BuildIdentitySnapshot(
+                cli: BuildIdentityRecord(
+                    version: "0.1.15",
+                    commit: "d4d4a106fedcba98765432100123456789abcdef",
+                    commitShort: "d4d4a106",
+                    dirty: false,
+                    builtAt: "2026-04-22T01:40:00Z",
+                    channel: "dev",
+                    error: nil,
+                    detail: nil
+                ),
+                engine: BuildIdentityRecord(
+                    version: "0.1.15",
+                    commit: "d4d4a106fedcba98765432100123456789abcdef",
+                    commitShort: "d4d4a106",
+                    dirty: false,
+                    builtAt: "2026-04-22T01:40:00Z",
+                    channel: "dev",
+                    error: nil,
+                    detail: nil
+                ),
+                drift: false,
+                components: []
+            ),
+            updateInfo: nil
+        )
+    }
+
+    private func contractDisplayPhase(for item: ManagedPhaseContractCase) -> String {
+        if let format = item.toolDisplayFormat {
+            return format.replacingOccurrences(of: "{tool_name}", with: "Bash")
+        }
+        return item.displayLabel
     }
 
     private func managedAttentionKind(for raw: String) -> ManagedAttentionKind {

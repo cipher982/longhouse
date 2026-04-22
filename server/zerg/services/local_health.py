@@ -21,6 +21,7 @@ from datetime import timezone
 from pathlib import Path
 from typing import Any
 
+from zerg.managed_phase_contract import display_label_for_phase
 from zerg.services.longhouse_paths import get_agent_db_path
 from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
@@ -781,24 +782,7 @@ def _load_outbox_session_phase_rows(base_dir: Path) -> dict[str, dict[str, str |
 
 
 def _phase_display_label(phase: str | None, tool_name: str | None) -> str | None:
-    normalized_phase = _normalize_optional_string(phase)
-    if normalized_phase is None:
-        return None
-    normalized_tool = _normalize_optional_string(tool_name)
-    lowered = normalized_phase.lower()
-    if lowered == "running":
-        return f"running {normalized_tool}" if normalized_tool else "running"
-    if lowered == "thinking":
-        return "thinking"
-    if lowered == "blocked":
-        return f"blocked on {normalized_tool}" if normalized_tool else "needs permission"
-    if lowered == "needs_user":
-        return "needs you"
-    if lowered == "idle":
-        return "idle"
-    if lowered == "finished":
-        return "completed"
-    return lowered.replace("_", " ")
+    return display_label_for_phase(_normalize_optional_string(phase), _normalize_optional_string(tool_name))
 
 
 # Phase freshness windows, seconds. MUST mirror

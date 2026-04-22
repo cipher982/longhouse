@@ -20,6 +20,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite://")
 os.environ.setdefault("TESTING", "1")
 os.environ.setdefault("FERNET_SECRET", Fernet.generate_key().decode())
 
+from zerg import managed_phase_contract
 from zerg.cli import local_health as local_health_cli
 from zerg.cli.main import app
 from zerg.services import local_health as local_health_service
@@ -73,6 +74,31 @@ def _write_outbox_file(tmp_path: Path, *, age_seconds: int = 0, name: str = "prs
     path.write_text(json.dumps({"session_id": "sess-1", "state": "thinking"}))
     timestamp = time.time() - age_seconds
     os.utime(path, (timestamp, timestamp))
+
+
+def _write_outbox_phase_signal(
+    tmp_path: Path,
+    *,
+    session_id: str,
+    state: str,
+    provider: str = "claude",
+    tool_name: str | None = None,
+    occurred_at: str = "2026-04-19T00:04:30Z",
+    name: str = "prs.phase.json",
+) -> None:
+    outbox_dir = get_agent_outbox_dir(tmp_path)
+    outbox_dir.mkdir(parents=True, exist_ok=True)
+    (outbox_dir / name).write_text(
+        json.dumps(
+            {
+                "session_id": session_id,
+                "state": state,
+                "provider": provider,
+                "tool_name": tool_name,
+                "occurred_at": occurred_at,
+            }
+        )
+    )
 
 
 def _write_local_config(
@@ -141,10 +167,12 @@ def _write_service_plist(
     return path
 
 
-def _load_managed_phase_contract() -> list[dict]:
-    root = Path(__file__).resolve().parents[2]
-    contract_path = root / "desktop" / "LonghouseMenuBarHarness" / "Fixtures" / "managed-phase-contract.json"
-    return json.loads(contract_path.read_text())["cases"]
+def _load_managed_phase_contract() -> list[managed_phase_contract.ManagedPhaseDefinition]:
+    return list(managed_phase_contract.managed_phase_definitions())
+
+
+def _contract_tool_name(case: managed_phase_contract.ManagedPhaseDefinition) -> str | None:
+    return "Bash" if case.tool_display_format else None
 
 
 def _disable_real_runner_env(monkeypatch, tmp_path: Path) -> None:
@@ -1281,13 +1309,63 @@ def test_process_scan_humanizes_needs_user_phase(monkeypatch, tmp_path: Path):
 
 
 def test_local_health_phase_contract_covers_every_known_raw_phase():
-    contract_raw_phases = {case["raw_phase"] for case in _load_managed_phase_contract()}
+    contract_raw_phases = {case.raw_phase for case in _load_managed_phase_contract()}
     assert contract_raw_phases == set(local_health_service._PHASE_FRESHNESS_SECONDS)
 
 
 def test_local_health_phase_contract_matches_display_labels():
     for case in _load_managed_phase_contract():
-        assert local_health_service._phase_display_label(case["raw_phase"], case.get("tool_name")) == case["display_phase"]
+        tool_name = _contract_tool_name(case)
+        assert local_health_service._phase_display_label(case.raw_phase, tool_name) == case.display_for_tool(tool_name)
+
+
+def test_managed_phase_contract_swift_generated_is_current():
+    root = Path(__file__).resolve().parents[2]
+    generated_path = (
+        root
+        / "desktop"
+        / "LonghouseMenuBarHarness"
+        / "Sources"
+        / "LonghouseMenuBarCore"
+        / "ManagedPhaseContract.generated.swift"
+    )
+    assert generated_path.read_text() == managed_phase_contract.render_swift_source()
+
+
+def test_local_health_command_surfaces_managed_phase_contract_from_raw_hook_events(monkeypatch, tmp_path: Path):
+    runner = CliRunner()
+    monkeypatch.setattr(local_health_service, "_candidate_runner_env_paths", lambda: [tmp_path / "missing-runner.env"])
+    monkeypatch.setattr(local_health_service, "get_service_info", lambda *args, **kwargs: _service_info("running"))
+    _write_engine_status(tmp_path / ".longhouse", age_seconds=2)
+    now = datetime.now(timezone.utc)
+    observed_at = now.isoformat().replace("+00:00", "Z")
+
+    for index, case in enumerate(_load_managed_phase_contract()):
+        session_id = f"contract-{case.raw_phase}-{index}"
+        proc = _FakeProc(
+            pid=60000 + index,
+            cmdline=["claude", "--session-id", session_id],
+            create_time=now.timestamp(),
+            env={"LONGHOUSE_MANAGED_SESSION_ID": session_id},
+            cwd="/Users/test/git/citi",
+        )
+        _patch_process_iter(monkeypatch, [proc])
+        tool_name = _contract_tool_name(case)
+        _write_outbox_phase_signal(
+            tmp_path / ".longhouse",
+            session_id=session_id,
+            state=case.raw_phase,
+            tool_name=tool_name,
+            occurred_at=observed_at,
+            name=f"prs.{case.raw_phase}.{index}.json",
+        )
+
+        result = runner.invoke(app, ["local-health", "--json", "--claude-dir", str(tmp_path / ".claude")])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        managed_session = next(item for item in payload["managed_sessions"] if item["session_id"] == session_id)
+        assert managed_session["phase"] == case.display_for_tool(tool_name)
 
 
 def test_phase_overlay_drops_stale_rows_past_freshness_window(monkeypatch, tmp_path: Path):

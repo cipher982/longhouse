@@ -553,7 +553,7 @@ struct ProviderComparisonRows: View {
     }
 }
 
-public enum ManagedAttentionKind: Equatable {
+public enum ManagedAttentionKind: Equatable, Sendable {
     /// Managed, attached, agent is doing work. Don't interrupt.
     case working
     /// Managed, attached, waiting for the user to act (prompt, approve tool, reply).
@@ -679,19 +679,20 @@ private struct ManagedSessionRow: View {
     }
 }
 
+@MainActor
 @ViewBuilder
-private func attentionPill(_ kind: ManagedAttentionKind) -> some View {
+private func attentionPill(_ kind: ManagedAttentionKind, identifier: String? = nil) -> some View {
     switch kind {
     case .working:
-        statePill(title: "THINKING", color: attentionColor(kind))
+        statePill(title: "THINKING", color: attentionColor(kind), identifier: identifier)
     case .needsYou:
-        statePill(title: "NEEDS YOU", color: attentionColor(kind))
+        statePill(title: "NEEDS YOU", color: attentionColor(kind), identifier: identifier)
     case .blocked:
-        statePill(title: "BLOCKED", color: attentionColor(kind))
+        statePill(title: "BLOCKED", color: attentionColor(kind), identifier: identifier)
     case .detached:
-        statePill(title: "DETACHED", color: attentionColor(kind))
+        statePill(title: "DETACHED", color: attentionColor(kind), identifier: identifier)
     case .degraded:
-        statePill(title: "DEGRADED", color: attentionColor(kind))
+        statePill(title: "DEGRADED", color: attentionColor(kind), identifier: identifier)
     case .idle:
         EmptyView()
     case .unknown(let label):
@@ -699,7 +700,7 @@ private func attentionPill(_ kind: ManagedAttentionKind) -> some View {
         if trimmed.isEmpty {
             EmptyView()
         } else {
-            statePill(title: trimmed.uppercased(), color: attentionColor(kind))
+            statePill(title: trimmed.uppercased(), color: attentionColor(kind), identifier: identifier)
         }
     }
 }
@@ -915,7 +916,8 @@ func subtleChip(title: String, tint: Color = Color.secondary) -> some View {
         )
 }
 
-func statePill(title: String, color: Color) -> some View {
+@MainActor
+func statePill(title: String, color: Color, identifier: String? = nil) -> some View {
     Text(title)
         .font(.system(size: 9, weight: .bold, design: .monospaced))
         .foregroundStyle(color)
@@ -925,6 +927,7 @@ func statePill(title: String, color: Color) -> some View {
             Capsule(style: .continuous)
                 .fill(color.opacity(0.14))
         )
+        .applyHarnessAccessibility(identifier: identifier, label: title)
 }
 
 var sectionDivider: some View {
@@ -947,6 +950,21 @@ func statusEmblem(color: Color, systemImage: String) -> some View {
             .frame(width: 34, height: 34)
         Image(systemName: systemImage)
             .font(.system(size: 16, weight: .semibold))
+            .foregroundStyle(color)
+    }
+}
+
+@MainActor
+func longhouseBrandEmblem(color: Color) -> some View {
+    ZStack {
+        Circle()
+            .fill(color.opacity(0.14))
+            .frame(width: 34, height: 34)
+        MenuBarBrandIcon.brandImage
+            .resizable()
+            .renderingMode(.template)
+            .aspectRatio(contentMode: .fit)
+            .frame(width: 22, height: 22)
             .foregroundStyle(color)
     }
 }
@@ -1009,7 +1027,8 @@ extension View {
     @ViewBuilder
     func applyHarnessAccessibility(identifier: String?, label: String) -> some View {
         if let identifier {
-            accessibilityIdentifier(identifier)
+            self
+                .accessibilityIdentifier(identifier)
                 .accessibilityLabel(Text(label))
         } else {
             self
