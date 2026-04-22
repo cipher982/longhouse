@@ -42,6 +42,7 @@ RELEASE_TAG_PREFIX = "v"
 DOWNLOAD_TIMEOUT_SECONDS = 120.0
 RELEASE_CHECKSUMS_FILENAME = "local-runtime-checksums.txt"
 MANAGED_CODEX_LAUNCHER_MARKER = "# longhouse-managed-codex-launcher"
+MANAGED_CODEX_LAUNCH_ALIAS = "codex"
 MANAGED_CODEX_VERSION_PATTERN = re.compile(r"(\d+\.\d+\.\d+(?:[-+._a-zA-Z0-9]+)?)")
 
 
@@ -291,6 +292,10 @@ def _managed_codex_binary_path(version_dir: Path) -> Path:
     return version_dir / CANONICAL_BINARY_NAMES[RuntimeComponent.MANAGED_CODEX]
 
 
+def _managed_codex_launch_alias_path(version_dir: Path) -> Path:
+    return version_dir / MANAGED_CODEX_LAUNCH_ALIAS
+
+
 def _managed_codex_launcher_script(layout: VersionedExecutableLayout) -> str:
     return (
         "#!/bin/sh\n"
@@ -313,12 +318,35 @@ def _is_managed_codex_launcher(path: Path) -> bool:
         return False
 
 
+def _is_managed_codex_launch_alias(path: Path) -> bool:
+    try:
+        return path.is_symlink() and os.readlink(path) == CANONICAL_BINARY_NAMES[RuntimeComponent.MANAGED_CODEX]
+    except OSError:
+        return False
+
+
 def _install_executable_launcher(layout: VersionedExecutableLayout, script: str) -> None:
     layout.launcher_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = layout.launcher_path.parent / f".{layout.launcher_path.name}.tmp-{os.getpid()}-{int(time.time() * 1000)}"
     temp_path.write_text(script)
     temp_path.chmod(0o755)
     temp_path.replace(layout.launcher_path)
+
+
+def _install_managed_codex_launch_alias(version_dir: Path) -> Path:
+    alias_path = _managed_codex_launch_alias_path(version_dir)
+    if _is_managed_codex_launch_alias(alias_path):
+        return alias_path
+
+    alias_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_link = alias_path.parent / f".{alias_path.name}.tmp-{os.getpid()}-{int(time.time() * 1000)}"
+    try:
+        temp_link.unlink()
+    except FileNotFoundError:
+        pass
+    temp_link.symlink_to(CANONICAL_BINARY_NAMES[RuntimeComponent.MANAGED_CODEX])
+    temp_link.replace(alias_path)
+    return alias_path
 
 
 def _switch_current_version(layout: VersionedExecutableLayout, version_dir: Path) -> None:
@@ -364,11 +392,17 @@ def _resolved_managed_codex_versioned_artifact() -> InstalledRuntimeArtifact | N
     layout = _managed_codex_layout()
     launcher_path = layout.launcher_path
     current_binary = _managed_codex_binary_path(layout.current_link)
+    launch_path = _managed_codex_launch_alias_path(layout.current_link)
     if launcher_path.exists() and current_binary.exists() and _is_managed_codex_launcher(launcher_path):
+        if not _is_managed_codex_launch_alias(launch_path):
+            try:
+                launch_path = _install_managed_codex_launch_alias(layout.current_link)
+            except OSError:
+                launch_path = launcher_path
         return InstalledRuntimeArtifact(
             component=RuntimeComponent.MANAGED_CODEX,
             path=str(launcher_path),
-            launch_path=str(launcher_path),
+            launch_path=str(launch_path),
             source="local-runtime-managed",
             installed_now=False,
             kind=RuntimeArtifactKind.EXECUTABLE,
@@ -493,6 +527,7 @@ def _ensure_managed_codex_versioned_artifact_from_binary(
     version_id = _managed_codex_version_id(source_binary, source_label, source_hash)
     version_dir = layout.versions_dir / version_id
     version_binary = _managed_codex_binary_path(version_dir)
+    launch_alias = _managed_codex_launch_alias_path(version_dir)
     version_dir.mkdir(parents=True, exist_ok=True)
     existed_before = version_binary.exists()
     try:
@@ -509,18 +544,21 @@ def _ensure_managed_codex_versioned_artifact_from_binary(
         current_target = None
 
     launcher_ready = layout.launcher_path.exists() and _is_managed_codex_launcher(layout.launcher_path)
+    alias_ready = _is_managed_codex_launch_alias(launch_alias)
     needs_switch = current_target != version_dir
-    changed = overwrite or not existed_before or needs_switch or not launcher_ready
+    changed = overwrite or not existed_before or needs_switch or not launcher_ready or not alias_ready
 
     if needs_switch:
         _switch_current_version(layout, version_dir)
+    if not alias_ready or overwrite:
+        _install_managed_codex_launch_alias(version_dir)
     if not launcher_ready or needs_switch or overwrite:
         _install_executable_launcher(layout, _managed_codex_launcher_script(layout))
 
     return InstalledRuntimeArtifact(
         component=RuntimeComponent.MANAGED_CODEX,
         path=str(layout.launcher_path),
-        launch_path=str(layout.launcher_path),
+        launch_path=str(_managed_codex_launch_alias_path(layout.current_link)),
         source=source_label,
         installed_now=changed,
         kind=RuntimeArtifactKind.EXECUTABLE,

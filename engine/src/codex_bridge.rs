@@ -25,6 +25,7 @@ const ACTIVE_PHASE_KEEPALIVE_MS: u64 = 30_000;
 const THREAD_SUBSCRIBE_BACKGROUND_RETRY_MS: u64 = 500;
 const THREAD_SUBSCRIBE_RETRY_ATTEMPTS: usize = 8;
 const THREAD_SUBSCRIBE_RETRY_DELAY_MS: u64 = 250;
+const MANAGED_CODEX_CONFIG_OVERRIDE: &str = "check_for_update_on_startup=false";
 const BRIDGE_OPT_OUT_NOTIFICATION_METHODS: &[&str] = &[
     "item/agentMessage/delta",
     "item/commandExecution/outputDelta",
@@ -1008,12 +1009,15 @@ pub fn cmd_codex_bridge_attach(config: BridgeAttachConfig) -> Result<i32> {
 
     let mut command = std::process::Command::new(&codex_bin);
     command
+        .arg("-c")
+        .arg(MANAGED_CODEX_CONFIG_OVERRIDE)
         .arg("resume")
         .arg(&thread_id)
         .arg("--enable")
         .arg("tui_app_server")
         .arg("--remote")
         .arg(&ws_url)
+        .env("LONGHOUSE_MANAGED_SESSION_ID", &config.session_id)
         .current_dir(PathBuf::from(state.cwd));
 
     #[cfg(unix)]
@@ -1141,6 +1145,8 @@ fn read_log_tail(path: &Path, max_chars: usize) -> String {
 async fn spawn_app_server_client(config: &BridgeRunConfig) -> Result<RpcClient> {
     let mut command = Command::new(&config.codex_bin);
     command
+        .arg("-c")
+        .arg(MANAGED_CODEX_CONFIG_OVERRIDE)
         .arg("app-server")
         .arg("--listen")
         .arg("ws://127.0.0.1:0")

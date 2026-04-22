@@ -90,15 +90,18 @@ def test_ensure_runtime_binary_copies_managed_codex_from_local_override(monkeypa
     versions = list((install_root / "versions").iterdir())
     assert len(versions) == 1
     installed_binary = versions[0] / "longhouse-codex"
+    launch_alias = install_root / "current" / runtime_artifacts.MANAGED_CODEX_LAUNCH_ALIAS
 
     assert launcher.exists()
     assert runtime_artifacts.MANAGED_CODEX_LAUNCHER_MARKER in launcher.read_text()
     assert installed_binary.read_text() == source.read_text()
     assert (install_root / "current").resolve() == versions[0]
+    assert launch_alias.is_symlink()
+    assert os.readlink(launch_alias) == "longhouse-codex"
     completed = subprocess.run([str(launcher)], check=False, capture_output=True, text=True)
     assert completed.stdout.strip() == "codex"
     assert result.path == str(launcher)
-    assert result.launch_path == str(launcher)
+    assert result.launch_path == str(launch_alias)
     assert result.installed_now is True
 
 
@@ -121,9 +124,11 @@ def test_ensure_runtime_binary_accepts_pathlike_managed_codex_override(monkeypat
     )
 
     launcher = home / ".local" / "bin" / "longhouse-codex"
+    launch_alias = home / ".longhouse" / "runtimes" / "codex" / "current" / runtime_artifacts.MANAGED_CODEX_LAUNCH_ALIAS
     completed = subprocess.run([str(launcher)], check=False, capture_output=True, text=True)
     assert completed.stdout.strip() == "codex-pathlike"
     assert result.path == str(launcher)
+    assert result.launch_path == str(launch_alias)
     assert result.installed_now is True
 
 
@@ -146,10 +151,13 @@ def test_ensure_runtime_binary_migrates_legacy_managed_codex_install(monkeypatch
     versions = list((install_root / "versions").iterdir())
     assert len(versions) == 1
     installed_binary = versions[0] / "longhouse-codex"
+    launch_alias = install_root / "current" / runtime_artifacts.MANAGED_CODEX_LAUNCH_ALIAS
 
     assert result.installed_now is True
     assert runtime_artifacts.MANAGED_CODEX_LAUNCHER_MARKER in launcher.read_text()
     assert installed_binary.read_text() == "#!/bin/sh\necho legacy-codex\n"
+    assert launch_alias.is_symlink()
+    assert os.readlink(launch_alias) == "longhouse-codex"
     completed = subprocess.run([str(launcher)], check=False, capture_output=True, text=True)
     assert completed.stdout.strip() == "legacy-codex"
 
@@ -157,6 +165,7 @@ def test_ensure_runtime_binary_migrates_legacy_managed_codex_install(monkeypatch
     assert resolved is not None
     assert resolved.source == "local-runtime-managed"
     assert resolved.path == str(launcher)
+    assert resolved.launch_path == str(launch_alias)
 
 
 def test_ensure_runtime_binary_reuses_versioned_managed_codex_layout(monkeypatch, tmp_path: Path):
@@ -181,6 +190,9 @@ def test_ensure_runtime_binary_reuses_versioned_managed_codex_layout(monkeypatch
     assert first.installed_now is True
     assert second.installed_now is False
     assert second.path == str(home / ".local" / "bin" / "longhouse-codex")
+    assert second.launch_path == str(
+        home / ".longhouse" / "runtimes" / "codex" / "current" / runtime_artifacts.MANAGED_CODEX_LAUNCH_ALIAS
+    )
 
 
 def test_managed_codex_launcher_disables_upstream_update_checks(monkeypatch, tmp_path: Path):
@@ -461,10 +473,14 @@ def test_managed_codex_uses_release_url_when_override_missing(monkeypatch, tmp_p
     launcher = home / ".local" / "bin" / "longhouse-codex"
     install_root = home / ".longhouse" / "runtimes" / "codex"
     versions = list((install_root / "versions").iterdir())
+    launch_alias = install_root / "current" / runtime_artifacts.MANAGED_CODEX_LAUNCH_ALIAS
 
     assert result.path == str(launcher)
+    assert result.launch_path == str(launch_alias)
     assert result.installed_now is True
     assert len(versions) == 1
+    assert launch_alias.is_symlink()
+    assert os.readlink(launch_alias) == "longhouse-codex"
     assert downloads == ["https://github.com/cipher982/longhouse/releases/download/v0.1.9/longhouse-codex-darwin-arm64"]
     assert (versions[0] / "longhouse-codex").read_text() == "#!/bin/sh\necho managed-codex\n"
 

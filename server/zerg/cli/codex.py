@@ -25,6 +25,7 @@ from zerg.services.shipper.service import get_engine_executable
 from zerg.session_loop_mode import SessionLoopMode
 
 _CODEX_BIN_ENV = "LONGHOUSE_CODEX_BIN"
+_MANAGED_CODEX_CONFIG_OVERRIDE = "check_for_update_on_startup=false"
 _ROLLOUT_TURN_EVENT_TYPES = {"task_started", "task_complete", "turn_aborted"}
 _ROLLOUT_TERMINAL_EVENT_TYPES = {"task_complete", "turn_aborted"}
 _ROLLOUT_TAIL_LINES = 256
@@ -64,15 +65,19 @@ def _build_codex_attach_command(
     codex_bin: str,
     ws_url: str,
     bypass_approvals: bool,
+    session_id: str | None = None,
     thread_id: str | None = None,
 ) -> str:
-    cmd = [codex_bin]
+    cmd = [codex_bin, "-c", _MANAGED_CODEX_CONFIG_OVERRIDE]
     if thread_id:
         cmd += ["resume", thread_id]
     if bypass_approvals:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
-    return shlex.join(cmd)
+    command_text = shlex.join(cmd)
+    if session_id:
+        return f"LONGHOUSE_MANAGED_SESSION_ID={shlex.quote(session_id)} {command_text}"
+    return command_text
 
 
 class _NativeBridgeError(Exception):
@@ -227,19 +232,28 @@ def _stop_native_codex_bridge(*, session_id: str) -> str | None:
     return stderr or stdout or f"codex-bridge stop exited with code {completed.returncode}"
 
 
-def _run_native_codex_tui(*, codex_bin: str, ws_url: str, cwd: Path, bypass_approvals: bool = False) -> int:
+def _run_native_codex_tui(
+    *,
+    session_id: str,
+    codex_bin: str,
+    ws_url: str,
+    cwd: Path,
+    bypass_approvals: bool = False,
+) -> int:
     # Connect TUI to the bridge's app-server. The TUI calls thread/start which
     # creates the thread; the bridge daemon observes the thread/started notification
     # and posts idle once it knows which thread to drive.
-    cmd = [codex_bin]
+    cmd = [codex_bin, "-c", _MANAGED_CODEX_CONFIG_OVERRIDE]
     if bypass_approvals:
         cmd.append("--dangerously-bypass-approvals-and-sandbox")
     cmd += ["--enable", "tui_app_server", "--remote", ws_url]
+    env = os.environ.copy()
+    env["LONGHOUSE_MANAGED_SESSION_ID"] = session_id
     completed = subprocess.run(
         cmd,
         check=False,
         cwd=str(cwd),
-        env=os.environ.copy(),
+        env=env,
     )
     return int(completed.returncode)
 
@@ -381,6 +395,7 @@ def codex(
         codex_bin=resolved_codex_bin,
         ws_url=ws_url,
         bypass_approvals=bypass_approvals,
+        session_id=result.session_id,
     )
     if not attach:
         typer.echo(f"Attach: {attach_cmd}")
@@ -392,6 +407,7 @@ def codex(
 
     typer.echo("Attaching...")
     exit_code = _run_native_codex_tui(
+        session_id=result.session_id,
         codex_bin=resolved_codex_bin,
         ws_url=ws_url,
         cwd=cwd,
@@ -409,6 +425,7 @@ def codex(
                 codex_bin=resolved_codex_bin,
                 ws_url=ws_url,
                 bypass_approvals=bypass_approvals,
+                session_id=result.session_id,
                 thread_id=resume_thread_id or None,
             )
             typer.secho(

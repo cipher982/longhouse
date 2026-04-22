@@ -67,13 +67,13 @@ def test_resolve_codex_binary_prefers_installed_managed_runtime_before_ambient_p
     monkeypatch.setattr(
         codex_cli,
         "resolve_installed_runtime_artifact",
-        lambda component: type("Artifact", (), {"launch_path": "/tmp/longhouse-codex"})()
+        lambda component: type("Artifact", (), {"launch_path": "/tmp/codex"})()
         if component == codex_cli.RuntimeComponent.MANAGED_CODEX
         else None,
     )
     monkeypatch.setattr(codex_cli.shutil, "which", lambda name: "/usr/local/bin/codex" if name == "codex" else None)
 
-    assert codex_cli._resolve_codex_binary() == "/tmp/longhouse-codex"
+    assert codex_cli._resolve_codex_binary() == "/tmp/codex"
 
 
 def test_resolve_codex_binary_does_not_fall_back_to_ambient_path(monkeypatch):
@@ -159,6 +159,20 @@ def test_active_turn_survived_tui_exit_checks_latest_rollout_when_active_turn_mi
     assert codex_cli._active_turn_survived_tui_exit(str(state_file)) is False
 
 
+def test_build_codex_attach_command_carries_managed_override_and_session_env():
+    command = codex_cli._build_codex_attach_command(
+        codex_bin="/tmp/codex",
+        ws_url="ws://127.0.0.1:4800",
+        bypass_approvals=False,
+        session_id="session-123",
+        thread_id="thr_123",
+    )
+
+    assert command.startswith("LONGHOUSE_MANAGED_SESSION_ID=session-123 ")
+    assert "/tmp/codex -c check_for_update_on_startup=false resume thr_123" in command
+    assert "--enable tui_app_server --remote ws://127.0.0.1:4800" in command
+
+
 def test_launch_managed_local_from_api_sets_codex_provider(monkeypatch, tmp_path):
     fake_client = _FakeClient(
         response=_FakeResponse(
@@ -210,7 +224,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     runner = CliRunner()
     open_calls: list[str] = []
     bridge_calls: list[dict[str, object]] = []
-    native_tui_calls: list[tuple[str, str, str, bool]] = []
+    native_tui_calls: list[tuple[str, str, str, str, bool]] = []
 
     monkeypatch.setattr(
         codex_cli,
@@ -228,7 +242,7 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
             source_runner_name="work-laptop",
         ),
     )
-    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/longhouse-codex")
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/codex")
     monkeypatch.setattr(
         codex_cli,
         "_start_native_codex_bridge",
@@ -238,8 +252,8 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
     monkeypatch.setattr(
         codex_cli,
         "_run_native_codex_tui",
-        lambda *, codex_bin, ws_url, cwd, bypass_approvals=False: native_tui_calls.append(
-            (codex_bin, ws_url, str(cwd), bypass_approvals)
+        lambda *, session_id, codex_bin, ws_url, cwd, bypass_approvals=False: native_tui_calls.append(
+            (session_id, codex_bin, ws_url, str(cwd), bypass_approvals)
         )
         or 0,
     )
@@ -278,10 +292,10 @@ def test_codex_command_starts_native_bridge_and_attaches(monkeypatch, tmp_path):
             "cwd": tmp_path,
             "url": "https://longhouse.test",
             "token": "zdt_test_token",
-            "codex_bin": "/tmp/longhouse-codex",
+            "codex_bin": "/tmp/codex",
         }
     ]
-    assert native_tui_calls == [("/tmp/longhouse-codex", "ws://127.0.0.1:4800", str(tmp_path), False)]
+    assert native_tui_calls == [("session-123", "/tmp/codex", "ws://127.0.0.1:4800", str(tmp_path), False)]
 
 
 def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):
@@ -303,7 +317,7 @@ def test_codex_command_exits_on_bridge_failure(monkeypatch, tmp_path):
             source_runner_name="work-laptop",
         ),
     )
-    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/longhouse-codex")
+    monkeypatch.setattr(codex_cli, "_resolve_codex_binary", lambda _explicit=None: "/tmp/codex")
     monkeypatch.setattr(
         codex_cli,
         "_start_native_codex_bridge",
