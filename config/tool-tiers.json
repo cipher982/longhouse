@@ -1,0 +1,51 @@
+{
+  "_description": "Single source of truth for tool UX tiers across web and iOS timeline rendering. Regenerate TS/Swift via scripts/generate/tool_tiers.py.",
+  "_tiers": {
+    "noise": "Passive reads/searches. Collapse consecutive runs into a single 'Explored N' chip. Low signal — user rarely cares which file was grepped.",
+    "context": "Passive reads a user might care about specifically (Read file, WebFetch). Render as an inline one-liner. Single row, no card chrome.",
+    "action": "State-changing or heavyweight work (Edit, Write, Bash, Task, remote ops). Render as a compact card. Expand-on-click for full input/output."
+  },
+  "default_tier": "action",
+  "tools": {
+    "Read":             { "tier": "context", "icon": "R", "label": "Read",      "color": "cyan" },
+    "Edit":             { "tier": "action",  "icon": "E", "label": "Edit",      "color": "brand" },
+    "Write":            { "tier": "action",  "icon": "W", "label": "Write",     "color": "success" },
+    "NotebookEdit":     { "tier": "action",  "icon": "N", "label": "Notebook",  "color": "brand" },
+    "Bash":             { "tier": "action",  "icon": "$", "label": "Bash",      "color": "warning" },
+    "Task":             { "tier": "action",  "icon": "T", "label": "Task",      "color": "secondary" },
+    "Agent":            { "tier": "action",  "icon": "A", "label": "Agent",     "color": "tertiary" },
+    "Grep":             { "tier": "noise",   "icon": "~", "label": "Grep",      "color": "muted" },
+    "Glob":             { "tier": "noise",   "icon": "*", "label": "Glob",      "color": "muted" },
+    "LS":               { "tier": "noise",   "icon": "/", "label": "List",      "color": "muted" },
+    "ToolSearch":       { "tier": "noise",   "icon": "?", "label": "ToolSearch","color": "muted" },
+    "TodoRead":         { "tier": "noise",   "icon": "=", "label": "TodoRead",  "color": "muted" },
+    "TodoWrite":        { "tier": "action",  "icon": "+", "label": "TodoWrite", "color": "accent" },
+    "WebFetch":         { "tier": "context", "icon": "W", "label": "Fetch",     "color": "cyan" },
+    "WebSearch":        { "tier": "context", "icon": "S", "label": "Search",    "color": "secondary" },
+
+    "read_file":        { "tier": "context", "icon": "R", "label": "read_file", "color": "cyan" },
+    "grep":             { "tier": "noise",   "icon": "~", "label": "grep",      "color": "muted" },
+    "list_files":       { "tier": "noise",   "icon": "/", "label": "list",      "color": "muted" },
+    "find":             { "tier": "noise",   "icon": "?", "label": "find",      "color": "muted" },
+    "codebase_search":  { "tier": "noise",   "icon": "?", "label": "search",    "color": "muted" },
+    "web_search":       { "tier": "context", "icon": "S", "label": "web_search","color": "secondary" },
+    "shell":            { "tier": "action",  "icon": "$", "label": "shell",     "color": "warning" },
+    "exec_command":     { "tier": "action",  "icon": "$", "label": "exec",      "color": "warning" },
+    "run_shell_command":{ "tier": "action",  "icon": "$", "label": "shell",     "color": "warning" },
+    "write_stdin":      { "tier": "action",  "icon": "$", "label": "stdin",     "color": "warning" },
+    "apply_patch":      { "tier": "action",  "icon": "E", "label": "patch",     "color": "brand" },
+    "create_file":      { "tier": "action",  "icon": "W", "label": "create",    "color": "success" },
+    "str_replace_editor":{ "tier": "action", "icon": "E", "label": "edit",      "color": "brand" },
+    "update_plan":      { "tier": "action",  "icon": "+", "label": "plan",      "color": "accent" }
+  },
+  "mcp_namespaces": {
+    "longhouse":  { "icon": "O", "color": "brand" },
+    "life-hub":   { "icon": "O", "color": "brand" },
+    "browser":    { "icon": "B", "color": "cyan" },
+    "search":     { "icon": "S", "color": "secondary" },
+    "web":        { "icon": "S", "color": "secondary" },
+    "gdrive":     { "icon": "G", "color": "success" },
+    "gmail":      { "icon": "G", "color": "success" }
+  },
+  "mcp_default_tier": "noise"
+}
