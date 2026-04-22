@@ -688,6 +688,92 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func liveUnmanagedProcessSummaryUsesExplicitProcessTruth() {
+        let snapshot = HealthSnapshot(
+            schemaVersion: 1,
+            collectedAt: nil,
+            healthState: "healthy",
+            severity: "green",
+            headline: "Longhouse shipping healthy",
+            reasons: [],
+            suggestedActions: [],
+            service: nil,
+            engineStatus: nil,
+            outbox: nil,
+            activitySummary: ActivitySummarySnapshot(
+                path: nil,
+                exists: true,
+                error: nil,
+                sessionsToday: 4,
+                sessionsRecent: 4,
+                providerCountsToday: ["claude": 2, "codex": 2],
+                providerCountsRecent: ["claude": 2, "codex": 2],
+                sessionRecencyBands: nil,
+                recentTouches: [
+                    ActivityTouchSnapshot(
+                        provider: "claude",
+                        lastUpdated: "2026-04-11T10:00:00Z",
+                        workspaceLabel: "zeta-athena-horizon",
+                        branch: nil,
+                        isSubagent: false
+                    )
+                ],
+                latestActivityAt: "2026-04-11T10:00:00Z",
+                recentWindowMinutes: 15
+            ),
+            managedSummary: ManagedSummarySnapshot(
+                attachedCount: 2,
+                detachedCount: 0,
+                degradedCount: 0,
+                orphanBridgeCount: 0,
+                latestActivityAt: "2026-04-11T10:00:00Z"
+            ),
+            managedSessions: [
+                ManagedSessionSnapshot(
+                    sessionId: "managed-claude-1",
+                    provider: "claude",
+                    workspaceLabel: "athena-horizon",
+                    branch: nil,
+                    state: "attached",
+                    phase: "thinking",
+                    rawPhase: "thinking",
+                    phaseObservedAt: "2026-04-11T10:00:00Z",
+                    lastActivityAt: "2026-04-11T10:00:00Z",
+                    bridgeStatus: nil,
+                    bridgePid: nil,
+                    bridgeHeartbeatAt: nil,
+                    reasonCodes: []
+                )
+            ],
+            unmanagedProcesses: [
+                UnmanagedProcessSnapshot(
+                    provider: "codex",
+                    pid: 48047,
+                    workspaceLabel: "zerg",
+                    cwd: "/Users/test/git/zerg",
+                    branch: nil,
+                    startedAt: "2026-04-11T09:58:00Z"
+                ),
+                UnmanagedProcessSnapshot(
+                    provider: "codex",
+                    pid: 55478,
+                    workspaceLabel: "myagents",
+                    cwd: "/Users/test/git/me/myagents",
+                    branch: nil,
+                    startedAt: "2026-04-11T09:55:00Z"
+                ),
+            ],
+            launchReadiness: nil
+        )
+
+        #expect(snapshot.currentUnmanagedProcesses.count == 2)
+        #expect(snapshot.liveUnmanagedSummaryLabel == "2 live")
+        #expect(snapshot.liveUnmanagedProviderMixLabel == "Codex 2")
+        #expect(snapshot.currentManagedSessions.count == 1)
+        #expect(snapshot.recentActivitySummaryLabel == "4 active in 15m")
+    }
+
+    @Test
     func decodesManagedDetachedFixture() throws {
         let fixtureURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

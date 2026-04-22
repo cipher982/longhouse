@@ -52,6 +52,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
     public let activitySummary: ActivitySummarySnapshot?
     public let managedSummary: ManagedSummarySnapshot?
     public let managedSessions: [ManagedSessionSnapshot]?
+    public let unmanagedProcesses: [UnmanagedProcessSnapshot]?
     public let orphanBridges: [OrphanBridgeSnapshot]?
     public let launchReadiness: LaunchReadinessSnapshot?
     public let build: BuildIdentitySnapshot?
@@ -71,6 +72,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         activitySummary: ActivitySummarySnapshot?,
         managedSummary: ManagedSummarySnapshot? = nil,
         managedSessions: [ManagedSessionSnapshot]? = nil,
+        unmanagedProcesses: [UnmanagedProcessSnapshot]? = nil,
         orphanBridges: [OrphanBridgeSnapshot]? = nil,
         launchReadiness: LaunchReadinessSnapshot?,
         build: BuildIdentitySnapshot? = nil,
@@ -89,6 +91,7 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         self.activitySummary = activitySummary
         self.managedSummary = managedSummary
         self.managedSessions = managedSessions
+        self.unmanagedProcesses = unmanagedProcesses
         self.orphanBridges = orphanBridges
         self.launchReadiness = launchReadiness
         self.build = build
@@ -381,6 +384,10 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         managedSessions ?? []
     }
 
+    public var currentUnmanagedProcesses: [UnmanagedProcessSnapshot] {
+        unmanagedProcesses ?? []
+    }
+
     public var currentOrphanBridges: [OrphanBridgeSnapshot] {
         orphanBridges ?? []
     }
@@ -581,6 +588,28 @@ public struct HealthSnapshot: Codable, Equatable, Sendable {
         let entries = providerCountsRecent
         guard !entries.isEmpty else {
             return "No recent provider traffic"
+        }
+        return entries
+            .map { "\(Self.providerDisplayName($0.provider)) \($0.count)" }
+            .joined(separator: " · ")
+    }
+
+    public var liveUnmanagedSummaryLabel: String {
+        let count = currentUnmanagedProcesses.count
+        return count == 1 ? "1 live" : "\(count) live"
+    }
+
+    public var liveUnmanagedProviderMixLabel: String {
+        let counts = currentUnmanagedProcesses.reduce(into: [String: Int]()) { partialResult, process in
+            let provider = (process.provider ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !provider.isEmpty else {
+                return
+            }
+            partialResult[provider, default: 0] += 1
+        }
+        let entries = sortedProviderCounts(counts)
+        guard !entries.isEmpty else {
+            return "No live unmanaged sessions"
         }
         return entries
             .map { "\(Self.providerDisplayName($0.provider)) \($0.count)" }
@@ -1272,6 +1301,22 @@ public struct ActivityTouchSnapshot: Codable, Equatable, Sendable {
     public let workspaceLabel: String?
     public let branch: String?
     public let isSubagent: Bool?
+}
+
+public struct UnmanagedProcessSnapshot: Codable, Equatable, Identifiable, Sendable {
+    public let provider: String?
+    public let pid: Int?
+    public let workspaceLabel: String?
+    public let cwd: String?
+    public let branch: String?
+    public let startedAt: String?
+
+    public var id: String {
+        if let pid {
+            return "unmanaged-\(pid)"
+        }
+        return "\(provider ?? "unknown")-\(workspaceLabel ?? "workspace")-\(startedAt ?? "unknown")"
+    }
 }
 
 public struct LaunchReadinessSnapshot: Codable, Equatable, Sendable {
