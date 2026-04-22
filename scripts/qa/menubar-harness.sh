@@ -21,6 +21,7 @@ Usage:
   scripts/qa/menubar-harness.sh snapshot-live [output.png]
   scripts/qa/menubar-harness.sh raw-snapshot-fixture <fixture-name> [output.png]
   scripts/qa/menubar-harness.sh raw-snapshot-live [output.png]
+  scripts/qa/menubar-harness.sh compare-header-variants <fixture-name>
   scripts/qa/menubar-harness.sh render-fixtures
   scripts/qa/menubar-harness.sh smoke [fixture-name]
   scripts/qa/menubar-harness.sh xcuitest
@@ -370,6 +371,18 @@ case "$cmd" in
     (cd "$ROOT" && uv run --project server longhouse local-health --json > "$tmp_json")
     raw_snapshot_exec --input "$tmp_json" --output "$output"
     echo "$output"
+    ;;
+  compare-header-variants)
+    fixture="${1:-}"
+    if [[ -z "$fixture" ]]; then
+      usage
+      exit 2
+    fi
+    for variant in minimal telemetry-rail session-ribbon; do
+      output="$ARTIFACT_DIR/${fixture}-${variant}.png"
+      raw_snapshot_exec --input "$(fixture_path "$fixture")" --output "$output" --header-variant "$variant"
+      echo "$output"
+    done
     ;;
   render-fixtures)
     app_bin="$(build_app_binary)"

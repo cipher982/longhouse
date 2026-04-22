@@ -191,6 +191,159 @@ struct MissionReadoutGrid: View {
     }
 }
 
+struct HeaderRailMetric: Identifiable {
+    let id: String
+    let label: String
+    let value: String
+    let tint: Color
+
+    init(id: String? = nil, label: String, value: String, tint: Color = .primary) {
+        self.id = id ?? label
+        self.label = label
+        self.value = value
+        self.tint = tint
+    }
+}
+
+struct HeaderTelemetryRail: View {
+    let statusTitle: String
+    let statusColor: Color
+    let updatedLabel: String
+    let metrics: [HeaderRailMetric]
+    let statusIdentifier: String?
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 8) {
+                leadingChips
+                metricRow(limit: metrics.count)
+            }
+
+            HStack(alignment: .center, spacing: 8) {
+                leadingChips
+                metricRow(limit: min(metrics.count, 2))
+            }
+        }
+    }
+
+    private var leadingChips: some View {
+        HStack(spacing: 8) {
+            headerSummaryStatusPill(title: statusTitle, color: statusColor, identifier: statusIdentifier)
+            headerSummaryLabel("Updated \(updatedLabel)")
+        }
+    }
+
+    private func metricRow(limit: Int) -> some View {
+        HStack(alignment: .center, spacing: 9) {
+            ForEach(Array(metrics.prefix(limit))) { metric in
+                Text("\(metric.label) \(metric.value)")
+                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(metric.tint)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+                    .monospacedDigit()
+            }
+        }
+    }
+}
+
+struct HeaderSessionToken: Identifiable {
+    let id: String
+    let provider: String
+    let attention: ManagedAttentionKind
+
+    init(id: String? = nil, provider: String, attention: ManagedAttentionKind) {
+        self.id = id ?? UUID().uuidString
+        self.provider = provider
+        self.attention = attention
+    }
+}
+
+struct HeaderSessionRibbon: View {
+    let statusTitle: String
+    let statusColor: Color
+    let updatedLabel: String
+    let tokens: [HeaderSessionToken]
+    let managedSummary: String
+    let statusIdentifier: String?
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 8) {
+                leadingChips
+                if !tokens.isEmpty {
+                    SessionTokenRibbon(tokens: tokens)
+                }
+                if !managedSummary.isEmpty {
+                    summaryText
+                }
+            }
+
+            HStack(alignment: .center, spacing: 8) {
+                leadingChips
+                if !tokens.isEmpty {
+                    SessionTokenRibbon(tokens: tokens)
+                }
+            }
+        }
+    }
+
+    private var leadingChips: some View {
+        HStack(spacing: 8) {
+            headerSummaryStatusPill(title: statusTitle, color: statusColor, identifier: statusIdentifier)
+            headerSummaryLabel("Updated \(updatedLabel)")
+        }
+    }
+
+    private var summaryText: some View {
+        headerSummaryLabel(managedSummary)
+    }
+}
+
+private struct SessionTokenRibbon: View {
+    let tokens: [HeaderSessionToken]
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(tokens) { token in
+                Capsule()
+                    .fill(sessionTokenFillColor(token))
+                    .frame(width: 16, height: 8)
+                    .overlay {
+                        Capsule()
+                            .stroke(providerColor(token.provider).opacity(0.9), lineWidth: 1)
+                    }
+                    .overlay(alignment: .trailing) {
+                        if token.attention == .needsYou || token.attention == .blocked {
+                            Circle()
+                                .fill(Color(red: 0.95, green: 0.70, blue: 0.20))
+                                .frame(width: 4, height: 4)
+                                .offset(x: 1)
+                        }
+                    }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func sessionTokenFillColor(_ token: HeaderSessionToken) -> Color {
+        switch token.attention {
+        case .working:
+            return Color.secondary.opacity(0.32)
+        case .needsYou, .blocked:
+            return Color(red: 0.95, green: 0.70, blue: 0.20).opacity(0.65)
+        case .idle:
+            return Color.white.opacity(0.05)
+        case .detached:
+            return Color(red: 0.90, green: 0.67, blue: 0.16).opacity(0.4)
+        case .degraded:
+            return Color(red: 0.86, green: 0.29, blue: 0.23).opacity(0.45)
+        case .unknown:
+            return Color.secondary.opacity(0.18)
+        }
+    }
+}
+
 private struct MissionReadoutCell: View {
     let readout: PanelReadout
 
@@ -219,6 +372,35 @@ private struct MissionReadoutCell: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
     }
+}
+
+@MainActor
+@ViewBuilder
+func headerSummaryStatusPill(title: String, color: Color, identifier: String? = nil) -> some View {
+    Text(title)
+        .font(.system(size: 10, weight: .bold, design: .monospaced))
+        .foregroundStyle(color)
+        .tracking(0.4)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(color.opacity(0.16))
+        )
+        .lineLimit(1)
+        .minimumScaleFactor(0.82)
+        .applyHarnessAccessibility(identifier: identifier, label: title)
+}
+
+@MainActor
+@ViewBuilder
+func headerSummaryLabel(_ text: String) -> some View {
+    Text(text)
+        .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+        .foregroundStyle(Color.secondary)
+        .monospacedDigit()
+        .lineLimit(1)
+        .minimumScaleFactor(0.82)
 }
 
 struct ActivityFeedEntry: Identifiable {

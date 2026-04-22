@@ -29,6 +29,7 @@ struct LonghouseMenuBarCoreTests {
             "--output", "/tmp/example.png",
             "--action-log", "/tmp/actions.jsonl",
             "--ui-url", "https://longhouse.ai",
+            "--header-variant", "telemetry-rail",
             "--effect-mode", "log-only",
             "--exercise-actions", "refresh,copyDiagnostics",
             "--quit-after", "2.5",
@@ -40,6 +41,7 @@ struct LonghouseMenuBarCoreTests {
         #expect(config.actionLogURL?.path == "/tmp/actions.jsonl")
         #expect(config.uiURL?.absoluteString == "https://longhouse.ai")
         #expect(config.effectMode == .logOnly)
+        #expect(config.headerSummaryVariant == .telemetryRail)
         #expect(config.exerciseActions == [.refresh, .copyDiagnostics])
         #expect(config.quitAfterSeconds == 2.5)
         #expect(config.refreshIntervalSeconds == 5)

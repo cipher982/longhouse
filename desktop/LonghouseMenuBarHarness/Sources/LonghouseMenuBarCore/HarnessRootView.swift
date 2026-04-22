@@ -5,17 +5,20 @@ public struct HarnessRootView: View {
     private let actionSink: any HealthActionSink
     private let refreshIntervalSeconds: TimeInterval?
     private let managePresentationUpdates: Bool
+    private let headerSummaryVariant: HeaderSummaryVariant
 
     public init(
         store: SnapshotStore,
         actionSink: any HealthActionSink,
         refreshIntervalSeconds: TimeInterval?,
-        managePresentationUpdates: Bool = true
+        managePresentationUpdates: Bool = true,
+        headerSummaryVariant: HeaderSummaryVariant = .default
     ) {
         self.store = store
         self.actionSink = actionSink
         self.refreshIntervalSeconds = refreshIntervalSeconds
         self.managePresentationUpdates = managePresentationUpdates
+        self.headerSummaryVariant = headerSummaryVariant
     }
 
     public var body: some View {
@@ -30,7 +33,8 @@ public struct HarnessRootView: View {
                     feedback: store.feedback,
                     setFeedback: store.setFeedback,
                     actionSink: actionSink,
-                    isManualRefreshing: store.isManualRefreshActive
+                    isManualRefreshing: store.isManualRefreshActive,
+                    headerSummaryVariant: headerSummaryVariant
                 ) {
                     store.refresh(reason: .manual)
                 }
