@@ -1,7 +1,19 @@
 import AppKit
+import SwiftUI
 
 @MainActor
 public enum MenuBarBrandIcon {
+    public static var brandImage: Image {
+        if let nsImage = NSImage(named: "LonghouseMenuIcon") {
+            return Image(nsImage: nsImage)
+        }
+        if let url = LonghouseResourceLocator.url(forResource: "LonghouseMenuIcon", withExtension: "png"),
+           let nsImage = NSImage(contentsOf: url) {
+            return Image(nsImage: nsImage)
+        }
+        return Image(systemName: "circle.dotted")
+    }
+
     public static let baseImage: NSImage = {
         guard let url = LonghouseResourceLocator.url(forResource: "LonghouseMenuIcon", withExtension: "png"),
               let image = NSImage(contentsOf: url) else {

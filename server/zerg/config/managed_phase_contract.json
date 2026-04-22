@@ -1,0 +1,37 @@
+{
+  "phases": [
+    {
+      "raw_phase": "thinking",
+      "display_label": "thinking",
+      "attention": "working"
+    },
+    {
+      "raw_phase": "running",
+      "display_label": "running",
+      "tool_display_format": "running {tool_name}",
+      "attention": "working"
+    },
+    {
+      "raw_phase": "blocked",
+      "display_label": "needs permission",
+      "tool_display_format": "blocked on {tool_name}",
+      "attention": "blocked"
+    },
+    {
+      "raw_phase": "needs_user",
+      "display_label": "needs you",
+      "attention": "needsYou"
+    },
+    {
+      "raw_phase": "idle",
+      "display_label": "idle",
+      "attention": "idle"
+    },
+    {
+      "raw_phase": "finished",
+      "display_label": "completed",
+      "attention": "idle",
+      "local_health_only": true
+    }
+  ]
+}

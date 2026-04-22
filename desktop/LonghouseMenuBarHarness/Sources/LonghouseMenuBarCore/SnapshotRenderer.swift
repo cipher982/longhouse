@@ -7,12 +7,13 @@ public enum SnapshotRenderer {
         snapshot: HealthSnapshot,
         actionSink: any HealthActionSink,
         outputURL: URL,
+        presentationDate: Date = Date(),
         headerSummaryVariant: HeaderSummaryVariant = .default
     ) throws {
         let view = MenuBarPanelView(
             snapshot: snapshot,
             history: [],
-            presentationDate: Date(),
+            presentationDate: presentationDate,
             feedback: nil,
             setFeedback: { _ in },
             actionSink: actionSink,

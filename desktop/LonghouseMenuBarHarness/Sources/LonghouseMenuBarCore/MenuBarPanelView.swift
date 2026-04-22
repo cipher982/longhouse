@@ -200,6 +200,10 @@ public struct MenuBarPanelView: View {
     }
 
     private var displayHeadline: String {
+        if isHealthy {
+            return "Longhouse"
+        }
+
         let trimmed = snapshot.headline.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.lowercased().hasPrefix("longhouse ") else {
             return trimmed
@@ -214,7 +218,7 @@ public struct MenuBarPanelView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
-            statusEmblem(color: snapshot.parsedSeverity.accentColor, systemImage: snapshot.parsedSeverity.symbolName)
+            longhouseBrandEmblem(color: snapshot.parsedSeverity.accentColor)
                 .accessibilityIdentifier(LonghouseMenuBarAccessibilityID.Header.statusGlyph)
 
             VStack(alignment: .leading, spacing: 8) {
