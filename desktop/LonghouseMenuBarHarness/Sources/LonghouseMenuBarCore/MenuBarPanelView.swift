@@ -145,6 +145,7 @@ public struct MenuBarPanelView: View {
     private let actionSink: any HealthActionSink
     private let isManualRefreshing: Bool
     private let refresh: () -> Void
+    private let headerSummaryVariant: HeaderSummaryVariant
 
     public init(
         snapshot: HealthSnapshot,
@@ -154,6 +155,7 @@ public struct MenuBarPanelView: View {
         setFeedback: @escaping (HealthActionFeedback?) -> Void,
         actionSink: any HealthActionSink,
         isManualRefreshing: Bool,
+        headerSummaryVariant: HeaderSummaryVariant = .default,
         refresh: @escaping () -> Void
     ) {
         self.snapshot = snapshot
@@ -163,6 +165,7 @@ public struct MenuBarPanelView: View {
         self.setFeedback = setFeedback
         self.actionSink = actionSink
         self.isManualRefreshing = isManualRefreshing
+        self.headerSummaryVariant = headerSummaryVariant
         self.refresh = refresh
     }
 
@@ -246,41 +249,68 @@ public struct MenuBarPanelView: View {
                         label: displayHeadline
                     )
 
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        statusChip(
-                            title: snapshot.ambientStatusLabel.uppercased(),
-                            color: snapshot.parsedSeverity.accentColor,
-                            identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
-                        )
-
-                        subtleChip(title: "Updated \(snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate))")
-                    }
-
-                    if let managedChip = snapshot.managedHeaderChipLabel {
-                        subtleChip(title: managedChip, tint: managedChipTint)
-                    }
-
-                    if let updateChip = snapshot.updateAvailableChipLabel {
-                        subtleChip(title: updateChip, tint: .yellow)
-                    }
-
-                    if let driftChip = snapshot.buildDriftChipLabel {
-                        subtleChip(title: driftChip, tint: .orange)
-                    }
-                }
-
-                Text(snapshot.missionSummaryLabel(relativeTo: presentationDate))
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Color.secondary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.84)
+                headerSummaryBlock
             }
 
             Spacer(minLength: 0)
 
             headerControlGroup
         }
+    }
+
+    @ViewBuilder
+    private var headerSummaryBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch headerSummaryVariant {
+            case .minimal:
+                headerMinimalSummary
+            case .telemetryRail:
+                headerTelemetryRailSummary
+            case .sessionRibbon:
+                headerSessionRibbonSummary
+            }
+
+            if let updateChip = snapshot.updateAvailableChipLabel {
+                subtleChip(title: updateChip, tint: .yellow)
+            }
+
+            if let driftChip = snapshot.buildDriftChipLabel {
+                subtleChip(title: driftChip, tint: .orange)
+            }
+        }
+    }
+
+    private var headerMinimalSummary: some View {
+        HStack(spacing: 8) {
+            headerSummaryStatusPill(
+                title: snapshot.ambientStatusLabel.uppercased(),
+                color: snapshot.parsedSeverity.accentColor,
+                identifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
+            )
+
+            headerSummaryLabel("Updated \(snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate))")
+        }
+    }
+
+    private var headerTelemetryRailSummary: some View {
+        HeaderTelemetryRail(
+            statusTitle: snapshot.ambientStatusLabel.uppercased(),
+            statusColor: snapshot.parsedSeverity.accentColor,
+            updatedLabel: snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate),
+            metrics: headerTelemetryItems,
+            statusIdentifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
+        )
+    }
+
+    private var headerSessionRibbonSummary: some View {
+        HeaderSessionRibbon(
+            statusTitle: snapshot.ambientStatusLabel.uppercased(),
+            statusColor: snapshot.parsedSeverity.accentColor,
+            updatedLabel: snapshot.snapshotAgeCompactLabel(relativeTo: presentationDate),
+            tokens: headerSessionTokens,
+            managedSummary: snapshot.managedSummaryLabel,
+            statusIdentifier: LonghouseMenuBarAccessibilityID.Header.statusBadge
+        )
     }
 
     private var headerControlGroup: some View {
@@ -440,6 +470,25 @@ public struct MenuBarPanelView: View {
         ]
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0 != "Unavailable" && $0 != "-" }
             .joined(separator: " · ")
+    }
+
+    private var headerTelemetryItems: [HeaderRailMetric] {
+        [
+            HeaderRailMetric(label: "Ship", value: snapshot.lastShipCompactLabel(relativeTo: presentationDate), tint: snapshot.parsedSeverity.accentColor),
+            HeaderRailMetric(label: "Active", value: snapshot.sessionsRecentLabel, tint: snapshot.providerCountsRecent.isEmpty ? .primary : snapshot.parsedSeverity.accentColor),
+            HeaderRailMetric(label: "Managed", value: "\(snapshot.currentManagedSessions.count)", tint: managedChipTint),
+            HeaderRailMetric(label: "Queue", value: queueBoardValue, tint: queueBoardTone),
+        ]
+    }
+
+    private var headerSessionTokens: [HeaderSessionToken] {
+        snapshot.currentManagedSessions.enumerated().map { index, session in
+            HeaderSessionToken(
+                id: "\(index)-\((session.provider ?? "unknown").lowercased())",
+                provider: session.provider ?? "unknown",
+                attention: managedAttention(for: session)
+            )
+        }
     }
 
     /// Activity touches we know aren't owned by a managed session on this Mac.

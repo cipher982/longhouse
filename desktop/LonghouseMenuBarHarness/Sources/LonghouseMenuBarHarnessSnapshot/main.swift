@@ -12,7 +12,12 @@ struct LonghouseMenuBarHarnessSnapshot {
 
         let snapshot = try config.source.load()
         let actionSink = SpyHealthActionSink(logURL: config.actionLogURL, uiURL: config.uiURL)
-        try SnapshotRenderer.renderPNG(snapshot: snapshot, actionSink: actionSink, outputURL: outputURL)
+        try SnapshotRenderer.renderPNG(
+            snapshot: snapshot,
+            actionSink: actionSink,
+            outputURL: outputURL,
+            headerSummaryVariant: config.headerSummaryVariant
+        )
         print(outputURL.path)
     }
 }

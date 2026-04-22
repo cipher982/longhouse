@@ -6,7 +6,8 @@ public enum SnapshotRenderer {
     public static func renderPNG(
         snapshot: HealthSnapshot,
         actionSink: any HealthActionSink,
-        outputURL: URL
+        outputURL: URL,
+        headerSummaryVariant: HeaderSummaryVariant = .default
     ) throws {
         let view = MenuBarPanelView(
             snapshot: snapshot,
@@ -16,6 +17,7 @@ public enum SnapshotRenderer {
             setFeedback: { _ in },
             actionSink: actionSink,
             isManualRefreshing: false,
+            headerSummaryVariant: headerSummaryVariant,
             refresh: {}
         )
         .environment(\.colorScheme, .dark)

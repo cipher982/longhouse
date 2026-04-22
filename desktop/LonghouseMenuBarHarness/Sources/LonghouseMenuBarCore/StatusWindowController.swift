@@ -9,12 +9,14 @@ public final class StatusWindowController: NSWindowController {
     public init(
         store: SnapshotStore,
         actionSink: any HealthActionSink,
-        refreshIntervalSeconds: TimeInterval?
+        refreshIntervalSeconds: TimeInterval?,
+        headerSummaryVariant: HeaderSummaryVariant = .default
     ) {
         let rootView = HarnessRootView(
             store: store,
             actionSink: actionSink,
-            refreshIntervalSeconds: refreshIntervalSeconds
+            refreshIntervalSeconds: refreshIntervalSeconds,
+            headerSummaryVariant: headerSummaryVariant
         )
         self.hostingController = NSHostingController(rootView: rootView)
         if #available(macOS 13.0, *) {

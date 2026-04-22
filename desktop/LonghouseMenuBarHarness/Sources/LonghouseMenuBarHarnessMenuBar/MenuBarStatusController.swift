@@ -17,7 +17,8 @@ final class MenuBarStatusController: NSObject {
     init(
         store: SnapshotStore,
         actionSink: SpyHealthActionSink,
-        refreshIntervalSeconds: TimeInterval?
+        refreshIntervalSeconds: TimeInterval?,
+        headerSummaryVariant: HeaderSummaryVariant = .default
     ) {
         self.store = store
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -26,7 +27,8 @@ final class MenuBarStatusController: NSObject {
                 store: store,
                 actionSink: actionSink,
                 refreshIntervalSeconds: nil,
-                managePresentationUpdates: false
+                managePresentationUpdates: false,
+                headerSummaryVariant: headerSummaryVariant
             )
         )
 

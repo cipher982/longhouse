@@ -118,6 +118,7 @@ public struct HarnessRuntimeConfig {
     public let healthExecutablePath: String?
     public let healthArguments: [String]
     public let showStatusWindowOnLaunch: Bool
+    public let headerSummaryVariant: HeaderSummaryVariant
 
     public init(
         outputURL: URL?,
@@ -134,7 +135,8 @@ public struct HarnessRuntimeConfig {
         healthCommand: String?,
         healthExecutablePath: String?,
         healthArguments: [String],
-        showStatusWindowOnLaunch: Bool
+        showStatusWindowOnLaunch: Bool,
+        headerSummaryVariant: HeaderSummaryVariant
     ) {
         self.outputURL = outputURL
         self.source = source
@@ -151,6 +153,7 @@ public struct HarnessRuntimeConfig {
         self.healthExecutablePath = healthExecutablePath
         self.healthArguments = healthArguments
         self.showStatusWindowOnLaunch = showStatusWindowOnLaunch
+        self.headerSummaryVariant = headerSummaryVariant
     }
 
     public static func parse(arguments: [String]) throws -> HarnessRuntimeConfig {
@@ -170,6 +173,7 @@ public struct HarnessRuntimeConfig {
         var healthExecutablePath: String?
         var healthArguments: [String] = []
         var explicitLiveMode = false
+        var headerSummaryVariant = HeaderSummaryVariant.default
 
         var index = 0
         while index < arguments.count {
@@ -255,6 +259,13 @@ public struct HarnessRuntimeConfig {
                     throw SnapshotSourceError.invalidArguments("Expected numeric seconds after --refresh-seconds")
                 }
                 refreshIntervalSeconds = parsed
+            case "--header-variant":
+                index += 1
+                guard index < arguments.count, let parsed = HeaderSummaryVariant(rawValue: arguments[index]) else {
+                    let allowed = HeaderSummaryVariant.allCases.map(\.rawValue).joined(separator: ", ")
+                    throw SnapshotSourceError.invalidArguments("Expected --header-variant \(allowed)")
+                }
+                headerSummaryVariant = parsed
             case "--health-command":
                 index += 1
                 guard index < arguments.count else {
@@ -324,7 +335,8 @@ public struct HarnessRuntimeConfig {
             healthCommand: healthCommand,
             healthExecutablePath: healthExecutablePath,
             healthArguments: healthArguments,
-            showStatusWindowOnLaunch: showStatusWindowOnLaunch
+            showStatusWindowOnLaunch: showStatusWindowOnLaunch,
+            headerSummaryVariant: headerSummaryVariant
         )
     }
 }
