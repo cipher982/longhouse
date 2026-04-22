@@ -1472,6 +1472,66 @@
   }
   .tl-code--output { max-height: 420px; }
 
+  /* --- Edit-tool diff view --- */
+  .tl-detail__path {
+    font-family: var(--font-family-mono);
+    color: var(--color-text-secondary);
+    font-weight: var(--font-weight-semibold);
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 11px;
+    margin-inline-start: 4px;
+  }
+  .tl-detail__diff-stat {
+    font-family: var(--font-family-mono);
+    font-size: 11px;
+    margin-inline-start: 4px;
+    text-transform: none;
+    letter-spacing: 0;
+  }
+  .tl-detail__diff-stat--add    { color: var(--color-intent-success); }
+  .tl-detail__diff-stat--remove { color: var(--color-intent-error); }
+
+  .tl-diff {
+    margin: 0;
+    border-radius: var(--radius-md);
+    background: rgba(12, 10, 8, 0.78);
+    border: 1px solid rgba(158, 124, 90, 0.14);
+    font-family: var(--font-family-mono);
+    font-size: 11.5px;
+    line-height: 1.55;
+    overflow: auto;
+    max-height: 420px;
+  }
+  .tl-diff__line {
+    display: flex;
+    gap: 6px;
+    padding: 0 10px;
+    white-space: pre;
+  }
+  .tl-diff__gutter {
+    flex: 0 0 12px;
+    text-align: center;
+    color: var(--color-text-muted);
+    user-select: none;
+  }
+  .tl-diff__text {
+    flex: 1;
+    min-width: 0;
+    color: rgba(243, 234, 217, 0.9);
+  }
+  .tl-diff__line--add {
+    background: rgba(93, 155, 74, 0.14);
+  }
+  .tl-diff__line--add .tl-diff__gutter,
+  .tl-diff__line--add .tl-diff__text { color: var(--color-intent-success); }
+  .tl-diff__line--remove {
+    background: rgba(196, 80, 64, 0.14);
+  }
+  .tl-diff__line--remove .tl-diff__gutter,
+  .tl-diff__line--remove .tl-diff__text { color: var(--color-intent-error); }
+  .tl-diff__line--equal { opacity: 0.85; }
+
   .event-inspector__body {
     min-height: 0;
     flex: 1;
