@@ -1201,6 +1201,10 @@ public struct ManagedSessionSnapshot: Codable, Equatable, Identifiable, Sendable
         case "degraded":
             return .degraded
         case "attached":
+            let normalizedPhase = phase?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if normalizedPhase.isEmpty {
+                return .idle
+            }
             // Unknown attached phases should stay non-interruptible until
             // we explicitly classify them, rather than implying it's the
             // user's turn.

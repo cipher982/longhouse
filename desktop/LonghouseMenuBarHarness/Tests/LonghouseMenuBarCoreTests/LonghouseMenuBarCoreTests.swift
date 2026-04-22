@@ -742,6 +742,26 @@ struct LonghouseMenuBarCoreTests {
     }
 
     @Test
+    func attachedManagedSessionWithoutPhaseDefaultsToIdleAttention() {
+        let session = ManagedSessionSnapshot(
+            sessionId: "sess-missing-phase",
+            provider: "codex",
+            workspaceLabel: "assistants-service",
+            branch: nil,
+            state: "attached",
+            phase: nil,
+            phaseObservedAt: nil,
+            lastActivityAt: "2026-04-22T02:43:47Z",
+            bridgeStatus: "ready",
+            bridgePid: 95434,
+            bridgeHeartbeatAt: "2026-04-22T02:43:47Z",
+            reasonCodes: []
+        )
+
+        #expect(session.menuBarAttentionKind == .idle)
+    }
+
+    @Test
     @MainActor
     func managedPhaseContractRendersStablePills() throws {
         let outputDirectory = try makeFakeHomeDirectory()
