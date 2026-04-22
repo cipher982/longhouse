@@ -79,6 +79,19 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
             tool_name TEXT,
             source TEXT NOT NULL,
             observed_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS managed_session_state (
+            session_id TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            workspace_path TEXT,
+            workspace_label TEXT,
+            phase_kind TEXT,
+            tool_name TEXT,
+            phase_source TEXT,
+            phase_observed_at TEXT,
+            last_activity_at TEXT,
+            updated_at TEXT NOT NULL
         );",
     )?;
 
@@ -102,7 +115,10 @@ pub fn open_db(db_path: Option<&Path>) -> Result<Connection> {
          WHERE status = 'pending';
 
          CREATE INDEX IF NOT EXISTS idx_session_phase_provider_observed
-         ON session_phase_state(provider, observed_at DESC);",
+         ON session_phase_state(provider, observed_at DESC);
+
+         CREATE INDEX IF NOT EXISTS idx_managed_session_state_provider_updated
+         ON managed_session_state(provider, updated_at DESC);",
     )?;
 
     tracing::debug!("Opened shipper DB: {}", path.display());
