@@ -1070,7 +1070,11 @@
   }
 
   /* --- Shared --- */
-  .timeline-pane__list { gap: 2px; }
+  .timeline-pane__list.timeline-events {
+    gap: 2px;
+    align-items: stretch;
+    padding-inline: var(--space-4);
+  }
 
   .tl-chip {
     display: inline-flex;
@@ -1185,26 +1189,29 @@
   /* --- Action cards: compact, single header line, accent stripe. --- */
   .tl-action {
     position: relative;
-    display: flex;
-    flex-direction: column;
+    display: block;
     border-radius: var(--radius-md);
     max-width: 80ch;
     margin-inline: auto;
     width: 100%;
-    overflow: hidden;
     transition: background-color var(--motion-duration-fast) var(--motion-easing-standard);
   }
   .tl-action:hover { background: rgba(255,255,255,0.02); }
   .tl-action.is-selected { background: rgba(212, 184, 122, 0.07); }
   .tl-action.is-expanded { background: rgba(18, 11, 9, 0.55); }
   .tl-action__head {
-    all: unset;
     display: flex;
     align-items: center;
     gap: var(--space-2);
     padding: 7px 10px 7px 14px;
     cursor: pointer;
     min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
   }
   .tl-action__accent {
     position: absolute;
@@ -1273,8 +1280,7 @@
 
   /* --- Context lines: a single indented ↳ row, no card. --- */
   .tl-context {
-    display: flex;
-    flex-direction: column;
+    display: block;
     max-width: 80ch;
     margin-inline: auto;
     width: 100%;
@@ -1283,13 +1289,17 @@
   .tl-context.is-selected { background: rgba(212, 184, 122, 0.06); }
   .tl-context.is-expanded { background: rgba(18, 11, 9, 0.4); }
   .tl-context__head {
-    all: unset;
     display: flex;
     align-items: baseline;
     gap: 8px;
     padding: 4px 10px 4px 14px;
     cursor: pointer;
     min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
     font-family: var(--font-family-mono);
     font-size: 12px;
     line-height: 1.6;
@@ -1310,8 +1320,7 @@
 
   /* --- Noise chip: "Explored Read × 3, Grep × 2" --- */
   .tl-noise {
-    display: flex;
-    flex-direction: column;
+    display: block;
     max-width: 80ch;
     margin-inline: auto;
     width: 100%;
@@ -1320,7 +1329,6 @@
   .tl-noise.is-selected { background: rgba(212, 184, 122, 0.06); }
   .tl-noise.is-expanded { background: rgba(18, 11, 9, 0.45); }
   .tl-noise__head {
-    all: unset;
     display: flex;
     align-items: baseline;
     gap: 8px;
@@ -1330,6 +1338,11 @@
     font-size: 12px;
     line-height: 1.6;
     min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
   }
   .tl-noise__head:hover { background: rgba(255,255,255,0.02); border-radius: var(--radius-md); }
   .tl-noise__arrow { color: var(--color-text-muted); opacity: 0.6; flex-shrink: 0; }
@@ -1370,7 +1383,6 @@
   .tl-noise__item { border-radius: 4px; }
   .tl-noise__item.is-expanded { background: rgba(18, 11, 9, 0.6); }
   .tl-noise__item-head {
-    all: unset;
     display: flex;
     align-items: baseline;
     gap: 8px;
@@ -1380,6 +1392,11 @@
     font-size: 11.5px;
     line-height: 1.55;
     min-width: 0;
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
   }
   .tl-noise__item-head:hover { background: rgba(255,255,255,0.02); border-radius: 4px; }
   .tl-noise__item-label { font-weight: var(--font-weight-semibold); flex-shrink: 0; }
