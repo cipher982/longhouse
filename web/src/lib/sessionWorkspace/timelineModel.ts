@@ -1,14 +1,21 @@
 import type { AgentEvent, AgentSessionProjectionItem } from "../../services/api/agents";
 import { parseUTC } from "../dateUtils";
 import type {
+  NoiseGroup,
   TimelineItem,
   TimelineModel,
   TimelineSeam,
   TimelineSelection,
-  ToolBatch,
   ToolInteraction,
 } from "./types";
 import { truncatePath } from "./formatters";
+import {
+  colorTokenToCss,
+  resolveToolInfo,
+  toolTier,
+  type ResolvedToolInfo,
+  type ToolTier,
+} from "./toolTiers.generated";
 
 export function isOutsideActiveContext(event: AgentEvent | null | undefined): boolean {
   return event?.in_active_context === false;
@@ -16,6 +23,28 @@ export function isOutsideActiveContext(event: AgentEvent | null | undefined): bo
 
 export function isAgentToolInteraction(interaction: ToolInteraction): boolean {
   return interaction.toolName.toLowerCase() === "agent";
+}
+
+export function getToolTier(interaction: ToolInteraction): ToolTier {
+  return toolTier(interaction.toolName);
+}
+
+/** Back-compat display info with CSS color strings for inline styles. */
+export function getToolDisplayInfo(toolName: string): {
+  icon: string;
+  color: string;
+  displayName: string;
+  mcpNamespace?: string;
+  tier: ToolTier;
+} {
+  const info: ResolvedToolInfo = resolveToolInfo(toolName);
+  return {
+    icon: info.icon,
+    color: colorTokenToCss(info.color),
+    displayName: info.label,
+    mcpNamespace: info.mcpNamespace,
+    tier: info.tier,
+  };
 }
 
 function buildTimelineSeam(item: AgentSessionProjectionItem): TimelineSeam {
@@ -49,97 +78,6 @@ function buildTimelineSeam(item: AgentSessionProjectionItem): TimelineSeam {
     description: `Everything below continues on ${childOrigin} from the saved split point in ${parentOrigin}.`,
     timestamp: item.timestamp,
   };
-}
-
-function parseMcpTool(name: string): { namespace: string; method: string } | null {
-  const parts = name.split("__");
-  if (parts.length === 3 && parts[0] === "mcp") {
-    return { namespace: parts[1], method: parts[2] };
-  }
-  return null;
-}
-
-export function getToolDisplayInfo(
-  toolName: string,
-): { icon: string; color: string; displayName: string; mcpNamespace?: string } {
-  const mcp = parseMcpTool(toolName);
-  if (mcp) {
-    const namespace = mcp.namespace.toLowerCase();
-    if (namespace.includes("longhouse") || namespace.includes("life-hub")) {
-      return {
-        icon: "O",
-        color: "var(--color-brand-primary)",
-        displayName: mcp.method,
-        mcpNamespace: mcp.namespace,
-      };
-    }
-    if (namespace.includes("browser")) {
-      return {
-        icon: "B",
-        color: "var(--color-neon-cyan)",
-        displayName: mcp.method,
-        mcpNamespace: mcp.namespace,
-      };
-    }
-    if (namespace.includes("search") || namespace.includes("web")) {
-      return {
-        icon: "S",
-        color: "var(--color-neon-secondary)",
-        displayName: mcp.method,
-        mcpNamespace: mcp.namespace,
-      };
-    }
-    if (namespace.includes("gdrive") || namespace.includes("gmail")) {
-      return {
-        icon: "G",
-        color: "var(--color-intent-success)",
-        displayName: mcp.method,
-        mcpNamespace: mcp.namespace,
-      };
-    }
-    return {
-      icon: "M",
-      color: "var(--color-text-secondary)",
-      displayName: mcp.method,
-      mcpNamespace: mcp.namespace,
-    };
-  }
-
-  switch (toolName.toLowerCase()) {
-    case "agent":
-      return { icon: "A", color: "var(--color-text-tertiary)", displayName: "Agent" };
-    case "bash":
-    case "exec_command":
-    case "shell":
-    case "shell_command":
-    case "run_shell_command":
-    case "write_stdin":
-      return { icon: "$", color: "var(--color-intent-warning)", displayName: toolName };
-    case "read":
-    case "read_file":
-      return { icon: "R", color: "var(--color-neon-cyan)", displayName: toolName };
-    case "write":
-    case "create_file":
-      return { icon: "W", color: "var(--color-intent-success)", displayName: toolName };
-    case "edit":
-    case "str_replace_editor":
-      return { icon: "E", color: "var(--color-brand-primary)", displayName: toolName };
-    case "grep":
-      return { icon: "~", color: "var(--color-text-secondary)", displayName: toolName };
-    case "glob":
-      return { icon: "*", color: "var(--color-text-secondary)", displayName: toolName };
-    case "task":
-      return { icon: "T", color: "var(--color-neon-secondary)", displayName: toolName };
-    case "todowrite":
-    case "update_plan":
-      return { icon: "+", color: "var(--color-brand-accent)", displayName: toolName };
-    default:
-      return {
-        icon: (toolName[0] || " ").toUpperCase(),
-        color: "var(--color-text-secondary)",
-        displayName: toolName,
-      };
-  }
 }
 
 export function parseLonghouseOutput(
@@ -216,6 +154,10 @@ export function getToolDuration(callEvent: AgentEvent | null, resultEvent: Agent
   return `${(diffMs / 1000).toFixed(1)}s`;
 }
 
+/**
+ * Short one-line label for a tool call. Prefers the most semantic input field
+ * (file path, command, query) over raw JSON.
+ */
 export function getToolSummary(interaction: ToolInteraction): string {
   const { callEvent, resultEvent } = interaction;
 
@@ -255,6 +197,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
   const eventIdToSelectionKey = new Map<number, string>();
   const events: AgentEvent[] = [];
 
+  // Pass 1: collect events and pair assistant→tool_result by tool_call_id.
   for (const projectionItem of projectionItems) {
     if (projectionItem.kind !== "event" || !projectionItem.event) continue;
     const event = projectionItem.event;
@@ -303,6 +246,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     }
   }
 
+  // Pass 2: flatten projection into a linear timeline of individual items.
   const items: TimelineItem[] = [];
   const toolItems: ToolInteraction[] = [];
 
@@ -314,10 +258,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
 
     const event = projectionItem.event;
     if (!event) continue;
-
-    // Hide compaction metadata events (internal transcript bookkeeping, not user-facing)
     if (event.role === "system") continue;
-
     if (event.role === "tool" && absorbedResultIds.has(event.id)) continue;
 
     if (event.role === "user") {
@@ -351,68 +292,57 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     items.push({ kind: "message", event });
   }
 
+  // Pass 3: collapse runs of 2+ consecutive noise-tier tools into a single
+  // `noise_group` row. Context and action tools are boundaries (they keep
+  // their own row). A single noise call also stays as a tool row — one row
+  // is already compact enough; no point hiding it behind a chip.
   const groupedItems: TimelineItem[] = [];
-  const toolBatches: ToolBatch[] = [];
-  const batchByInteractionKey = new Map<string, ToolBatch>();
-  const batchWindowMs = 1000;
-  let index = 0;
+  const noiseGroups: NoiseGroup[] = [];
+  const groupByInteractionKey = new Map<string, NoiseGroup>();
 
-  while (index < items.length) {
-    const item = items[index];
-    if (item.kind !== "tool") {
-      groupedItems.push(item);
-      index += 1;
+  let buffer: ToolInteraction[] = [];
+
+  const flush = () => {
+    if (buffer.length === 0) return;
+    if (buffer.length === 1) {
+      groupedItems.push({ kind: "tool", interaction: buffer[0] });
+    } else {
+      const group: NoiseGroup = {
+        key: `noise:${buffer[0].anchorId}`,
+        interactions: [...buffer],
+        timestamp: buffer[0].timestamp,
+        anchorId: buffer[0].anchorId,
+      };
+      groupedItems.push({ kind: "noise_group", group });
+      noiseGroups.push(group);
+      for (const interaction of buffer) {
+        groupByInteractionKey.set(interaction.key, group);
+      }
+    }
+    buffer = [];
+  };
+
+  for (const item of items) {
+    if (item.kind === "tool" && getToolTier(item.interaction) === "noise") {
+      buffer.push(item.interaction);
       continue;
     }
-
-    const batchTimestamp = parseUTC(item.interaction.timestamp).getTime();
-    const interactions: ToolInteraction[] = [item.interaction];
-    let nextIndex = index + 1;
-
-    while (nextIndex < items.length && items[nextIndex].kind === "tool") {
-      const nextItem = items[nextIndex] as { kind: "tool"; interaction: ToolInteraction };
-      const nextTimestamp = parseUTC(nextItem.interaction.timestamp).getTime();
-      if (nextTimestamp - batchTimestamp > batchWindowMs) break;
-      interactions.push(nextItem.interaction);
-      nextIndex += 1;
-    }
-
-    if (interactions.length >= 2) {
-      const batch: ToolBatch = {
-        key: `batch:${interactions[0].anchorId}`,
-        interactions,
-        timestamp: item.interaction.timestamp,
-        anchorId: interactions[0].anchorId,
-      };
-      groupedItems.push({ kind: "tool_batch", batch });
-      toolBatches.push(batch);
-      for (const interaction of interactions) {
-        batchByInteractionKey.set(interaction.key, batch);
-      }
-    } else {
-      groupedItems.push(item);
-    }
-
-    index = nextIndex;
+    flush();
+    groupedItems.push(item);
   }
+  flush();
 
+  // Pass 4: selection map.
   const selectionMap = new Map<string, TimelineSelection>();
   const eventIdToRowId = new Map<number, string>();
 
   for (const item of groupedItems) {
-    if (item.kind === "seam") {
-      continue;
-    }
+    if (item.kind === "seam") continue;
 
     if (item.kind === "message") {
       const key = `message:${item.event.id}`;
       const rowId = `event-${item.event.id}`;
-      selectionMap.set(key, {
-        kind: "message",
-        key,
-        rowId,
-        event: item.event,
-      });
+      selectionMap.set(key, { kind: "message", key, rowId, event: item.event });
       eventIdToRowId.set(item.event.id, rowId);
       continue;
     }
@@ -425,42 +355,28 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
         key,
         rowId,
         interaction: item.interaction,
-        parentBatchKey: null,
+        parentGroupKey: null,
       });
-      if (item.interaction.callEvent) {
-        eventIdToRowId.set(item.interaction.callEvent.id, rowId);
-      }
-      if (item.interaction.resultEvent) {
-        eventIdToRowId.set(item.interaction.resultEvent.id, rowId);
-      }
+      if (item.interaction.callEvent) eventIdToRowId.set(item.interaction.callEvent.id, rowId);
+      if (item.interaction.resultEvent) eventIdToRowId.set(item.interaction.resultEvent.id, rowId);
       continue;
     }
 
-    const batchKey = `batch:${item.batch.key}`;
-    const rowId = `event-${item.batch.anchorId}`;
-    selectionMap.set(batchKey, {
-      kind: "tool_batch",
-      key: batchKey,
-      rowId,
-      batch: item.batch,
-    });
+    const groupKey = `group:${item.group.key}`;
+    const rowId = `event-${item.group.anchorId}`;
+    selectionMap.set(groupKey, { kind: "noise_group", key: groupKey, rowId, group: item.group });
 
-    for (const interaction of item.batch.interactions) {
+    for (const interaction of item.group.interactions) {
       const key = `tool:${interaction.key}`;
       selectionMap.set(key, {
         kind: "tool",
         key,
         rowId,
         interaction,
-        parentBatchKey: item.batch.key,
+        parentGroupKey: item.group.key,
       });
-
-      if (interaction.callEvent) {
-        eventIdToRowId.set(interaction.callEvent.id, rowId);
-      }
-      if (interaction.resultEvent) {
-        eventIdToRowId.set(interaction.resultEvent.id, rowId);
-      }
+      if (interaction.callEvent) eventIdToRowId.set(interaction.callEvent.id, rowId);
+      if (interaction.resultEvent) eventIdToRowId.set(interaction.resultEvent.id, rowId);
     }
   }
 
@@ -471,12 +387,11 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
         eventIdToRowId.set(eventId, selection.rowId);
         continue;
       }
-
-      const orphanBatch = selectionKey.startsWith("tool:")
-        ? batchByInteractionKey.get(selectionKey.slice("tool:".length))
+      const orphanGroup = selectionKey.startsWith("tool:")
+        ? groupByInteractionKey.get(selectionKey.slice("tool:".length))
         : null;
-      if (orphanBatch) {
-        eventIdToRowId.set(eventId, `event-${orphanBatch.anchorId}`);
+      if (orphanGroup) {
+        eventIdToRowId.set(eventId, `event-${orphanGroup.anchorId}`);
       }
     }
   }
@@ -485,7 +400,7 @@ export function buildTimelineModel(projectionItems: AgentSessionProjectionItem[]
     events,
     items: groupedItems,
     toolItems,
-    toolBatches,
+    noiseGroups,
     selectionMap,
     eventIdToSelectionKey,
     eventIdToRowId,
@@ -496,21 +411,14 @@ export function getPreferredSelectionKey(item: TimelineItem): string | null {
   if (item.kind === "seam") return null;
   if (item.kind === "message") return `message:${item.event.id}`;
   if (item.kind === "tool") return `tool:${item.interaction.key}`;
-  return `batch:${item.batch.key}`;
+  return `group:${item.group.key}`;
 }
 
 export function timelineItemContainsSelection(item: TimelineItem, selectionKey: string | null): boolean {
   if (!selectionKey) return false;
   if (item.kind === "seam") return false;
-
-  if (item.kind === "message") {
-    return selectionKey === `message:${item.event.id}`;
-  }
-
-  if (item.kind === "tool") {
-    return selectionKey === `tool:${item.interaction.key}`;
-  }
-
-  if (selectionKey === `batch:${item.batch.key}`) return true;
-  return item.batch.interactions.some((interaction) => selectionKey === `tool:${interaction.key}`);
+  if (item.kind === "message") return selectionKey === `message:${item.event.id}`;
+  if (item.kind === "tool") return selectionKey === `tool:${item.interaction.key}`;
+  if (selectionKey === `group:${item.group.key}`) return true;
+  return item.group.interactions.some((interaction) => selectionKey === `tool:${interaction.key}`);
 }
