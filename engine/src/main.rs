@@ -2,6 +2,7 @@ mod bench;
 mod build_identity;
 mod codex_app_server_canary;
 mod codex_bridge;
+mod codex_ws_relay;
 mod commands;
 mod config;
 mod daemon;
