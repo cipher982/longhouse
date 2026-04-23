@@ -1103,14 +1103,16 @@ test.describe("Session Detail Page", () => {
       )
       .toBeLessThan(storedLayout.sidebarWidth - 20);
 
-    // Inspector pane was removed: tool rows now expand inline instead of
-    // opening a side rail. Sanity-check that clicking a tool row toggles
-    // its inline detail (opens+closes) without the old inspector resize
-    // dance.
+    // Inspector pane was removed: tool rows now expand inline. Sanity-check
+    // that clicking the tool-row *header* toggles its inline detail
+    // (opens+closes). Scope the click to the header button — after expand,
+    // the row grows tall and a naive .click() on the row lands inside the
+    // detail pane, not on the toggle.
     const firstTool = page.locator('[data-row-kind="tool"]').first();
-    await firstTool.click();
+    const firstToolHead = firstTool.locator(".tl-action__head");
+    await firstToolHead.click();
     await expect(firstTool).toHaveClass(/is-expanded/);
-    await firstTool.click();
+    await firstToolHead.click();
     await expect(firstTool).not.toHaveClass(/is-expanded/);
   });
 
