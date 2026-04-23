@@ -319,6 +319,15 @@ enum Commands {
         /// disconnect path on unpatched Codex. 0 disables throttling.
         #[arg(long, default_value = "0")]
         ws_read_throttle_ms: u64,
+
+        /// Insert a drain-and-forward TCP relay between codex's WS listener
+        /// and the canary client. The relay sets SO_RCVBUF/SO_SNDBUF to the
+        /// platform max on all sockets so kernel buffers stay generous,
+        /// giving codex's internal mpsc(128) room to flush. Experiment to
+        /// see whether this prevents the slow-connection disconnect bug
+        /// without forking codex.
+        #[arg(long)]
+        proxy_codex_ws: bool,
     },
 
     /// Bind a transcript path to a managed Longhouse session ID.
@@ -752,6 +761,7 @@ fn main() -> anyhow::Result<()> {
             keep_home,
             verify_hooks,
             ws_read_throttle_ms,
+            proxy_codex_ws,
         } => {
             let rt = tokio::runtime::Runtime::new()?;
             let summary = rt.block_on(run_codex_app_server_canary(CanaryConfig {
@@ -785,6 +795,7 @@ fn main() -> anyhow::Result<()> {
                 keep_home,
                 verify_hooks,
                 ws_read_throttle_ms,
+                proxy_codex_ws,
             }))?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&summary)?);

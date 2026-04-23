@@ -150,6 +150,13 @@ cmd=(
   --remote-tui-subscribe-phase "$SUBSCRIBE_PHASE"
   --remote-tui-log "$REMOTE_TUI_LOG"
   --ws-read-throttle-ms "$WS_READ_THROTTLE_MS"
+)
+
+if [[ "${PROXY_CODEX_WS:-0}" == "1" ]]; then
+  cmd+=(--proxy-codex-ws)
+fi
+
+cmd+=(
   --log-jsonl "$JSONL_LOG"
   --json
 )
