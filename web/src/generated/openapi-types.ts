@@ -3781,6 +3781,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/agents/turns/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Summarize Turns
+         * @description Summarize recent completed managed turns overall and by provider.
+         */
+        get: operations["summarize_turns_agents_turns_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/agents/backfill-summaries": {
         parameters: {
             query?: never;
@@ -6021,6 +6041,52 @@ export interface components {
          * @enum {string}
          */
         ManagedSessionTransport: "claude_channel_bridge" | "codex_app_server";
+        /** ManagedTurnProviderSummaryResponse */
+        ManagedTurnProviderSummaryResponse: {
+            /** Completed Turns */
+            completed_turns: number;
+            /** Slow Turns */
+            slow_turns: number;
+            /** Durable Turns */
+            durable_turns: number;
+            /** Terminal Only Turns */
+            terminal_only_turns: number;
+            submit_to_send_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            submit_to_active_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            submit_to_terminal_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            active_to_terminal_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            terminal_to_durable_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            total_turn_time_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            /** Provider */
+            provider: string;
+        };
+        /** ManagedTurnSummaryResponse */
+        ManagedTurnSummaryResponse: {
+            /** Completed Turns */
+            completed_turns: number;
+            /** Slow Turns */
+            slow_turns: number;
+            /** Durable Turns */
+            durable_turns: number;
+            /** Terminal Only Turns */
+            terminal_only_turns: number;
+            submit_to_send_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            submit_to_active_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            submit_to_terminal_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            active_to_terminal_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            terminal_to_durable_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+            total_turn_time_ms: components["schemas"]["TurnLatencyPercentilesResponse"];
+        };
+        /** ManagedTurnsSummaryEnvelopeResponse */
+        ManagedTurnsSummaryEnvelopeResponse: {
+            /** Hours Back */
+            hours_back: number;
+            /** Slow Threshold Ms */
+            slow_threshold_ms: number;
+            summary: components["schemas"]["ManagedTurnSummaryResponse"];
+            /** Providers */
+            providers: components["schemas"]["ManagedTurnProviderSummaryResponse"][];
+        };
         /** MessageCreate */
         MessageCreate: {
             /** Role */
@@ -8635,6 +8701,15 @@ export interface components {
             config?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** TurnLatencyPercentilesResponse */
+        TurnLatencyPercentilesResponse: {
+            /** P50 */
+            p50?: number | null;
+            /** P95 */
+            p95?: number | null;
+            /** Max */
+            max?: number | null;
         };
         /**
          * UsageLimit
@@ -15412,7 +15487,7 @@ export interface operations {
                 project?: string | null;
                 /** @description Filter by device */
                 device_id?: string | null;
-                /** @description Filter by turn state */
+                /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
                 state?: string | null;
                 /** @description Filter by current machine transport state */
                 machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
@@ -15440,6 +15515,52 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SlowTurnsListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    summarize_turns_agents_turns_summary_get: {
+        parameters: {
+            query?: {
+                /** @description Filter by session provider */
+                provider?: string | null;
+                /** @description Filter by project */
+                project?: string | null;
+                /** @description Filter by device */
+                device_id?: string | null;
+                /** @description Filter by completed turn state (for example terminal|durable|failed). Only turns with terminal_at or durable_at are eligible. */
+                state?: string | null;
+                /** @description Filter by current machine transport state */
+                machine_status?: ("healthy" | "degraded" | "offline" | "broken") | null;
+                /** @description Count turns at or above this total duration as slow */
+                slow_threshold_ms?: number;
+                /** @description Only consider completed turns submitted within this recent window */
+                hours_back?: number;
+                /** @description Treat heartbeats older than this as offline when enriching machine status */
+                stale_after_seconds?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedTurnsSummaryEnvelopeResponse"];
                 };
             };
             /** @description Validation Error */
