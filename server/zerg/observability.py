@@ -52,18 +52,30 @@ def _otlp_endpoint_configured() -> bool:
 
 def _build_resource_attributes() -> dict[str, bool | str]:
     settings = get_settings()
-    identity = build_info.load()
-    return {
+    attributes: dict[str, bool | str] = {
         "service.name": "longhouse-runtime",
-        "service.version": identity.version,
         "service.instance.id": socket.gethostname(),
         "deployment.environment.name": settings.environment or settings.app_mode.value,
         "longhouse.app_mode": settings.app_mode.value,
-        "longhouse.build.channel": identity.channel,
-        "longhouse.build.commit": identity.commit_short,
-        "longhouse.build.dirty": identity.dirty,
-        "longhouse.build.qualified_version": identity.qualified_version,
     }
+    try:
+        identity = build_info.load()
+    except build_info.BuildIdentityMissing as exc:
+        logger.warning("OpenTelemetry resource attributes missing build identity; continuing without build metadata: %s", exc)
+        attributes["longhouse.build.identity_available"] = False
+        return attributes
+
+    attributes.update(
+        {
+            "service.version": identity.version,
+            "longhouse.build.identity_available": True,
+            "longhouse.build.channel": identity.channel,
+            "longhouse.build.commit": identity.commit_short,
+            "longhouse.build.dirty": identity.dirty,
+            "longhouse.build.qualified_version": identity.qualified_version,
+        }
+    )
+    return attributes
 
 
 def _normalize_attribute_value(value: object) -> bool | float | int | str | tuple[bool | float | int | str, ...]:

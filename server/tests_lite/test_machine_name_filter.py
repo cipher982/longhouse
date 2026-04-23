@@ -114,6 +114,22 @@ def test_filter_sessions_by_machine_name(tmp_path):
         assert total == 0
 
 
+def test_device_id_filter_accepts_device_ids_and_legacy_machine_names(tmp_path):
+    Session = _make_db(tmp_path)
+    with Session() as db:
+        store = AgentsStore(db)
+        _ingest(store, "work-macbook")
+        _ingest(store, "home-server")
+
+        sessions, total = store.list_sessions(device_id="device-work-macbook", hide_autonomous=False)
+        assert total == 1
+        assert sessions[0].device_id == "device-work-macbook"
+
+        sessions, total = store.list_sessions(device_id="work-macbook", hide_autonomous=False)
+        assert total == 1
+        assert sessions[0].environment == "work-macbook"
+
+
 def test_machines_excludes_null_environment(tmp_path):
     """Sessions with null environment are excluded from machine list."""
     Session = _make_db(tmp_path)

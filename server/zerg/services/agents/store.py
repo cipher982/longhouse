@@ -1980,7 +1980,11 @@ class AgentsStore:
         if provider:
             stmt = stmt.where(AgentSession.provider == provider)
         if device_id:
-            stmt = stmt.where(AgentSession.device_id == device_id)
+            # The browser now writes `device_id=` for machine filters, but the
+            # timeline filter API still returns legacy machine labels sourced
+            # from `environment`. Accept either shape while old links and
+            # imported sessions are still in circulation.
+            stmt = stmt.where(or_(AgentSession.device_id == device_id, AgentSession.environment == device_id))
         if since:
             stmt = stmt.where(time_anchor >= since)
         if until:
