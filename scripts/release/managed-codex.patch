@@ -29,11 +29,12 @@ index 75a4971..a028aa8 100644
 
  mod remote_control;
  mod stdio;
-@@ -285,6 +290,29 @@ fn disconnect_connection(
+@@ -285,6 +290,30 @@ fn disconnect_connection(
      false
  }
 
 +fn server_notification_requires_delivery(notification: &ServerNotification) -> bool {
++    // Conservative allowlist: new notification variants default to best-effort until reviewed.
 +    matches!(
 +        notification,
 +        ServerNotification::TurnCompleted(_)
