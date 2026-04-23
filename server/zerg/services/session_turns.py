@@ -66,7 +66,7 @@ class SessionTurnSnapshot:
 
 
 @dataclass(frozen=True)
-class SlowSessionTurnSummary:
+class ManagedCompletedTurnSummary:
     session: AgentSession
     turn: SessionTurn
     completed_at: datetime
@@ -231,7 +231,49 @@ def list_slow_session_turns(
     stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
     limit: int = 20,
     offset: int = 0,
-) -> tuple[list[SlowSessionTurnSummary], int]:
+) -> tuple[list[ManagedCompletedTurnSummary], int]:
+    summaries = list_managed_completed_turns(
+        db,
+        provider=provider,
+        project=project,
+        device_id=device_id,
+        state=state,
+        machine_status=machine_status,
+        min_total_turn_time_ms=min_total_turn_time_ms,
+        hours_back=hours_back,
+        stale_after_seconds=stale_after_seconds,
+    )
+    # Keep the threshold authoritative even if a future dialect cannot express
+    # the SQL pre-filter and list_managed_completed_turns returns the broader
+    # completed-turn slice.
+    summaries = [item for item in summaries if item.total_turn_time_ms >= min_total_turn_time_ms]
+    summaries.sort(
+        key=lambda item: (
+            -item.total_turn_time_ms,
+            -item.completed_at.timestamp(),
+            -int(item.turn.id),
+        )
+    )
+    # total reflects the fully filtered slow-turn set, including current
+    # machine-status enrichment that is only available after the heartbeat map
+    # join in Python.
+    total = len(summaries)
+    page = summaries[max(0, offset) : max(0, offset) + max(1, limit)]
+    return page, total
+
+
+def list_managed_completed_turns(
+    db: Session,
+    *,
+    provider: str | None = None,
+    project: str | None = None,
+    device_id: str | None = None,
+    state: str | None = None,
+    machine_status: str | None = None,
+    min_total_turn_time_ms: int | None = None,
+    hours_back: int = 24,
+    stale_after_seconds: int = DEFAULT_MACHINE_HEARTBEAT_STALE_AFTER_SECONDS,
+) -> list[ManagedCompletedTurnSummary]:
     submitted_after = utc_now() - timedelta(hours=max(1, hours_back))
     completed_at_expr = func.coalesce(SessionTurn.durable_at, SessionTurn.terminal_at)
     total_turn_time_expr = _completed_turn_time_ms_sql(db)
@@ -253,7 +295,7 @@ def list_slow_session_turns(
         query = query.filter(AgentSession.device_id == device_id)
     if state:
         query = query.filter(SessionTurn.state == state)
-    if total_turn_time_expr is not None:
+    if min_total_turn_time_ms is not None and total_turn_time_expr is not None:
         query = query.filter(total_turn_time_expr >= int(min_total_turn_time_ms))
 
     rows = query.order_by(completed_at_expr.desc(), SessionTurn.id.desc()).all()
@@ -264,17 +306,17 @@ def list_slow_session_turns(
         stale_after_seconds=stale_after_seconds,
     )
 
-    summaries: list[SlowSessionTurnSummary] = []
+    summaries: list[ManagedCompletedTurnSummary] = []
     for turn, session in rows:
         completed_at = normalize_utc(turn.durable_at) or normalize_utc(turn.terminal_at)
         total_turn_time_ms = _completed_turn_time_ms(turn)
-        if completed_at is None or total_turn_time_ms is None or total_turn_time_ms < min_total_turn_time_ms:
+        if completed_at is None or total_turn_time_ms is None:
             continue
         machine = machine_map.get(str(session.device_id or "").strip()) if session.device_id else None
         if machine_status and (machine is None or machine.status != machine_status):
             continue
         summaries.append(
-            SlowSessionTurnSummary(
+            ManagedCompletedTurnSummary(
                 session=session,
                 turn=turn,
                 completed_at=completed_at,
@@ -282,20 +324,7 @@ def list_slow_session_turns(
                 machine=machine,
             )
         )
-
-    summaries.sort(
-        key=lambda item: (
-            -item.total_turn_time_ms,
-            -item.completed_at.timestamp(),
-            -int(item.turn.id),
-        )
-    )
-    # total reflects the fully filtered slow-turn set, including current
-    # machine-status enrichment that is only available after the heartbeat map
-    # join in Python.
-    total = len(summaries)
-    page = summaries[max(0, offset) : max(0, offset) + max(1, limit)]
-    return page, total
+    return summaries
 
 
 def get_session_turn_snapshot(
@@ -348,8 +377,9 @@ def _completed_turn_time_ms_sql(db: Session):
         return func.round((func.julianday(completed_at_expr) - func.julianday(SessionTurn.user_submitted_at)) * 86400000)
     if dialect_name == "postgresql":
         return func.floor(func.extract("epoch", completed_at_expr - SessionTurn.user_submitted_at) * 1000)
-    # Unknown dialects still stay correct because Python re-checks the
-    # threshold for every row after load; this only loses the SQL pre-filter.
+    # Unknown dialects still stay correct because list_slow_session_turns
+    # re-checks the threshold in Python after load; this only loses the SQL
+    # pre-filter.
     return None
 
 

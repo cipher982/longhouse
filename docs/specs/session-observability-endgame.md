@@ -110,6 +110,7 @@ These read paths are how a human or agent should answer slowdown questions quick
 - `GET /api/agents/machines/health` answers "is the shipping path on this machine healthy right now?"
 - `GET /api/agents/sessions/{session_id}/turns` and turn detail answer "which phase of this specific turn was slow?"
 - `GET /api/agents/turns/slow` answers "show me recent slow managed turns across sessions, grouped by the metadata I care about."
+- `GET /api/agents/turns/summary` answers "what do recent managed-turn latency percentiles and slow-turn counts look like overall and by provider?"
 
 If a slowdown question still requires opening logs first, the product surface is incomplete.
 
@@ -192,3 +193,5 @@ Near-term slice success criteria:
 - `GET /api/agents/turns/slow` returns recent completed managed-turn outliers across sessions, ordered by slowest total turn time first.
 - Each slow-turn row includes canonical timing durations, session/provider/project/device identifiers, and the current machine transport state when available.
 - Operator flows can filter recent slow turns by provider, project, device, machine state, and slow threshold without joining turns and heartbeats by hand.
+- `GET /api/agents/turns/summary` returns recent completed managed-turn latency stats for the same filtered slice, including `p50/p95/max` percentiles for canonical timing milestones.
+- The summary surface includes both overall counts and by-provider breakdowns so operators can tell whether a slowdown is fleet-wide or isolated to one provider.

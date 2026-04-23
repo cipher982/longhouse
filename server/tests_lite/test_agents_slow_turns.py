@@ -25,6 +25,7 @@ from zerg.models.agents import AgentSession
 from zerg.models.agents import SessionTurn
 from zerg.services.session_turns import SESSION_TURN_STATE_ACTIVE
 from zerg.services.session_turns import SESSION_TURN_STATE_DURABLE
+from zerg.services.session_turns import SESSION_TURN_STATE_FAILED
 from zerg.services.session_turns import SESSION_TURN_STATE_TERMINAL
 
 
@@ -441,5 +442,402 @@ def test_slow_turns_route_supports_filters_machine_status_and_pagination(tmp_pat
         assert item["project"] == "zerg"
         assert item["machine"]["status"] == "broken"
         assert item["total_turn_time_ms"] == 50000
+
+        degraded = client.get(
+            "/agents/turns/slow"
+            "?provider=claude"
+            "&machine_status=degraded"
+            "&hours_back=24"
+            "&min_total_turn_time_ms=30000"
+            "&stale_after_seconds=3600"
+        )
+        assert degraded.status_code == 200, degraded.text
+        degraded_payload = degraded.json()
+        assert degraded_payload["total"] == 1
+        assert degraded_payload["turns"][0]["project"] == "hdr"
+        assert degraded_payload["turns"][0]["machine"]["status"] == "degraded"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_turn_summary_route_returns_overall_and_provider_percentiles(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        claude_a = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="broken-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        claude_b = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="broken-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        codex = _seed_session(
+            db,
+            provider="codex",
+            project="zerg",
+            device_id="healthy-machine",
+            managed_transport="codex_app_server",
+        )
+
+        _seed_turn(
+            db,
+            session_id=claude_a.id,
+            request_id="req-claude-a",
+            state=SESSION_TURN_STATE_DURABLE,
+            user_submitted_at=pinned_now - timedelta(hours=2),
+            send_accepted_at=pinned_now - timedelta(hours=2) + timedelta(seconds=1),
+            active_phase_observed_at=pinned_now - timedelta(hours=2) + timedelta(seconds=5),
+            terminal_at=pinned_now - timedelta(hours=2) + timedelta(seconds=70),
+            durable_at=pinned_now - timedelta(hours=2) + timedelta(seconds=72),
+        )
+        _seed_turn(
+            db,
+            session_id=claude_b.id,
+            request_id="req-claude-b",
+            state=SESSION_TURN_STATE_DURABLE,
+            user_submitted_at=pinned_now - timedelta(minutes=40),
+            send_accepted_at=pinned_now - timedelta(minutes=40) + timedelta(seconds=1),
+            active_phase_observed_at=pinned_now - timedelta(minutes=40) + timedelta(seconds=2),
+            terminal_at=pinned_now - timedelta(minutes=40) + timedelta(seconds=31),
+            durable_at=pinned_now - timedelta(minutes=40) + timedelta(seconds=32),
+        )
+        _seed_turn(
+            db,
+            session_id=codex.id,
+            request_id="req-codex",
+            state=SESSION_TURN_STATE_TERMINAL,
+            user_submitted_at=pinned_now - timedelta(hours=1),
+            send_accepted_at=pinned_now - timedelta(hours=1) + timedelta(seconds=1),
+            active_phase_observed_at=pinned_now - timedelta(hours=1) + timedelta(seconds=3),
+            terminal_at=pinned_now - timedelta(hours=1) + timedelta(seconds=45),
+        )
+
+        _seed_heartbeat(
+            db,
+            device_id="broken-machine",
+            received_at=pinned_now - timedelta(minutes=2),
+            spool_dead=1,
+        )
+        _seed_heartbeat(
+            db,
+            device_id="healthy-machine",
+            received_at=pinned_now - timedelta(minutes=2),
+        )
+
+    client, api_app_ref = _make_client(SessionLocal)
+    try:
+        response = client.get("/agents/turns/summary?hours_back=24&slow_threshold_ms=30000&stale_after_seconds=3600")
+        assert response.status_code == 200, response.text
+
+        payload = response.json()
+        assert payload["hours_back"] == 24
+        assert payload["slow_threshold_ms"] == 30000
+        assert payload["summary"] == {
+            "completed_turns": 3,
+            "slow_turns": 3,
+            "durable_turns": 2,
+            "terminal_only_turns": 1,
+            "submit_to_send_ms": {"p50": 1000, "p95": 1000, "max": 1000},
+            "submit_to_active_ms": {"p50": 3000, "p95": 4800, "max": 5000},
+            "submit_to_terminal_ms": {"p50": 45000, "p95": 67500, "max": 70000},
+            "active_to_terminal_ms": {"p50": 42000, "p95": 62700, "max": 65000},
+            "terminal_to_durable_ms": {"p50": 1500, "p95": 1950, "max": 2000},
+            "total_turn_time_ms": {"p50": 45000, "p95": 69300, "max": 72000},
+        }
+
+        assert payload["providers"] == [
+            {
+                "provider": "claude",
+                "completed_turns": 2,
+                "slow_turns": 2,
+                "durable_turns": 2,
+                "terminal_only_turns": 0,
+                "submit_to_send_ms": {"p50": 1000, "p95": 1000, "max": 1000},
+                "submit_to_active_ms": {"p50": 3500, "p95": 4850, "max": 5000},
+                "submit_to_terminal_ms": {"p50": 50500, "p95": 68050, "max": 70000},
+                "active_to_terminal_ms": {"p50": 47000, "p95": 63200, "max": 65000},
+                "terminal_to_durable_ms": {"p50": 1500, "p95": 1950, "max": 2000},
+                "total_turn_time_ms": {"p50": 52000, "p95": 70000, "max": 72000},
+            },
+            {
+                "provider": "codex",
+                "completed_turns": 1,
+                "slow_turns": 1,
+                "durable_turns": 0,
+                "terminal_only_turns": 1,
+                "submit_to_send_ms": {"p50": 1000, "p95": 1000, "max": 1000},
+                "submit_to_active_ms": {"p50": 3000, "p95": 3000, "max": 3000},
+                "submit_to_terminal_ms": {"p50": 45000, "p95": 45000, "max": 45000},
+                "active_to_terminal_ms": {"p50": 42000, "p95": 42000, "max": 42000},
+                "terminal_to_durable_ms": {"p50": None, "p95": None, "max": None},
+                "total_turn_time_ms": {"p50": 45000, "p95": 45000, "max": 45000},
+            },
+        ]
+
+        higher_threshold = client.get(
+            "/agents/turns/summary?hours_back=24&slow_threshold_ms=60000&stale_after_seconds=3600"
+        )
+        assert higher_threshold.status_code == 200, higher_threshold.text
+        higher_payload = higher_threshold.json()
+        assert higher_payload["summary"]["completed_turns"] == 3
+        assert higher_payload["summary"]["slow_turns"] == 1
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_turn_summary_route_respects_machine_status_and_state_filters(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        broken_a = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="broken-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        broken_b = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="broken-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        broken_terminal = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="broken-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        missing_heartbeat = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="missing-heartbeat-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        other_project = _seed_session(
+            db,
+            provider="claude",
+            project="hdr",
+            device_id="broken-machine",
+            managed_transport="claude_channel_bridge",
+        )
+
+        _seed_turn(
+            db,
+            session_id=broken_a.id,
+            request_id="req-broken-a",
+            state=SESSION_TURN_STATE_DURABLE,
+            user_submitted_at=pinned_now - timedelta(hours=3),
+            terminal_at=pinned_now - timedelta(hours=3) + timedelta(seconds=55),
+            durable_at=pinned_now - timedelta(hours=3) + timedelta(seconds=60),
+        )
+        _seed_turn(
+            db,
+            session_id=broken_b.id,
+            request_id="req-broken-b",
+            state=SESSION_TURN_STATE_DURABLE,
+            user_submitted_at=pinned_now - timedelta(minutes=30),
+            terminal_at=pinned_now - timedelta(minutes=30) + timedelta(seconds=45),
+            durable_at=pinned_now - timedelta(minutes=30) + timedelta(seconds=50),
+        )
+        _seed_turn(
+            db,
+            session_id=broken_terminal.id,
+            request_id="req-broken-terminal",
+            state=SESSION_TURN_STATE_TERMINAL,
+            user_submitted_at=pinned_now - timedelta(minutes=80),
+            terminal_at=pinned_now - timedelta(minutes=80) + timedelta(seconds=70),
+        )
+        _seed_turn(
+            db,
+            session_id=missing_heartbeat.id,
+            request_id="req-missing-heartbeat",
+            state=SESSION_TURN_STATE_DURABLE,
+            user_submitted_at=pinned_now - timedelta(minutes=65),
+            terminal_at=pinned_now - timedelta(minutes=65) + timedelta(seconds=70),
+            durable_at=pinned_now - timedelta(minutes=65) + timedelta(seconds=75),
+        )
+        _seed_turn(
+            db,
+            session_id=other_project.id,
+            request_id="req-other-project",
+            state=SESSION_TURN_STATE_DURABLE,
+            user_submitted_at=pinned_now - timedelta(minutes=20),
+            terminal_at=pinned_now - timedelta(minutes=20) + timedelta(seconds=85),
+            durable_at=pinned_now - timedelta(minutes=20) + timedelta(seconds=90),
+        )
+
+        _seed_heartbeat(
+            db,
+            device_id="broken-machine",
+            received_at=pinned_now - timedelta(minutes=2),
+            spool_dead=1,
+        )
+
+    client, api_app_ref = _make_client(SessionLocal)
+    try:
+        response = client.get(
+            "/agents/turns/summary"
+            "?provider=claude"
+            "&project=zerg"
+            "&state=durable"
+            "&machine_status=broken"
+            "&hours_back=24"
+            "&slow_threshold_ms=40000"
+            "&stale_after_seconds=3600"
+        )
+        assert response.status_code == 200, response.text
+
+        payload = response.json()
+        assert payload["summary"] == {
+            "completed_turns": 2,
+            "slow_turns": 2,
+            "durable_turns": 2,
+            "terminal_only_turns": 0,
+            "submit_to_send_ms": {"p50": None, "p95": None, "max": None},
+            "submit_to_active_ms": {"p50": None, "p95": None, "max": None},
+            "submit_to_terminal_ms": {"p50": 50000, "p95": 54500, "max": 55000},
+            "active_to_terminal_ms": {"p50": None, "p95": None, "max": None},
+            "terminal_to_durable_ms": {"p50": 5000, "p95": 5000, "max": 5000},
+            "total_turn_time_ms": {"p50": 55000, "p95": 59500, "max": 60000},
+        }
+        assert payload["providers"] == [
+            {
+                "provider": "claude",
+                "completed_turns": 2,
+                "slow_turns": 2,
+                "durable_turns": 2,
+                "terminal_only_turns": 0,
+                "submit_to_send_ms": {"p50": None, "p95": None, "max": None},
+                "submit_to_active_ms": {"p50": None, "p95": None, "max": None},
+                "submit_to_terminal_ms": {"p50": 50000, "p95": 54500, "max": 55000},
+                "active_to_terminal_ms": {"p50": None, "p95": None, "max": None},
+                "terminal_to_durable_ms": {"p50": 5000, "p95": 5000, "max": 5000},
+                "total_turn_time_ms": {"p50": 55000, "p95": 59500, "max": 60000},
+            }
+        ]
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_slow_turns_route_excludes_old_turns_and_preserves_total_for_overflow_offset(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        recent_session = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="recent-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        old_session = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="old-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        _seed_turn(
+            db,
+            session_id=recent_session.id,
+            request_id="req-recent",
+            state=SESSION_TURN_STATE_DURABLE,
+            user_submitted_at=pinned_now - timedelta(minutes=30),
+            terminal_at=pinned_now - timedelta(minutes=30) + timedelta(seconds=40),
+            durable_at=pinned_now - timedelta(minutes=30) + timedelta(seconds=42),
+        )
+        _seed_turn(
+            db,
+            session_id=old_session.id,
+            request_id="req-old",
+            state=SESSION_TURN_STATE_DURABLE,
+            user_submitted_at=pinned_now - timedelta(hours=3),
+            terminal_at=pinned_now - timedelta(hours=3) + timedelta(seconds=80),
+            durable_at=pinned_now - timedelta(hours=3) + timedelta(seconds=82),
+        )
+
+    client, api_app_ref = _make_client(SessionLocal)
+    try:
+        response = client.get("/agents/turns/slow?hours_back=1&min_total_turn_time_ms=30000&offset=5")
+        assert response.status_code == 200, response.text
+
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["turns"] == []
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_slow_turns_route_supports_completed_failed_state_filter(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 21, 0, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(session_turns_service, "utc_now", lambda: pinned_now)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        failed_session = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="failed-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        durable_session = _seed_session(
+            db,
+            provider="claude",
+            project="zerg",
+            device_id="durable-machine",
+            managed_transport="claude_channel_bridge",
+        )
+        failed_turn = _seed_turn(
+            db,
+            session_id=failed_session.id,
+            request_id="req-failed",
+            state=SESSION_TURN_STATE_FAILED,
+            user_submitted_at=pinned_now - timedelta(minutes=50),
+            terminal_at=pinned_now - timedelta(minutes=50) + timedelta(seconds=39),
+        )
+        _seed_turn(
+            db,
+            session_id=durable_session.id,
+            request_id="req-durable",
+            state=SESSION_TURN_STATE_DURABLE,
+            user_submitted_at=pinned_now - timedelta(minutes=40),
+            terminal_at=pinned_now - timedelta(minutes=40) + timedelta(seconds=55),
+            durable_at=pinned_now - timedelta(minutes=40) + timedelta(seconds=60),
+        )
+        failed_turn_id = int(failed_turn.id)
+
+    client, api_app_ref = _make_client(SessionLocal)
+    try:
+        response = client.get("/agents/turns/slow?hours_back=24&min_total_turn_time_ms=30000&state=failed")
+        assert response.status_code == 200, response.text
+
+        payload = response.json()
+        assert payload["total"] == 1
+        assert [item["turn_id"] for item in payload["turns"]] == [failed_turn_id]
+        assert payload["turns"][0]["state"] == SESSION_TURN_STATE_FAILED
+        assert payload["turns"][0]["completed_at"] == "2026-04-23T20:10:39Z"
+        assert payload["turns"][0]["timing"]["total_turn_time_ms"] == 39000
     finally:
         api_app_ref.dependency_overrides = {}
