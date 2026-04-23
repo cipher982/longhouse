@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 from cryptography.fernet import Fernet
@@ -16,6 +18,8 @@ from zerg.cli.main import app
 from zerg.cli.update_manager import InstallMetadata
 from zerg.cli.update_manager import UpdateCheckResult
 from zerg.services import machine_state as machine_state_service
+from zerg.services import shipper as shipper_service
+from zerg.services.shipper.service import Platform as ServicePlatform
 
 
 def test_doctor_reports_install_metadata(monkeypatch):
@@ -145,3 +149,81 @@ def test_check_config_tolerates_missing_machine_state(tmp_path, monkeypatch):
     results = doctor_cli._check_config()
 
     assert isinstance(results, list)
+
+
+def test_check_shipper_prefers_machine_repair_for_configured_machine(tmp_path, monkeypatch):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "cleanupPeriodDays": 90,
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "command": "/Users/test/.local/bin/longhouse-stop-hook",
+                                }
+                            ]
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    token_path = claude_dir / "token"
+    token_path.write_text("zdt_test", encoding="utf-8")
+    machine_state_service.write_machine_state(
+        base_dir=tmp_path / ".longhouse",
+        written_by="test",
+        runtime_url="https://demo.longhouse.test",
+        machine_name="cinder",
+    )
+
+    monkeypatch.setattr(doctor_cli, "_get_claude_dir", lambda: claude_dir)
+    monkeypatch.setattr(doctor_cli, "get_token_path", lambda _: token_path)
+    monkeypatch.setattr(shipper_service, "get_service_status", lambda: "stopped")
+    monkeypatch.setattr("zerg.services.shipper.service.detect_platform", lambda: ServicePlatform.LINUX)
+
+    results = doctor_cli._check_shipper()
+
+    service_result = next(result for result in results if result.label == "Machine agent service stopped")
+    assert service_result.detail == "Run: longhouse machine repair"
+
+
+def test_check_shipper_falls_back_to_connect_install_when_machine_unconfigured(tmp_path, monkeypatch):
+    claude_dir = tmp_path / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text(
+        json.dumps(
+            {
+                "cleanupPeriodDays": 90,
+                "hooks": {
+                    "Stop": [
+                        {
+                            "hooks": [
+                                {
+                                    "command": "/Users/test/.local/bin/longhouse-stop-hook",
+                                }
+                            ]
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    token_path = claude_dir / "token"
+    token_path.write_text("zdt_test", encoding="utf-8")
+
+    monkeypatch.setattr(doctor_cli, "_get_claude_dir", lambda: claude_dir)
+    monkeypatch.setattr(doctor_cli, "get_token_path", lambda _: token_path)
+    monkeypatch.setattr(shipper_service, "get_service_status", lambda: "stopped")
+    monkeypatch.setattr("zerg.services.shipper.service.detect_platform", lambda: ServicePlatform.LINUX)
+
+    results = doctor_cli._check_shipper()
+
+    service_result = next(result for result in results if result.label == "Machine agent service stopped")
+    assert service_result.detail == "Run: longhouse connect --install"

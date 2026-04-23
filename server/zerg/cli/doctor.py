@@ -27,6 +27,8 @@ from zerg.cli.update_manager import check_for_updates
 from zerg.cli.update_manager import current_installed_version
 from zerg.cli.update_manager import load_install_metadata
 from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.services.machine_repair import can_repair_machine_from_state
+from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.shipper.token import get_token_path
 
 # ---------------------------------------------------------------------------
@@ -81,6 +83,12 @@ def _get_claude_dir() -> Path:
     if config_dir:
         return Path(config_dir).expanduser()
     return Path.home() / ".claude"
+
+
+def _local_machine_repair_command(*, claude_dir: Path | None = None) -> str:
+    return recommended_machine_repair_command(
+        can_reconcile_from_state=can_repair_machine_from_state(claude_dir=str(claude_dir) if claude_dir else None)
+    )
 
 
 def _cmd_version(cmd: str) -> str | None:
@@ -301,6 +309,7 @@ def _check_shipper() -> list[CheckResult]:
     """Machine-agent checks: Claude sessions, device token, engine log, service."""
     results: list[CheckResult] = []
     claude_dir = _get_claude_dir()
+    repair_command = _local_machine_repair_command(claude_dir=claude_dir)
 
     # Claude Code sessions directory
     projects_dir = claude_dir / "projects"
@@ -333,7 +342,7 @@ def _check_shipper() -> list[CheckResult]:
         except Exception as exc:
             results.append(CheckResult(WARN, "Claude settings.json is unreadable", str(exc)))
     else:
-        results.append(CheckResult(WARN, "Claude settings.json not found", "Run: longhouse connect --install"))
+        results.append(CheckResult(WARN, "Claude settings.json not found", repair_command))
 
     if settings_data is not None:
         cleanup_days = settings_data.get("cleanupPeriodDays")
@@ -389,7 +398,7 @@ def _check_shipper() -> list[CheckResult]:
                 CheckResult(
                     WARN,
                     "Claude Stop hook missing the Longhouse machine agent",
-                    "Run: longhouse connect --install",
+                    repair_command,
                 )
             )
 
@@ -419,7 +428,7 @@ def _check_shipper() -> list[CheckResult]:
         except Exception:
             results.append(CheckResult(PASS, "Engine log exists"))
     else:
-        results.append(CheckResult(WARN, "No engine log found", "Run: longhouse connect --install"))
+        results.append(CheckResult(WARN, "No engine log found", repair_command))
 
     # Engine service status
     try:
@@ -429,9 +438,9 @@ def _check_shipper() -> list[CheckResult]:
         if status == "running":
             results.append(CheckResult(PASS, "Machine agent service running"))
         elif status == "stopped":
-            results.append(CheckResult(WARN, "Machine agent service stopped", "Start with: longhouse connect --install"))
+            results.append(CheckResult(WARN, "Machine agent service stopped", repair_command))
         else:
-            results.append(CheckResult(WARN, "Machine agent service not installed", "Install with: longhouse connect --install"))
+            results.append(CheckResult(WARN, "Machine agent service not installed", repair_command))
     except Exception:
         # Service check not available on this platform
         pass
@@ -462,9 +471,9 @@ def _check_shipper() -> list[CheckResult]:
                 label = "Desktop App install missing, broken, or unsupported"
                 if artifact_path:
                     label = f"{label} ({artifact_path})"
-                results.append(CheckResult(WARN, label, "Run: longhouse connect --install"))
+                results.append(CheckResult(WARN, label, repair_command))
             else:
-                results.append(CheckResult(WARN, "Desktop App bundle not installed", "Run: longhouse connect --install"))
+                results.append(CheckResult(WARN, "Desktop App bundle not installed", repair_command))
 
             # Then report the service status (only if we have a valid installation)
             if runtime_mode in ("app-bundle", "source-build"):
@@ -475,11 +484,11 @@ def _check_shipper() -> list[CheckResult]:
                         CheckResult(
                             WARN,
                             "Desktop App service stopped (bundle present but not running)",
-                            "Run: launchctl load ~/Library/LaunchAgents/ai.longhouse.app.plist",
+                            repair_command,
                         )
                     )
                 else:
-                    results.append(CheckResult(WARN, "Desktop App service not registered", "Run: longhouse connect --install"))
+                    results.append(CheckResult(WARN, "Desktop App service not registered", repair_command))
     except Exception:
         pass
 

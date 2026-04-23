@@ -28,6 +28,7 @@ from zerg.services.longhouse_paths import get_agent_log_dir
 from zerg.services.longhouse_paths import get_agent_outbox_dir
 from zerg.services.longhouse_paths import get_agent_status_path
 from zerg.services.longhouse_paths import resolve_longhouse_home
+from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.machine_state import machine_state_source_hash
 from zerg.services.machine_state import read_machine_state
 from zerg.services.shipper.service import get_service_info
@@ -396,9 +397,7 @@ def _can_reconcile_launch_from_state(
 
 
 def _repair_command(*, can_reconcile_from_state: bool) -> str:
-    if can_reconcile_from_state:
-        return "Run: longhouse machine reconcile"
-    return "Run: longhouse connect --install"
+    return recommended_machine_repair_command(can_reconcile_from_state=can_reconcile_from_state)
 
 
 def _collect_launch_readiness(base_dir: Path, *, service: dict[str, Any]) -> dict[str, Any]:

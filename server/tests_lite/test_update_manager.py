@@ -342,7 +342,7 @@ def test_upgrade_command_override_source_reinstalls_from_custom_package(monkeypa
     assert metadata_payload.installed_version == "0.1.7"
 
 
-def test_upgrade_command_invokes_connect_install_after_pypi_bump(monkeypatch, tmp_path):
+def test_upgrade_command_invokes_machine_repair_after_pypi_bump(monkeypatch, tmp_path):
     runner = CliRunner()
     runner_home = tmp_path / "home"
     runner_home.mkdir()
@@ -381,7 +381,7 @@ def test_upgrade_command_invokes_connect_install_after_pypi_bump(monkeypatch, tm
     assert result.exit_code == 0, result.output
     assert calls == [
         ["uv", "tool", "upgrade", "longhouse"],
-        ["/usr/local/bin/longhouse", "connect", "--install"],
+        ["/usr/local/bin/longhouse", "machine", "repair"],
     ]
 
 
@@ -423,7 +423,7 @@ def test_upgrade_skips_runtime_reconcile_when_entrypoint_missing(monkeypatch, tm
 
     assert result.exit_code == 0, result.output
     assert calls == [["uv", "tool", "upgrade", "longhouse"]]
-    assert "longhouse connect --install" in result.output
+    assert "longhouse machine repair" in result.output
 
 
 def test_record_install_command_writes_metadata(monkeypatch, tmp_path):

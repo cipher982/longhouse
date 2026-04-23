@@ -14,6 +14,8 @@ from zerg.cli.config_file import load_config
 from zerg.services.desktop_app import build_snapshot_arguments
 from zerg.services.local_health import collect_local_health
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+from zerg.services.machine_repair import can_repair_machine_from_state
+from zerg.services.machine_repair import recommended_machine_repair_command
 from zerg.services.machine_state import normalize_runtime_url
 from zerg.services.runtime_artifacts import RuntimeComponent
 from zerg.services.runtime_artifacts import desktop_app_canonical_bundle_path
@@ -204,9 +206,12 @@ def _launch_desktop_surface(
         cwd = Path(prebuilt_artifact.path) if component == RuntimeComponent.DESKTOP_APP else Path(prebuilt_artifact.launch_path).parent
     else:
         if not allow_source_fallback:
+            repair_command = recommended_machine_repair_command(
+                can_reconcile_from_state=can_repair_machine_from_state(claude_dir=claude_dir)
+            )
             typer.secho(
                 f"Longhouse.app is not installed in {desktop_app_canonical_bundle_path()}. "
-                "Run `longhouse connect --install` to install or repair the local runtime.",
+                f"{repair_command.replace('Run: ', '')} to install or repair the local runtime.",
                 fg=typer.colors.RED,
             )
             raise typer.Exit(code=1)
