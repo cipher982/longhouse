@@ -101,11 +101,37 @@ def _normalize_optional_string(value: Any) -> str | None:
     return raw or None
 
 
+def _normalize_optional_int(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def _normalize_binding_path(path: str | None) -> str | None:
     normalized = _normalize_optional_string(path)
     if normalized is None:
         return None
     return str(Path(normalized).expanduser().resolve(strict=False))
+
+
+_THREAD_SUBSCRIPTION_TRANSIENT_STATES = frozenset(
+    {
+        "waiting_for_thread",
+        "waiting_for_turn",
+        "waiting_for_rollout",
+        "ready_to_subscribe",
+        "subscribing",
+        "retrying",
+    }
+)
 
 
 def _read_session_context(path: Path, *, max_lines: int = 6) -> tuple[str | None, str | None]:
@@ -983,6 +1009,9 @@ def _collect_managed_codex_summary(
         state_thread_path = _normalize_binding_path(state.get("thread_path"))
         last_error = _normalize_optional_string(state.get("last_error"))
         bridge_status = _normalize_optional_string(state.get("status")) or "unknown"
+        thread_subscription_status = _normalize_optional_string(state.get("thread_subscription_status"))
+        thread_subscription_attempts = _normalize_optional_int(state.get("thread_subscription_attempts")) or 0
+        thread_subscription_last_error = _normalize_optional_string(state.get("thread_subscription_last_error"))
         app_server = _find_bridge_child_process(process_rows, bridge_pid=bridge_pid, needle=" app-server ")
         bridge_heartbeat_at = bridge_updated_at
         has_turn_activity = bool(
@@ -1005,11 +1034,16 @@ def _collect_managed_codex_summary(
             continue
 
         reason_codes: list[str] = []
-        if last_error:
-            reason_codes.append("thread_subscription_failed")
+        rollout_missing_after_turn = bool(state_thread_path and not Path(state_thread_path).exists() and has_turn_activity)
+        thread_subscription_failed = thread_subscription_status == "failed"
+        thread_subscription_transitional = thread_subscription_status in _THREAD_SUBSCRIPTION_TRANSIENT_STATES
+        thread_subscription_issue = bool(last_error or thread_subscription_failed)
         if binding_path and state_thread_path and binding_path != state_thread_path:
-            reason_codes.append("thread_subscription_failed")
-        if state_thread_path and not Path(state_thread_path).exists() and has_turn_activity:
+            thread_subscription_issue = True
+        if rollout_missing_after_turn and not thread_subscription_transitional:
+            thread_subscription_issue = True
+
+        if thread_subscription_issue:
             reason_codes.append("thread_subscription_failed")
         if app_server is None:
             reason_codes.append("live_control_unavailable")
@@ -1040,6 +1074,9 @@ def _collect_managed_codex_summary(
                 "bridge_status": bridge_status,
                 "bridge_pid": bridge_pid,
                 "bridge_heartbeat_at": bridge_heartbeat_at,
+                "thread_subscription_status": thread_subscription_status,
+                "thread_subscription_attempts": thread_subscription_attempts,
+                "thread_subscription_last_error": thread_subscription_last_error,
                 "reason_codes": reason_codes,
             }
         )

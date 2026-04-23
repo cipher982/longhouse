@@ -22,7 +22,8 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 use codex_app_server_canary::{
-    parse_app_server_transport, run as run_codex_app_server_canary, CanaryConfig,
+    parse_app_server_transport, parse_remote_tui_subscribe_phase,
+    run as run_codex_app_server_canary, CanaryConfig,
 };
 use codex_bridge::{
     cmd_codex_bridge_attach, cmd_codex_bridge_interrupt, cmd_codex_bridge_run,
@@ -270,6 +271,10 @@ enum Commands {
         /// Optional path for the PTY log captured from the remote TUI when --spawn-remote-tui is used
         #[arg(long)]
         remote_tui_log: Option<PathBuf>,
+
+        /// When a second client should subscribe to a remote-TUI-owned thread
+        #[arg(long, default_value = "postturn")]
+        remote_tui_subscribe_phase: String,
 
         /// Probe thread/read after the run and report turn count
         #[arg(long)]
@@ -688,6 +693,7 @@ fn main() -> anyhow::Result<()> {
             spawn_remote_tui,
             remote_tui_grace_ms,
             remote_tui_log,
+            remote_tui_subscribe_phase,
             probe_thread_read,
             probe_thread_list,
             event_timeout_secs,
@@ -718,6 +724,9 @@ fn main() -> anyhow::Result<()> {
                 spawn_remote_tui,
                 remote_tui_grace_ms,
                 remote_tui_log,
+                remote_tui_subscribe_phase: parse_remote_tui_subscribe_phase(
+                    &remote_tui_subscribe_phase,
+                )?,
                 probe_thread_read,
                 probe_thread_list,
                 event_timeout_secs,
@@ -746,6 +755,10 @@ fn main() -> anyhow::Result<()> {
                 println!(
                     "effective_codex_home: {}",
                     summary.effective_codex_home_path
+                );
+                println!(
+                    "remote_tui_subscribe_phase: {}",
+                    summary.remote_tui_subscribe_phase
                 );
                 if let Some(path) = summary.thread_path.as_deref() {
                     println!("thread_path: {}", path);

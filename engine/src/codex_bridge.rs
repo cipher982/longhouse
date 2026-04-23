@@ -115,6 +115,12 @@ pub struct BridgeStateFile {
     pub active_turn_id: Option<String>,
     pub last_turn_status: Option<String>,
     pub last_error: Option<String>,
+    #[serde(default)]
+    pub thread_subscription_status: Option<String>,
+    #[serde(default)]
+    pub thread_subscription_attempts: u32,
+    #[serde(default)]
+    pub thread_subscription_last_error: Option<String>,
     pub updated_at: String,
 }
 
@@ -217,6 +223,33 @@ enum BridgeRuntimeUpdate {
         tool_name: Option<String>,
     },
     Progress,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThreadSubscriptionStatus {
+    WaitingForThread,
+    WaitingForTurn,
+    WaitingForRollout,
+    ReadyToSubscribe,
+    Subscribing,
+    Retrying,
+    Subscribed,
+    Failed,
+}
+
+impl ThreadSubscriptionStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::WaitingForThread => "waiting_for_thread",
+            Self::WaitingForTurn => "waiting_for_turn",
+            Self::WaitingForRollout => "waiting_for_rollout",
+            Self::ReadyToSubscribe => "ready_to_subscribe",
+            Self::Subscribing => "subscribing",
+            Self::Retrying => "retrying",
+            Self::Subscribed => "subscribed",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -391,6 +424,9 @@ pub async fn cmd_codex_bridge_start(config: BridgeStartConfig) -> Result<BridgeS
         active_turn_id: None,
         last_turn_status: None,
         last_error: None,
+        thread_subscription_status: Some(ThreadSubscriptionStatus::WaitingForThread.as_str().to_string()),
+        thread_subscription_attempts: 0,
+        thread_subscription_last_error: None,
         updated_at: Utc::now().to_rfc3339(),
     };
     write_state_file(&paths.state_file, &state)?;
@@ -528,6 +564,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
         active_turn_id: None,
         last_turn_status: None,
         last_error: None,
+        thread_subscription_status: Some(ThreadSubscriptionStatus::WaitingForThread.as_str().to_string()),
+        thread_subscription_attempts: 0,
+        thread_subscription_last_error: None,
         updated_at: Utc::now().to_rfc3339(),
     };
     write_state_file(&config.state_file, &initial_state)?;
@@ -566,6 +605,9 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
             active_turn_id: None,
             last_turn_status: None,
             last_error: None,
+            thread_subscription_status: Some(ThreadSubscriptionStatus::WaitingForThread.as_str().to_string()),
+            thread_subscription_attempts: 0,
+            thread_subscription_last_error: None,
             updated_at: Utc::now().to_rfc3339(),
         },
         runtime: BridgeRuntimeSink {
@@ -649,7 +691,7 @@ pub async fn cmd_codex_bridge_run(config: BridgeRunConfig) -> Result<()> {
                 }
             }
             _ = thread_subscribe_retry.tick() => {
-                if let Some(followup) = pending_thread_subscription(&context) {
+                if let Some(followup) = pending_thread_subscription(&mut context)? {
                     if let Err(err) =
                         handle_bridge_followup(&config, &mut client, &mut context, followup).await
                     {
@@ -1562,7 +1604,7 @@ async fn process_notification(
                 }
             }
             if followup.is_none() {
-                followup = pending_thread_subscription(context);
+                followup = pending_thread_subscription(context)?;
             }
         }
         "turn/started" | "item/started" | "item/completed" | "thread/status/changed" => {
@@ -1581,7 +1623,7 @@ async fn process_notification(
             let updates = context.runtime_tracker.handle_notification(method, &params);
             emit_runtime_updates(context, updates).await;
             if followup.is_none() {
-                followup = pending_thread_subscription(context);
+                followup = pending_thread_subscription(context)?;
             }
         }
         "item/agentMessage/delta"
@@ -1612,26 +1654,74 @@ async fn process_notification(
     Ok(followup)
 }
 
-fn pending_thread_subscription(context: &BridgeContext) -> Option<BridgeFollowup> {
-    let thread_id = context.state.thread_id.as_ref()?;
-    if context.subscribed_thread_id.as_deref() == Some(thread_id.as_str()) {
-        return None;
+fn thread_rollout_is_ready(path: &str) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+        .unwrap_or(false)
+}
+
+fn derive_thread_subscription_status(context: &BridgeContext) -> ThreadSubscriptionStatus {
+    let Some(thread_id) = context.state.thread_id.as_deref() else {
+        return ThreadSubscriptionStatus::WaitingForThread;
+    };
+    if context.subscribed_thread_id.as_deref() == Some(thread_id) {
+        return ThreadSubscriptionStatus::Subscribed;
     }
-    let path_exists = context
-        .state
-        .thread_path
-        .as_ref()
-        .map(|path| Path::new(path).exists())
-        .unwrap_or(false);
+
     let has_turn_activity =
         context.state.active_turn_id.is_some() || context.state.last_turn_status.is_some();
-    if !path_exists && !has_turn_activity {
-        return None;
+    let rollout_ready = context
+        .state
+        .thread_path
+        .as_deref()
+        .map(thread_rollout_is_ready)
+        .unwrap_or(false);
+
+    if rollout_ready || (context.state.thread_path.is_none() && has_turn_activity) {
+        ThreadSubscriptionStatus::ReadyToSubscribe
+    } else if has_turn_activity {
+        ThreadSubscriptionStatus::WaitingForRollout
+    } else {
+        ThreadSubscriptionStatus::WaitingForTurn
     }
-    Some(BridgeFollowup::SubscribeThread {
-        thread_id: thread_id.clone(),
+}
+
+fn update_thread_subscription_tracking(
+    context: &mut BridgeContext,
+    status: ThreadSubscriptionStatus,
+    last_error: Option<String>,
+) -> Result<()> {
+    let next_status = Some(status.as_str().to_string());
+    let next_error = normalize_optional_string(last_error);
+    if context.state.thread_subscription_status == next_status
+        && context.state.thread_subscription_last_error == next_error
+    {
+        return Ok(());
+    }
+    context.state.thread_subscription_status = next_status;
+    context.state.thread_subscription_last_error = next_error;
+    write_state_file(&context.state_file, &context.state)
+}
+
+fn pending_thread_subscription(context: &mut BridgeContext) -> Result<Option<BridgeFollowup>> {
+    let status = derive_thread_subscription_status(context);
+    update_thread_subscription_tracking(
+        context,
+        status,
+        context.state.thread_subscription_last_error.clone(),
+    )?;
+    if status != ThreadSubscriptionStatus::ReadyToSubscribe {
+        return Ok(None);
+    }
+    let thread_id = context
+        .state
+        .thread_id
+        .clone()
+        .context("thread subscription requested without thread id")?;
+    Ok(Some(BridgeFollowup::SubscribeThread {
+        thread_id,
         thread_path: context.state.thread_path.clone(),
-    })
+    }))
 }
 
 fn is_retryable_thread_subscription_error(error_text: &str) -> bool {
@@ -1763,6 +1853,9 @@ fn adopt_thread_identity(
     context.runtime.thread_id = desired_id.clone();
     if desired_id != current_id {
         context.subscribed_thread_id = None;
+        context.state.thread_subscription_attempts = 0;
+        context.state.thread_subscription_last_error = None;
+        context.state.thread_subscription_status = None;
     }
     sync_thread_binding(
         config,
@@ -2268,6 +2361,15 @@ async fn handle_bridge_followup(
             });
             let mut last_error = None;
             for attempt in 0..=THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
+                context.state.thread_subscription_attempts = context
+                    .state
+                    .thread_subscription_attempts
+                    .saturating_add(1);
+                update_thread_subscription_tracking(
+                    context,
+                    ThreadSubscriptionStatus::Subscribing,
+                    None,
+                )?;
                 match send_request_with_runtime(
                     client,
                     "thread/resume",
@@ -2294,6 +2396,11 @@ async fn handle_bridge_followup(
                         )?;
                         apply_thread_resume_snapshot(context, &response).await?;
                         context.subscribed_thread_id = context.state.thread_id.clone();
+                        update_thread_subscription_tracking(
+                            context,
+                            ThreadSubscriptionStatus::Subscribed,
+                            None,
+                        )?;
                         return Ok(());
                     }
                     Err(err) => {
@@ -2302,6 +2409,16 @@ async fn handle_bridge_followup(
                         // materialized, and the running-thread resume path can also see the
                         // rollout file before its initial contents land on disk.
                         let retryable = is_retryable_thread_subscription_error(&error_text);
+                        let status = if retryable {
+                            ThreadSubscriptionStatus::Retrying
+                        } else {
+                            ThreadSubscriptionStatus::Failed
+                        };
+                        update_thread_subscription_tracking(
+                            context,
+                            status,
+                            Some(error_text.clone()),
+                        )?;
                         last_error = Some(err);
                         if retryable && attempt < THREAD_SUBSCRIBE_RETRY_ATTEMPTS {
                             tokio::time::sleep(Duration::from_millis(
@@ -2309,6 +2426,9 @@ async fn handle_bridge_followup(
                             ))
                             .await;
                             continue;
+                        }
+                        if retryable {
+                            return Ok(());
                         }
                         break;
                     }
@@ -2386,6 +2506,11 @@ mod tests {
                 active_turn_id: None,
                 last_turn_status: None,
                 last_error: None,
+                thread_subscription_status: Some(
+                    ThreadSubscriptionStatus::WaitingForThread.as_str().to_string(),
+                ),
+                thread_subscription_attempts: 0,
+                thread_subscription_last_error: None,
                 updated_at: Utc::now().to_rfc3339(),
             },
             runtime: BridgeRuntimeSink {
@@ -2980,15 +3105,59 @@ mod tests {
             Some("/tmp/thread.jsonl")
         );
         assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-live"));
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::WaitingForTurn.as_str())
+        );
     }
 
     #[tokio::test]
-    async fn process_notification_waits_for_turn_activity_before_subscribing_missing_rollout() {
+    async fn process_notification_waits_for_rollout_materialization_before_subscribing_known_path() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
+        let rollout_path = temp.path().join("missing-rollout.jsonl");
         context.state.thread_id = Some("thr-live".to_string());
-        context.state.thread_path = Some("/tmp/thread.jsonl".to_string());
+        context.state.thread_path = Some(rollout_path.display().to_string());
+        context.runtime.thread_id = Some("thr-live".to_string());
+
+        let followup = process_notification(
+            &json!({
+                "method": "turn/started",
+                "params": {
+                    "turn": {
+                        "id": "turn-live",
+                        "status": "inProgress"
+                    }
+                }
+            }),
+            &config,
+            &mut context,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(followup, None);
+        assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));
+        assert_eq!(
+            context.state.last_turn_status.as_deref(),
+            Some("inProgress")
+        );
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::WaitingForRollout.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn process_notification_subscribes_when_known_rollout_is_ready() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        let rollout_path = temp.path().join("ready-rollout.jsonl");
+        fs::write(&rollout_path, "{\"ok\":true}\n").unwrap();
+        context.state.thread_id = Some("thr-live".to_string());
+        context.state.thread_path = Some(rollout_path.display().to_string());
         context.runtime.thread_id = Some("thr-live".to_string());
 
         let followup = process_notification(
@@ -3011,13 +3180,12 @@ mod tests {
             followup,
             Some(BridgeFollowup::SubscribeThread {
                 thread_id: "thr-live".to_string(),
-                thread_path: Some("/tmp/thread.jsonl".to_string()),
+                thread_path: Some(rollout_path.display().to_string()),
             })
         );
-        assert_eq!(context.state.active_turn_id.as_deref(), Some("turn-live"));
         assert_eq!(
-            context.state.last_turn_status.as_deref(),
-            Some("inProgress")
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
         );
     }
 
@@ -3068,6 +3236,10 @@ mod tests {
         assert_eq!(context.state.thread_id.as_deref(), Some("thr-live"));
         assert_eq!(context.state.thread_path, None);
         assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-live"));
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
+        );
         assert_eq!(binding.get("/tmp/bad-thread.jsonl").unwrap(), None);
     }
 
@@ -3096,6 +3268,42 @@ mod tests {
             context.state.thread_path.as_deref(),
             Some("/tmp/thread-live.jsonl")
         );
+    }
+
+    #[tokio::test]
+    async fn adopt_thread_identity_resets_subscription_tracking_for_new_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = make_test_run_config(&temp);
+        let mut context = make_test_context(&temp);
+        context.state.thread_id = Some("thr-old".to_string());
+        context.state.thread_path = Some("/tmp/thread-old.jsonl".to_string());
+        context.runtime.thread_id = Some("thr-old".to_string());
+        context.state.thread_subscription_status =
+            Some(ThreadSubscriptionStatus::Retrying.as_str().to_string());
+        context.state.thread_subscription_attempts = 3;
+        context.state.thread_subscription_last_error =
+            Some("thread/resume failed: no rollout found".to_string());
+
+        let changed = adopt_thread_identity(
+            &config,
+            &mut context,
+            Some("thr-new".to_string()),
+            Some("/tmp/thread-new.jsonl".to_string()),
+            false,
+        )
+        .unwrap();
+
+        assert!(changed);
+        assert_eq!(context.state.thread_id.as_deref(), Some("thr-new"));
+        assert_eq!(
+            context.state.thread_path.as_deref(),
+            Some("/tmp/thread-new.jsonl")
+        );
+        assert_eq!(context.runtime.thread_id.as_deref(), Some("thr-new"));
+        assert_eq!(context.subscribed_thread_id, None);
+        assert_eq!(context.state.thread_subscription_attempts, 0);
+        assert_eq!(context.state.thread_subscription_status, None);
+        assert_eq!(context.state.thread_subscription_last_error, None);
     }
 
     #[tokio::test]
@@ -3133,12 +3341,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn process_notification_retries_thread_subscription_until_bridge_is_subscribed() {
+    async fn process_notification_stops_requesting_thread_subscription_after_bridge_is_subscribed() {
         let temp = tempfile::tempdir().unwrap();
         let config = make_test_run_config(&temp);
         let mut context = make_test_context(&temp);
+        let rollout_path = temp.path().join("thread.jsonl");
+        fs::write(&rollout_path, "{\"ok\":true}\n").unwrap();
         context.state.thread_id = Some("thr-live".to_string());
-        context.state.thread_path = Some("/tmp/thread.jsonl".to_string());
+        context.state.thread_path = Some(rollout_path.display().to_string());
         context.runtime.thread_id = Some("thr-live".to_string());
 
         let followup = process_notification(
@@ -3161,8 +3371,12 @@ mod tests {
             followup,
             Some(BridgeFollowup::SubscribeThread {
                 thread_id: "thr-live".to_string(),
-                thread_path: Some("/tmp/thread.jsonl".to_string()),
+                thread_path: Some(rollout_path.display().to_string()),
             })
+        );
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::ReadyToSubscribe.as_str())
         );
 
         context.subscribed_thread_id = Some("thr-live".to_string());
@@ -3183,6 +3397,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(followup, None);
+        assert_eq!(
+            context.state.thread_subscription_status.as_deref(),
+            Some(ThreadSubscriptionStatus::Subscribed.as_str())
+        );
     }
 
     #[test]
