@@ -62,7 +62,7 @@ def _extract_ship_summary(stdout: str) -> dict[str, Any] | None:
     if start < 0:
         return None
     try:
-        parsed = json.loads(raw[start:])
+        parsed, _end = json.JSONDecoder().raw_decode(raw[start:])
     except Exception:
         return None
     return parsed if isinstance(parsed, dict) else None

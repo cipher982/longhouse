@@ -504,3 +504,26 @@ def test_auth_auto_token_replays_spool_after_success(monkeypatch):
         ("persist", ("https://example.com", None, "auth")),
         ("replay", {"url": "https://example.com", "token": "zdt_auto", "claude_dir": None}),
     ]
+
+
+def test_attempt_post_auth_spool_replay_preserves_auth_success_context(monkeypatch):
+    messages: list[str] = []
+
+    monkeypatch.setattr(
+        connect,
+        "replay_machine_backlog",
+        lambda **kwargs: SimpleNamespace(
+            warning="Queued shipping could not be replayed immediately. Run `longhouse ship` if backlog stays stuck."
+        ),
+    )
+    monkeypatch.setattr(connect.typer, "secho", lambda message, fg=None: messages.append(message))
+
+    connect._attempt_post_auth_spool_replay(
+        url="https://example.com",
+        token="zdt_auto",
+        claude_dir=None,
+    )
+
+    assert messages == [
+        "Authenticated, but queued shipping could not be replayed immediately. Run `longhouse ship` if backlog stays stuck."
+    ]
