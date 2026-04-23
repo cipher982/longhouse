@@ -318,6 +318,120 @@ def test_install_local_runtime_installs_managed_codex_by_default(tmp_path, monke
     assert result.codex_runtime.path == "/tmp/longhouse-codex"
 
 
+def test_apply_machine_state_update_persists_without_reconciling_when_service_missing(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(installer, "get_service_info", lambda claude_dir: {"status": "not-installed"})
+
+    result = installer.apply_machine_state_update(
+        claude_dir=str(claude_dir),
+        written_by="connect",
+        runtime_url="https://example.com",
+    )
+
+    assert result.reconciled is False
+    assert result.install_result is None
+    assert result.machine_state.runtime_url == "https://example.com"
+    _state_path, loaded, error = installer.read_machine_state(home / ".longhouse")
+    assert error is None
+    assert loaded is not None
+    assert loaded.runtime_url == "https://example.com"
+    assert loaded.written_by == "connect"
+
+
+def test_apply_machine_state_update_reconciles_existing_service(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+
+    monkeypatch.setenv("HOME", str(home))
+    installer.write_machine_state(
+        base_dir=home / ".longhouse",
+        written_by="connect-install",
+        runtime_url="https://old.longhouse.test",
+        machine_name="test-box",
+        desktop_app_enabled=True,
+        topology_intent="connect-remote",
+    )
+
+    service_calls: list[dict[str, str | None]] = []
+    hook_calls: list[dict[str, str | None]] = []
+    desktop_calls: list[dict[str, str | None]] = []
+
+    monkeypatch.setattr(installer, "get_service_info", lambda claude_dir: {"status": "running"})
+    monkeypatch.setattr(installer, "load_token", lambda config_dir: "stored-token")
+
+    def fake_ensure(component, *, source_override=None, overwrite=False):
+        if component.value == "engine":
+            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False)
+        if component.value == "managed-codex":
+            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=False)
+        raise AssertionError(f"unexpected component: {component}")
+
+    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: service_calls.append(kwargs)
+        or {
+            "message": "ok",
+            "service": "launchd",
+            "plist_path": "/tmp/test.plist",
+        },
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_hooks",
+        lambda **kwargs: hook_calls.append(kwargs) or ["hooks installed"],
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_desktop_app_service",
+        lambda **kwargs: desktop_calls.append(kwargs) or {
+            "message": "desktop app installed",
+            "plist_path": "/tmp/menubar.plist",
+            "app_path": "/Applications/Longhouse.app",
+            "launch_path": "/Applications/Longhouse.app/Contents/MacOS/Longhouse",
+        },
+    )
+
+    result = installer.apply_machine_state_update(
+        claude_dir=str(claude_dir),
+        written_by="connect",
+        runtime_url="https://new.longhouse.test",
+    )
+
+    assert result.reconciled is True
+    assert result.machine_state.runtime_url == "https://new.longhouse.test"
+    assert result.machine_state.machine_name == "test-box"
+    assert result.install_result is not None
+    assert service_calls == [
+        {
+            "url": "https://new.longhouse.test",
+            "token": "stored-token",
+            "claude_dir": str(claude_dir),
+            "machine_name": "test-box",
+            "machine_config_generation": result.machine_state.config_generation,
+            "machine_state_hash": installer.machine_state_source_hash(result.machine_state),
+        }
+    ]
+    assert hook_calls == [
+        {
+            "url": "https://new.longhouse.test",
+            "token": "stored-token",
+            "claude_dir": str(claude_dir),
+            "engine_path": "/tmp/longhouse-engine",
+        }
+    ]
+    assert desktop_calls == [
+        {
+            "ui_url": "https://new.longhouse.test",
+            "claude_dir": str(claude_dir),
+        }
+    ]
+
+
 def test_reconcile_local_runtime_uses_canonical_machine_state(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"

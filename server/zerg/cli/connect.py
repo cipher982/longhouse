@@ -20,11 +20,11 @@ from zerg.cli.config_file import load_config
 from zerg.services.desktop_app import default_install_desktop_app
 from zerg.services.desktop_app import get_desktop_app_service_info
 from zerg.services.desktop_app import uninstall_desktop_app_service
+from zerg.services.local_runtime_installer import apply_machine_state_update
 from zerg.services.local_runtime_installer import reconcile_local_runtime
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.machine_state import clear_machine_runtime_url
 from zerg.services.machine_state import load_machine_state
-from zerg.services.machine_state import write_machine_state
 from zerg.services.shipper import clear_token
 from zerg.services.shipper import get_service_info
 from zerg.services.shipper import get_zerg_url
@@ -64,14 +64,14 @@ logging.basicConfig(
 # ---------------------------------------------------------------------------
 
 
-def _persist_selected_url(url: str, config_dir: Path | None, *, written_by: str) -> None:
+def _persist_selected_url(url: str, claude_dir: str | None, *, written_by: str) -> None:
     """Persist an explicit Runtime Host choice to canonical machine state."""
     normalized_url = normalize_zerg_url(url)
     if not normalized_url:
         raise ValueError(f"Invalid Longhouse URL: {url!r}")
 
-    write_machine_state(
-        base_dir=config_dir,
+    apply_machine_state_update(
+        claude_dir=claude_dir,
         written_by=written_by,
         runtime_url=normalized_url,
     )
@@ -251,7 +251,7 @@ def auth(
     if token:
         if _validate_token(url, token):
             save_token(token, config_dir)
-            _persist_selected_url(url, config_dir, written_by="auth")
+            _persist_selected_url(url, claude_dir, written_by="auth")
             typer.secho(f"Token validated and stored for {device_name}", fg=typer.colors.GREEN)
         else:
             typer.secho("Invalid token", fg=typer.colors.RED)
@@ -292,7 +292,7 @@ def auth(
     # Validate and store
     if _validate_token(url, token):
         save_token(token, config_dir)
-        _persist_selected_url(url, config_dir, written_by="auth")
+        _persist_selected_url(url, claude_dir, written_by="auth")
         typer.secho(f"Authenticated successfully as {device_name}", fg=typer.colors.GREEN)
     else:
         typer.secho("Invalid or expired token", fg=typer.colors.RED)
@@ -567,7 +567,7 @@ def connect(
         auto_token = _auto_create_token(url)
         if auto_token:
             save_token(auto_token, config_dir)
-            _persist_selected_url(url, config_dir, written_by="connect")
+            _persist_selected_url(url, claude_dir, written_by="connect")
             token = auto_token
             typer.secho("Authenticated successfully.", fg=typer.colors.GREEN)
         else:
@@ -583,7 +583,7 @@ def connect(
     # This handles the case where explicit --url/--token were passed but
     # not yet written (auto-auth already persists on that path).
     save_token(token, config_dir)
-    _persist_selected_url(url, config_dir, written_by="connect")
+    _persist_selected_url(url, claude_dir, written_by="connect")
 
     try:
         engine = get_engine_executable()
