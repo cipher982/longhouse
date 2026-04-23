@@ -9,7 +9,7 @@
     "outbox_stuck"
   ],
   "suggested_actions": [
-    "Run: longhouse connect --install",
+    "Run: longhouse machine repair",
     "Inspect logs: ~/.longhouse/agent/logs/engine.log.*"
   ],
   "service": {

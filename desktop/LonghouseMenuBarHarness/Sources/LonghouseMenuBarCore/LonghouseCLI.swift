@@ -107,7 +107,7 @@ enum LonghouseCLI {
             executable.path,
             [
                 "machine",
-                "reconcile",
+                "repair",
             ]
         )
     }
