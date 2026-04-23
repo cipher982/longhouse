@@ -339,12 +339,26 @@ class AgentHeartbeat(AgentsBase):
 
     # Last successful ship timestamp
     last_ship_at = Column(DateTime(timezone=True), nullable=True)
+    last_ship_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    last_ship_result = Column(String(64), nullable=True)
+    last_ship_latency_ms = Column(Integer, nullable=True)
+    last_ship_http_status = Column(Integer, nullable=True)
 
     # Stats
     spool_pending = Column(Integer, default=0)
     spool_dead = Column(Integer, default=0)
     parse_errors_1h = Column(Integer, default=0)
     consecutive_failures = Column(Integer, default=0)
+    ship_attempts_1h = Column(Integer, default=0)
+    ship_successes_1h = Column(Integer, default=0)
+    ship_rate_limited_1h = Column(Integer, default=0)
+    ship_server_errors_1h = Column(Integer, default=0)
+    ship_payload_rejections_1h = Column(Integer, default=0)
+    ship_payload_too_large_1h = Column(Integer, default=0)
+    ship_retryable_client_errors_1h = Column(Integer, default=0)
+    ship_connect_errors_1h = Column(Integer, default=0)
+    ship_latency_p50_ms_1h = Column(Integer, nullable=True)
+    ship_latency_p95_ms_1h = Column(Integer, nullable=True)
     disk_free_bytes = Column(BigInteger, default=0)
     is_offline = Column(Integer, default=0)  # 0/1 (SQLite has no bool)
 
