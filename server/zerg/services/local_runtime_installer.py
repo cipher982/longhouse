@@ -51,7 +51,6 @@ class LocalRuntimeReconcileResult:
 @dataclass(frozen=True)
 class MachineStateApplyResult:
     machine_state: MachineState
-    install_result: LocalRuntimeInstallResult | None = None
     reconciled: bool = False
 
 
@@ -198,19 +197,37 @@ def apply_machine_state_update(
         return MachineStateApplyResult(machine_state=machine_state)
 
     effective_token = token if token is not None else load_token(config_dir)
-    install_result = _install_local_runtime_artifacts(
+    if token:
+        save_token(token, config_dir)
+
+    install_service(
         url=machine_state.runtime_url,
         token=effective_token,
         claude_dir=claude_dir,
         machine_name=machine_state.machine_name,
-        menubar=bool(machine_state.desktop_app_enabled),
-        codex_source=codex_source,
         machine_config_generation=machine_state.config_generation,
         machine_state_hash=machine_state_source_hash(machine_state),
     )
+    try:
+        install_hooks(
+            url=machine_state.runtime_url,
+            token=effective_token,
+            claude_dir=claude_dir,
+        )
+    except Exception:
+        pass
+
+    if machine_state.desktop_app_enabled:
+        try:
+            install_desktop_app_service(
+                ui_url=machine_state.runtime_url,
+                claude_dir=claude_dir,
+            )
+        except Exception:
+            pass
+
     return MachineStateApplyResult(
         machine_state=machine_state,
-        install_result=install_result,
         reconciled=True,
     )
 
