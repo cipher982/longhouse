@@ -319,6 +319,72 @@ def test_install_local_runtime_installs_managed_codex_by_default(tmp_path, monke
     assert result.codex_runtime.path == "/tmp/longhouse-codex"
 
 
+def test_install_local_runtime_skips_global_integrations_for_scratch_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    scratch_home = home / ".longhouse-dev"
+    state_writes: list[dict[str, object]] = []
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("LONGHOUSE_HOME", str(scratch_home))
+    monkeypatch.setattr(
+        installer,
+        "write_machine_state",
+        lambda **kwargs: state_writes.append(kwargs) or _stub_machine_state(**kwargs),
+    )
+    monkeypatch.setattr(installer, "save_token", lambda token, config_dir: None)
+    monkeypatch.setattr(installer, "sanitize_machine_name", lambda machine_name: machine_name)
+
+    def fake_ensure(component, *, source_override=None, overwrite=False):
+        if component.value == "engine":
+            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False)
+        if component.value == "managed-codex":
+            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=True)
+        raise AssertionError(f"unexpected component: {component}")
+
+    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("scratch install should skip service install")),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_hooks",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("scratch install should skip hook install")),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_desktop_app_service",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("scratch install should skip desktop app install")),
+    )
+
+    result = installer.install_local_runtime(
+        url="http://127.0.0.1:8080",
+        token=None,
+        claude_dir=None,
+        machine_name="test-box-dev",
+        menubar=True,
+    )
+
+    assert state_writes == [
+        {
+            "base_dir": scratch_home,
+            "written_by": "connect-install",
+            "runtime_url": "http://127.0.0.1:8080",
+            "machine_name": "test-box-dev",
+            "desktop_app_enabled": True,
+            "topology_intent": None,
+        }
+    ]
+    assert result.service_result["service"] == "skipped"
+    assert "Scratch Longhouse home active" in result.service_result["message"]
+    assert result.hooks.actions == ["Scratch Longhouse home active; skipped Claude/Codex hook install."]
+    assert result.desktop_app_result == {
+        "message": "Scratch Longhouse home active; skipped desktop app install.",
+        "skipped": True,
+    }
+
+
 def test_apply_machine_state_update_persists_without_reconciling_when_service_missing(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"
@@ -689,3 +755,57 @@ def test_reconcile_local_runtime_requires_complete_machine_state(tmp_path, monke
         assert "missing runtime_url" in str(exc)
     else:
         raise AssertionError("expected reconcile_local_runtime to reject incomplete machine state")
+
+
+def test_reconcile_local_runtime_skips_global_integrations_for_scratch_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    scratch_home = home / ".longhouse-dev"
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("LONGHOUSE_HOME", str(scratch_home))
+    installer.write_machine_state(
+        base_dir=scratch_home,
+        written_by="connect-install",
+        runtime_url="http://127.0.0.1:8080",
+        machine_name="test-box-dev",
+        desktop_app_enabled=True,
+    )
+    monkeypatch.setattr(installer, "load_token", lambda config_dir: "stored-token")
+
+    def fake_ensure(component, *, source_override=None, overwrite=False):
+        if component.value == "engine":
+            return SimpleNamespace(path="/tmp/longhouse-engine", installed_now=False)
+        if component.value == "managed-codex":
+            return SimpleNamespace(path="/tmp/longhouse-codex", installed_now=False)
+        raise AssertionError(f"unexpected component: {component}")
+
+    monkeypatch.setattr(installer, "ensure_runtime_binary", fake_ensure)
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("scratch reconcile should skip service install")),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_hooks",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("scratch reconcile should skip hook install")),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_desktop_app_service",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("scratch reconcile should skip desktop app install")),
+    )
+
+    result = installer.reconcile_local_runtime(
+        claude_dir=None,
+        written_by="machine-reconcile",
+    )
+
+    assert result.machine_state.runtime_url == "http://127.0.0.1:8080"
+    assert result.machine_state.machine_name == "test-box-dev"
+    assert result.install_result.service_result["service"] == "skipped"
+    assert result.install_result.hooks.actions == ["Scratch Longhouse home active; skipped Claude/Codex hook install."]
+    assert result.install_result.desktop_app_result == {
+        "message": "Scratch Longhouse home active; skipped desktop app install.",
+        "skipped": True,
+    }

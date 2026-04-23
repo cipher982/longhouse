@@ -15,6 +15,8 @@ from urllib.parse import urlparse
 
 from zerg.services.desktop_app import install_desktop_app_service
 from zerg.services.local_health import collect_launch_readiness
+from zerg.services.longhouse_paths import classify_longhouse_home
+from zerg.services.longhouse_paths import is_stable_longhouse_home
 from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.machine_state import MachineState
 from zerg.services.machine_state import machine_state_source_hash
@@ -59,14 +61,8 @@ class MachineStateApplyResult:
     reconciled: bool = False
 
 
-def _canonical_stable_home() -> Path:
-    return (Path.home() / ".longhouse").expanduser().resolve(strict=False)
-
-
 def _is_stable_home(state_root: Path | None) -> bool:
-    if state_root is None:
-        return True
-    return state_root.expanduser().resolve(strict=False) == _canonical_stable_home()
+    return is_stable_longhouse_home(state_root)
 
 
 def _is_local_control_plane_url(url: str | None) -> bool:
@@ -174,7 +170,7 @@ def _install_local_runtime_artifacts(
     machine_config_generation: str | None = None,
     machine_state_hash: str | None = None,
 ) -> LocalRuntimeInstallResult:
-    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir)
     resolved_name = sanitize_machine_name(machine_name)
     if resolved_name is None:
         raise ValueError(f"Invalid machine name: {machine_name!r}")
@@ -184,6 +180,30 @@ def _install_local_runtime_artifacts(
 
     engine_runtime = ensure_runtime_binary(RuntimeComponent.ENGINE)
     codex_runtime = _ensure_managed_codex_runtime(source_override=codex_source)
+    home_mode = classify_longhouse_home(config_dir)
+    if home_mode == "scratch":
+        desktop_app_result = None
+        if menubar:
+            desktop_app_result = {
+                "message": "Scratch Longhouse home active; skipped desktop app install.",
+                "skipped": True,
+            }
+        return LocalRuntimeInstallResult(
+            machine_name=resolved_name,
+            engine_runtime=engine_runtime,
+            codex_runtime=codex_runtime,
+            service_result={
+                "success": True,
+                "mode": "scratch",
+                "service": "skipped",
+                "message": "Scratch Longhouse home active; skipped global service install.",
+            },
+            hooks=HookInstallResult(
+                actions=["Scratch Longhouse home active; skipped Claude/Codex hook install."],
+            ),
+            desktop_app_result=desktop_app_result,
+        )
+
     service_result = install_service(
         url=url,
         token=token,
@@ -239,7 +259,7 @@ def install_local_runtime(
 ) -> LocalRuntimeInstallResult:
     """Install the machine agent, CLI hooks, and optional desktop app."""
 
-    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir)
     resolved_name = sanitize_machine_name(machine_name)
     if resolved_name is None:
         raise ValueError(f"Invalid machine name: {machine_name!r}")
@@ -288,7 +308,7 @@ def apply_machine_state_update(
     first-install behavior.
     """
 
-    config_dir = base_dir if base_dir is not None else (resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None)
+    config_dir = base_dir if base_dir is not None else resolve_longhouse_home_from_provider_home(claude_dir)
     service_info = get_service_info(claude_dir)
 
     write_kwargs: dict[str, object] = {
@@ -304,12 +324,10 @@ def apply_machine_state_update(
     if topology_intent is not None:
         write_kwargs["topology_intent"] = topology_intent
 
-    effective_url = runtime_url if runtime_url is not None else None
-    effective_machine_name = machine_name if machine_name is not None else None
     _guard_stable_home_control_plane_target(
         state_root=config_dir,
-        runtime_url=effective_url,
-        machine_name=effective_machine_name,
+        runtime_url=runtime_url,
+        machine_name=machine_name,
     )
 
     machine_state = write_machine_state(**write_kwargs)
@@ -371,7 +389,7 @@ def reconcile_local_runtime(
     inferring truth from runner.env, launchd plists, or other generated files.
     """
 
-    config_dir = resolve_longhouse_home_from_provider_home(claude_dir) if claude_dir else None
+    config_dir = resolve_longhouse_home_from_provider_home(claude_dir)
     state_path, current_state, error = read_machine_state(config_dir)
     if error:
         raise RuntimeError(f"Failed to read existing machine state at {state_path}: {error}")
