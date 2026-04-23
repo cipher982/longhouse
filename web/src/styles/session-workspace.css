@@ -1083,8 +1083,12 @@
   }
 
   :root {
-    --tl-prose-max: 80ch;
-    --tl-tool-max: 132ch;
+    /* Prose is the primary surface — give it a comfortable but generous
+       reading width. Tool rows are interleaved detail; they wrap/clamp
+       to a narrower band so they don't dominate the eye, and so short
+       commands don't stretch across a 160ch viewport. */
+    --tl-prose-max: 110ch;
+    --tl-tool-max: 96ch;
   }
 
   .tl-chip {
