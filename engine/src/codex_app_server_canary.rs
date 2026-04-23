@@ -37,6 +37,37 @@ pub fn parse_app_server_transport(value: &str) -> Result<AppServerTransport> {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteTuiSubscribePhase {
+    PreTurn,
+    PostTurn,
+    AfterRollout,
+}
+
+impl RemoteTuiSubscribePhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::PreTurn => "preturn",
+            Self::PostTurn => "postturn",
+            Self::AfterRollout => "after_rollout",
+        }
+    }
+}
+
+pub fn parse_remote_tui_subscribe_phase(value: &str) -> Result<RemoteTuiSubscribePhase> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "" | "postturn" | "post_turn" | "post-turn" => Ok(RemoteTuiSubscribePhase::PostTurn),
+        "preturn" | "pre_turn" | "pre-turn" => Ok(RemoteTuiSubscribePhase::PreTurn),
+        "afterrollout" | "after_rollout" | "after-rollout" | "rollout" => {
+            Ok(RemoteTuiSubscribePhase::AfterRollout)
+        }
+        other => bail!(
+            "Unsupported remote TUI subscribe phase '{other}'. Use preturn, postturn, or after_rollout"
+        ),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CanaryConfig {
     pub prompt: String,
@@ -58,6 +89,7 @@ pub struct CanaryConfig {
     pub spawn_remote_tui: bool,
     pub remote_tui_grace_ms: u64,
     pub remote_tui_log: Option<PathBuf>,
+    pub remote_tui_subscribe_phase: RemoteTuiSubscribePhase,
     pub probe_thread_read: bool,
     pub probe_thread_list: bool,
     pub event_timeout_secs: u64,
@@ -99,6 +131,7 @@ pub struct CanarySummary {
     pub remote_tui_spawned: bool,
     pub remote_tui_alive_after_grace: Option<bool>,
     pub remote_tui_alive_before_shutdown: Option<bool>,
+    pub remote_tui_subscribe_phase: String,
     pub remote_tui_log: Option<String>,
     pub remote_tui_stderr_lines: Vec<String>,
     pub log_jsonl: Option<String>,
@@ -147,6 +180,7 @@ struct RemoteTuiHandle {
 #[derive(Debug, Default)]
 struct ObservationState {
     thread_id: Option<String>,
+    thread_path: Option<String>,
     turn_id: Option<String>,
     turn_status: Option<String>,
     assistant_text: String,
@@ -306,55 +340,24 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
     let _ = initialize_response;
     send_notification(&mut client, &mut logger, "initialized", json!({})).await?;
 
-    let thread_response = if let Some(thread_id) = config.resume_thread_id.as_deref() {
-        send_request(
-            &config,
-            &mut client,
-            &mut state,
-            &mut logger,
-            "thread/resume",
-            json!({
-                "threadId": thread_id,
-                "cwd": config.cwd.to_string_lossy(),
-                "approvalPolicy": config.approval_policy,
-                "sandbox": config.sandbox,
-                "model": config.model.clone(),
-            }),
-            deadline,
-        )
-        .await?
-    } else {
-        send_request(
-            &config,
-            &mut client,
-            &mut state,
-            &mut logger,
-            "thread/start",
-            json!({
-                "cwd": config.cwd.to_string_lossy(),
-                "approvalPolicy": config.approval_policy,
-                "sandbox": config.sandbox,
-                "model": config.model.clone(),
-            }),
-            deadline,
-        )
-        .await?
-    };
-    let thread_id = extract_string(&thread_response, &["thread", "id"])
-        .context("missing thread.id in thread response")?;
-    let thread_path = extract_string(&thread_response, &["thread", "path"]);
-    state.thread_id = Some(thread_id.clone());
-
-    if config.spawn_remote_tui {
+    let needs_remote_tui_owned_thread = config.spawn_remote_tui && config.resume_thread_id.is_none();
+    let subscribe_before_turn =
+        needs_remote_tui_owned_thread && config.remote_tui_subscribe_phase == RemoteTuiSubscribePhase::PreTurn;
+    let subscribe_after_turn =
+        needs_remote_tui_owned_thread && config.remote_tui_subscribe_phase == RemoteTuiSubscribePhase::PostTurn;
+    let subscribe_after_rollout = needs_remote_tui_owned_thread
+        && config.remote_tui_subscribe_phase == RemoteTuiSubscribePhase::AfterRollout;
+    let (thread_id, mut thread_path) = if needs_remote_tui_owned_thread {
         let mut handle = spawn_remote_tui(
             &config,
             app_server_ws_url
                 .as_deref()
                 .context("websocket transport did not expose a listen URL")?,
-            &thread_id,
+            None,
             spawn_home_override,
         )
         .await?;
+        wait_for_thread_started(&config, &mut client, &mut state, &mut logger, deadline).await?;
         sleep(Duration::from_millis(config.remote_tui_grace_ms)).await;
         let alive = handle.is_alive().await?;
         remote_tui_alive_after_grace = Some(alive);
@@ -367,8 +370,98 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
                 log_tail
             );
         }
+        let thread_id = state
+            .thread_id
+            .clone()
+            .context("remote TUI did not emit thread/started")?;
+        let mut thread_path = state.thread_path.clone();
+        if subscribe_before_turn {
+            let resume_response = subscribe_to_thread(
+                &config,
+                &mut client,
+                &mut state,
+                &mut logger,
+                deadline,
+                &thread_id,
+                thread_path.as_deref(),
+            )
+            .await?;
+            thread_path = extract_string(&resume_response, &["thread", "path"]).or(thread_path);
+            state.thread_path = thread_path.clone();
+        }
         remote_tui = Some(handle);
-    }
+        (thread_id, thread_path)
+    } else {
+        let thread_response = if let Some(thread_id) = config.resume_thread_id.as_deref() {
+            send_request(
+                &config,
+                &mut client,
+                &mut state,
+                &mut logger,
+                "thread/resume",
+                json!({
+                    "threadId": thread_id,
+                    "cwd": config.cwd.to_string_lossy(),
+                    "approvalPolicy": config.approval_policy,
+                    "sandbox": config.sandbox,
+                    "model": config.model.clone(),
+                }),
+                deadline,
+            )
+            .await?
+        } else {
+            send_request(
+                &config,
+                &mut client,
+                &mut state,
+                &mut logger,
+                "thread/start",
+                json!({
+                    "cwd": config.cwd.to_string_lossy(),
+                    "approvalPolicy": config.approval_policy,
+                    "sandbox": config.sandbox,
+                    "model": config.model.clone(),
+                }),
+                deadline,
+            )
+            .await?
+        };
+        let thread_id = extract_string(&thread_response, &["thread", "id"])
+            .context("missing thread.id in thread response")?;
+        let thread_path = extract_string(&thread_response, &["thread", "path"]);
+        state.thread_id = Some(thread_id.clone());
+        state.thread_path = thread_path.clone();
+
+        if config.spawn_remote_tui {
+            if let Some(path) = thread_path.as_deref() {
+                wait_for_thread_rollout(Path::new(path), Duration::from_secs(5)).await?;
+            }
+            let mut handle = spawn_remote_tui(
+                &config,
+                app_server_ws_url
+                    .as_deref()
+                    .context("websocket transport did not expose a listen URL")?,
+                Some(&thread_id),
+                spawn_home_override,
+            )
+            .await?;
+            sleep(Duration::from_millis(config.remote_tui_grace_ms)).await;
+            let alive = handle.is_alive().await?;
+            remote_tui_alive_after_grace = Some(alive);
+            if !alive {
+                let stderr_lines = handle.stderr_lines().await;
+                let log_tail = handle.log_tail(4000);
+                bail!(
+                    "remote TUI exited early after launch. stderr={:?} log_tail={}",
+                    stderr_lines,
+                    log_tail
+                );
+            }
+            remote_tui = Some(handle);
+        }
+
+        (thread_id, thread_path)
+    };
 
     let mut turn_params = json!({
         "threadId": thread_id.clone(),
@@ -394,6 +487,26 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         .context("missing turn.id in turn/start response")?;
     state.turn_id = Some(turn_id.clone());
     state.turn_status = extract_string(&turn_response, &["turn", "status"]);
+
+    if subscribe_after_turn || subscribe_after_rollout {
+        if subscribe_after_rollout {
+            if let Some(path) = thread_path.as_deref() {
+                wait_for_thread_rollout(Path::new(path), Duration::from_secs(5)).await?;
+            }
+        }
+        let resume_response = subscribe_to_thread(
+            &config,
+            &mut client,
+            &mut state,
+            &mut logger,
+            deadline,
+            &thread_id,
+            thread_path.as_deref(),
+        )
+        .await?;
+        thread_path = extract_string(&resume_response, &["thread", "path"]).or(thread_path);
+        state.thread_path = thread_path.clone();
+    }
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel();
     if let Some(text) = config.steer_text.clone() {
@@ -596,6 +709,7 @@ pub async fn run(config: CanaryConfig) -> Result<CanarySummary> {
         remote_tui_spawned: config.spawn_remote_tui,
         remote_tui_alive_after_grace,
         remote_tui_alive_before_shutdown,
+        remote_tui_subscribe_phase: config.remote_tui_subscribe_phase.as_str().to_string(),
         remote_tui_log,
         remote_tui_stderr_lines,
         log_jsonl: config.log_jsonl.map(|path| path.display().to_string()),
@@ -639,8 +753,6 @@ async fn spawn_client(
         .arg("exec_permission_approvals")
         .arg("--enable")
         .arg("request_permissions_tool")
-        .arg("--session-source")
-        .arg(&config.session_source)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -926,6 +1038,74 @@ async fn process_event(
     Ok(())
 }
 
+async fn wait_for_thread_started(
+    config: &CanaryConfig,
+    client: &mut RpcClient,
+    state: &mut ObservationState,
+    logger: &mut JsonlLogger,
+    deadline: Instant,
+) -> Result<()> {
+    while state.thread_id.is_none() {
+        let event = recv_event(client, deadline).await?;
+        process_event(config, event, client, state, logger).await?;
+    }
+    Ok(())
+}
+
+async fn subscribe_to_thread(
+    config: &CanaryConfig,
+    client: &mut RpcClient,
+    state: &mut ObservationState,
+    logger: &mut JsonlLogger,
+    deadline: Instant,
+    thread_id: &str,
+    thread_path: Option<&str>,
+) -> Result<Value> {
+    let mut params = json!({
+        "threadId": thread_id,
+        "cwd": config.cwd.to_string_lossy(),
+        "approvalPolicy": config.approval_policy,
+        "sandbox": config.sandbox,
+        "model": config.model.clone(),
+    });
+    if let Some(path) = thread_path {
+        params["path"] = Value::String(path.to_string());
+    }
+
+    let mut last_error = None;
+    for attempt in 0..=20 {
+        match send_request(
+            config,
+            client,
+            state,
+            logger,
+            "thread/resume",
+            params.clone(),
+            deadline,
+        )
+        .await
+        {
+            Ok(response) => return Ok(response),
+            Err(err) => {
+                let error_text = err.to_string();
+                last_error = Some(err);
+                if is_retryable_thread_subscription_error(&error_text) && attempt < 20 {
+                    sleep(Duration::from_millis(250)).await;
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+
+    Err(last_error.expect("thread subscribe retry loop should capture an error"))
+}
+
+fn is_retryable_thread_subscription_error(message: &str) -> bool {
+    message.contains("no rollout found for thread id")
+        || (message.contains("failed to load rollout") && message.contains("is empty"))
+}
+
 async fn handle_server_request(
     config: &CanaryConfig,
     value: Value,
@@ -1037,6 +1217,9 @@ fn process_rpc_value(value: Value, state: &mut ObservationState) -> Result<()> {
             {
                 state.thread_id = Some(id);
             }
+            if let Some(path) = extract_string(&params, &["thread", "path"]) {
+                state.thread_path = Some(path);
+            }
             let status = params
                 .get("status")
                 .or_else(|| params.get("thread").and_then(|thread| thread.get("status")));
@@ -1107,7 +1290,7 @@ fn extract_websocket_listen_url(line: &str) -> Option<String> {
 async fn spawn_remote_tui(
     config: &CanaryConfig,
     ws_url: &str,
-    thread_id: &str,
+    thread_id: Option<&str>,
     home_override: Option<&Path>,
 ) -> Result<RemoteTuiHandle> {
     let log_path = config.remote_tui_log.clone().unwrap_or_else(|| {
@@ -1117,12 +1300,19 @@ async fn spawn_remote_tui(
         fs::create_dir_all(parent)
             .with_context(|| format!("creating remote TUI log directory {}", parent.display()))?;
     }
-    let remote_cmd = format!(
-        "exec {} resume {} --enable tui_app_server --remote {} --no-alt-screen",
-        shell_quote(&config.codex_bin),
-        shell_quote(thread_id),
-        shell_quote(ws_url),
-    );
+    let remote_cmd = match thread_id {
+        Some(thread_id) => format!(
+            "exec {} resume {} --enable tui_app_server --remote {} --no-alt-screen",
+            shell_quote(&config.codex_bin),
+            shell_quote(thread_id),
+            shell_quote(ws_url),
+        ),
+        None => format!(
+            "exec {} --enable tui_app_server --remote {} --no-alt-screen",
+            shell_quote(&config.codex_bin),
+            shell_quote(ws_url),
+        ),
+    };
     let mut command = Command::new("script");
     command
         .arg("-q")
@@ -1362,6 +1552,28 @@ fn home_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("HOME is not set"))
 }
 
+fn thread_rollout_is_ready(path: &Path) -> bool {
+    fs::metadata(path)
+        .map(|metadata| metadata.is_file() && metadata.len() > 0)
+        .unwrap_or(false)
+}
+
+async fn wait_for_thread_rollout(path: &Path, timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if thread_rollout_is_ready(path) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            bail!(
+                "thread rollout did not materialize before remote TUI launch: {}",
+                path.display()
+            );
+        }
+        sleep(Duration::from_millis(50)).await;
+    }
+}
+
 async fn wait_for_hook_states(outbox_dir: &Path, hook_session_id: &str) -> Result<Vec<String>> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
@@ -1457,6 +1669,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn thread_rollout_is_ready_requires_non_empty_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rollout.jsonl");
+        assert!(!thread_rollout_is_ready(&path));
+        fs::write(&path, "").unwrap();
+        assert!(!thread_rollout_is_ready(&path));
+        fs::write(&path, "{\"ok\":true}\n").unwrap();
+        assert!(thread_rollout_is_ready(&path));
+    }
+
+    #[test]
+    fn parse_remote_tui_subscribe_phase_accepts_rollout_alias() {
+        assert_eq!(
+            parse_remote_tui_subscribe_phase("rollout").unwrap(),
+            RemoteTuiSubscribePhase::AfterRollout
+        );
+        assert_eq!(
+            parse_remote_tui_subscribe_phase("after_rollout").unwrap(),
+            RemoteTuiSubscribePhase::AfterRollout
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_thread_rollout_retries_until_file_is_non_empty() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("rollout.jsonl");
+        let writer_path = path.clone();
+        tokio::spawn(async move {
+            sleep(Duration::from_millis(75)).await;
+            fs::write(&writer_path, "").unwrap();
+            sleep(Duration::from_millis(75)).await;
+            fs::write(&writer_path, "{\"ok\":true}\n").unwrap();
+        });
+        wait_for_thread_rollout(&path, Duration::from_secs(1))
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn canary_runs_against_fake_codex_app_server() {
         let temp = tempfile::tempdir().unwrap();
@@ -1528,6 +1779,7 @@ for line in sys.stdin:
             interrupt_after_ms: None,
             auto_approve: false,
             spawn_remote_tui: false,
+            remote_tui_subscribe_phase: RemoteTuiSubscribePhase::PostTurn,
             remote_tui_grace_ms: 3000,
             remote_tui_log: None,
             probe_thread_read: true,
@@ -1664,6 +1916,7 @@ for line in sys.stdin:
             interrupt_after_ms: None,
             auto_approve: true,
             spawn_remote_tui: false,
+            remote_tui_subscribe_phase: RemoteTuiSubscribePhase::PostTurn,
             remote_tui_grace_ms: 3000,
             remote_tui_log: None,
             probe_thread_read: false,

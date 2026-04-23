@@ -128,11 +128,18 @@ def test_bridge_state_file_schema_matches_python_reader(tmp_path: Path) -> None:
             "active_turn_id",
             "last_turn_status",
             "last_error",
+            "thread_subscription_status",
+            "thread_subscription_last_error",
         ):
             if optional_key in raw and raw[optional_key] is not None:
                 assert isinstance(raw[optional_key], str), (
                     f"{optional_key} must be string|null, got {type(raw[optional_key]).__name__}"
                 )
+
+        if "thread_subscription_attempts" in raw:
+            assert isinstance(raw["thread_subscription_attempts"], int), (
+                "thread_subscription_attempts must be int"
+            )
 
         # Only run the Python collector while the engine is alive. Otherwise
         # `_bridge_is_alive` considers the state stale and purges it.
