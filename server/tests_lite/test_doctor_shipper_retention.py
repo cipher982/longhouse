@@ -5,6 +5,8 @@ from zerg.cli import doctor
 from zerg.services import desktop_app
 from zerg.services import shipper
 from zerg.services.longhouse_paths import get_machine_token_path
+from zerg.services.longhouse_paths import get_agent_log_dir
+from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
 from zerg.services.shipper.service import Platform
 
 
@@ -52,6 +54,21 @@ def test_check_shipper_passes_with_long_retention_and_longhouse_stop_hook(tmp_pa
 
     assert labels["cleanupPeriodDays=180 days"] == doctor.PASS
     assert labels["Claude Stop hook includes the Longhouse machine agent"] == doctor.PASS
+
+
+def test_check_shipper_reads_engine_log_from_longhouse_home(tmp_path, monkeypatch):
+    claude_dir = tmp_path / ".claude"
+    _seed_claude_dir(claude_dir, settings={})
+    log_dir = get_agent_log_dir(resolve_longhouse_home_from_provider_home(claude_dir))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "engine.log.2026-04-23").write_text("engine log\n", encoding="utf-8")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude_dir))
+
+    results = doctor._check_shipper()
+    labels = {r.label: r.status for r in results}
+
+    assert "No engine log found" not in labels
+    assert any(r.status == doctor.PASS and r.label.startswith("Engine log exists (") for r in results)
 
 
 def test_check_shipper_reports_ambient_app_bundle(tmp_path, monkeypatch):

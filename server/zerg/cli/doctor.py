@@ -393,8 +393,12 @@ def _check_shipper() -> list[CheckResult]:
                 )
             )
 
-    # Engine log (rolling daily files: engine.log.YYYY-MM-DD)
-    log_dir = claude_dir / "logs"
+    # Engine logs live under the Longhouse agent state root, not the provider
+    # home. Hosted dogfood often uses ~/.claude plus ~/.longhouse siblings.
+    from zerg.services.longhouse_paths import get_agent_log_dir
+    from zerg.services.longhouse_paths import resolve_longhouse_home_from_provider_home
+
+    log_dir = get_agent_log_dir(resolve_longhouse_home_from_provider_home(claude_dir))
     engine_logs = sorted(log_dir.glob("engine.log.*")) if log_dir.is_dir() else []
     if engine_logs:
         try:
@@ -539,38 +543,20 @@ def _check_config() -> list[CheckResult]:
                 )
             )
 
-    # URL drift check: config.toml vs machine-state.json
-    from urllib.parse import urlparse
-
-    from zerg.services.machine_state import load_machine_state
-
-    config_netloc = f"{config.server.host}:{config.server.port}"
-    machine_state = load_machine_state()
-    if machine_state and machine_state.runtime_url:
-        try:
-            parsed_machine = urlparse(machine_state.runtime_url)
-            machine_netloc = parsed_machine.netloc
-            if config_netloc != machine_netloc:
-                results.append(
-                    CheckResult(
-                        WARN,
-                        f"URL drift: config says {config_netloc}, machine-state has {machine_netloc}",
-                        "Run: longhouse connect --install to sync, or edit config.toml to match",
-                    )
-                )
-        except Exception:
-            pass  # Non-critical
-
     try:
         from zerg.services.local_health import collect_launch_readiness
+        from zerg.services.machine_state import load_machine_state
 
+        machine_state = load_machine_state()
+        machine_runtime_url = machine_state.runtime_url if machine_state else None
+        machine_state_name = getattr(machine_state, "machine_name", None) if machine_state else None
         launch_readiness = collect_launch_readiness()
         launch_reasons = {str(item) for item in list(launch_readiness.get("reasons") or [])}
         runner = dict(launch_readiness.get("runner") or {})
         runner_urls = ", ".join(str(item) for item in list(runner.get("runner_urls") or []) if str(item).strip()) or "-"
         runner_name = str(runner.get("runner_name") or "").strip() or "-"
-        control_plane_url = str(launch_readiness.get("control_plane_url") or machine_state.runtime_url or "").strip() or "-"
-        machine_name = str(launch_readiness.get("machine_name") or getattr(machine_state, "machine_name", None) or "").strip() or "-"
+        control_plane_url = str(launch_readiness.get("control_plane_url") or machine_runtime_url or "").strip() or "-"
+        machine_name = str(launch_readiness.get("machine_name") or machine_state_name or "").strip() or "-"
 
         if launch_reasons.intersection(
             {
