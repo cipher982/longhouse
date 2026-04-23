@@ -1,3 +1,4 @@
+import plistlib
 from types import SimpleNamespace
 
 from zerg.services import local_runtime_installer as installer
@@ -456,6 +457,71 @@ def test_apply_machine_state_update_ignores_service_from_other_state_root(tmp_pa
 
     assert result.reconciled is False
     assert result.machine_state.runtime_url == "https://new.longhouse.test"
+
+
+def test_apply_machine_state_update_reconciles_symlinked_state_root(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    claude_dir = home / ".claude"
+    real_home = tmp_path / "real-longhouse"
+    real_home.mkdir(parents=True, exist_ok=True)
+    home.mkdir(parents=True, exist_ok=True)
+    (home / ".longhouse").symlink_to(real_home, target_is_directory=True)
+    service_file = tmp_path / "com.longhouse.shipper.plist"
+    service_file.write_bytes(
+        plistlib.dumps(
+            {
+                "EnvironmentVariables": {
+                    "LONGHOUSE_HOME": str(real_home),
+                }
+            }
+        )
+    )
+
+    monkeypatch.setenv("HOME", str(home))
+    installer.write_machine_state(
+        base_dir=home / ".longhouse",
+        written_by="connect-install",
+        runtime_url="https://old.longhouse.test",
+        machine_name="test-box",
+        desktop_app_enabled=False,
+    )
+
+    service_calls: list[dict[str, str | None]] = []
+    monkeypatch.setattr(
+        installer,
+        "get_service_info",
+        lambda claude_dir: {"status": "running", "service_file": str(service_file)},
+    )
+    monkeypatch.setattr(installer, "load_token", lambda config_dir: "stored-token")
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: service_calls.append(kwargs)
+        or {
+            "message": "ok",
+            "service": "launchd",
+            "plist_path": "/tmp/test.plist",
+        },
+    )
+    monkeypatch.setattr(installer, "install_hooks", lambda **kwargs: ["hooks installed"])
+
+    result = installer.apply_machine_state_update(
+        claude_dir=str(claude_dir),
+        written_by="connect",
+        runtime_url="https://new.longhouse.test",
+    )
+
+    assert result.reconciled is True
+    assert service_calls == [
+        {
+            "url": "https://new.longhouse.test",
+            "token": "stored-token",
+            "claude_dir": str(claude_dir),
+            "machine_name": "test-box",
+            "machine_config_generation": result.machine_state.config_generation,
+            "machine_state_hash": installer.machine_state_source_hash(result.machine_state),
+        }
+    ]
 
 
 def test_reconcile_local_runtime_uses_canonical_machine_state(tmp_path, monkeypatch):

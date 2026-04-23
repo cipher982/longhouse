@@ -104,7 +104,7 @@ def _service_targets_state_root(service_info: dict[str, object], state_root: Pat
     if service_home is None:
         return True
 
-    return service_home == state_root.expanduser()
+    return service_home.resolve(strict=False) == state_root.expanduser().resolve(strict=False)
 
 
 def _ensure_managed_codex_runtime(*, source_override: str | None = None) -> InstalledRuntimeBinary:
