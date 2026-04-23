@@ -64,7 +64,7 @@ def test_ensure_runtime_binary_copies_window_host_from_local_override(monkeypatc
 
 
 def test_extract_version_token_accepts_build_metadata():
-    assert runtime_artifacts._extract_version_token("codex-cli 0.122.0+longhouse.1") == "0.122.0+longhouse.1"
+    assert runtime_artifacts._extract_version_token("codex-cli 0.124.0+build.1") == "0.124.0+build.1"
 
 
 def test_ensure_runtime_binary_copies_managed_codex_from_local_override(monkeypatch, tmp_path: Path):
@@ -116,7 +116,7 @@ def test_ensure_runtime_binary_accepts_pathlike_managed_codex_override(monkeypat
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setattr(runtime_artifacts, "_local_bin_dir", lambda: home / ".local" / "bin")
     monkeypatch.setattr(runtime_artifacts, "resolve_longhouse_home", lambda: home / ".longhouse")
-    monkeypatch.setattr(runtime_artifacts, "_probe_executable_version", lambda path: "codex-cli 0.122.0+longhouse.1")
+    monkeypatch.setattr(runtime_artifacts, "_probe_executable_version", lambda path: "codex-cli 0.124.0")
 
     result = runtime_artifacts.ensure_runtime_binary(
         runtime_artifacts.RuntimeComponent.MANAGED_CODEX,

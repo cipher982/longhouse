@@ -9,18 +9,6 @@ on:
         description: "Existing git tag to publish from (for example v0.1.6)"
         required: true
         type: string
-      managed_codex_upstream_ref:
-        description: "Optional upstream openai/codex ref or tag for the managed Codex build"
-        required: false
-        type: string
-      managed_codex_upstream_version:
-        description: "Optional upstream Codex version stamp (for example 0.123.0)"
-        required: false
-        type: string
-      managed_codex_build_version:
-        description: "Optional managed Codex build stamp (for example 0.123.0+longhouse.5)"
-        required: false
-        type: string
       notary_wait_timeout:
         description: "How long to wait for Apple notarization before failing (for example 330m)"
         required: false
@@ -36,9 +24,6 @@ jobs:
   build-engine-linux-x64:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
-      MANAGED_CODEX_UPSTREAM_REF: ${{ inputs.managed_codex_upstream_ref || '' }}
-      MANAGED_CODEX_UPSTREAM_VERSION: ${{ inputs.managed_codex_upstream_version || '' }}
-      MANAGED_CODEX_BUILD_VERSION: ${{ inputs.managed_codex_build_version || '' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -50,7 +35,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux build deps for managed Codex
+      - name: Install Linux build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
@@ -58,42 +43,15 @@ jobs:
       - name: Build engine binary
         run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
 
-      - name: Restore managed Codex cargo dependency cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-          restore-keys: |
-            managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-
-            managed-codex-cargo-${{ runner.os }}-
-
-      - name: Prepare managed Codex cache directory
-        run: mkdir -p prebuilt
-
-      - name: Restore managed Codex binary cache
-        id: managed_codex_binary_cache
-        uses: actions/cache@v4
-        with:
-          path: prebuilt/longhouse-codex
-          key: managed-codex-binary-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-
-      - name: Build managed Codex binary
-        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit != 'true' }}
-        run: |
-          chmod +x scripts/release/build-managed-codex.sh
-          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
-
-      - name: Stage managed Codex release asset
+      - name: Download managed Codex (stock upstream)
         run: |
           mkdir -p binaries
-          cp prebuilt/longhouse-codex binaries/longhouse-codex-linux-x64
-          chmod +x binaries/longhouse-codex-linux-x64
+          scripts/release/download-managed-codex.sh \
+            --target x86_64-unknown-linux-gnu \
+            --output binaries/longhouse-codex-linux-x64
 
       - name: Collect engine binary
         run: |
-          mkdir -p binaries
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-x64
           chmod +x binaries/longhouse-engine-linux-x64
 
@@ -109,9 +67,6 @@ jobs:
   build-engine-linux-arm64:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
-      MANAGED_CODEX_UPSTREAM_REF: ${{ inputs.managed_codex_upstream_ref || '' }}
-      MANAGED_CODEX_UPSTREAM_VERSION: ${{ inputs.managed_codex_upstream_version || '' }}
-      MANAGED_CODEX_BUILD_VERSION: ${{ inputs.managed_codex_build_version || '' }}
     runs-on: ubuntu-24.04-arm
 
     steps:
@@ -123,7 +78,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install Linux build deps for managed Codex
+      - name: Install Linux build deps
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
@@ -131,42 +86,15 @@ jobs:
       - name: Build engine binary
         run: cargo build --manifest-path engine/Cargo.toml --release --bin longhouse-engine
 
-      - name: Restore managed Codex cargo dependency cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-          restore-keys: |
-            managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-
-            managed-codex-cargo-${{ runner.os }}-
-
-      - name: Prepare managed Codex cache directory
-        run: mkdir -p prebuilt
-
-      - name: Restore managed Codex binary cache
-        id: managed_codex_binary_cache
-        uses: actions/cache@v4
-        with:
-          path: prebuilt/longhouse-codex
-          key: managed-codex-binary-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-
-      - name: Build managed Codex binary
-        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit != 'true' }}
-        run: |
-          chmod +x scripts/release/build-managed-codex.sh
-          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
-
-      - name: Stage managed Codex release asset
+      - name: Download managed Codex (stock upstream)
         run: |
           mkdir -p binaries
-          cp prebuilt/longhouse-codex binaries/longhouse-codex-linux-arm64
-          chmod +x binaries/longhouse-codex-linux-arm64
+          scripts/release/download-managed-codex.sh \
+            --target aarch64-unknown-linux-gnu \
+            --output binaries/longhouse-codex-linux-arm64
 
       - name: Collect engine binary
         run: |
-          mkdir -p binaries
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-linux-arm64
           chmod +x binaries/longhouse-engine-linux-arm64
 
@@ -185,9 +113,6 @@ jobs:
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag_name }}
       LONGHOUSE_NOTARY_WAIT_TIMEOUT: ${{ inputs.notary_wait_timeout || '330m' }}
-      MANAGED_CODEX_UPSTREAM_REF: ${{ inputs.managed_codex_upstream_ref || '' }}
-      MANAGED_CODEX_UPSTREAM_VERSION: ${{ inputs.managed_codex_upstream_version || '' }}
-      MANAGED_CODEX_BUILD_VERSION: ${{ inputs.managed_codex_build_version || '' }}
 
     steps:
       - name: Checkout
@@ -218,37 +143,11 @@ jobs:
           cp engine/target/release/longhouse-engine binaries/longhouse-engine-darwin-arm64
           chmod +x binaries/longhouse-engine-darwin-arm64
 
-      - name: Restore managed Codex cargo dependency cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-          restore-keys: |
-            managed-codex-cargo-${{ runner.os }}-${{ runner.arch }}-
-            managed-codex-cargo-${{ runner.os }}-
-
-      - name: Prepare managed Codex cache directory
-        run: mkdir -p prebuilt
-
-      - name: Restore managed Codex binary cache
-        id: managed_codex_binary_cache
-        uses: actions/cache@v4
-        with:
-          path: prebuilt/longhouse-codex
-          key: managed-codex-binary-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-
-      - name: Build managed Codex binary
-        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit != 'true' }}
+      - name: Download managed Codex (stock upstream)
         run: |
-          chmod +x scripts/release/build-managed-codex.sh
-          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
-
-      - name: Stage managed Codex release asset
-        run: |
-          cp prebuilt/longhouse-codex binaries/longhouse-codex-darwin-arm64
-          chmod +x binaries/longhouse-codex-darwin-arm64
+          scripts/release/download-managed-codex.sh \
+            --target aarch64-apple-darwin \
+            --output binaries/longhouse-codex-darwin-arm64
 
       - name: Build macOS ambient app payload
         run: |

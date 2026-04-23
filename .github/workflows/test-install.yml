@@ -10,8 +10,7 @@ on:
       - 'scripts/qa/test-cli-upgrade.sh'
       - 'scripts/qa/test-local-runtime-packaging.sh'
       - 'scripts/resolve-swift-product-path.sh'
-      - 'scripts/release/build-managed-codex.sh'
-      - 'scripts/release/managed-codex.patch'
+      - 'scripts/release/download-managed-codex.sh'
       - 'server/pyproject.toml'
       - 'server/zerg/cli/**'
       - 'server/zerg/__main__.py'
@@ -27,8 +26,7 @@ on:
       - 'scripts/qa/test-cli-upgrade.sh'
       - 'scripts/qa/test-local-runtime-packaging.sh'
       - 'scripts/resolve-swift-product-path.sh'
-      - 'scripts/release/build-managed-codex.sh'
-      - 'scripts/release/managed-codex.patch'
+      - 'scripts/release/download-managed-codex.sh'
       - 'server/pyproject.toml'
       - 'server/zerg/cli/**'
       - 'server/zerg/__main__.py'
@@ -48,71 +46,6 @@ on:
         type: boolean
 
 jobs:
-  managed-codex-smoke-binary:
-    if: ${{ github.event_name != 'schedule' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-          - os: macos-latest
-    runs-on: ${{ matrix.os }}
-    # macOS hosted Rust builds for managed Codex are slow enough that the first
-    # cold cache-seeding run needs substantial headroom. Subsequent runs should
-    # hit the binary cache below and skip the rebuild entirely.
-    timeout-minutes: 180
-    name: "managed-codex-smoke-build--${{ matrix.os }}"
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Restore managed Codex cargo dependency cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: managed-codex-cargo-${{ runner.os }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-          restore-keys: |
-            managed-codex-cargo-${{ runner.os }}-
-
-      - name: Prepare managed Codex output directory
-        run: mkdir -p prebuilt
-
-      - name: Restore managed Codex binary cache
-        id: managed_codex_binary_cache
-        uses: actions/cache@v4
-        with:
-          path: prebuilt/longhouse-codex
-          key: managed-codex-binary-${{ runner.os }}-${{ hashFiles('scripts/release/build-managed-codex.sh', 'scripts/release/managed-codex.patch') }}
-
-      - name: Install Linux build deps for managed Codex
-        if: ${{ runner.os == 'Linux' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
-
-      - name: Ensure cached managed Codex binary is executable
-        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit == 'true' }}
-        run: chmod +x prebuilt/longhouse-codex
-
-      - name: Build managed Codex binary for smoke reuse
-        if: ${{ steps.managed_codex_binary_cache.outputs.cache-hit != 'true' }}
-        run: |
-          chmod +x scripts/release/build-managed-codex.sh
-          scripts/release/build-managed-codex.sh --output prebuilt/longhouse-codex
-          chmod +x prebuilt/longhouse-codex
-
-      - name: Upload managed Codex smoke artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: installer-smoke-managed-codex-${{ matrix.os }}
-          path: prebuilt/longhouse-codex
-          retention-days: 1
-
   runtime-packaging-macos:
     if: ${{ github.event_name != 'schedule' }}
     runs-on: macos-latest
@@ -134,7 +67,6 @@ jobs:
           path: artifacts/runtime-packaging
 
   installer-first-run-local:
-    needs: managed-codex-smoke-binary
     if: ${{ github.event_name != 'schedule' }}
     strategy:
       fail-fast: false
@@ -174,17 +106,16 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Install Linux build deps for managed Codex
-        if: ${{ runner.os == 'Linux' }}
+      - name: Download stock codex for installer smoke
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
-
-      - name: Download prebuilt managed Codex
-        uses: actions/download-artifact@v5
-        with:
-          name: installer-smoke-managed-codex-${{ matrix.os }}
-          path: ${{ runner.temp }}/managed-codex
+          case "${{ matrix.os }}" in
+            ubuntu-latest) target=x86_64-unknown-linux-gnu ;;
+            macos-latest)  target=aarch64-apple-darwin ;;
+            *) echo "Unsupported matrix os ${{ matrix.os }}"; exit 1 ;;
+          esac
+          scripts/release/download-managed-codex.sh \
+            --target "$target" \
+            --output "${RUNNER_TEMP}/managed-codex/longhouse-codex"
 
       - name: Run disposable installer smoke
         env:
@@ -235,7 +166,6 @@ jobs:
             --runtime-artifact-smoke
 
   installer-upgrade-local:
-    needs: managed-codex-smoke-binary
     if: ${{ github.event_name != 'schedule' }}
     strategy:
       fail-fast: false
@@ -273,17 +203,16 @@ jobs:
         with:
           bun-version: '1.2.20'
 
-      - name: Install Linux build deps for managed Codex
-        if: ${{ runner.os == 'Linux' }}
+      - name: Download stock codex for installer upgrade smoke
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config libssl-dev libcap-dev
-
-      - name: Download prebuilt managed Codex
-        uses: actions/download-artifact@v5
-        with:
-          name: installer-smoke-managed-codex-${{ matrix.os }}
-          path: ${{ runner.temp }}/managed-codex
+          case "${{ matrix.os }}" in
+            ubuntu-latest) target=x86_64-unknown-linux-gnu ;;
+            macos-latest)  target=aarch64-apple-darwin ;;
+            *) echo "Unsupported matrix os ${{ matrix.os }}"; exit 1 ;;
+          esac
+          scripts/release/download-managed-codex.sh \
+            --target "$target" \
+            --output "${RUNNER_TEMP}/managed-codex/longhouse-codex"
 
       - name: Rehearse install -> upgrade in disposable HOME
         run: |

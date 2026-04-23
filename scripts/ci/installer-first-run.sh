@@ -138,9 +138,8 @@ build_desktop_app_bundle() {
 build_managed_codex_binary() {
   local binary_path="$1"
 
-  log "🤖 Building local managed Codex binary for installer validation..." >&2
-  chmod +x "$ROOT_DIR/scripts/release/build-managed-codex.sh"
-  "$ROOT_DIR/scripts/release/build-managed-codex.sh" --output "$binary_path" >/dev/null
+  log "🤖 Downloading stock codex binary for installer validation..." >&2
+  "$ROOT_DIR/scripts/release/download-managed-codex.sh" --output "$binary_path" >/dev/null
 
   if [[ ! -x "$binary_path" ]]; then
     fail "Managed Codex binary was not created: $binary_path"
