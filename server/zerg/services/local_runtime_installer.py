@@ -331,6 +331,9 @@ def apply_machine_state_update(
     )
 
     machine_state = write_machine_state(**write_kwargs)
+    if not _is_stable_home(config_dir):
+        return MachineStateApplyResult(machine_state=machine_state)
+
     service_installed = _service_targets_state_root(service_info, config_dir)
     if not service_installed or not machine_state.runtime_url or not machine_state.machine_name:
         return MachineStateApplyResult(machine_state=machine_state)

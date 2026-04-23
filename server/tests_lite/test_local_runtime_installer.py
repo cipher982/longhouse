@@ -465,6 +465,39 @@ def test_apply_machine_state_update_allows_localhost_target_on_scratch_home(tmp_
     assert collect_calls == []
 
 
+def test_apply_machine_state_update_skips_global_reconcile_for_scratch_home(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    scratch_home = home / ".longhouse-dev"
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(installer, "get_service_info", lambda claude_dir: {"status": "running"})
+    monkeypatch.setattr(
+        installer,
+        "install_service",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("scratch apply should skip service reconcile")),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_hooks",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("scratch apply should skip hook reconcile")),
+    )
+    monkeypatch.setattr(
+        installer,
+        "install_desktop_app_service",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("scratch apply should skip desktop app reconcile")),
+    )
+
+    result = installer.apply_machine_state_update(
+        claude_dir=None,
+        base_dir=scratch_home,
+        written_by="shipper-save-url",
+        runtime_url="https://dev.longhouse.test",
+    )
+
+    assert result.reconciled is False
+    assert result.machine_state.runtime_url == "https://dev.longhouse.test"
+
+
 def test_apply_machine_state_update_reconciles_existing_service(tmp_path, monkeypatch):
     home = tmp_path / "home"
     claude_dir = home / ".claude"
