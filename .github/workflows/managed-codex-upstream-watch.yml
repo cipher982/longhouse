@@ -183,7 +183,12 @@ jobs:
 
   dispatch-runtime-release:
     needs: detect
-    if: ${{ needs.detect.outputs.update_needed == 'true' && needs.detect.outputs.patch_status == 'applies_cleanly' && needs.detect.outputs.already_published != 'true' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    # Only dispatch rebuilds on explicit workflow_dispatch (not cron) until the
+    # detector can reliably distinguish "patch applies cleanly to lib.rs hunk"
+    # from "full rebuild succeeds". rust-v0.124.0 detector said applies_cleanly
+    # but the rebuild failed at codex-rs/tui/src/app.rs:4347. See docket item
+    # managed-codex-detector-false-positive.
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run && needs.detect.outputs.update_needed == 'true' && needs.detect.outputs.patch_status == 'applies_cleanly' && needs.detect.outputs.already_published != 'true' }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
