@@ -33,6 +33,7 @@ The system is "fully observed" only when all of these are true.
 - Every managed turn emits a root runtime-host trace with phase timings.
 - Every engine ship/export cycle emits machine-local timing telemetry.
 - Every `/api/agents/ingest` request emits both traces and metrics.
+- Every `/api/agents/heartbeat` request emits both traces and metrics.
 - Every slow-turn report can be matched to a machine, session, provider, and build identity.
 
 ### Debuggability
@@ -82,6 +83,8 @@ Required families:
 - ingest request counts by auth kind, provider, and status
 - ingest decode/write latency histograms
 - ingest payload size and event count histograms
+- heartbeat request counts by auth kind, last ship result, and status
+- heartbeat write latency and payload size histograms
 - engine ship attempt counts by outcome
 - engine ship latency histograms or rolling status summaries
 - heartbeat freshness and offline duration

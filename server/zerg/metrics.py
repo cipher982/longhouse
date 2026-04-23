@@ -184,6 +184,24 @@ try:
         labelnames=("provider", "kind"),
     )
 
+    agents_heartbeat_requests_total = Counter(
+        "agents_heartbeat_requests_total",
+        "Agent heartbeat requests by auth kind and status",
+        labelnames=("auth_kind", "status"),
+    )
+
+    agents_heartbeat_write_seconds = Histogram(
+        "agents_heartbeat_write_seconds",
+        "Write-serializer enqueue plus heartbeat write latency (seconds)",
+        buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5),
+    )
+
+    agents_heartbeat_payload_bytes = Histogram(
+        "agents_heartbeat_payload_bytes",
+        "Wire payload byte sizes for agent heartbeat requests",
+        buckets=(128, 256, 512, 768, 1_024, 2_048, 4_096, 8_192, 16_384),
+    )
+
 except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib absent
 
     class _NoopCounter:  # noqa: D401 – tiny helper
@@ -204,6 +222,7 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     managed_turn_wait_total = _NoopCounter()  # type: ignore[assignment]
     agents_ingest_requests_total = _NoopCounter()  # type: ignore[assignment]
     agents_ingest_events_total = _NoopCounter()  # type: ignore[assignment]
+    agents_heartbeat_requests_total = _NoopCounter()  # type: ignore[assignment]
 
     # Provide *noop* Gauge so code can call ``set`` without importing
     # the optional dependency in minimal CI images.
@@ -247,3 +266,5 @@ except ModuleNotFoundError:  # pragma: no cover – metrics disabled when lib ab
     agents_ingest_decode_seconds = _NoopHistogram()  # type: ignore[assignment]
     agents_ingest_write_seconds = _NoopHistogram()  # type: ignore[assignment]
     agents_ingest_payload_bytes = _NoopHistogram()  # type: ignore[assignment]
+    agents_heartbeat_write_seconds = _NoopHistogram()  # type: ignore[assignment]
+    agents_heartbeat_payload_bytes = _NoopHistogram()  # type: ignore[assignment]
