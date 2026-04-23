@@ -159,6 +159,54 @@ def _ensure_managed_codex_runtime(*, source_override: str | None = None) -> Inst
     return ensure_runtime_binary(RuntimeComponent.MANAGED_CODEX, source_override=source_override)
 
 
+def _reconcile_launch_artifacts(
+    *,
+    url: str,
+    token: str | None,
+    claude_dir: str | None,
+    machine_name: str,
+    menubar: bool,
+    machine_config_generation: str | None,
+    machine_state_hash: str | None,
+    engine_path: str | None = None,
+) -> tuple[dict[str, str], HookInstallResult, dict[str, str] | None]:
+    service_result = install_service(
+        url=url,
+        token=token,
+        claude_dir=claude_dir,
+        machine_name=machine_name,
+        machine_config_generation=machine_config_generation,
+        machine_state_hash=machine_state_hash,
+    )
+
+    try:
+        hook_kwargs: dict[str, str | None] = {
+            "url": url,
+            "token": token,
+            "claude_dir": claude_dir,
+        }
+        if engine_path is not None:
+            hook_kwargs["engine_path"] = engine_path
+        hook_actions = install_hooks(**hook_kwargs)
+        hooks = HookInstallResult(actions=hook_actions)
+    except Exception as exc:
+        hooks = HookInstallResult(actions=[], warning=str(exc))
+
+    desktop_app_result = None
+    if menubar:
+        try:
+            desktop_app_result = install_desktop_app_service(
+                ui_url=url,
+                claude_dir=claude_dir,
+            )
+        except Exception as exc:
+            # Dev/unreleased builds may 404 on the release asset — degrade
+            # gracefully rather than failing the entire install.
+            desktop_app_result = {"warning": str(exc)}
+
+    return service_result, hooks, desktop_app_result
+
+
 def _install_local_runtime_artifacts(
     *,
     url: str,
@@ -204,37 +252,16 @@ def _install_local_runtime_artifacts(
             desktop_app_result=desktop_app_result,
         )
 
-    service_result = install_service(
+    service_result, hooks, desktop_app_result = _reconcile_launch_artifacts(
         url=url,
         token=token,
         claude_dir=claude_dir,
         machine_name=resolved_name,
+        menubar=menubar,
         machine_config_generation=machine_config_generation,
         machine_state_hash=machine_state_hash,
+        engine_path=engine_runtime.path,
     )
-
-    try:
-        hook_actions = install_hooks(
-            url=url,
-            token=token,
-            claude_dir=claude_dir,
-            engine_path=engine_runtime.path,
-        )
-        hooks = HookInstallResult(actions=hook_actions)
-    except Exception as exc:
-        hooks = HookInstallResult(actions=[], warning=str(exc))
-
-    desktop_app_result = None
-    if menubar:
-        try:
-            desktop_app_result = install_desktop_app_service(
-                ui_url=url,
-                claude_dir=claude_dir,
-            )
-        except Exception as exc:
-            # Dev/unreleased builds may 404 on the release asset — degrade
-            # gracefully rather than failing the entire install.
-            desktop_app_result = {"warning": str(exc)}
 
     return LocalRuntimeInstallResult(
         machine_name=resolved_name,
@@ -342,31 +369,15 @@ def apply_machine_state_update(
     if token:
         save_token(token, config_dir)
 
-    install_service(
+    _reconcile_launch_artifacts(
         url=machine_state.runtime_url,
         token=effective_token,
         claude_dir=claude_dir,
         machine_name=machine_state.machine_name,
+        menubar=bool(machine_state.desktop_app_enabled),
         machine_config_generation=machine_state.config_generation,
         machine_state_hash=machine_state_source_hash(machine_state),
     )
-    try:
-        install_hooks(
-            url=machine_state.runtime_url,
-            token=effective_token,
-            claude_dir=claude_dir,
-        )
-    except Exception:
-        pass
-
-    if machine_state.desktop_app_enabled:
-        try:
-            install_desktop_app_service(
-                ui_url=machine_state.runtime_url,
-                claude_dir=claude_dir,
-            )
-        except Exception:
-            pass
 
     return MachineStateApplyResult(
         machine_state=machine_state,
