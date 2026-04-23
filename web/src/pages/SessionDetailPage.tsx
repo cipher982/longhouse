@@ -3,8 +3,7 @@
  *
  * Layout:
  * - Left: session context and branch lineage
- * - Center: event timeline transcript
- * - Right: inspector for the selected event
+ * - Center: event timeline transcript (tool detail expands inline)
  * - Bottom dock: inline live-session composer and session control
  */
 
@@ -21,7 +20,6 @@ import { toast } from "react-hot-toast";
 import { Button, EmptyState, Spinner } from "../components/ui";
 import { TrashIcon } from "../components/icons";
 import { SessionChat, type SessionChatTarget } from "../components/SessionChat";
-import { EventInspectorPane } from "../components/session-workspace/EventInspectorPane";
 import { SessionContextPane } from "../components/session-workspace/SessionContextPane";
 import { SessionRuntimeStrip } from "../components/session-workspace/SessionRuntimeStrip";
 import { TimelinePane } from "../components/session-workspace/TimelinePane";
@@ -70,7 +68,6 @@ function SessionDetailWorkspaceRoute({
     isFetchingPreviousPage,
     abandonedEvents,
     selectedKey,
-    selectedSelection,
     selectKey,
     handleVisibleSelectionChange,
     registerTimelineList,
@@ -193,11 +190,6 @@ function SessionDetailWorkspaceRoute({
     interaction.sourceOriginLabel ||
     displaySession.home_label ||
     "host";
-
-  const inspectorSelection =
-    selectedSelection && selectedSelection.kind !== "message"
-      ? selectedSelection
-      : null;
 
   return (
     <div className="session-workspace-route">
@@ -335,15 +327,6 @@ function SessionDetailWorkspaceRoute({
               </div>
             }
           />
-        }
-        inspector={
-          inspectorSelection ? (
-            <EventInspectorPane
-              selection={inspectorSelection}
-              sessionEnded={Boolean(session?.ended_at)}
-              onSelectKey={selectKey}
-            />
-          ) : undefined
         }
       />
     </div>

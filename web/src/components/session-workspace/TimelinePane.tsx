@@ -94,12 +94,8 @@ function truncateMarkdown(text: string, maxLines: number): string {
 
 function MessageRow({
   event,
-  isSelected,
-  onSelect,
 }: {
   event: Extract<TimelineItem, { kind: "message" }>["event"];
-  isSelected: boolean;
-  onSelect: () => void;
 }) {
   const preview = getTimelineMessagePreview(event);
   const outside = isOutsideActiveContext(event);
@@ -119,18 +115,7 @@ function MessageRow({
       data-testid="session-timeline-row"
       data-row-kind="message"
       data-message-role={event.role}
-      className={`tl-msg tl-msg--${event.role}${isSelected ? " is-selected" : ""}`}
-      // Clicking anywhere on the message selects it and opens the raw-event
-      // inspector. Text selection still works — we use mousedown state to
-      // suppress the click if the user is selecting text, not just clicking.
-      onClick={(e) => {
-        const sel = window.getSelection();
-        if (sel && sel.toString().length > 0) return;
-        // Don't steal clicks on links/buttons inside the markdown body.
-        const target = e.target as HTMLElement;
-        if (target.closest("a, button")) return;
-        onSelect();
-      }}
+      className={`tl-msg tl-msg--${event.role}`}
     >
       <div className="tl-msg__head">
         <span className="tl-msg__who">
@@ -140,18 +125,6 @@ function MessageRow({
         {outside ? (
           <span className="tl-chip tl-chip--warning">outside active context</span>
         ) : null}
-        <button
-          type="button"
-          className="tl-raw-btn"
-          onClick={(e) => {
-            e.stopPropagation();
-            onSelect();
-          }}
-          title="Inspect raw event"
-          aria-label="Inspect raw event"
-        >
-          {"{}"}
-        </button>
       </div>
       <div className="tl-msg__body">
         {isAssistant || isUser ? (
@@ -376,37 +349,30 @@ function ActionCard({
       data-tool-tier="action"
       className={`tl-action${isSelected ? " is-selected" : ""}${expanded ? " is-expanded" : ""}${isAgent ? " tl-action--agent" : ""}`}
     >
-      <div className="tl-action__head">
+      <button
+        type="button"
+        className="tl-action__head"
+        onClick={() => {
+          onSelect();
+          onToggleExpand();
+        }}
+        aria-expanded={expanded}
+        aria-controls={detailId}
+      >
         <span className="tl-action__accent" style={{ background: info.color }} data-tone={statusTone} />
-        <button
-          type="button"
-          className="tl-action__main"
-          onClick={onSelect}
-          aria-label={`Inspect ${info.displayName}`}
-        >
-          <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
-          <span className="tl-action__name">{agentType || info.displayName}</span>
-          {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
-          <span className="tl-action__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
-        </button>
+        <span className="tl-action__icon" style={{ color: info.color }}>{info.icon}</span>
+        <span className="tl-action__name">{agentType || info.displayName}</span>
+        {info.mcpNamespace ? <span className="tl-action__ns">{info.mcpNamespace}</span> : null}
+        <span className="tl-action__summary">{summary || (dropped ? "dropped" : pending ? "running…" : "")}</span>
         <span className="tl-action__meta">
           {exitCode != null && exitCode !== 0 ? <span className="tl-chip tl-chip--error">exit {exitCode}</span> : null}
           {pending ? <span className="tl-chip tl-chip--pending">running</span> : null}
           {dropped ? <span className="tl-chip tl-chip--warning">dropped</span> : null}
           {outside ? <span className="tl-chip tl-chip--warning">outside</span> : null}
           {duration ? <span className="tl-action__time">{duration}</span> : null}
-          <button
-            type="button"
-            className={`tl-action__chev${expanded ? " is-open" : ""}`}
-            onClick={onToggleExpand}
-            aria-expanded={expanded}
-            aria-controls={detailId}
-            aria-label={expanded ? "Collapse details" : "Expand details"}
-          >
-            ›
-          </button>
+          <span className={`tl-action__chev${expanded ? " is-open" : ""}`} aria-hidden="true">›</span>
         </span>
-      </div>
+      </button>
       {expanded ? (
         <div id={detailId}>
           <ToolDetail interaction={interaction} sessionEnded={sessionEnded} />
@@ -633,18 +599,64 @@ export function TimelinePane({
 
   const prevScrollHeightRef = useRef(0);
   const prevLoadedEntriesRef = useRef(0);
+  const prevItemCountRef = useRef(0);
+  // Remember whether the user was "at the bottom" *before* items mutated.
+  // If they were, new entries should scroll into view; if not, viewport
+  // stays put so the user doesn't get yanked mid-read.
+  // Threshold is generous (80px) so a tiny manual scroll still counts as
+  // "at the bottom" for auto-follow purposes.
+  const wasAtBottomRef = useRef(true);
+  const STICK_THRESHOLD = 80;
+
   useLayoutEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
     const newScrollHeight = container.scrollHeight;
     const prevLoaded = prevLoadedEntriesRef.current;
     prevLoadedEntriesRef.current = loadedEntries;
+
+    // Case 1: older entries prepended (pagination scroll preservation).
     if (prevLoaded > 0 && loadedEntries > prevLoaded) {
       const diff = newScrollHeight - prevScrollHeightRef.current;
       if (diff > 0) container.scrollTop += diff;
     }
     prevScrollHeightRef.current = newScrollHeight;
   }, [loadedEntries]);
+
+  // Case 2: items appended at the bottom (live events in an open session).
+  // Stick to bottom only if the user was already at the bottom before the
+  // append. Otherwise the viewport stays anchored to whatever they were
+  // reading.
+  useLayoutEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const prevCount = prevItemCountRef.current;
+    prevItemCountRef.current = items.length;
+    if (prevCount === 0) {
+      // Initial load — scroll to bottom so the most recent activity is
+      // visible out of the box.
+      container.scrollTop = container.scrollHeight;
+      wasAtBottomRef.current = true;
+      return;
+    }
+    if (items.length > prevCount && wasAtBottomRef.current) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [items]);
+
+  // Track "at bottom" continuously so the next append knows whether to
+  // stick. We read scrollTop on every scroll, not only on mutation, so
+  // the user's intent (scrolled up = don't follow) is always current.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
+      wasAtBottomRef.current = distance < STICK_THRESHOLD;
+    };
+    container.addEventListener("scroll", onScroll, { passive: true });
+    return () => container.removeEventListener("scroll", onScroll);
+  }, []);
 
   const debouncedSearch = useDebouncedValue(searchQuery, 300);
   const messageCount = useMemo(
@@ -866,15 +878,7 @@ export function TimelinePane({
             }
 
             if (item.kind === "message") {
-              const selectionKey = `message:${item.event.id}`;
-              return (
-                <MessageRow
-                  key={item.event.id}
-                  event={item.event}
-                  isSelected={selectedKey === selectionKey}
-                  onSelect={() => onSelectKey(selectionKey)}
-                />
-              );
+              return <MessageRow key={item.event.id} event={item.event} />;
             }
 
             if (item.kind === "tool") {
