@@ -1044,7 +1044,7 @@
     gap: var(--space-3);
     align-items: center;
     padding: var(--space-3) 0 var(--space-2);
-    max-width: 80ch;
+    max-width: var(--tl-tool-max);
     margin-inline: auto;
   }
   .tl-seam__rule {
@@ -1069,11 +1069,22 @@
     align-self: start;
   }
 
-  /* --- Shared --- */
+  /* --- Shared ---
+     Three width scopes:
+       - prose (tl-msg): 80ch max, centered — tuned for reading.
+       - tool rows (tl-action / tl-context / tl-noise): fill the column
+         up to a wider cap so bash commands and diffs don't wrap awkwardly.
+       - list container: takes the full available width minus modest
+         page padding. */
   .timeline-pane__list.timeline-events {
     gap: 2px;
     align-items: stretch;
     padding-inline: var(--space-4);
+  }
+
+  :root {
+    --tl-prose-max: 80ch;
+    --tl-tool-max: 132ch;
   }
 
   .tl-chip {
@@ -1099,7 +1110,7 @@
     flex-direction: column;
     gap: 4px;
     padding: var(--space-3) 0;
-    max-width: 80ch;
+    max-width: var(--tl-prose-max);
     margin-inline: auto;
     width: 100%;
   }
@@ -1193,7 +1204,7 @@
     position: relative;
     display: block;
     border-radius: var(--radius-md);
-    max-width: 80ch;
+    max-width: var(--tl-tool-max);
     margin-inline: auto;
     width: 100%;
     transition: background-color var(--motion-duration-fast) var(--motion-easing-standard);
@@ -1284,7 +1295,7 @@
   /* --- Context lines: a single indented ↳ row, no card. --- */
   .tl-context {
     display: block;
-    max-width: 80ch;
+    max-width: var(--tl-tool-max);
     margin-inline: auto;
     width: 100%;
     border-radius: var(--radius-md);
@@ -1324,7 +1335,7 @@
   /* --- Noise chip: "Explored Read × 3, Grep × 2" --- */
   .tl-noise {
     display: block;
-    max-width: 80ch;
+    max-width: var(--tl-tool-max);
     margin-inline: auto;
     width: 100%;
     border-radius: var(--radius-md);
