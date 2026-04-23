@@ -1,0 +1,259 @@
+"""Tests for the machine-facing heartbeat health summary endpoint."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from types import SimpleNamespace
+
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import sessionmaker
+
+import zerg.services.agent_heartbeat_health as machine_health_service
+from zerg.database import get_db
+from zerg.database import make_engine
+from zerg.models.agents import AgentHeartbeat
+from zerg.models.agents import AgentsBase
+
+
+def _make_db(tmp_path):
+    db_path = tmp_path / "test_agents_machine_health.db"
+    engine = make_engine(f"sqlite:///{db_path}")
+    engine = engine.execution_options(schema_translate_map={"agents": None})
+    AgentsBase.metadata.create_all(bind=engine)
+    SessionLocal = sessionmaker(bind=engine)
+    return SessionLocal
+
+
+def _make_client(SessionLocal):
+    from zerg.dependencies.agents_auth import require_single_tenant
+    from zerg.dependencies.agents_auth import verify_agents_token
+    from zerg.main import api_app
+    from zerg.main import app
+
+    def override_get_db():
+        with SessionLocal() as db:
+            yield db
+
+    def override_verify_agents_token():
+        return SimpleNamespace(device_id="testclient", id="token-1")
+
+    def override_require_single_tenant():
+        return None
+
+    api_app.dependency_overrides[get_db] = override_get_db
+    api_app.dependency_overrides[verify_agents_token] = override_verify_agents_token
+    api_app.dependency_overrides[require_single_tenant] = override_require_single_tenant
+    client = TestClient(app, backend="asyncio")
+    return client, api_app
+
+
+def test_machine_health_route_returns_latest_row_per_device_and_sorts_by_state(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        db.add(
+            AgentHeartbeat(
+                device_id="broken-machine",
+                received_at=pinned_now - timedelta(minutes=20),
+                version="0.5.0",
+                spool_pending=0,
+                spool_dead=0,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                ship_attempts_1h=1,
+                ship_successes_1h=1,
+                disk_free_bytes=100,
+                is_offline=0,
+            )
+        )
+        db.add(
+            AgentHeartbeat(
+                device_id="broken-machine",
+                received_at=pinned_now - timedelta(minutes=1),
+                version="0.6.0",
+                last_ship_attempt_at=pinned_now - timedelta(minutes=1),
+                last_ship_result="connect_error",
+                last_ship_latency_ms=220,
+                spool_pending=3,
+                spool_dead=2,
+                parse_errors_1h=0,
+                consecutive_failures=1,
+                ship_attempts_1h=5,
+                ship_successes_1h=3,
+                ship_connect_errors_1h=1,
+                ship_latency_p50_ms_1h=120,
+                ship_latency_p95_ms_1h=220,
+                disk_free_bytes=100,
+                is_offline=0,
+            )
+        )
+        db.add(
+            AgentHeartbeat(
+                device_id="degraded-machine",
+                received_at=pinned_now - timedelta(minutes=2),
+                version="0.6.0",
+                spool_pending=0,
+                spool_dead=0,
+                parse_errors_1h=0,
+                consecutive_failures=2,
+                ship_attempts_1h=4,
+                ship_successes_1h=2,
+                ship_server_errors_1h=2,
+                disk_free_bytes=100,
+                is_offline=0,
+            )
+        )
+        db.add(
+            AgentHeartbeat(
+                device_id="healthy-machine",
+                received_at=pinned_now - timedelta(minutes=3),
+                version="0.6.0",
+                spool_pending=0,
+                spool_dead=0,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                ship_attempts_1h=4,
+                ship_successes_1h=4,
+                disk_free_bytes=100,
+                is_offline=0,
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.get("/api/agents/machines/health?stale_after_seconds=3600&limit=2")
+        assert response.status_code == 200
+
+        payload = response.json()
+        assert payload["total"] == 3
+        assert [item["device_id"] for item in payload["machines"]] == [
+            "broken-machine",
+            "degraded-machine",
+        ]
+
+        broken = payload["machines"][0]
+        assert broken["version"] == "0.6.0"
+        assert broken["status"] == "broken"
+        assert broken["status_reason"] == "spool_dead"
+        assert broken["status_summary"] == "2 dead-letter range(s) need repair."
+        assert broken["heartbeat_age_seconds"] == 60
+        assert broken["ship_success_rate_1h"] == 0.6
+        assert broken["spool_dead"] == 2
+        assert broken["reasons"] == ["spool_dead", "consecutive_failures", "connect_errors", "spool_pending"]
+        assert broken["last_ship_attempt_at"] == "2026-04-23T20:14:00Z"
+
+        degraded = payload["machines"][1]
+        assert degraded["status"] == "degraded"
+        assert degraded["status_reason"] == "consecutive_failures"
+        assert degraded["heartbeat_age_seconds"] == 120
+
+        filtered = client.get("/api/agents/machines/health?status=broken&stale_after_seconds=3600")
+        assert filtered.status_code == 200
+        filtered_payload = filtered.json()
+        assert filtered_payload["total"] == 1
+        assert filtered_payload["machines"][0]["device_id"] == "broken-machine"
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_machine_health_route_filters_by_device_and_marks_stale_rows_offline(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        db.add(
+            AgentHeartbeat(
+                device_id="sleepy-machine",
+                received_at=pinned_now - timedelta(minutes=20),
+                version="0.6.0",
+                spool_pending=0,
+                spool_dead=0,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                disk_free_bytes=100,
+                is_offline=0,
+            )
+        )
+        db.add(
+            AgentHeartbeat(
+                device_id="offline-machine",
+                received_at=pinned_now - timedelta(minutes=1),
+                version="0.6.0",
+                spool_pending=0,
+                spool_dead=0,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                disk_free_bytes=100,
+                is_offline=1,
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.get("/api/agents/machines/health?device_id=sleepy-machine&stale_after_seconds=600")
+        assert response.status_code == 200
+
+        payload = response.json()
+        assert payload["total"] == 1
+        machine = payload["machines"][0]
+        assert machine["device_id"] == "sleepy-machine"
+        assert machine["status"] == "offline"
+        assert machine["status_reason"] == "heartbeat_stale"
+        assert machine["is_stale"] is True
+        assert machine["heartbeat_age_seconds"] == 1200
+
+        offline = client.get("/api/agents/machines/health?device_id=offline-machine&stale_after_seconds=600")
+        assert offline.status_code == 200
+        offline_machine = offline.json()["machines"][0]
+        assert offline_machine["status"] == "offline"
+        assert offline_machine["status_reason"] == "reported_offline"
+        assert offline_machine["is_offline"] is True
+    finally:
+        api_app_ref.dependency_overrides = {}
+
+
+def test_machine_health_route_keeps_known_broken_state_even_when_heartbeat_is_stale(tmp_path, monkeypatch):
+    SessionLocal = _make_db(tmp_path)
+    pinned_now = datetime(2026, 4, 23, 20, 15, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(machine_health_service, "utc_now", lambda: pinned_now)
+
+    with SessionLocal() as db:
+        db.add(
+            AgentHeartbeat(
+                device_id="stale-broken-machine",
+                received_at=pinned_now - timedelta(minutes=20),
+                version="0.6.0",
+                spool_pending=0,
+                spool_dead=1,
+                parse_errors_1h=0,
+                consecutive_failures=0,
+                disk_free_bytes=100,
+                is_offline=0,
+            )
+        )
+        db.commit()
+
+    client, api_app_ref = _make_client(SessionLocal)
+
+    try:
+        response = client.get("/api/agents/machines/health?device_id=stale-broken-machine&stale_after_seconds=600")
+        assert response.status_code == 200
+
+        payload = response.json()
+        assert payload["total"] == 1
+        machine = payload["machines"][0]
+        assert machine["status"] == "broken"
+        assert machine["status_reason"] == "spool_dead"
+        assert machine["is_stale"] is True
+        assert machine["reasons"] == ["heartbeat_stale", "spool_dead"]
+    finally:
+        api_app_ref.dependency_overrides = {}

@@ -90,6 +90,15 @@ Use it for directed session actions such as:
 - `GET /api/agents/sessions/{session_id}/turns`
 - `GET /api/agents/sessions/{session_id}/turns/{turn_id}`
 
+### Machine health and transport summaries
+
+- `GET /api/agents/machines/health`
+
+This route is the canonical machine-facing summary for latest heartbeat-derived
+transport state. It should answer, per device, whether Longhouse shipping is
+healthy, degraded, offline, or broken, plus the dominant recent transport
+symptom and rolling ship outcome counters.
+
 ### Coordination and directed messaging
 
 - `POST /api/agents/messages`
