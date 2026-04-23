@@ -25,7 +25,7 @@ env:
 
 jobs:
   continuation-provider-smoke:
-    runs-on: ubuntu-latest
+    runs-on: cube
     timeout-minutes: 25
 
     steps:
