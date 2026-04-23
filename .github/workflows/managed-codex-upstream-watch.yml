@@ -9,6 +9,15 @@ on:
         description: "Optional explicit upstream rust-v* tag to inspect"
         required: false
         type: string
+      candidate_source:
+        description: "How to choose the upstream candidate when candidate_tag is not set"
+        required: false
+        default: latest_published_release
+        type: choice
+        options:
+          - latest_published_release
+          - latest_tag
+          - latest_prerelease_release
       dispatch_runtime_release:
         description: "Dispatch local-runtime-release.yml for the detected candidate"
         required: false
@@ -34,9 +43,14 @@ jobs:
     outputs:
       update_needed: ${{ steps.report.outputs.update_needed }}
       patch_status: ${{ steps.report.outputs.patch_status }}
+      candidate_source: ${{ steps.report.outputs.candidate_source }}
       candidate_tag: ${{ steps.report.outputs.candidate_tag }}
       candidate_version: ${{ steps.report.outputs.candidate_version }}
       candidate_ref: ${{ steps.report.outputs.candidate_ref }}
+      desired_build_version: ${{ steps.report.outputs.desired_build_version }}
+      longhouse_release_tag: ${{ steps.publish_state.outputs.longhouse_release_tag }}
+      current_published_version: ${{ steps.publish_state.outputs.current_published_version }}
+      already_published: ${{ steps.publish_state.outputs.already_published }}
 
     steps:
       - name: Checkout
@@ -46,9 +60,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           CANDIDATE_TAG: ${{ inputs.candidate_tag || '' }}
+          CANDIDATE_SOURCE: ${{ inputs.candidate_source || 'latest_published_release' }}
         run: |
           mkdir -p artifacts
-          args=(--json --write-agent-prompt artifacts/managed-codex-agent-prompt.txt)
+          args=(--json --write-agent-prompt artifacts/managed-codex-agent-prompt.txt --candidate-source "${CANDIDATE_SOURCE}")
           if [[ -n "${CANDIDATE_TAG}" ]]; then
             args+=(--candidate-tag "${CANDIDATE_TAG}")
           fi
@@ -56,6 +71,8 @@ jobs:
 
       - name: Parse report
         id: report
+        env:
+          MANAGED_CODEX_BUILD_SUFFIX: ${{ inputs.managed_codex_build_suffix || vars.MANAGED_CODEX_BUILD_SUFFIX || 'longhouse.1' }}
         run: |
           python3 - <<'PY'
           import json
@@ -63,18 +80,76 @@ jobs:
           from pathlib import Path
 
           report = json.loads(Path("artifacts/managed-codex-report.json").read_text())
+          desired_build_version = f"{report['candidate_tag']['version']}+{os.environ['MANAGED_CODEX_BUILD_SUFFIX']}"
           output_path = Path(os.environ["GITHUB_OUTPUT"])
           with output_path.open("a", encoding="utf-8") as fh:
               fh.write(f"update_needed={'true' if report['update_needed_by_tag'] else 'false'}\n")
               fh.write(f"patch_status={report['patch_status']}\n")
+              fh.write(f"candidate_source={report['candidate_source']}\n")
               fh.write(f"candidate_tag={report['candidate_tag']['name']}\n")
               fh.write(f"candidate_version={report['candidate_tag']['version']}\n")
               fh.write(f"candidate_ref={report['candidate_tag']['commit_sha']}\n")
+              fh.write(f"desired_build_version={desired_build_version}\n")
           PY
 
+      - name: Inspect current published managed Codex version
+        id: publish_state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LONGHOUSE_RELEASE_TAG: ${{ inputs.longhouse_release_tag || vars.LONGHOUSE_RUNTIME_RELEASE_TAG || '' }}
+          DESIRED_BUILD_VERSION: ${{ steps.report.outputs.desired_build_version }}
+        run: |
+          echo "longhouse_release_tag=${LONGHOUSE_RELEASE_TAG}" >> "$GITHUB_OUTPUT"
+          if [[ -z "${LONGHOUSE_RELEASE_TAG}" ]]; then
+            echo "current_published_version=" >> "$GITHUB_OUTPUT"
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          mkdir -p current-release
+          if ! gh release download "${LONGHOUSE_RELEASE_TAG}" \
+            --pattern "longhouse-codex-linux-x64" \
+            --dir current-release \
+            --repo "${GITHUB_REPOSITORY}"; then
+            echo "current_published_version=" >> "$GITHUB_OUTPUT"
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          chmod +x current-release/longhouse-codex-linux-x64
+          CURRENT_PUBLISHED_VERSION="$(python3 - <<'PY'
+          import re
+          import subprocess
+
+          completed = subprocess.run(
+              ["current-release/longhouse-codex-linux-x64", "--version"],
+              check=False,
+              capture_output=True,
+              text=True,
+              timeout=5,
+          )
+          raw = (completed.stdout or completed.stderr or "").strip()
+          match = re.search(r"(\d+\.\d+\.\d+(?:[-+._a-zA-Z0-9]+)?)", raw)
+          print(match.group(1) if match else "")
+          PY
+          )"
+
+          echo "current_published_version=${CURRENT_PUBLISHED_VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ -n "${CURRENT_PUBLISHED_VERSION}" && "${CURRENT_PUBLISHED_VERSION}" == "${DESIRED_BUILD_VERSION}" ]]; then
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Write job summary
+        env:
+          DESIRED_BUILD_VERSION: ${{ steps.report.outputs.desired_build_version }}
+          LONGHOUSE_RELEASE_TAG: ${{ steps.publish_state.outputs.longhouse_release_tag }}
+          CURRENT_PUBLISHED_VERSION: ${{ steps.publish_state.outputs.current_published_version }}
+          ALREADY_PUBLISHED: ${{ steps.publish_state.outputs.already_published }}
         run: |
           python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import os
           import json
           from pathlib import Path
 
@@ -84,11 +159,17 @@ jobs:
           print("")
           print(f"- Pinned upstream version: `{report['pinned_upstream_version']}`")
           print(f"- Pinned upstream ref: `{report['pinned_upstream_ref']}`")
+          print(f"- Candidate source: `{report['candidate_source']}`")
           print(f"- Candidate tag: `{report['candidate_tag']['name']}`")
           print(f"- Candidate version: `{report['candidate_tag']['version']}`")
           print(f"- Candidate ref: `{report['candidate_tag']['commit_sha']}`")
+          print(f"- Desired managed build version: `{os.environ['DESIRED_BUILD_VERSION']}`")
           print(f"- Patch status: `{report['patch_status']}`")
           print(f"- Update needed: `{str(report['update_needed_by_tag']).lower()}`")
+          if os.environ["LONGHOUSE_RELEASE_TAG"]:
+              print(f"- Target Longhouse release tag: `{os.environ['LONGHOUSE_RELEASE_TAG']}`")
+              print(f"- Current published managed Codex version: `{os.environ['CURRENT_PUBLISHED_VERSION'] or 'unknown'}`")
+              print(f"- Already published on target release: `{os.environ['ALREADY_PUBLISHED']}`")
           if latest_release:
               print(f"- Latest published release: `{latest_release.get('tag_name')}`")
           print("")
@@ -106,12 +187,12 @@ jobs:
 
   dispatch-runtime-release:
     needs: detect
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.dispatch_runtime_release && needs.detect.outputs.update_needed == 'true' }}
+    if: ${{ needs.detect.outputs.update_needed == 'true' && needs.detect.outputs.patch_status == 'applies_cleanly' && needs.detect.outputs.already_published != 'true' && needs.detect.outputs.longhouse_release_tag != '' && ((github.event_name == 'workflow_dispatch' && inputs.dispatch_runtime_release) || (github.event_name == 'schedule' && vars.MANAGED_CODEX_AUTO_DISPATCH == 'true')) }}
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
-      LONGHOUSE_RELEASE_TAG: ${{ inputs.longhouse_release_tag || '' }}
-      MANAGED_CODEX_BUILD_SUFFIX: ${{ inputs.managed_codex_build_suffix || 'longhouse.1' }}
+      LONGHOUSE_RELEASE_TAG: ${{ needs.detect.outputs.longhouse_release_tag }}
+      DESIRED_BUILD_VERSION: ${{ needs.detect.outputs.desired_build_version }}
 
     steps:
       - name: Validate dispatch inputs
@@ -128,4 +209,4 @@ jobs:
             --field tag_name="${LONGHOUSE_RELEASE_TAG}" \
             --field managed_codex_upstream_ref="${{ needs.detect.outputs.candidate_ref }}" \
             --field managed_codex_upstream_version="${{ needs.detect.outputs.candidate_version }}" \
-            --field managed_codex_build_version="${{ needs.detect.outputs.candidate_version }}+${MANAGED_CODEX_BUILD_SUFFIX}"
+            --field managed_codex_build_version="${DESIRED_BUILD_VERSION}"
